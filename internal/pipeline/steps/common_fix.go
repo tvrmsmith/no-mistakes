@@ -50,7 +50,7 @@ var commitSummarySchema = json.RawMessage(fmt.Sprintf(`{
 // hasBlockingFindings returns true if any finding has error or warning severity.
 func hasBlockingFindings(items []Finding) bool {
 	for _, f := range items {
-		if f.Severity == "error" || f.Severity == "warning" {
+		if f.Severity == types.FindingSeverityError || f.Severity == types.FindingSeverityWarning {
 			return true
 		}
 	}
