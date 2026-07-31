@@ -99,7 +99,18 @@ type GlobalConfig struct {
 	// findings prescribed the fixes it certifies. Default true; set
 	// session_reuse: false to force every invocation cold.
 	SessionReuse bool `yaml:"-"`
-	AutoFix      AutoFixRaw
+	// SignCommits controls whether pipeline commits inherit the host's git
+	// signing configuration. Default true leaves it alone. Set false when the
+	// configured signer is interactive (1Password's op-ssh-sign prompts for a
+	// biometric unlock): the daemon runs unattended, so a signer waiting on a
+	// human fails the step instead. The commits land unsigned and can be
+	// re-signed afterwards with
+	// `git rebase <base> --exec 'git commit --amend --no-edit -S'`.
+	//
+	// Global-only: signing is an authenticity boundary, so a pushed branch
+	// must never be able to turn the maintainer's signing off.
+	SignCommits bool `yaml:"-"`
+	AutoFix     AutoFixRaw
 	// CI is the operator's own CI-step floor. It is the only place the rerun
 	// budget can be set for a repository whose default branch this machine's
 	// user does not control (the common case when contributing to someone
@@ -161,6 +172,7 @@ type globalConfigRaw struct {
 	StepQuietWarning       string              `yaml:"step_quiet_warning"`
 	LogLevel               string              `yaml:"log_level"`
 	SessionReuse           *bool               `yaml:"session_reuse"`
+	SignCommits            *bool               `yaml:"sign_commits"`
 	AutoFix                AutoFixRaw          `yaml:"auto_fix"`
 	CI                     CIRaw               `yaml:"ci"`
 	Commit                 CommitRaw           `yaml:"commit"`
@@ -467,6 +479,8 @@ type Config struct {
 	Test                  Test
 	Document              Document
 	Review                Review
+	// SignCommits is global-only; see the GlobalConfig field.
+	SignCommits bool
 	// SCM carries the global SCM CLI settings; see SCMRaw. It is global-only:
 	// a repo config cannot set it, since it selects which credentials the
 	// daemon authenticates with.
@@ -718,6 +732,14 @@ daemon_connect_timeout: "3s"
 # its fixes. Supported for claude and codex; other agents run cold. Set false to
 # force every agent invocation cold.
 session_reuse: true
+
+# Sign the commits the pipeline makes (fix, document, and CI-fix commits) with
+# the host's git signing configuration. Set false when your signer is
+# interactive - 1Password's op-ssh-sign asks for a biometric unlock, and the
+# daemon runs unattended, so the signer blocks and the step fails. Commits then
+# land unsigned; re-sign a branch afterwards with
+#   git rebase <base> --exec 'git commit --amend --no-edit -S'
+sign_commits: true
 
 # Log level for daemon output
 # Options: debug, info, warn, error
@@ -1297,6 +1319,7 @@ func DefaultGlobalConfig() *GlobalConfig {
 		LogLevel:             "info",
 		SessionReuse:         true,
 		Eval:                 evalDefaults(),
+		SignCommits:          true,
 	}
 }
 
@@ -1386,6 +1409,9 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	}
 	if raw.SessionReuse != nil {
 		cfg.SessionReuse = *raw.SessionReuse
+	}
+	if raw.SignCommits != nil {
+		cfg.SignCommits = *raw.SignCommits
 	}
 	if raw.AutoFix.CI == nil {
 		raw.AutoFix.CI = raw.AutoFix.Babysit
@@ -2031,6 +2057,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Test:           test,
 		Document:       Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
 		Review:         Review{PathInstructions: resolvePathInstructions(repo.Review.PathInstructions)},
+		SignCommits:    global.SignCommits,
 		// repo is the EffectiveRepoConfig result, so this value is already
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,
