@@ -125,6 +125,9 @@ type GlobalConfig struct {
 	// RepoConfig means no pushed branch can enable, disable, or resize it.
 	Eval Eval
 	SCM  SCMRaw `yaml:"scm"`
+	// Review steers how wide and how strict each review turn is. Global-only:
+	// a pushed branch must not be able to loosen the review of its own change.
+	Review ReviewRaw
 	// TrustWorkingPathConfig honors the gate-control fields from
 	// .no-mistakes.yaml in the repo's registered working path (the
 	// maintainer's own checkout) on top of the trusted default-branch copy.
@@ -179,6 +182,7 @@ type globalConfigRaw struct {
 	Intent                 IntentRaw           `yaml:"intent"`
 	Test                   TestRaw             `yaml:"test"`
 	Eval                   EvalRaw             `yaml:"eval"`
+	Review                 ReviewRaw           `yaml:"review"`
 	SCM                    SCMRaw              `yaml:"scm"`
 	TrustWorkingPathConfig bool                `yaml:"trust_working_path_config"`
 }
@@ -253,6 +257,9 @@ type ReviewRaw struct {
 	// at least one changed file; a run that touches nothing matching leaves
 	// the review prompt exactly as it is without this setting.
 	PathInstructions []PathInstruction `yaml:"path_instructions"`
+	// NarrowAfterRound is a pointer so "not set" (nil) differs from an
+	// explicit 0, which disables narrowing.
+	NarrowAfterRound *int `yaml:"narrow_after_round"`
 }
 
 // PathInstruction is one glob-scoped block of review guidance. Path follows the
@@ -508,6 +515,13 @@ type Document struct {
 // changed paths each glob matches.
 type Review struct {
 	PathInstructions []PathInstruction
+	// NarrowAfterRound is how many review rounds get a full adversarial sweep
+	// of every applicable aspect at every severity. Past it the step asks for
+	// fewer aspects and a higher severity floor, because a rereview's cost is
+	// dominated by the per-aspect sub-agents the review skill spawns and later
+	// rounds overwhelmingly produce advisory findings nobody acts on. 0
+	// disables narrowing entirely, keeping every round a full sweep.
+	NarrowAfterRound int
 }
 
 // TestRaw is the YAML representation of test-step settings.
@@ -600,6 +614,10 @@ type Eval struct {
 	// case per stratum (no Hamilton bound). Unlabeled cases never fill it.
 	DiversifiedSize int
 }
+
+// DefaultReviewNarrowAfterRound is how many review rounds run as a full
+// adversarial sweep before the step starts narrowing.
+const DefaultReviewNarrowAfterRound = 2
 
 // IntentRaw is the YAML representation of user-intent extraction settings.
 // Pointer fields distinguish "not set" (nil) from explicit zero/false values.
@@ -785,6 +803,14 @@ auto_fix:
 # default branch overrides this value.
 ci:
   rerun_transient: 0
+
+# How many review rounds get a full adversarial sweep of every applicable
+# aspect at every severity. Past this, a rereview asks the review skill for
+# fewer aspects and a higher severity floor, because most of a review's cost is
+# the per-aspect sub-agents it spawns and later rounds overwhelmingly turn up
+# advisory findings nobody acts on. Set to 0 to keep every round a full sweep.
+review:
+  narrow_after_round: 2
 
 # Auto-fix commit subject template. Available variables: {{.Step}} and {{.Summary}}.
 # Repo config may override this value.
@@ -1422,6 +1448,7 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	cfg.Intent = raw.Intent
 	cfg.Test = raw.Test
 	applyEvalOverrides(&cfg.Eval, &raw.Eval)
+	cfg.Review = raw.Review
 
 	return cfg, nil
 }
@@ -1913,6 +1940,20 @@ func validateTestRaw(test TestRaw) error {
 	return nil
 }
 
+// reviewDefaults returns the default review-step settings.
+func reviewDefaults() Review {
+	return Review{NarrowAfterRound: DefaultReviewNarrowAfterRound}
+}
+
+// applyReviewOverrides applies non-nil raw values onto resolved defaults. A
+// negative threshold is meaningless, so it collapses to 0 (never narrow) -
+// the fail-safe direction, since it preserves the exhaustive review.
+func applyReviewOverrides(dst *Review, src *ReviewRaw) {
+	if src.NarrowAfterRound != nil {
+		dst.NarrowAfterRound = max(*src.NarrowAfterRound, 0)
+	}
+}
+
 // autoFixDefaults returns the default auto-fix configuration.
 func autoFixDefaults() AutoFix {
 	return AutoFix{
@@ -2025,6 +2066,14 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	// repository's decision (see EvidenceRaw.LocalRoot).
 	applyEvidenceStorageOverrides(&test.Evidence, &global.Test.Evidence)
 
+	// Global-only on purpose: review breadth is a gate strength, so a pushed
+	// branch must not be able to narrow the review of its own change.
+	review := reviewDefaults()
+	applyReviewOverrides(&review, &global.Review)
+	// path_instructions is repo-owned (trusted default-branch copy); the
+	// narrowing knob is global-only.
+	review.PathInstructions = resolvePathInstructions(repo.Review.PathInstructions)
+
 	commit := Commit{FixMessage: DefaultFixMessageTemplate}
 	if global.Commit.FixMessage != nil {
 		commit.FixMessage = *global.Commit.FixMessage
@@ -2056,7 +2105,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Intent:         intent,
 		Test:           test,
 		Document:       Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
-		Review:         Review{PathInstructions: resolvePathInstructions(repo.Review.PathInstructions)},
+		Review:         review,
 		SignCommits:    global.SignCommits,
 		// repo is the EffectiveRepoConfig result, so this value is already
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
