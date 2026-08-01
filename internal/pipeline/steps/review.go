@@ -61,9 +61,9 @@ func reviewBreadthForRound(round, narrowAfter int) reviewBreadth {
 	case narrowAfter <= 0 || round <= narrowAfter:
 		return reviewBreadth{}
 	case round <= 2*narrowAfter:
-		return reviewBreadth{Aspects: coreReviewAspects, MinSeverity: types.SeverityWarning}
+		return reviewBreadth{Aspects: coreReviewAspects, MinSeverity: types.FindingSeverityWarning}
 	default:
-		return reviewBreadth{Aspects: minimalReviewAspects, MinSeverity: types.SeverityError}
+		return reviewBreadth{Aspects: minimalReviewAspects, MinSeverity: types.FindingSeverityError}
 	}
 }
 
@@ -72,7 +72,7 @@ func (b reviewBreadth) skillInvocation() string {
 	if len(b.Aspects) == 0 {
 		return fullSweepSkillInvocation
 	}
-	return fmt.Sprintf("(Skill tool), naming exactly these aspects so it runs only those: %s", strings.Join(b.Aspects, ", "))
+	return fmt.Sprintf("(Skill tool), naming exactly these aspects so it runs only those - %s -", strings.Join(b.Aspects, ", "))
 }
 
 // severityRule renders the floor as a generation rule rather than a reporting
@@ -80,9 +80,9 @@ func (b reviewBreadth) skillInvocation() string {
 // sub-agent pass to produce.
 func (b reviewBreadth) severityRule() string {
 	switch b.MinSeverity {
-	case types.SeverityWarning:
+	case types.FindingSeverityWarning:
 		return "\n- This is a later round of an ongoing review. Report only \"error\" and \"warning\" findings. Do not spend review effort looking for \"info\"-severity polish, and omit any you notice in passing."
-	case types.SeverityError:
+	case types.FindingSeverityError:
 		return "\n- This is a late round of an ongoing review. Report only \"error\" findings - problems that must not merge. Do not spend review effort looking for \"warning\" or \"info\" findings, and omit any you notice in passing."
 	default:
 		return ""
@@ -180,10 +180,12 @@ func (s *ReviewStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 	// test and lint fix prompts already carry. The instruction is a contract,
 	// not an enforced sandbox - the agent has free shell access - so the pinned
 	// regression tests guard the wording, not the runtime.
+	rounds := stepRounds(sctx)
+
 	var fixSummary string
 	if sctx.Fixing && !sctx.SkipFixExecution {
 		previousFindings := sanitizedPreviousFindingsForPrompt(sctx.PreviousFindings)
-		historySection := executionContextPromptSection() + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + testguidance.Rule
+		historySection := executionContextPromptSection() + roundHistoryPromptSectionFor(rounds) + userIntentPromptSection(sctx) + testguidance.Rule
 		fixPrompt := fmt.Sprintf(
 			`Investigate previous review findings and address legitimate ones.
 
@@ -288,7 +290,6 @@ Previous review findings to address:
 	// net-deleted-author-lines git-diff backstop for the removal-of-required
 	// class - a fixer round that net-deletes author-added lines parks
 	// regardless of intent source. Held pending a scope decision.
-	rounds := stepRounds(sctx)
 	historySection := executionContextPromptSection() + roundHistoryPromptSectionFor(rounds) + uncertifiedRoundHistoryPromptSection(sctx) + fixRoundProvenanceClause(sctx) + branchHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + intentConformanceReviewClause(sctx) + pipelineDeliveryPhaseClause() + testguidance.Rule + testguidance.ReviewerAction
 
 	// Path-scoped repository review guidance, taken from the trusted
