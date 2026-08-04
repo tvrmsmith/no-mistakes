@@ -9,6 +9,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/scm"
 )
 
 // baseFactory records what the wrapper passed down and returns a cmd whose Env
@@ -104,6 +105,43 @@ func TestSCMCLIFactoryWithoutConfigReturnsBase(t *testing.T) {
 	}
 	if cmd.Env != nil {
 		t.Fatalf("cmd.Env = %v, want nil (inherit) without a config", cmd.Env)
+	}
+}
+
+// A GitHub host built without a slug carries no --repo, so gh infers the
+// repository and the branch from its cwd - the developer's live checkout once
+// a wrapper is configured. buildHost has to refuse instead.
+func TestBuildHostFailsClosedWithoutAGitHubSlug(t *testing.T) {
+	sctx := &pipeline.StepContext{
+		Ctx:    context.Background(),
+		Config: &config.Config{},
+		Repo:   &db.Repo{UpstreamURL: "https://github.com/", WorkingPath: "/repo"},
+		Run:    &db.Run{},
+	}
+
+	host, skip := buildHost(sctx, scm.ProviderGitHub)
+	if host != nil {
+		t.Fatalf("buildHost returned a host for an unresolvable GitHub slug")
+	}
+	if !strings.Contains(skip, "GitHub repository") {
+		t.Fatalf("skip reason = %q, want it to name the unresolved repository", skip)
+	}
+}
+
+// The PR URL is the documented fallback slug source, so a run that has one is
+// still addressable and must keep building a host.
+func TestBuildHostResolvesGitHubSlugFromThePRURL(t *testing.T) {
+	prURL := "https://github.com/test/repo/pull/7"
+	sctx := &pipeline.StepContext{
+		Ctx:    context.Background(),
+		Config: &config.Config{},
+		Repo:   &db.Repo{UpstreamURL: "https://github.com/", WorkingPath: "/repo"},
+		Run:    &db.Run{PRURL: &prURL},
+	}
+
+	host, skip := buildHost(sctx, scm.ProviderGitHub)
+	if host == nil {
+		t.Fatalf("buildHost refused a run whose PR URL names the repository: %s", skip)
 	}
 }
 

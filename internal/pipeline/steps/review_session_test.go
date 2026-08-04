@@ -199,6 +199,56 @@ func TestReviewLoop_IndependentReviewTurnsOneFixerSession(t *testing.T) {
 	}
 }
 
+// The skill-mandate retry re-runs a turn whose content was rejected, so it
+// must not inherit the drifted turn's context: any reviewer session identity
+// the run still carries is dropped and the retry runs cold. The run here
+// starts with a persisted reviewer identity (the legacy shape crash recovery
+// can still load), which is exactly the state that could seat the retry back
+// in the session that ignored the mandate.
+func TestReviewLoop_SkillMandateRetryRunsSessionFree(t *testing.T) {
+	turns := 0
+	mock := &sessionMockAgent{}
+	mock.respond = func(opts agent.RunOpts) *agent.Result {
+		if opts.Purpose != "review" {
+			t.Errorf("unexpected agent purpose %q", opts.Purpose)
+			return &agent.Result{Output: []byte(`{}`)}
+		}
+		turns++
+		clean := []byte(`{"findings":[],"summary":"clean","risk_level":"low","risk_rationale":"clean"}`)
+		if turns == 1 {
+			// An inline pass: the mandated skill was never invoked.
+			return &agent.Result{Output: clean, SkillsUsed: []string{"tdd"}}
+		}
+		return &agent.Result{Output: clean, SkillsUsed: []string{requiredReviewSkill}}
+	}
+
+	exec, database, run, repo, workDir := reviewSessionHarness(t, mock, []pipeline.Step{&ReviewStep{}})
+	if err := database.UpsertRunAgentSession(run.ID, string(pipeline.SessionRoleReviewer), "session-mock", "sess-legacy"); err != nil {
+		t.Fatalf("seed reviewer session: %v", err)
+	}
+
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	reviews := reviewCalls(mock.snapshot())
+	if len(reviews) != 2 {
+		t.Fatalf("expected the drifted turn plus one retry, got %d review calls", len(reviews))
+	}
+	if reviews[1].Session != nil && reviews[1].Session.ID != "" {
+		t.Fatalf("the mandate retry resumed session %+v, but it must run cold", reviews[1].Session)
+	}
+	sessions, err := database.GetRunAgentSessions(run.ID)
+	if err != nil {
+		t.Fatalf("get sessions: %v", err)
+	}
+	for _, s := range sessions {
+		if s.Role == string(pipeline.SessionRoleReviewer) {
+			t.Fatalf("reviewer session %+v survived the mandate retry", s)
+		}
+	}
+}
+
 // TestReviewLoop_RereviewNeverResumesTheSessionThatPrescribedItsFixes is the
 // class regression for the pipeline certifying its own fixes: an auto-fix
 // round implements the findings the previous review turn prescribed, so the

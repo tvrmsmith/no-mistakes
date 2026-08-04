@@ -261,7 +261,7 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 		return nil, retErr
 	}
 
-	res, err := finalizeClaudeResult(result, opts.JSONSchema, usage)
+	res, err := finalizeClaudeResult(result, opts.JSONSchema, usage, &stream)
 	if res != nil {
 		res.SessionID = result.sessionID
 		res.Resumed = resumeID != ""
@@ -288,9 +288,16 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 
 func (a *claudeAgent) Close() error { return nil }
 
-func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage TokenUsage) (*Result, error) {
+func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage TokenUsage, stream *claudeStream) (*Result, error) {
 	if result.IsError || result.Subtype != "success" {
-		return nil, fmt.Errorf("claude error: subtype=%s", result.Subtype)
+		// A mid-stream stall is how the CLI most often reaches this path: it
+		// exits 0 and reports the failure as a non-success subtype, so this
+		// return carries the stream diagnostics exactly like the parse-error,
+		// wait-error, and no-result paths. Without them the error names no
+		// cause classifyTransient can recognize, and a recoverable stall fails
+		// the run instead of spending a retry.
+		return nil, errors.New(withClaudeStreamDetail(
+			fmt.Sprintf("claude error: subtype=%s", result.Subtype), stream))
 	}
 	if len(schema) > 0 && result.StructuredOutput == nil {
 		return nil, errNoStructuredOutput

@@ -1116,6 +1116,12 @@ func preserveFailedMessage(err error, detached bool, runID string) string {
 		cause = "the preserved pipeline commits could not be pinned in the local gate"
 	}
 	if !detached {
+		// The anchor ref is written by the fetch, and only a fetch that
+		// succeeded can reach a mismatch, so that branch may not claim no ref
+		// moved. Every other cause fails before or during the fetch.
+		if errors.Is(err, errPreservedAnchorMismatch) {
+			return fmt.Sprintf("%s; %s in your clone was written but does not hold it, and no worktree files were changed", cause, recoverAnchorRef(runID))
+		}
 		return cause + "; no files or refs were changed"
 	}
 	if errors.Is(err, errPreservedPinAbsent) {

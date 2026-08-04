@@ -50,8 +50,8 @@ func TestReviewBreadthForRound_NarrowsAsRoundsAccumulate(t *testing.T) {
 // used, so narrowing cannot silently change round one.
 func TestReviewBreadthPromptSections_FullSweepIsUnchanged(t *testing.T) {
 	b := reviewBreadthForRound(1, 2)
-	if got := b.skillInvocation(); got != fullSweepSkillInvocation {
-		t.Errorf("skillInvocation() = %q, want %q", got, fullSweepSkillInvocation)
+	if got := b.skillInvocation(); got != "(Skill tool, no arguments)" {
+		t.Errorf("skillInvocation() = %q, want the unqualified skill invocation", got)
 	}
 	if got := b.severityRule(); got != "" {
 		t.Errorf("severityRule() = %q, want empty", got)
@@ -177,7 +177,7 @@ func TestReviewStep_NarrowsThePromptOnceRoundsPassTheThreshold(t *testing.T) {
 	t.Run("round at the threshold stays a full sweep", func(t *testing.T) {
 		t.Parallel()
 		prompt := run(t, 1)
-		if !strings.Contains(prompt, fullSweepSkillInvocation) {
+		if !strings.Contains(prompt, "(Skill tool, no arguments)") {
 			t.Errorf("prompt lost the full-sweep invocation:\n%s", prompt)
 		}
 		if strings.Contains(prompt, "naming exactly these aspects") {
@@ -191,7 +191,7 @@ func TestReviewStep_NarrowsThePromptOnceRoundsPassTheThreshold(t *testing.T) {
 	t.Run("round past the threshold narrows aspects and floor", func(t *testing.T) {
 		t.Parallel()
 		prompt := run(t, 2)
-		if strings.Contains(prompt, fullSweepSkillInvocation) {
+		if strings.Contains(prompt, "(Skill tool, no arguments)") {
 			t.Errorf("prompt kept the full-sweep invocation past the threshold:\n%s", prompt)
 		}
 		for _, aspect := range coreReviewAspects {
@@ -199,8 +199,14 @@ func TestReviewStep_NarrowsThePromptOnceRoundsPassTheThreshold(t *testing.T) {
 				t.Errorf("prompt missing narrowed aspect %q:\n%s", aspect, prompt)
 			}
 		}
-		if !strings.Contains(prompt, reviewBreadthForRound(3, 2).severityRule()) {
+		if !strings.Contains(prompt, "This is a later round of an ongoing review.") {
+			t.Errorf("prompt missing the later-round framing:\n%s", prompt)
+		}
+		if !strings.Contains(prompt, `Report only "error" and "warning" findings.`) {
 			t.Errorf("prompt missing the warning floor:\n%s", prompt)
+		}
+		if !strings.Contains(prompt, `Do not spend review effort looking for "info"-severity polish`) {
+			t.Errorf("prompt missing the generation-side floor:\n%s", prompt)
 		}
 	})
 }
