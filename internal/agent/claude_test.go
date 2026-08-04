@@ -772,6 +772,18 @@ func TestClaudeStdinHelper(t *testing.T) {
 		}
 		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"API Error: Stream idle timeout - no chunks received"}]}}`+"\n")
 		os.Exit(1)
+	case "subtype-stall-then-succeed":
+		// The other shape of the same stall, and the common one: the CLI
+		// reports the stall as assistant text and then exits 0 with a
+		// non-success result event rather than a non-zero status.
+		attempt := recordClaudeHelperAttempt()
+		if attempt > 1 {
+			emitClaudeHelperResult()
+			return
+		}
+		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"API Error: Stream idle timeout - no chunks received"}]}}`+"\n")
+		_, _ = io.WriteString(os.Stdout, `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"helper-session"}`+"\n")
+		return
 	case "stall-then-hang":
 		// A stalled claude that never exits: it writes a deprecation notice on
 		// stderr, reports the stall as assistant text, emits one more event,
@@ -1049,6 +1061,30 @@ func TestClaudeAgent_StreamStallIsReportedAndRetried(t *testing.T) {
 	}
 	if got := claudeHelperAttempts(t, countPath); got != 2 {
 		t.Fatalf("claude invoked %d times, want 2 (one stall, one success)", got)
+	}
+}
+
+// The stall exit path that matters most is the one where claude exits 0 and
+// reports the failure as a non-success result subtype. That return has to
+// carry the stream diagnostics for the same run to spend a retry, and only a
+// full Run proves the accumulated stream actually reaches it: dropping the
+// stream at the finalize call site leaves the helper-level test green.
+func TestClaudeAgent_ResultSubtypeStallIsRetriedThroughRun(t *testing.T) {
+	defer withFastBackoff(t)()
+	countPath := filepath.Join(t.TempDir(), "attempts")
+	t.Setenv("NM_CLAUDE_STDIN_HELPER", "subtype-stall-then-succeed")
+	t.Setenv("NM_CLAUDE_STDIN_ATTEMPTS", countPath)
+	a := newClaudeStdinHelperAgent(t)
+
+	result, err := a.Run(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("run through a recoverable non-success result subtype: %v", err)
+	}
+	if result.SessionID != "helper-session" {
+		t.Fatalf("session ID = %q, want helper-session", result.SessionID)
+	}
+	if got := claudeHelperAttempts(t, countPath); got != 2 {
+		t.Fatalf("claude invoked %d times, want 2 (one stalled subtype, one success)", got)
 	}
 }
 

@@ -1101,12 +1101,28 @@ var errPreservedAnchorMismatch = errors.New("anchored ref is not the preserved p
 // claim about surviving state, so it may only be made when the write succeeded.
 var errPreservedPinAbsent = errors.New("preserved pipeline commits are not pinned in the gate")
 
+// errPreservedAnchorFetched marks any failure observed after the anchor fetch
+// already wrote the clone-side anchor ref. What the operator needs to know is
+// whether a ref moved, which is decided by how far the sequence got, not by
+// which specific failure ended it: a rev-parse that cannot run at all still
+// happens with the fetched ref in place.
+var errPreservedAnchorFetched = errors.New("the preserved anchor ref was already written")
+
+func afterAnchorFetch(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", errPreservedAnchorFetched, err)
+}
+
 // preserveFailedMessage words the blocked_recover_preserve_failed refusal for
 // the operator. The detached variant names the retained gate-side pin only when
 // that pin is known to exist: the staging ref is written before the fetch and
 // deliberately kept on failure, making it the only thing keeping the preserved
 // commits reachable in the gate. When the write itself failed, nothing
-// references those commits and the refusal has to say so instead.
+// references those commits and the refusal has to say so instead. The claim
+// that nothing moved is likewise made only for failures that happened before
+// the anchor fetch wrote the clone-side ref.
 func preserveFailedMessage(err error, detached bool, runID string) string {
 	cause := "the preserved pipeline commits could not be fetched from the local gate"
 	switch {
@@ -1116,11 +1132,12 @@ func preserveFailedMessage(err error, detached bool, runID string) string {
 		cause = "the preserved pipeline commits could not be pinned in the local gate"
 	}
 	if !detached {
-		// The anchor ref is written by the fetch, and only a fetch that
-		// succeeded can reach a mismatch, so that branch may not claim no ref
-		// moved. Every other cause fails before or during the fetch.
-		if errors.Is(err, errPreservedAnchorMismatch) {
-			return fmt.Sprintf("%s; %s in your clone was written but does not hold it, and no worktree files were changed", cause, recoverAnchorRef(runID))
+		if errors.Is(err, errPreservedAnchorFetched) {
+			anchor := fmt.Sprintf("%s in your clone was written and its contents could not be verified", recoverAnchorRef(runID))
+			if errors.Is(err, errPreservedAnchorMismatch) {
+				anchor = fmt.Sprintf("%s in your clone was written but does not hold it", recoverAnchorRef(runID))
+			}
+			return fmt.Sprintf("%s; %s, and no worktree files were changed", cause, anchor)
 		}
 		return cause + "; no files or refs were changed"
 	}
@@ -1151,7 +1168,7 @@ func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, run
 		if err := git.FetchRemoteBranchToPrivateRef(ctx, s.workDir(), gateDir, branch, anchorRef); err != nil {
 			return err
 		}
-		return verifyPreservedAnchor(ctx, s.workDir(), anchorRef, preserved)
+		return afterAnchorFetch(verifyPreservedAnchor(ctx, s.workDir(), anchorRef, preserved))
 	}
 	sourceRef := gatePreservedRef(runID)
 	if _, refErr := git.Run(ctx, gateDir, "update-ref", sourceRef, preserved); refErr != nil {
@@ -1172,7 +1189,7 @@ func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, run
 	if err = git.FetchRefToPrivateRef(ctx, s.workDir(), gateDir, sourceRef, anchorRef); err != nil {
 		return err
 	}
-	err = verifyPreservedAnchor(ctx, s.workDir(), anchorRef, preserved)
+	err = afterAnchorFetch(verifyPreservedAnchor(ctx, s.workDir(), anchorRef, preserved))
 	return err
 }
 
