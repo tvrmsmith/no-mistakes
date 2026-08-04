@@ -304,6 +304,7 @@ func TestRecoverFastForwardRechecksCurrentBranchBeforeMerge(t *testing.T) {
 	if state.Recovered || state.Changed || state.Safety != "blocked_recover_assumptions_changed" {
 		t.Fatalf("recover after branch switch = %#v", state)
 	}
+	assertRefusalRecords(t, state.Error, f.anchorRef())
 	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.submitted {
 		t.Fatalf("HEAD = %s, want submitted %s", got, f.submitted)
 	}
@@ -440,9 +441,12 @@ func TestRecoverDivergedRefusesButKeepLocalReturnsCustody(t *testing.T) {
 	if refused.Recovered || refused.Safety != "blocked_recover_diverged" || refused.Relation != RelationDiverged {
 		t.Fatalf("recover diverged = %#v", refused)
 	}
-	if !strings.Contains(refused.Error, f.anchorRef()) || !strings.Contains(refused.Error, "--keep-local") {
+	if !strings.Contains(refused.Error, "--keep-local") {
 		t.Fatalf("diverged refusal not actionable: %q", refused.Error)
 	}
+	// This refusal names the anchor as where the preserved commits are, so it
+	// is the one message that may never also claim no ref was written.
+	assertRefusalRecords(t, refused.Error, f.anchorRef())
 	// `rerun` was offered here as a third exit, but taking it makes the run
 	// active again, so the two real exits this same message names are then
 	// refused with blocked_recover_run_active. Never offer it.
@@ -1131,6 +1135,15 @@ func TestRecoverConcurrentGatePushLosesCleanly(t *testing.T) {
 	if state.Recovered || state.Safety != "blocked_recover_gate_race" {
 		t.Fatalf("racing keep-local recover = %#v", state)
 	}
+	assertRefusalRecords(t, state.Error, f.anchorRef())
+	// The gate-side staging ref was deleted and the delete was confirmed, so
+	// the refusal must not leave the operator hunting for a ref that is gone.
+	if !f.gateRefMissing(f.keepLocalStagingRef()) {
+		t.Fatalf("gate staging ref %s survived the refusal", f.keepLocalStagingRef())
+	}
+	if strings.Contains(state.Error, f.keepLocalStagingRef()) {
+		t.Fatalf("refusal = %q names %s, which was confirmed deleted", state.Error, f.keepLocalStagingRef())
+	}
 	if f.custodyReturned() {
 		t.Fatal("racing recover stamped custody")
 	}
@@ -1372,6 +1385,9 @@ func TestRecoverRebasedPreservedHeadRefusesConcurrentCommitWithoutLosingIt(t *te
 	if state.Safety != "blocked_recover_assumptions_changed" {
 		t.Fatalf("concurrent-commit refusal = %s", state.Safety)
 	}
+	// Both anchors exist by the time the branch swap refuses, so this is also
+	// the case that proves the record reports every ref it wrote, not just one.
+	assertRefusalRecords(t, state.Error, f.anchorRef(), f.localAnchorRef())
 	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != concurrent {
 		t.Fatalf("HEAD = %s, want the concurrent commit %s preserved", got, concurrent)
 	}
@@ -1459,6 +1475,7 @@ func TestRecoverRebasedPreservedHeadRefusesDirtyWorktree(t *testing.T) {
 	if state.Recovered || state.Changed || state.Safety != "blocked_recover_dirty" {
 		t.Fatalf("dirty rebased recover = %#v", state)
 	}
+	assertRefusalRecords(t, state.Error, f.anchorRef())
 	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.submitted {
 		t.Fatalf("dirty refusal moved HEAD to %s", got)
 	}
@@ -1533,6 +1550,7 @@ func TestRecoverRebasedPreservedHeadRechecksAfterAnchoringLocalHead(t *testing.T
 	if state.Recovered || state.Changed || state.Safety != "blocked_recover_assumptions_changed" {
 		t.Fatalf("recover after branch switch = %#v", state)
 	}
+	assertRefusalRecords(t, state.Error, f.anchorRef())
 	if got := strings.TrimSpace(mustRun(t, f.local, "branch", "--show-current")); got != "other-clean-branch" {
 		t.Fatalf("current branch = %q", got)
 	}
@@ -2162,5 +2180,189 @@ func TestActiveOlderRunIsNotSupersededByNewerCustodyReturnedRun(t *testing.T) {
 	}
 	if state.State != StatePipelineOwned || state.Safety != "blocked_pipeline_owned" {
 		t.Fatalf("active older run stopped blocking the branch: %#v", state)
+	}
+}
+
+// assertRefusalRecords is the shared pin for the recovery record: a refusal
+// must name every ref this invocation wrote and must never pair that with the
+// claim that nothing was written. Asserting on Safety alone lets the message
+// revert to the false claim without a single test noticing, which is how the
+// claim survived four review rounds.
+func assertRefusalRecords(t *testing.T, message string, refs ...string) {
+	t.Helper()
+	if strings.Contains(message, "no files or refs were changed") {
+		t.Fatalf("refusal = %q claims nothing was written, but %v exist", message, refs)
+	}
+	for _, ref := range refs {
+		if !strings.Contains(message, ref) {
+			t.Fatalf("refusal = %q does not name %s, which it wrote", message, ref)
+		}
+	}
+}
+
+// keepLocalStagingRef names the gate-side ref keep-local publishes so the kept
+// head's objects reach the gate without a push.
+func (f *recoverFixture) keepLocalStagingRef() string {
+	return "refs/no-mistakes/custody-return/" + f.run.ID
+}
+
+// TestRecoverKeepLocalNamesAGateRefItCouldNotDelete is the regression for the
+// one recovery path that writes into the gate. The staging ref is deleted best
+// effort, so a delete that fails leaves a ref the operator can still find; a
+// refusal that then claimed nothing was written anywhere would be false. The
+// undeletable ref is produced the way a stale lock or a read-only gate
+// produces one: the directory holding the loose ref rejects the unlink.
+func TestRecoverKeepLocalNamesAGateRefItCouldNotDelete(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustWrite(t, filepath.Join(f.local, "rescope.txt"), "rescope\n")
+	mustRun(t, f.local, "add", "rescope.txt")
+	mustRun(t, f.local, "commit", "-m", "diverging rescope")
+	local := mustRun(t, f.local, "rev-parse", "HEAD")
+
+	// Pre-stage the exact head the fetch would deliver, so the fetch is a no-op
+	// that needs no write, then freeze the directory so only the delete fails.
+	mustRun(t, f.gate, "fetch", "--no-tags", f.local, "+refs/heads/feature/recover:"+f.keepLocalStagingRef())
+	refDir := filepath.Join(f.gate, "refs", "no-mistakes", "custody-return")
+	if err := os.Chmod(refDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(refDir, 0o755) })
+
+	// Race the gate so the compare-and-swap refuses and a refusal is emitted
+	// after the failed delete.
+	f.service.beforeGateReset = func() {
+		writer := filepath.Join(t.TempDir(), "racer")
+		mustRun(t, filepath.Dir(writer), "-c", "core.autocrlf=false", "clone", f.gate, writer)
+		configureIdentity(t, writer)
+		mustRun(t, writer, "checkout", "feature/recover")
+		mustWrite(t, filepath.Join(writer, "race.txt"), "race\n")
+		mustRun(t, writer, "add", "race.txt")
+		mustRun(t, writer, "commit", "-m", "racing push")
+		mustRun(t, writer, "push", "origin", "HEAD:refs/heads/feature/recover")
+	}
+
+	state := f.service.Recover(f.ctx, true)
+	if state.Recovered || state.Safety != "blocked_recover_gate_race" {
+		t.Fatalf("racing keep-local recover = %#v", state)
+	}
+	if f.gateRefMissing(f.keepLocalStagingRef()) {
+		t.Fatalf("gate staging ref %s was deleted, so this run never reached the failed-delete path", f.keepLocalStagingRef())
+	}
+	if got := mustRun(t, f.gate, "rev-parse", f.keepLocalStagingRef()+"^{commit}"); got != local {
+		t.Fatalf("staging ref = %s, want the kept head %s", got, local)
+	}
+	assertRefusalRecords(t, state.Error, f.anchorRef(), f.keepLocalStagingRef())
+	if !strings.Contains(state.Error, "in the local gate") {
+		t.Fatalf("refusal = %q does not say the surviving ref is in the gate, not the clone", state.Error)
+	}
+	if f.custodyReturned() {
+		t.Fatal("racing recover stamped custody")
+	}
+}
+
+// TestRecoverAdoptBoundaryRefusalNamesTheAnchorsItWrote pins the adoption
+// pre-move boundary: it is reached after both anchors exist, so it may not
+// deny them either.
+func TestRecoverAdoptBoundaryRefusalNamesTheAnchorsItWrote(t *testing.T) {
+	t.Parallel()
+
+	f := newRebasedRecoverFixture(t, types.RunCancelled)
+	f.service.beforeRecoverBranchMove = func() {
+		mustRun(t, f.local, "checkout", "-b", "other-clean-branch", f.submitted)
+	}
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Changed || state.Safety != "blocked_recover_assumptions_changed" {
+		t.Fatalf("recover after boundary branch switch = %#v", state)
+	}
+	if !strings.Contains(state.Error, "no branch ref was moved") {
+		t.Fatalf("boundary refusal = %q, want it to state the branch was not moved", state.Error)
+	}
+	assertRefusalRecords(t, state.Error, f.anchorRef(), f.localAnchorRef())
+	if got := mustRun(t, f.local, "rev-parse", "refs/heads/feature/recover"); got != f.submitted {
+		t.Fatalf("feature branch = %s, want it untouched at %s", got, f.submitted)
+	}
+	if f.custodyReturned() {
+		t.Fatal("boundary refusal stamped custody")
+	}
+}
+
+// TestRecoverAdoptRefusesAnUnexplainedLocalAnchorWithoutDenyingThePreservedOne
+// pins the create-only local-anchor guard: an anchor at a commit this run did
+// not observe is unexplained and refuses, but the preserved anchor was already
+// fetched and must still be reported.
+func TestRecoverAdoptRefusesAnUnexplainedLocalAnchorWithoutDenyingThePreservedOne(t *testing.T) {
+	t.Parallel()
+
+	f := newRebasedRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.local, "update-ref", f.localAnchorRef(), f.base, "")
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Changed || state.Safety != "blocked_recover_preserve_failed" {
+		t.Fatalf("recover with an unexplained local anchor = %#v", state)
+	}
+	if !strings.Contains(state.Error, "could not be anchored") {
+		t.Fatalf("refusal = %q, want the anchoring-failure wording", state.Error)
+	}
+	assertRefusalRecords(t, state.Error, f.anchorRef())
+	if strings.Contains(state.Error, f.localAnchorRef()) {
+		t.Fatalf("refusal = %q claims it wrote %s, which it refused to write", state.Error, f.localAnchorRef())
+	}
+	if got := mustRun(t, f.local, "rev-parse", f.localAnchorRef()); got != f.base {
+		t.Fatalf("pre-existing local anchor = %s, want it left at %s", got, f.base)
+	}
+	if f.custodyReturned() {
+		t.Fatal("unexplained-anchor refusal stamped custody")
+	}
+}
+
+// TestRecoverAdoptRefusesWhenTheLocalAnchorCannotBeWritten covers the same
+// guard's write failure: a directory/file conflict on the ref path is the
+// refusal a stale .lock or a read-only clone produces.
+func TestRecoverAdoptRefusesWhenTheLocalAnchorCannotBeWritten(t *testing.T) {
+	t.Parallel()
+
+	f := newRebasedRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.local, "update-ref", f.localAnchorRef()+"/blocked", f.base)
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Changed || state.Safety != "blocked_recover_preserve_failed" {
+		t.Fatalf("recover with an unwritable local anchor = %#v", state)
+	}
+	assertRefusalRecords(t, state.Error, f.anchorRef())
+	if got := mustRun(t, f.local, "rev-parse", "refs/heads/feature/recover"); got != f.submitted {
+		t.Fatalf("feature branch = %s, want it untouched at %s", got, f.submitted)
+	}
+	if f.custodyReturned() {
+		t.Fatal("unwritable-anchor refusal stamped custody")
+	}
+}
+
+// TestRecoverRefusesWhenThePreservedAnchorCannotBeWritten is the first test to
+// reach the already-reachable-preserved anchoring path at all. Nothing has been
+// written when it fails, so this is the case that must keep the plain unchanged
+// claim - the record is what decides, not the wording of the refusal.
+func TestRecoverRefusesWhenThePreservedAnchorCannotBeWritten(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.local, "fetch", f.gate, "refs/heads/feature/recover")
+	mustRun(t, f.local, "merge", "--ff-only", f.preserved)
+	mustRun(t, f.local, "update-ref", f.anchorRef()+"/blocked", f.submitted)
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Changed || state.Safety != "blocked_recover_preserve_failed" {
+		t.Fatalf("recover with an unwritable preserved anchor = %#v", state)
+	}
+	if !strings.Contains(state.Error, "could not be anchored locally") {
+		t.Fatalf("refusal = %q, want the local-anchoring failure wording", state.Error)
+	}
+	if !strings.Contains(state.Error, "no files or refs were changed") {
+		t.Fatalf("refusal = %q dropped the unchanged claim, which is true here: nothing was written", state.Error)
+	}
+	if f.custodyReturned() {
+		t.Fatal("failed anchoring stamped custody")
 	}
 }

@@ -180,7 +180,7 @@ func TestCustodyRecoveryGuidance_SyncedAcrossSurfaces(t *testing.T) {
 	// the run, after which both exits this same message names are refused with
 	// blocked_recover_run_active, so it must offer neither the command nor a
 	// reworded version of it.
-	diverged := branchsync.BlockedRecoverDivergedMessage("refs/no-mistakes/recover/run-1")
+	diverged := branchsync.BlockedRecoverDivergedMessage("refs/no-mistakes/recover/run-1", "no files or refs were changed")
 	for _, forbidden := range []string{"rerun", "resume validating"} {
 		if strings.Contains(diverged, forbidden) {
 			t.Errorf("blocked_recover_diverged offers %q, which forecloses the exits it names: %q", forbidden, diverged)
