@@ -1662,13 +1662,16 @@ func TestRecoverAnchorsDetachedPreservedHeadBehindGateBranch(t *testing.T) {
 }
 
 // The refusal text is the operator's only evidence of what a failed recovery
-// touched, so the branch-sourced (non-detached) path may not claim nothing
-// moved: the anchor ref is written by the fetch, and only a fetch that already
-// succeeded can produce a mismatch.
+// touched, so no refusal reached after the anchor fetch may claim nothing
+// moved, and none may blame the gate fetch for a failure that happened after
+// it succeeded.
 func TestPreserveFailedMessageDoesNotDenyTheAnchorItAlreadyWrote(t *testing.T) {
 	t.Parallel()
 
-	mismatch := preserveFailedMessage(afterAnchorFetch(fmt.Errorf("%w: deadbeef", errPreservedAnchorMismatch)), false, "run-1")
+	written := &recoverAnchors{}
+	written.note(recoverAnchorRef("run-1"))
+
+	mismatch := preserveFailedMessage(fmt.Errorf("%w: deadbeef", errPreservedAnchorMismatch), false, "run-1", written)
 	if strings.Contains(mismatch, "no files or refs were changed") {
 		t.Fatalf("mismatch refusal = %q: the anchor ref was written before the mismatch was observed", mismatch)
 	}
@@ -1681,44 +1684,81 @@ func TestPreserveFailedMessageDoesNotDenyTheAnchorItAlreadyWrote(t *testing.T) {
 
 	// Verification can also fail without deciding anything about the ref - a
 	// git failure, or a context cancelled between the fetch and the rev-parse.
-	// The fetch still wrote the anchor, so this claims no more than the
-	// mismatch does.
-	unverified := preserveFailedMessage(afterAnchorFetch(errors.New("rev-parse exploded")), false, "run-1")
+	// The fetch still wrote the anchor and still succeeded, so the refusal may
+	// neither deny the ref nor send the operator to the gate.
+	unverified := preserveFailedMessage(errors.New("rev-parse exploded"), false, "run-1", written)
 	if strings.Contains(unverified, "no files or refs were changed") {
 		t.Fatalf("post-fetch refusal = %q: the anchor ref was written before verification ran", unverified)
 	}
 	if !strings.Contains(unverified, recoverAnchorRef("run-1")) {
 		t.Fatalf("post-fetch refusal = %q, want it to name the anchor ref that was written", unverified)
 	}
+	if strings.Contains(unverified, "could not be fetched from the local gate") {
+		t.Fatalf("post-fetch refusal = %q blames the gate fetch, which had already succeeded", unverified)
+	}
 	if !strings.Contains(unverified, "no worktree files were changed") {
 		t.Fatalf("post-fetch refusal = %q, want it to keep the true worktree claim", unverified)
 	}
 
 	// A fetch that never succeeded wrote no ref, so that claim stays.
-	fetchFailed := preserveFailedMessage(errors.New("fetch exploded"), false, "run-1")
+	fetchFailed := preserveFailedMessage(errors.New("fetch exploded"), false, "run-1", &recoverAnchors{})
 	if !strings.Contains(fetchFailed, "no files or refs were changed") {
 		t.Fatalf("fetch-failure refusal = %q, want the unchanged claim kept", fetchFailed)
+	}
+	if !strings.Contains(fetchFailed, "could not be fetched from the local gate") {
+		t.Fatalf("fetch-failure refusal = %q, want the fetch-failure wording", fetchFailed)
 	}
 }
 
 // The split is on how far the sequence got, so fetchPreservedAnchor has to be
-// the thing that marks its own post-fetch failures: a real gate whose branch
-// does not hold the preserved head fetches cleanly and then fails
-// verification, and the refusal built from that error must not deny the ref
-// the fetch just wrote.
-func TestFetchPreservedAnchorMarksFailuresObservedAfterTheFetch(t *testing.T) {
+// the thing that records the anchor it wrote: a real gate whose branch does not
+// hold the preserved head fetches cleanly and then fails verification, and the
+// refusal built from that state must not deny the ref the fetch just wrote.
+func TestFetchPreservedAnchorRecordsTheAnchorItWrote(t *testing.T) {
 	t.Parallel()
 
 	f := newRecoverFixture(t, types.RunCancelled)
-	err := f.service.fetchPreservedAnchor(f.ctx, f.gate, "feature/recover", f.run.ID, f.anchorRef(), strings.Repeat("0", 40), false)
+	anchors := &recoverAnchors{}
+	err := f.service.fetchPreservedAnchor(f.ctx, f.gate, "feature/recover", f.run.ID, f.anchorRef(), strings.Repeat("0", 40), false, anchors)
 	if err == nil {
 		t.Fatal("expected the anchor verification to fail for a head the gate branch does not hold")
 	}
-	if !errors.Is(err, errPreservedAnchorFetched) {
-		t.Fatalf("error %v is not marked as observed after the fetch", err)
+	if !anchors.wrote(f.anchorRef()) {
+		t.Fatalf("the fetch wrote %s but did not record it", f.anchorRef())
 	}
-	if got := preserveFailedMessage(err, false, f.run.ID); strings.Contains(got, "no files or refs were changed") {
+	if got := preserveFailedMessage(err, false, f.run.ID, anchors); strings.Contains(got, "no files or refs were changed") {
 		t.Fatalf("refusal = %q: the anchor fetch already wrote %s", got, f.anchorRef())
+	}
+}
+
+// Every refusal downstream of the anchor fetch reads the same record, so the
+// routine dirty-worktree exit may not deny the ref either. A dirty behind
+// worktree is the reachable case: the fetch has already run by the time
+// cleanliness is checked.
+func TestRecoverDirtyRefusalDoesNotDenyTheAnchorItWrote(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustWrite(t, filepath.Join(f.local, "file.txt"), "uncommitted operator edit\n")
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Safety != "blocked_recover_dirty" {
+		t.Fatalf("dirty recover = %#v", state)
+	}
+	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()); got != f.preserved {
+		t.Fatalf("anchor ref = %s, want the preserved head %s: this run never reached the path under test", got, f.preserved)
+	}
+	if strings.Contains(state.Error, "no files or refs were changed") {
+		t.Fatalf("dirty refusal = %q: the anchor fetch already wrote %s", state.Error, f.anchorRef())
+	}
+	if !strings.Contains(state.Error, f.anchorRef()) {
+		t.Fatalf("dirty refusal = %q, want it to name the anchor ref that now exists", state.Error)
+	}
+	if !strings.Contains(state.Error, "no worktree files were changed") {
+		t.Fatalf("dirty refusal = %q, want it to keep the true worktree claim", state.Error)
+	}
+	if f.custodyReturned() {
+		t.Fatal("a dirty refusal stamped custody")
 	}
 }
 
@@ -1864,6 +1904,14 @@ func TestRecoverKeepsStagingRefWhenTheAnchorDoesNotMatch(t *testing.T) {
 	}
 	if !strings.Contains(state.Error, f.gateStagingRef()) {
 		t.Fatalf("refusal %q does not name the retained pin %s", state.Error, f.gateStagingRef())
+	}
+	// The detached fetch writes the clone-side anchor too, so this refusal owes
+	// the operator the same evidence the branch-sourced one gives.
+	if !strings.Contains(state.Error, f.anchorRef()) {
+		t.Fatalf("refusal %q does not name the clone anchor %s the fetch wrote", state.Error, f.anchorRef())
+	}
+	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()); got != f.submitted {
+		t.Fatalf("clone anchor = %s, want the mismatched head %s the fetch delivered", got, f.submitted)
 	}
 	if f.gateRefMissing(f.gateStagingRef()) {
 		t.Fatalf("gate staging ref %s was deleted after a rejected anchor instead of being retained for the operator", f.gateStagingRef())
