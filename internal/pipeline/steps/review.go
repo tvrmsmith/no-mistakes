@@ -404,12 +404,12 @@ Risk assessment (after listing all findings):
 			sctx.Log(fmt.Sprintf(
 				"review did not invoke the %s skill (skills used: %v); retrying once",
 				requiredReviewSkill, result.SkillsUsed))
-			// The retry must not inherit the drifted turn's context: resuming
-			// the session that just decided an inline pass was acceptable is
-			// the fastest way to reproduce that decision. Review turns already
-			// run cold, and dropping any reviewer identity the run still
-			// carries keeps that true for the retry even if a legacy or
-			// recovered session identity exists for the role.
+			// The retry is already cold by construction: runReviewTurn never
+			// sets opts.Session, so no review turn consults RunSessions. This
+			// is belt and braces for the drift path only - it drops a legacy
+			// persisted reviewer identity the run may still carry, so nothing
+			// downstream can seat the retry back in the session that ignored
+			// the mandate. It is not what makes the retry session-free.
 			sctx.ResetAgentSession(pipeline.SessionRoleReviewer)
 		}
 		turn, satisfied, err := runReviewTurn(sctx, runOpts)

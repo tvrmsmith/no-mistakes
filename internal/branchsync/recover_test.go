@@ -1668,7 +1668,7 @@ func TestRecoverAnchorsDetachedPreservedHeadBehindGateBranch(t *testing.T) {
 func TestPreserveFailedMessageDoesNotDenyTheAnchorItAlreadyWrote(t *testing.T) {
 	t.Parallel()
 
-	mismatch := preserveFailedMessage(fmt.Errorf("%w: deadbeef", errPreservedAnchorMismatch), false, "run-1")
+	mismatch := preserveFailedMessage(afterAnchorFetch(fmt.Errorf("%w: deadbeef", errPreservedAnchorMismatch)), false, "run-1")
 	if strings.Contains(mismatch, "no files or refs were changed") {
 		t.Fatalf("mismatch refusal = %q: the anchor ref was written before the mismatch was observed", mismatch)
 	}
@@ -1679,10 +1679,46 @@ func TestPreserveFailedMessageDoesNotDenyTheAnchorItAlreadyWrote(t *testing.T) {
 		t.Fatalf("mismatch refusal = %q, want it to keep the true worktree claim", mismatch)
 	}
 
+	// Verification can also fail without deciding anything about the ref - a
+	// git failure, or a context cancelled between the fetch and the rev-parse.
+	// The fetch still wrote the anchor, so this claims no more than the
+	// mismatch does.
+	unverified := preserveFailedMessage(afterAnchorFetch(errors.New("rev-parse exploded")), false, "run-1")
+	if strings.Contains(unverified, "no files or refs were changed") {
+		t.Fatalf("post-fetch refusal = %q: the anchor ref was written before verification ran", unverified)
+	}
+	if !strings.Contains(unverified, recoverAnchorRef("run-1")) {
+		t.Fatalf("post-fetch refusal = %q, want it to name the anchor ref that was written", unverified)
+	}
+	if !strings.Contains(unverified, "no worktree files were changed") {
+		t.Fatalf("post-fetch refusal = %q, want it to keep the true worktree claim", unverified)
+	}
+
 	// A fetch that never succeeded wrote no ref, so that claim stays.
 	fetchFailed := preserveFailedMessage(errors.New("fetch exploded"), false, "run-1")
 	if !strings.Contains(fetchFailed, "no files or refs were changed") {
 		t.Fatalf("fetch-failure refusal = %q, want the unchanged claim kept", fetchFailed)
+	}
+}
+
+// The split is on how far the sequence got, so fetchPreservedAnchor has to be
+// the thing that marks its own post-fetch failures: a real gate whose branch
+// does not hold the preserved head fetches cleanly and then fails
+// verification, and the refusal built from that error must not deny the ref
+// the fetch just wrote.
+func TestFetchPreservedAnchorMarksFailuresObservedAfterTheFetch(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	err := f.service.fetchPreservedAnchor(f.ctx, f.gate, "feature/recover", f.run.ID, f.anchorRef(), strings.Repeat("0", 40), false)
+	if err == nil {
+		t.Fatal("expected the anchor verification to fail for a head the gate branch does not hold")
+	}
+	if !errors.Is(err, errPreservedAnchorFetched) {
+		t.Fatalf("error %v is not marked as observed after the fetch", err)
+	}
+	if got := preserveFailedMessage(err, false, f.run.ID); strings.Contains(got, "no files or refs were changed") {
+		t.Fatalf("refusal = %q: the anchor fetch already wrote %s", got, f.anchorRef())
 	}
 }
 

@@ -199,13 +199,13 @@ func TestReviewLoop_IndependentReviewTurnsOneFixerSession(t *testing.T) {
 	}
 }
 
-// The skill-mandate retry re-runs a turn whose content was rejected, so it
-// must not inherit the drifted turn's context: any reviewer session identity
-// the run still carries is dropped and the retry runs cold. The run here
-// starts with a persisted reviewer identity (the legacy shape crash recovery
-// can still load), which is exactly the state that could seat the retry back
-// in the session that ignored the mandate.
-func TestReviewLoop_SkillMandateRetryRunsSessionFree(t *testing.T) {
+// The skill-mandate retry drops any legacy persisted reviewer identity the
+// run still carries. Review turns are session-free by construction - that is
+// pinned by TestReviewLoop_IndependentReviewTurnsOneFixerSession - so the row
+// deletion is the only behavior this guards: the run starts with a persisted
+// reviewer identity (the legacy shape crash recovery can still load) and must
+// not still hold one once the mandate retry has run.
+func TestReviewLoop_SkillMandateRetryDropsALegacyReviewerIdentity(t *testing.T) {
 	turns := 0
 	mock := &sessionMockAgent{}
 	mock.respond = func(opts agent.RunOpts) *agent.Result {
@@ -234,9 +234,6 @@ func TestReviewLoop_SkillMandateRetryRunsSessionFree(t *testing.T) {
 	reviews := reviewCalls(mock.snapshot())
 	if len(reviews) != 2 {
 		t.Fatalf("expected the drifted turn plus one retry, got %d review calls", len(reviews))
-	}
-	if reviews[1].Session != nil && reviews[1].Session.ID != "" {
-		t.Fatalf("the mandate retry resumed session %+v, but it must run cold", reviews[1].Session)
 	}
 	sessions, err := database.GetRunAgentSessions(run.ID)
 	if err != nil {
