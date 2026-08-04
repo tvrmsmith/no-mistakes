@@ -3,6 +3,7 @@ package branchsync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1657,6 +1658,31 @@ func TestRecoverAnchorsDetachedPreservedHeadBehindGateBranch(t *testing.T) {
 	}
 	if !f.custodyReturned() {
 		t.Fatal("detached-preserved recovery did not stamp custody")
+	}
+}
+
+// The refusal text is the operator's only evidence of what a failed recovery
+// touched, so the branch-sourced (non-detached) path may not claim nothing
+// moved: the anchor ref is written by the fetch, and only a fetch that already
+// succeeded can produce a mismatch.
+func TestPreserveFailedMessageDoesNotDenyTheAnchorItAlreadyWrote(t *testing.T) {
+	t.Parallel()
+
+	mismatch := preserveFailedMessage(fmt.Errorf("%w: deadbeef", errPreservedAnchorMismatch), false, "run-1")
+	if strings.Contains(mismatch, "no files or refs were changed") {
+		t.Fatalf("mismatch refusal = %q: the anchor ref was written before the mismatch was observed", mismatch)
+	}
+	if !strings.Contains(mismatch, recoverAnchorRef("run-1")) {
+		t.Fatalf("mismatch refusal = %q, want it to name the anchor ref that was written", mismatch)
+	}
+	if !strings.Contains(mismatch, "no worktree files were changed") {
+		t.Fatalf("mismatch refusal = %q, want it to keep the true worktree claim", mismatch)
+	}
+
+	// A fetch that never succeeded wrote no ref, so that claim stays.
+	fetchFailed := preserveFailedMessage(errors.New("fetch exploded"), false, "run-1")
+	if !strings.Contains(fetchFailed, "no files or refs were changed") {
+		t.Fatalf("fetch-failure refusal = %q, want the unchanged claim kept", fetchFailed)
 	}
 }
 

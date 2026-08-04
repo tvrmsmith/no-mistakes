@@ -404,6 +404,13 @@ Risk assessment (after listing all findings):
 			sctx.Log(fmt.Sprintf(
 				"review did not invoke the %s skill (skills used: %v); retrying once",
 				requiredReviewSkill, result.SkillsUsed))
+			// The retry must not inherit the drifted turn's context: resuming
+			// the session that just decided an inline pass was acceptable is
+			// the fastest way to reproduce that decision. Review turns already
+			// run cold, and dropping any reviewer identity the run still
+			// carries keeps that true for the retry even if a legacy or
+			// recovered session identity exists for the role.
+			sctx.ResetAgentSession(pipeline.SessionRoleReviewer)
 		}
 		turn, satisfied, err := runReviewTurn(sctx, runOpts)
 		if err != nil {

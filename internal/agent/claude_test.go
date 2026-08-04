@@ -447,7 +447,7 @@ func TestClaudeAgent_FinalizeResult_NoSchemaAllowsTextOnly(t *testing.T) {
 	result, err := finalizeClaudeResult(&claudeResult{
 		Subtype: "success",
 		text:    "All tests pass. Here's what I fixed:",
-	}, nil, TokenUsage{InputTokens: 10, OutputTokens: 5})
+	}, nil, TokenUsage{InputTokens: 10, OutputTokens: 5}, &claudeStream{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestClaudeAgent_FinalizeResult_NoSchemaAllowsTextOnly(t *testing.T) {
 }
 
 func TestClaudeAgent_FinalizeResult_WithSchemaRequiresStructuredOutput(t *testing.T) {
-	_, err := finalizeClaudeResult(&claudeResult{Subtype: "success", text: "plain text"}, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	_, err := finalizeClaudeResult(&claudeResult{Subtype: "success", text: "plain text"}, json.RawMessage(`{"type":"object"}`), TokenUsage{}, &claudeStream{})
 	if err == nil {
 		t.Fatal("expected error when structured output is missing")
 	}
@@ -473,12 +473,37 @@ func TestClaudeAgent_FinalizeResult_WithSchemaRequiresStructuredOutput(t *testin
 }
 
 func TestClaudeAgent_FinalizeResult_ErrorSubtypeNotRetryable(t *testing.T) {
-	_, err := finalizeClaudeResult(&claudeResult{Subtype: "error", IsError: true}, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	_, err := finalizeClaudeResult(&claudeResult{Subtype: "error", IsError: true}, json.RawMessage(`{"type":"object"}`), TokenUsage{}, &claudeStream{})
 	if err == nil {
 		t.Fatal("expected error for error subtype")
 	}
 	if errors.Is(err, errNoStructuredOutput) {
 		t.Fatal("error subtype should not be retryable")
+	}
+}
+
+// A mid-stream stall is reported by the CLI as a clean exit carrying a
+// non-success result subtype, so this is the exit path the stream-stall retry
+// most needs: the diagnostic lives only on the event stream, and without it
+// the error names nothing classifyTransient can match.
+func TestClaudeAgent_FinalizeResult_SubtypeFailureCarriesStreamDiagnostic(t *testing.T) {
+	var stream claudeStream
+	stream.tee(nil)("API Error: Stream idle timeout - no chunks received")
+
+	_, err := finalizeClaudeResult(
+		&claudeResult{Subtype: "error_during_execution", IsError: true},
+		json.RawMessage(`{"type":"object"}`), TokenUsage{}, &stream)
+	if err == nil {
+		t.Fatal("expected an error for a non-success subtype")
+	}
+	if !strings.Contains(err.Error(), "subtype=error_during_execution") {
+		t.Errorf("error %q dropped the subtype", err)
+	}
+	if !strings.Contains(err.Error(), "Stream idle timeout") {
+		t.Fatalf("error %q does not name the stream failure", err)
+	}
+	if _, ok := classifyTransient(err); !ok {
+		t.Fatalf("error %q is not classified transient, so the stalled run would not retry", err)
 	}
 }
 

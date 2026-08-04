@@ -41,6 +41,15 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 				host = prHost
 			}
 		}
+		if repo == "" {
+			// Fail closed. Without a slug gh carries no --repo, so it infers
+			// both the repository AND the branch from its working directory -
+			// which, with an scm.cli_wrapper configured, is the developer's
+			// live checkout on whatever branch they left it on. Skipping the
+			// step is the only safe answer; there is nothing that names the
+			// repository this run belongs to.
+			return nil, "could not resolve the GitHub repository from the remote URL"
+		}
 		forkRepo := ""
 		if sctx.Repo.ForkURL != "" {
 			// forkRepo is only used to extract the fork owner for --head owner:branch;
@@ -127,9 +136,12 @@ func scmCLIFactory(sctx *pipeline.StepContext, base github.CmdFactory) github.Cm
 		}
 		cmd := base(ctx, name, args...)
 		// The wrapper resolves credentials relative to its working directory,
-		// and gh addresses the repository through --repo rather than the cwd,
-		// so pointing at the user's real checkout is safe and is what makes
-		// directory-scoped credentials resolve correctly. It is the wrapper's
+		// which is what makes directory-scoped credentials resolve correctly.
+		// Pointing at the user's real checkout is safe only because gh
+		// addresses the repository through --repo rather than the cwd, and
+		// buildHost fails closed rather than building a GitHub host whose slug
+		// is unknown, so no gh invocation can fall back to inferring the
+		// repository or branch from that checkout. It is the wrapper's
 		// requirement alone: gh_config_dir travels in the environment, so
 		// setting only it must leave the working directory exactly as the base
 		// factory chose it.
