@@ -269,6 +269,7 @@ type Service struct {
 
 	beforeApply               func()
 	beforeGateReset           func()
+	beforeGateBranchHandback  func()
 	beforePreservedFetch      func()
 	beforeRecoverWorktreeMove func()
 	beforeRecoverBranchMove   func()
@@ -591,9 +592,10 @@ func (s *Service) Apply(ctx context.Context) State {
 //	behind     dirty     refuse (commit/stash first)    custody at local head;
 //	                                                    gate reset to it (CAS)
 //	diverged,  clean     anchor the pre-recovery local  custody at local head;
-//	P contains           head, then move to P with      gate reset to it (CAS)
-//	all local            fail-closed ops; return custody
-//	work
+//	P contains           head, hand a detached P's      gate reset to it (CAS)
+//	all local            gate branch to P (CAS), then
+//	work                 move to P with fail-closed
+//	                     ops; return custody
 //	diverged,  dirty     refuse (commit/stash first)    custody at local head;
 //	P contains                                          gate reset to it (CAS)
 //	all local
@@ -631,6 +633,13 @@ func (s *Service) Apply(ctx context.Context) State {
 //     head instead of taking P, --keep-local never touches the worktree and moves
 //     the gate branch to the kept head with an atomic compare-and-swap, so a
 //     concurrent gate push wins and recovery refuses.
+//   - Custody is only returned in a state the next run can actually use.
+//     Adopting a DETACHED P is the one path that hands the operator a head the
+//     gate branch has diverged from, so it also hands that branch to P with the
+//     same atomic compare-and-swap, against the submitted head it verified;
+//     otherwise the fresh `axi run` the recovery recommends dies on a
+//     non-fast-forward gate push. Every other relation leaves the gate branch
+//     alone, because it already reaches the head the operator is left on.
 //   - Anything unverifiable (missing gate where required, out-of-band gate
 //     branch movement, a recorded head the gate never received,
 //     failed anchor write or fetch, changed assumptions) refuses with a reason
@@ -794,7 +803,14 @@ func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
 				blocked.NextAction = inspectWorktreeAction()
 				return blocked
 			}
-			return s.recoverAdoptPreserved(ctx, run, state, preserved, anchors)
+			// A detached preserved head reached by adoption is the one case
+			// where the recovered branch diverges from the gate branch, so the
+			// gate has to be handed the head the operator is being given.
+			var handback *gateBranchHandback
+			if detachedPreserved {
+				handback = &gateBranchHandback{branch: branch, from: gateHead}
+			}
+			return s.recoverAdoptPreserved(ctx, run, state, preserved, handback, anchors)
 		}
 		state.Relation = RelationDiverged
 		blocked := blockedPlan(state, StatePipelineOwned, "blocked_recover_diverged", BlockedRecoverDivergedMessage(anchorRef, anchors.unchanged()))
@@ -965,7 +981,17 @@ func preservedContainsLocalWork(ctx context.Context, dir, local, preserved strin
 // uncommitted changes and loses nothing: containment was proven before the move
 // and the pre-recovery head stays anchored. Custody is stamped only after the
 // whole move is verified.
-func (s *Service) recoverAdoptPreserved(ctx context.Context, run *db.Run, state State, preserved string, anchors *recoverAnchors) State {
+//
+// handback, when set, additionally hands the gate branch to the adopted head
+// (see gateBranchHandback). It runs before the worktree move on purpose: a
+// recovery that stopped between the two must converge when it is re-run, and
+// only this order does. With the gate moved first, the retry finds the gate
+// branch at the preserved head and takes the ordinary adoption path; with the
+// worktree moved first, the retry finds the branch already equal to the
+// preserved head, returns custody through the reachable-anchor path, and would
+// silently leave the gate behind forever - the very state this hand-back
+// exists to close.
+func (s *Service) recoverAdoptPreserved(ctx context.Context, run *db.Run, state State, preserved string, handback *gateBranchHandback, anchors *recoverAnchors) State {
 	if s.beforeRecoverWorktreeMove != nil {
 		s.beforeRecoverWorktreeMove()
 	}
@@ -997,6 +1023,9 @@ func (s *Service) recoverAdoptPreserved(ctx context.Context, run *db.Run, state 
 	}
 	if anchored, err := git.Run(ctx, wd, "rev-parse", localAnchor+"^{commit}"); err != nil || anchored != head {
 		return blockedPlan(state, StatePipelineOwned, "blocked_recover_preserve_failed", anchors.refusal("the pre-recovery local head could not be verified after anchoring"))
+	}
+	if blocked, ok := s.handBackGateBranch(ctx, state, handback, preserved, anchors); !ok {
+		return blocked
 	}
 
 	if s.beforeRecoverBranchMove != nil {
@@ -1063,6 +1092,43 @@ func (s *Service) recoverAdoptPreserved(ctx context.Context, run *db.Run, state 
 		return state
 	}
 	return s.finishRecover(ctx, run, true)
+}
+
+// gateBranchHandback names the gate branch move that adopting a DETACHED
+// preserved head requires, and the exact head recovery verified it at. It is
+// set only on that path: everywhere else the gate branch already holds the
+// preserved head, or the operator is explicitly keeping a different one.
+type gateBranchHandback struct {
+	branch string
+	from   string
+}
+
+// handBackGateBranch moves the gate branch off the submitted head onto the
+// preserved pipeline head the worktree is adopting.
+//
+// Recovery hands the operator a rebased head the gate branch has diverged
+// from, so leaving that branch at the submitted head makes the ordinary next
+// run - the one recovery itself recommends - fail on a non-fast-forward gate
+// push, with the recovered work stuck behind a raw Git error.
+//
+// The move is an atomic compare-and-swap against the submitted head recovery
+// already verified, never a check followed by an unconditional write: a gate
+// push landing in that window wins and recovery refuses, exactly as
+// --keep-local does. No object staging is needed, because this path exists
+// only where the gate is already proven to hold the preserved commit; and it
+// is deliberately update-ref rather than a push, which would fire the gate's
+// receive hooks and start a pipeline run.
+func (s *Service) handBackGateBranch(ctx context.Context, state State, handback *gateBranchHandback, preserved string, anchors *recoverAnchors) (State, bool) {
+	if handback == nil {
+		return State{}, true
+	}
+	if s.beforeGateBranchHandback != nil {
+		s.beforeGateBranchHandback()
+	}
+	if _, err := git.Run(ctx, s.GateDir, "update-ref", "refs/heads/"+handback.branch, preserved, handback.from); err != nil {
+		return blockedPlan(state, StatePipelineOwned, "blocked_recover_gate_race", anchors.refusal("the gate branch changed while custody was being returned; re-run the recovery")), false
+	}
+	return State{}, true
 }
 
 func (s *Service) anchorReachablePreserved(ctx context.Context, state State, anchorRef, preserved string, anchors *recoverAnchors) (State, bool) {
