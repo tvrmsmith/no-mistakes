@@ -414,6 +414,8 @@ type AutoFixRaw struct {
 	Rebase   *int `yaml:"rebase"`
 	// MinSeverity is the lowest finding severity the executor will fix on its
 	// own. Unrecognized and blank values leave the resolved default in place.
+	// It is trusted-only (see EffectiveRepoConfig), unlike the retry counts
+	// above it.
 	MinSeverity *string `yaml:"min_severity"`
 }
 
@@ -1504,8 +1506,9 @@ func validatePathInstructionGlob(pattern string) error {
 // Non-executing fields (ignore patterns, auto-fix, commit, intent, test) are
 // always taken from the pushed copy, matching prior behavior, since they cannot
 // run arbitrary shell, select a process, or spend the maintainer's CI minutes.
-// The single exception inside test is evidence.branch, which names a git ref
-// the daemon pushes to and is therefore trusted-only.
+// Two exceptions live inside them: test.evidence.branch, which names a git ref
+// the daemon pushes to, and auto_fix.min_severity, which is a gate strength
+// rather than an effort bound. Both are trusted-only.
 func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
 	if pushed == nil {
 		pushed = &RepoConfig{}
@@ -1542,6 +1545,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// artifacts are collected. The publisher independently refuses any
 		// branch without its marker file, so this is defense in depth.
 		effective.Test.Evidence.Branch = trusted.Test.Evidence.Branch
+		// auto_fix.min_severity is the one trusted-only sub-field of an
+		// otherwise pushed-branch-readable block: the retry counts only bound
+		// how hard the pipeline tries, while the severity floor is a gate
+		// strength - a pushed branch that raised it would suppress automatic
+		// fixing of its own warnings. The rest of auto_fix stays pushed.
+		effective.AutoFix.MinSeverity = trusted.AutoFix.MinSeverity
 	} else {
 		effective.Document = DocumentRaw{}
 		effective.Review = ReviewRaw{}
@@ -1549,6 +1558,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.NoCI = false
 		effective.CI = CIRaw{}
 		effective.Test.Evidence.Branch = nil
+		effective.AutoFix.MinSeverity = nil
 	}
 	if allowRepoCommands {
 		return &effective

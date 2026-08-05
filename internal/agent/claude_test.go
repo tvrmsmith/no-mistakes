@@ -784,6 +784,12 @@ func TestClaudeStdinHelper(t *testing.T) {
 		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"API Error: Stream idle timeout - no chunks received"}]}}`+"\n")
 		_, _ = io.WriteString(os.Stdout, `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"helper-session"}`+"\n")
 		return
+	case "no-result":
+		// A claude that reports a diagnostic on the stream and then exits 0
+		// without ever emitting a result event: nothing failed at the process
+		// level, so the diagnostic is the only explanation available.
+		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"API Error: Stream idle timeout - no chunks received"}]}}`+"\n")
+		return
 	case "stall-then-hang":
 		// A stalled claude that never exits: it writes a deprecation notice on
 		// stderr, reports the stall as assistant text, emits one more event,
@@ -1100,6 +1106,27 @@ func TestClaudeAgent_ExhaustedStreamStallNamesTheCause(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Stream idle timeout") {
 		t.Fatalf("error %q does not name the stream failure", err)
+	}
+}
+
+// A claude that exits 0 without a result event reports no process-level
+// failure at all, so the diagnostics it left on the event stream are the only
+// evidence of what went wrong; a bare "no result event" would strand the
+// operator with an unexplained failure and hide the text classifyTransient
+// recognizes.
+func TestClaudeAgent_NoResultEventCarriesTheStreamDiagnostic(t *testing.T) {
+	t.Setenv("NM_CLAUDE_STDIN_HELPER", "no-result")
+	a := newClaudeStdinHelperAgent(t)
+
+	_, err := a.runOnce(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected a run with no result event to fail")
+	}
+	if !strings.Contains(err.Error(), "no result event") {
+		t.Fatalf("error %q does not name the missing result event", err)
+	}
+	if !strings.Contains(err.Error(), "Stream idle timeout") {
+		t.Errorf("error %q dropped the stream diagnostic", err)
 	}
 }
 

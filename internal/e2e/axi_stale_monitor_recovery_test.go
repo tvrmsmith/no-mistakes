@@ -159,6 +159,14 @@ func TestAxiStaleMonitorRerunBeforeSyncStrandsTheRecovery(t *testing.T) {
 	if runErr == nil {
 		t.Fatalf("axi run from the stranded clone should fail:\n%s", runOut)
 	}
+	// The failure has to be that rejection and not any other error that would
+	// also leave runErr non-nil: it must name the push to the gate, the branch,
+	// and the ref rejection the behind clone earns.
+	for _, want := range []string{"push \\\"" + branch + "\\\" to gate", "! [rejected]", "(fetch first)"} {
+		if !strings.Contains(runOut, want) {
+			t.Fatalf("axi run from the stranded clone did not report the rejected trigger push (%q missing):\n%s", want, runOut)
+		}
+	}
 
 	if out, err := h.RunInDir(operator, "axi", "abort", "--run", reran.ID); err != nil {
 		t.Fatalf("abort stranded rerun: %v\n%s", err, out)
