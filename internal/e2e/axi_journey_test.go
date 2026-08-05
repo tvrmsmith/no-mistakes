@@ -626,6 +626,90 @@ func TestAxiCustodyRecoveryAfterRebaseJourney(t *testing.T) {
 	}
 }
 
+// TestAxiCustodyRecoveryFromDetachedPreservedHeadJourney is the same rebased
+// custody return in the shape where the gate BRANCH never moved: the run is
+// cancelled at the review gate, before any fix round pushes the rebased head
+// back, so the preserved pipeline head lives in the gate as a detached commit
+// while refs/heads/<branch> still holds the submitted head. Recovery adopts
+// the detached head, which leaves the operator on a commit the gate branch has
+// diverged from - and the fresh `axi run` recovery itself recommends then died
+// on a raw non-fast-forward gate push. The journey drives the real binary end
+// to end and proves the recommended next action now works.
+func TestAxiCustodyRecoveryFromDetachedPreservedHeadJourney(t *testing.T) {
+	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: rebaseCustodyScenario(t)})
+	h.CommitChange("init-detached-recover", "seed.txt", "seed\n", "seed detached recover init")
+	initWorktree := h.AddWorktree("init-detached-recover")
+	if out, err := h.RunInDir(initWorktree, "init"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+
+	submitted := h.CommitChange("feature/detached-recover", "feature.txt", "unsafe\n", "add unsafe feature")
+
+	// The default branch advances before the run, so the pipeline's rebase step
+	// gives the operator's commits new SHAs.
+	h.CommitChange("main", "upstream-advance.txt", "advance\n", "upstream advance")
+	if out, err := h.runGit(context.Background(), h.WorkDir, "push", "origin", "main"); err != nil {
+		t.Fatalf("advance upstream main: %v\n%s", err, out)
+	}
+
+	operator := h.AddWorktree("feature/detached-recover")
+	gateOut, err := h.RunInDir(operator, "axi", "run", "--intent", "guard the feature across a rebased base before cancellation")
+	if err != nil || !strings.Contains(gateOut, "rebase-1") {
+		t.Fatalf("initial review gate: %v\n%s", err, gateOut)
+	}
+	// Cancel at the gate: no fix round runs, so nothing publishes the rebased
+	// head onto the gate branch.
+	abortOut, abortErr := h.RunInDir(operator, "axi", "abort")
+	if abortErr != nil {
+		t.Fatalf("axi abort: %v\n%s", abortErr, abortOut)
+	}
+	run := h.WaitForRun("feature/detached-recover", 30*time.Second)
+	if run.Status != types.RunCancelled {
+		t.Fatalf("run status after abort = %s", run.Status)
+	}
+
+	// The fixture must model the detached shape against the real gate: the
+	// preserved pipeline head is the run's rebased head, and the gate branch
+	// ref is still exactly the submitted head.
+	preserved := run.HeadSHA
+	if preserved == submitted {
+		t.Fatalf("pipeline did not rebase: run head is still the submitted head %s", submitted)
+	}
+	gateDir := filepath.Join(h.NMHome, "repos", h.repoID()+".git")
+	gateBranch, gitErr := h.runGit(context.Background(), gateDir, "rev-parse", "refs/heads/feature/detached-recover")
+	if gitErr != nil || strings.TrimSpace(string(gateBranch)) != submitted {
+		t.Fatalf("gate branch = %s (err %v), want the unmoved submitted head %s", strings.TrimSpace(string(gateBranch)), gitErr, submitted)
+	}
+
+	recoverOut, err := h.RunInDir(operator, "axi", "sync", "--recover")
+	if err != nil {
+		t.Fatalf("detached preserved-head recovery escalated: %v\n%s", err, recoverOut)
+	}
+	for _, want := range []string{"recovered: true", "state: custody_returned", "no-mistakes axi run --intent"} {
+		if !strings.Contains(recoverOut, want) {
+			t.Errorf("recover output missing %q:\n%s", want, recoverOut)
+		}
+	}
+	if got, gitErr := h.runGit(context.Background(), operator, "rev-parse", "HEAD"); gitErr != nil || strings.TrimSpace(string(got)) != preserved {
+		t.Fatalf("operator HEAD after recovery = %s (err %v), want preserved %s", strings.TrimSpace(string(got)), gitErr, preserved)
+	}
+	// Recovery hands the gate branch to the head it gave the operator.
+	gateBranch, gitErr = h.runGit(context.Background(), gateDir, "rev-parse", "refs/heads/feature/detached-recover")
+	if gitErr != nil || strings.TrimSpace(string(gateBranch)) != preserved {
+		t.Fatalf("gate branch after recovery = %s (err %v), want the adopted head %s", strings.TrimSpace(string(gateBranch)), gitErr, preserved)
+	}
+
+	// The advertised next action, executed exactly as recovery words it.
+	freshOut, err := h.RunInDir(operator, "axi", "run", "--intent", "validate on top of the recovered head")
+	if err != nil {
+		t.Fatalf("the fresh run recovery recommends failed: %v\n%s", err, freshOut)
+	}
+	if !strings.Contains(freshOut, "gate:") {
+		t.Fatalf("fresh pipeline did not start cleanly after detached recovery:\n%s", freshOut)
+	}
+	t.Logf("recover:\n%s\nfresh run:\n%s", recoverOut, freshOut)
+}
+
 // TestAxiPrePushAbortUnmovedHeadCustodyJourney reproduces the ownership gap
 // hit when delivery switches to a direct PR mid-validation: the worker aborts
 // the run at the review gate BEFORE the pipeline changes anything, so the
