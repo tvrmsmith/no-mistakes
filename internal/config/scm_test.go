@@ -57,10 +57,19 @@ func TestMerge_RepoConfigCannotSetSCM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRepoFromBytes: %v", err)
 	}
+	// The operator's real settings have to still be the ones that survive, so
+	// the assertion fails both if the repo config could win and if the global
+	// settings never reached the effective config at all.
+	global := &GlobalConfig{}
+	global.SCM.CLIWrapper = []string{"op", "plugin", "run", "--"}
+	global.SCM.GHConfigDir = "/gh-config"
 
-	merged := Merge(&GlobalConfig{}, repo)
-	if len(merged.SCM.CLIWrapper) != 0 || merged.SCM.GHConfigDir != "" {
-		t.Fatalf("merged scm = %+v, want the zero value (repo config must not override)", merged.SCM)
+	merged := Merge(global, repo)
+	if got, want := strings.Join(merged.SCM.CLIWrapper, " "), "op plugin run --"; got != want {
+		t.Errorf("merged scm.cli_wrapper = %q, want the operator's %q", got, want)
+	}
+	if merged.SCM.GHConfigDir != "/gh-config" {
+		t.Errorf("merged scm.gh_config_dir = %q, want the operator's %q", merged.SCM.GHConfigDir, "/gh-config")
 	}
 }
 

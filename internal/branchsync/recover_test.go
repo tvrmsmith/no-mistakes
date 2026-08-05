@@ -1859,6 +1859,104 @@ func TestRecoverKeepsStagingRefWhenTheFetchIsCancelled(t *testing.T) {
 	}
 }
 
+// A fetch can land the anchor ref and still report failure - a cancellation or
+// a gate error observed after the ref update. The refusal then has to name the
+// ref that now exists in the operator's clone, because it is real state the
+// operator can find and the exit status alone would deny it.
+func TestRecoverRecordsTheAnchorAFailedFetchStillWrote(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	f.strandDetachedPreserved()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.service.beforePreservedFetch = func() {
+		// The ref lands, exactly as a fetch that completed its ref update
+		// leaves it, and the fetch itself then fails.
+		mustRun(t, f.local, "update-ref", f.anchorRef(), f.submitted)
+		cancel()
+	}
+
+	state := f.service.Recover(ctx, false)
+	if state.Recovered || state.Safety != "blocked_recover_preserve_failed" {
+		t.Fatalf("recover = %#v, want blocked_recover_preserve_failed", state)
+	}
+	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", "--quiet", f.anchorRef()); err != nil {
+		t.Fatalf("anchor ref %s does not exist, so this run never reached the path under test", f.anchorRef())
+	}
+	if !strings.Contains(state.Error, f.anchorRef()+" in your clone was written") {
+		t.Fatalf("refusal = %q, want it to name the anchor ref the failed fetch left in the clone", state.Error)
+	}
+}
+
+// The counterfactual: an anchor left by an EARLIER attempt at a commit other
+// than the preserved head is not this invocation's work. Recovery re-fetches
+// precisely because that ref is wrong, so a refusal that reports it as written
+// tells the operator their commits are anchored there when they are not.
+func TestRecoverDoesNotClaimAStaleAnchorItDidNotWrite(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	f.strandDetachedPreserved()
+	mustRun(t, f.local, "update-ref", f.anchorRef(), f.submitted)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.service.beforePreservedFetch = cancel
+
+	state := f.service.Recover(ctx, false)
+	if state.Recovered || state.Safety != "blocked_recover_preserve_failed" {
+		t.Fatalf("recover = %#v, want blocked_recover_preserve_failed", state)
+	}
+	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()); got != f.submitted {
+		t.Fatalf("anchor ref = %s, want the stale %s: this run never reached the path under test", got, f.submitted)
+	}
+	if strings.Contains(state.Error, "in your clone was written") {
+		t.Fatalf("refusal = %q claims a fetch wrote %s, which still holds the stale head %s", state.Error, f.anchorRef(), f.submitted)
+	}
+	if !strings.Contains(state.Error, "could not be fetched from the local gate") {
+		t.Fatalf("refusal = %q, want the fetch-failure wording", state.Error)
+	}
+}
+
+// The gate-side pin is released best effort once the commits are safe in the
+// clone. A release the gate refused leaves a ref the operator can find, so the
+// record has to keep it and every later refusal has to report it - the pin is
+// never deleted on a failure path, only reported honestly when its delete did
+// not happen.
+func TestRecoverReportsTheGatePinItCouldNotDelete(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	f.strandDetachedPreserved()
+	mustWrite(t, filepath.Join(f.local, "file.txt"), "uncommitted operator edit\n")
+
+	pinDir := filepath.Join(f.gate, "refs", "no-mistakes", "preserved")
+	f.service.beforePreservedFetch = func() {
+		// A read-only ref directory is the same lock refusal a stale .lock or
+		// a permission-hardened gate produces on `update-ref -d`.
+		if err := os.Chmod(pinDir, 0o555); err != nil {
+			t.Fatalf("chmod pin dir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(pinDir, 0o755) })
+	}
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Safety != "blocked_recover_dirty" {
+		t.Fatalf("recover = %#v, want blocked_recover_dirty", state)
+	}
+	if f.gateRefMissing(f.gateStagingRef()) {
+		t.Fatalf("gate pin %s was deleted, so this run never reached the refused-delete path", f.gateStagingRef())
+	}
+	if strings.Contains(state.Error, "no files or refs were changed") {
+		t.Fatalf("refusal = %q while the gate pin %s still exists", state.Error, f.gateStagingRef())
+	}
+	if !strings.Contains(state.Error, f.gateStagingRef()+" in the local gate was written and could not be confirmed deleted") {
+		t.Fatalf("refusal = %q, want it to report the retained gate pin %s", state.Error, f.gateStagingRef())
+	}
+}
+
 // TestRecoverDoesNotClaimAPinTheGateRefused covers the failure shape where the
 // gate rejects the pin write itself: a directory/file conflict on the ref path
 // is the same lock refusal a stale .lock or a read-only gate produces. No ref

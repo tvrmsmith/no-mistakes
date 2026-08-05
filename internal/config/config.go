@@ -1598,9 +1598,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 //   - AllowRepoCommands, which hands commands and agent selection to whatever
 //     a contributor pushed. That switch stays default-branch-only; a local
 //     convenience override must not be able to widen the push trust boundary.
-//   - Every non-executing field (ignore patterns, auto-fix, commit, intent,
-//     test). Those already come from the pushed branch by design, and this
-//     function only concerns the trusted side.
+//   - Every non-executing field (ignore patterns, the auto-fix retry counts,
+//     commit, intent, test). Those already come from the pushed branch by
+//     design, and this function only concerns the trusted side. The one
+//     exception inside them, auto_fix.min_severity, is trusted-only because it
+//     is a gate strength rather than an effort bound; it is still not sourced
+//     from the working-path copy, which carries gate-control fields only.
 //
 // DisableProjectSettings merges as "true wins": a plain bool cannot
 // distinguish "set to false" from "absent", so the working-path copy can turn
