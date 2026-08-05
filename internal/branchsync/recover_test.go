@@ -1450,6 +1450,12 @@ func TestRecoverRebasedPreservedHeadRefusesConcurrentWorktreeEditWithoutLosingIt
 	if state.Safety != "blocked_recover_worktree_busy" {
 		t.Fatalf("concurrent-edit refusal = %s", state.Safety)
 	}
+	// The refusal comes after the anchor was written, so it owes the operator
+	// the same evidence its sibling apply-failure gives: a ref they can find
+	// the pre-recovery head at.
+	if !strings.Contains(state.Error, f.localAnchorRef()) {
+		t.Fatalf("refusal %q does not name the pre-recovery anchor %s it wrote", state.Error, f.localAnchorRef())
+	}
 	if got := readOptional(t, filepath.Join(f.local, "upstream.txt")); got != "uncommitted local draft\n" {
 		t.Fatalf("concurrent worktree edit lost: %q", got)
 	}
@@ -1979,7 +1985,7 @@ func TestRecoverDoesNotClaimAPinTheGateRefused(t *testing.T) {
 	if !f.gateRefMissing(f.gateStagingRef()) {
 		t.Fatalf("gate staging ref %s exists, so this run never reached the refused-write path", f.gateStagingRef())
 	}
-	if strings.Contains(state.Error, "stay pinned in the gate") {
+	if strings.Contains(state.Error, "deliberately retained") {
 		t.Fatalf("refusal %q claims the preserved commits are pinned, but %s was never written", state.Error, f.gateStagingRef())
 	}
 	if !strings.Contains(state.Error, "could not be pinned in the local gate") {
@@ -2017,8 +2023,11 @@ func TestRecoverKeepsStagingRefWhenTheAnchorDoesNotMatch(t *testing.T) {
 	if !strings.Contains(state.Error, "does not hold the preserved head") {
 		t.Fatalf("mismatch refusal = %q, want the anchored-ref mismatch wording", state.Error)
 	}
-	if !strings.Contains(state.Error, f.gateStagingRef()) {
-		t.Fatalf("refusal %q does not name the retained pin %s", state.Error, f.gateStagingRef())
+	if !strings.Contains(state.Error, f.gateStagingRef()+" in the local gate was deliberately retained") {
+		// A pin kept on purpose is not a delete that failed: wording it as
+		// leftover staging tells the operator to clean up the only ref holding
+		// their pipeline-authored commits reachable.
+		t.Fatalf("refusal %q does not report the retained pin %s as retained", state.Error, f.gateStagingRef())
 	}
 	// The detached fetch writes the clone-side anchor too, so this refusal owes
 	// the operator the same evidence the branch-sourced one gives.
