@@ -550,19 +550,19 @@ Both fields are global-only, since they select which credentials the daemon auth
 | Type    | `boolean` |
 | Default | `false`   |
 
-Reads the gate-control fields of `.no-mistakes.yaml` from each repo's registered working path — your own checkout — and layers them over the trusted default-branch copy.
+Reads the gate-control fields of `.no-mistakes.yaml` from each repo's registered working path — your own checkout — instead of from the trusted default-branch copy.
 
-The normal rule is that `commands`, `agent`, `document.instructions`, `review.path_instructions`, and `disable_project_settings` come only from a fresh fetch of the default branch, so a contributor cannot choose what the daemon executes by pushing a branch. That rule assumes you can commit those settings to the default branch. This field exists for the case where you cannot: a repo owned by a team that does not run no-mistakes, where there is nowhere trusted to put the commands.
+The normal rule is that `commands`, `agent`, `document.instructions`, `review.path_instructions`, `disable_project_settings`, and `skip_steps` come only from a fresh fetch of the default branch, so a contributor cannot choose what the daemon executes by pushing a branch. That rule assumes you can commit those settings to the default branch. This field exists for the case where you cannot: a repo owned by a team that does not run no-mistakes, where there is nowhere trusted to put the commands.
 
-The merge is field-by-field, and only fields the working-path copy actually sets take precedence. A working-path file setting just `commands.test` leaves a default-branch `commands.lint` in force; an absent or empty file changes nothing. A working-path `review.path_instructions` replaces the default-branch list rather than adding to it, so an edit there can retire a rule as well as add one.
+Exactly one file is trusted per run. When the working path holds a `.no-mistakes.yaml`, that file **is** the trusted copy: it replaces the default-branch copy outright rather than layering over it, so a field it leaves out is unset, not inherited. A working-path file setting just `commands.test` retires a default-branch `commands.lint`; a present-but-empty file states there are no trusted settings at all. An absent working-path file changes nothing and the default-branch copy stands. Layering read well until you tried to *retire* a default-branch command, which composition cannot express — the run would keep executing a command that appears nowhere in the file you were told steers the gate.
 
 One field is deliberately excluded:
 
-- **`allow_repo_commands`** stays default-branch-only. A local convenience override must not be able to widen the trust boundary for pushed branches.
+- **`allow_repo_commands`** stays default-branch-only. A local convenience override must neither widen the trust boundary for pushed branches nor silently retract the default branch's own opt-in.
 
-One field merges asymmetrically:
+One field resolves asymmetrically:
 
-- **`disable_project_settings`** merges as "true wins". The working-path copy can turn the opt-out on but not off, because a plain boolean cannot distinguish "set to false" from "absent".
+- **`disable_project_settings`** is "true wins". The working-path copy can turn the opt-out on but not off, because a plain boolean cannot distinguish "set to false" from "absent".
 
 Everything arriving over a push is unaffected: the default-branch rule still applies to the pushed SHA, whether or not this field is set.
 

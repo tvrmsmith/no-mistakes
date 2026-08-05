@@ -459,8 +459,8 @@ func TestExecutor_DefaultMinSeverityKeepsInfoFindingsOutOfAutoFix(t *testing.T) 
 	workDir := t.TempDir()
 
 	cfg := config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{})
-	if cfg.AutoFix.MinSeverity != types.SeverityWarning {
-		t.Fatalf("default auto_fix.min_severity = %q, want %q", cfg.AutoFix.MinSeverity, types.SeverityWarning)
+	if cfg.AutoFix.MinSeverity != types.FindingSeverityWarning {
+		t.Fatalf("default auto_fix.min_severity = %q, want %q", cfg.AutoFix.MinSeverity, types.FindingSeverityWarning)
 	}
 	cfg.AutoFix.Review = 3
 

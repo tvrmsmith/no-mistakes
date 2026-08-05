@@ -201,12 +201,20 @@ type RepoConfig struct {
 	// ONLY from the trusted default-branch copy of .no-mistakes.yaml (never
 	// the pushed SHA), so a contributor cannot self-enable. Default false:
 	// the pushed branch controls nothing that executes.
-	AllowRepoCommands bool       `yaml:"allow_repo_commands"`
-	AutoFix           AutoFixRaw `yaml:"auto_fix"`
-	CI                CIRaw      `yaml:"ci"`
-	Commit            CommitRaw  `yaml:"commit"`
-	Intent            IntentRaw  `yaml:"intent"`
-	Test              TestRaw    `yaml:"test"`
+	AllowRepoCommands bool `yaml:"allow_repo_commands"`
+	// SkipSteps names pipeline steps every run of this repository skips, the
+	// standing form of `--skip`. It removes whole validation phases, so it is
+	// honored ONLY from the trusted copy of .no-mistakes.yaml (see
+	// EffectiveRepoConfig) exactly like no_ci: a contributor's pushed branch
+	// must not be able to switch off the gate that reviews it. Unknown step
+	// names fail the config rather than being ignored - a typo that silently
+	// skipped nothing would be indistinguishable from a step that ran.
+	SkipSteps []types.StepName `yaml:"skip_steps"`
+	AutoFix   AutoFixRaw       `yaml:"auto_fix"`
+	CI        CIRaw            `yaml:"ci"`
+	Commit    CommitRaw        `yaml:"commit"`
+	Intent    IntentRaw        `yaml:"intent"`
+	Test      TestRaw          `yaml:"test"`
 	// Document carries the repository's documentation placement policy. It
 	// steers the document step's gate prompt, so it is honored ONLY from the
 	// trusted default-branch copy of .no-mistakes.yaml (see
@@ -387,19 +395,20 @@ func RenderedInstructions(instructions string) string {
 
 func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	type repoConfigRaw struct {
-		Agent                  agentList   `yaml:"agent"`
-		Commands               Commands    `yaml:"commands"`
-		IgnorePatterns         []string    `yaml:"ignore_patterns"`
-		AllowRepoCommands      bool        `yaml:"allow_repo_commands"`
-		AutoFix                AutoFixRaw  `yaml:"auto_fix"`
-		CI                     CIRaw       `yaml:"ci"`
-		Commit                 CommitRaw   `yaml:"commit"`
-		Intent                 IntentRaw   `yaml:"intent"`
-		Test                   TestRaw     `yaml:"test"`
-		Document               DocumentRaw `yaml:"document"`
-		Review                 ReviewRaw   `yaml:"review"`
-		DisableProjectSettings bool        `yaml:"disable_project_settings"`
-		NoCI                   bool        `yaml:"no_ci"`
+		Agent                  agentList        `yaml:"agent"`
+		Commands               Commands         `yaml:"commands"`
+		IgnorePatterns         []string         `yaml:"ignore_patterns"`
+		AllowRepoCommands      bool             `yaml:"allow_repo_commands"`
+		SkipSteps              []types.StepName `yaml:"skip_steps"`
+		AutoFix                AutoFixRaw       `yaml:"auto_fix"`
+		CI                     CIRaw            `yaml:"ci"`
+		Commit                 CommitRaw        `yaml:"commit"`
+		Intent                 IntentRaw        `yaml:"intent"`
+		Test                   TestRaw          `yaml:"test"`
+		Document               DocumentRaw      `yaml:"document"`
+		Review                 ReviewRaw        `yaml:"review"`
+		DisableProjectSettings bool             `yaml:"disable_project_settings"`
+		NoCI                   bool             `yaml:"no_ci"`
 	}
 	var raw repoConfigRaw
 	if err := value.Decode(&raw); err != nil {
@@ -410,6 +419,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.Commands = raw.Commands
 	c.IgnorePatterns = raw.IgnorePatterns
 	c.AllowRepoCommands = raw.AllowRepoCommands
+	c.SkipSteps = raw.SkipSteps
 	c.AutoFix = raw.AutoFix
 	c.CI = raw.CI
 	c.Commit = raw.Commit
@@ -518,6 +528,28 @@ type Config struct {
 	// intentionally has no CI (see the RepoConfig field). When true and the
 	// forge reports zero checks, the CI monitor treats that as all-checks-passed.
 	NoCI bool
+	// SkipSteps is the repository's resolved, trusted-only standing skip list
+	// (see the RepoConfig field). Use SkippedSteps to combine it with a run's
+	// own --skip selection.
+	SkipSteps []types.StepName
+}
+
+// SkippedSteps returns every step a run skips: the repository's standing
+// skip_steps plus the per-run --skip selection, deduped with the standing list
+// first. The two are additive because they answer different questions - the
+// config states what this repository never validates, the flag states what this
+// one run is not validating - and neither can re-enable what the other skipped.
+func (c *Config) SkippedSteps(runSkips []types.StepName) []types.StepName {
+	if len(c.SkipSteps) == 0 && len(runSkips) == 0 {
+		return nil
+	}
+	out := make([]types.StepName, 0, len(c.SkipSteps)+len(runSkips))
+	for _, step := range slices.Concat(c.SkipSteps, runSkips) {
+		if !slices.Contains(out, step) {
+			out = append(out, step)
+		}
+	}
+	return out
 }
 
 // Document is the resolved document-step config. Instructions come from the
@@ -1539,6 +1571,11 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateTestRaw(cfg.Test); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	skipSteps, err := normalizeSkipSteps(cfg.SkipSteps)
+	if err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
+	cfg.SkipSteps = skipSteps
 	if cfg.AutoFix.CI == nil {
 		cfg.AutoFix.CI = cfg.AutoFix.Babysit
 	}
@@ -1559,6 +1596,36 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 // default-branch .no-mistakes.yaml fails these checks, so a branch carrying an
 // invalid block has to fail here, before it merges, rather than brick the
 // repository's pipeline afterwards. Do not scope this to the trusted copy.
+// normalizeSkipSteps trims, validates, and dedupes a skip_steps list, keeping
+// first-seen order. An unrecognized name is an error rather than a silent
+// no-op: skipping is invisible in the run output beyond the step's own
+// "skipped" status, so a typo would read exactly like a step that ran.
+func normalizeSkipSteps(steps []types.StepName) ([]types.StepName, error) {
+	if len(steps) == 0 {
+		return nil, nil
+	}
+	known := types.AllSteps()
+	out := make([]types.StepName, 0, len(steps))
+	for _, raw := range steps {
+		step := types.StepName(strings.TrimSpace(string(raw)))
+		if !slices.Contains(known, step) {
+			return nil, fmt.Errorf("skip_steps: unknown step %q (known steps: %s)", step, joinSteps(known))
+		}
+		if !slices.Contains(out, step) {
+			out = append(out, step)
+		}
+	}
+	return out, nil
+}
+
+func joinSteps(steps []types.StepName) string {
+	names := make([]string, len(steps))
+	for i, step := range steps {
+		names[i] = string(step)
+	}
+	return strings.Join(names, ", ")
+}
+
 func validateReviewRaw(review ReviewRaw) error {
 	if len(review.PathInstructions) > MaxReviewPathInstructions {
 		return fmt.Errorf("review.path_instructions has %d entries, at most %d are allowed", len(review.PathInstructions), MaxReviewPathInstructions)
@@ -1681,6 +1748,11 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// strength - a pushed branch that raised it would suppress automatic
 		// fixing of its own warnings. The rest of auto_fix stays pushed.
 		effective.AutoFix.MinSeverity = trusted.AutoFix.MinSeverity
+		// skip_steps removes whole validation phases from the run, so it is
+		// trusted-only for the same reason no_ci is - and regardless of
+		// allow_repo_commands, which widens command selection, not which gates
+		// exist. A pushed branch that could list `review` would review itself.
+		effective.SkipSteps = slices.Clone(trusted.SkipSteps)
 	} else {
 		effective.Document = DocumentRaw{}
 		effective.Review = ReviewRaw{}
@@ -1689,6 +1761,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.CI = CIRaw{}
 		effective.Test.Evidence.Branch = nil
 		effective.AutoFix.MinSeverity = nil
+		effective.SkipSteps = nil
 	}
 	if allowRepoCommands {
 		return &effective
@@ -1705,75 +1778,47 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 	return &effective
 }
 
-// MergeWorkingPathTrusted layers the gate-control fields of a working-path
-// .no-mistakes.yaml over the trusted default-branch copy, returning the config
-// that should be treated as trusted. It is a no-op unless the maintainer set
-// trust_working_path_config in the global config (see GlobalConfig).
+// ResolveWorkingPathTrusted returns the config a run should treat as trusted
+// when the maintainer opted in with trust_working_path_config (see
+// GlobalConfig). It is a no-op when there is no working-path copy to adopt.
 //
-// The merge is field-by-field so the two copies compose rather than compete: a
-// working-path file that sets only commands.test leaves a default-branch
-// commands.lint in force. Only fields the working-path copy actually sets take
-// precedence, which is why an empty or absent file changes nothing.
+// Exactly one file is trusted per run. A present working-path
+// .no-mistakes.yaml IS that file, so it REPLACES the pinned-SHA default-branch
+// copy rather than layering over it: a field the working-path copy leaves out
+// is unset, not inherited. Layering read well until a maintainer tried to
+// RETIRE a default-branch command, which composition cannot express - the run
+// would keep executing a command that appears nowhere in the file they were
+// told steers the gate. Replacement makes the file they edit the whole answer.
 //
-// The merged gate-control fields are commands.{test,lint,format}, agent /
-// agents, document.instructions, review.path_instructions, and
-// disable_project_settings.
+// The two exceptions are both refusals to weaken a boundary, never to widen
+// one:
+//   - AllowRepoCommands is still read from the default-branch copy. It hands
+//     commands and agent selection to whatever a contributor pushed, so a
+//     local convenience file must neither enable it nor silently retract the
+//     default branch's own opt-in.
+//   - DisableProjectSettings is "true wins". A plain bool cannot distinguish
+//     "set to false" from "absent", so replacement can turn the opt-out on but
+//     not off; off is the weakening direction.
 //
-// review.path_instructions replaces the trusted list wholesale when the
-// working-path copy sets one, rather than concatenating: the two are alternate
-// statements of the same maintainer's rules, and appending would make a
-// working-path edit unable to retire a default-branch rule.
-//
-// Deliberately NOT merged:
-//   - AllowRepoCommands, which hands commands and agent selection to whatever
-//     a contributor pushed. That switch stays default-branch-only; a local
-//     convenience override must not be able to widen the push trust boundary.
-//   - Every non-executing field (ignore patterns, the auto-fix retry counts,
-//     commit, intent, test). Those already come from the pushed branch by
-//     design, and this function only concerns the trusted side. The one
-//     exception inside them, auto_fix.min_severity, is trusted-only because it
-//     is a gate strength rather than an effort bound; it is still not sourced
-//     from the working-path copy, which carries gate-control fields only.
-//
-// DisableProjectSettings merges as "true wins": a plain bool cannot
-// distinguish "set to false" from "absent", so the working-path copy can turn
-// the opt-out on but not off. Turning it off is the weakening direction, so
-// failing in the safe direction is correct.
-func MergeWorkingPathTrusted(trusted, workingPath *RepoConfig) *RepoConfig {
+// Fields that come from the pushed branch by design (ignore patterns, the
+// auto-fix retry counts, commit, intent, test) are unaffected either way -
+// EffectiveRepoConfig reads only the trusted-side fields from this result.
+func ResolveWorkingPathTrusted(trusted, workingPath *RepoConfig) *RepoConfig {
 	if workingPath == nil {
 		return trusted
 	}
-	merged := RepoConfig{}
-	if trusted != nil {
-		merged = *trusted
-		merged.Agents = copyAgents(trusted.Agents)
+	resolved := *workingPath
+	resolved.Agents = copyAgents(workingPath.Agents)
+	if len(resolved.Agents) > 0 {
+		resolved.Agent = firstAgent(resolved.Agents)
 	}
-	if workingPath.Commands.Test != "" {
-		merged.Commands.Test = workingPath.Commands.Test
+	resolved.Review.PathInstructions = slices.Clone(workingPath.Review.PathInstructions)
+	resolved.SkipSteps = slices.Clone(workingPath.SkipSteps)
+	resolved.AllowRepoCommands = trusted != nil && trusted.AllowRepoCommands
+	if trusted != nil && trusted.DisableProjectSettings {
+		resolved.DisableProjectSettings = true
 	}
-	if workingPath.Commands.Lint != "" {
-		merged.Commands.Lint = workingPath.Commands.Lint
-	}
-	if workingPath.Commands.Format != "" {
-		merged.Commands.Format = workingPath.Commands.Format
-	}
-	if len(workingPath.Agents) > 0 {
-		merged.Agents = copyAgents(workingPath.Agents)
-		merged.Agent = firstAgent(merged.Agents)
-	} else if workingPath.Agent != "" {
-		merged.Agent = workingPath.Agent
-		merged.Agents = nil
-	}
-	if workingPath.Document.Instructions != "" {
-		merged.Document.Instructions = workingPath.Document.Instructions
-	}
-	if len(workingPath.Review.PathInstructions) > 0 {
-		merged.Review.PathInstructions = slices.Clone(workingPath.Review.PathInstructions)
-	}
-	if workingPath.DisableProjectSettings {
-		merged.DisableProjectSettings = true
-	}
-	return &merged
+	return &resolved
 }
 
 // ParseLogLevel converts a log level string to slog.Level.
@@ -2151,6 +2196,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,
 		NoCI:                   repo.NoCI,
+		SkipSteps:              slices.Clone(repo.SkipSteps),
 	}
 
 	if repo.Agent != "" {

@@ -301,9 +301,9 @@ func TestEffectiveRepoConfig_CIRerunTransientTrustedOnly(t *testing.T) {
 // severity floor is a gate strength a pushed branch must not raise, while the
 // retry counts beside it stay pushed-branch-readable.
 func TestEffectiveRepoConfig_AutoFixMinSeverityTrustedOnly(t *testing.T) {
-	pushedFloor := types.SeverityError
+	pushedFloor := types.FindingSeverityError
 	pushedReview := 3
-	trustedFloor := types.SeverityInfo
+	trustedFloor := types.FindingSeverityInfo
 	pushed := &RepoConfig{}
 	pushed.AutoFix.MinSeverity = &pushedFloor
 	pushed.AutoFix.Review = &pushedReview
@@ -328,8 +328,8 @@ func TestEffectiveRepoConfig_AutoFixMinSeverityTrustedOnly(t *testing.T) {
 
 	// No trusted copy means the built-in default floor, not the pushed one.
 	withoutTrusted := Merge(DefaultGlobalConfig(), EffectiveRepoConfig(pushed, nil, false))
-	if withoutTrusted.AutoFix.MinSeverity != types.SeverityWarning {
-		t.Fatalf("min_severity without a trusted copy = %q, want the built-in default %q", withoutTrusted.AutoFix.MinSeverity, types.SeverityWarning)
+	if withoutTrusted.AutoFix.MinSeverity != types.FindingSeverityWarning {
+		t.Fatalf("min_severity without a trusted copy = %q, want the built-in default %q", withoutTrusted.AutoFix.MinSeverity, types.FindingSeverityWarning)
 	}
 	if withoutTrusted.AutoFix.Review != pushedReview {
 		t.Fatalf("auto_fix.review without a trusted copy = %d, want the pushed %d", withoutTrusted.AutoFix.Review, pushedReview)
