@@ -1087,7 +1087,7 @@ func (s *Service) finishRecover(ctx context.Context, run *db.Run, changed bool) 
 		state.NextAction = nil
 		return state
 	}
-	releaseGatePreservedPin(ctx, s.GateDir, run.ID)
+	releaseGatePreservedPin(ctx, s.GateDir, run.ID, nil)
 	state, _, _ := s.inspect(ctx)
 	state.Recovered = true
 	state.Changed = changed
@@ -1155,12 +1155,18 @@ func (a *recoverAnchors) note(ref string) {
 }
 
 func (a *recoverAnchors) noteGate(ref string) {
+	if a == nil {
+		return
+	}
 	if !slices.Contains(a.gate, ref) {
 		a.gate = append(a.gate, ref)
 	}
 }
 
 func (a *recoverAnchors) clearGate(ref string) {
+	if a == nil {
+		return
+	}
 	a.gate = slices.DeleteFunc(a.gate, func(existing string) bool { return existing == ref })
 }
 
@@ -1254,16 +1260,18 @@ func preserveFailedMessage(err error, detached bool, runID string, anchors *reco
 // commits are pinned when no ref reaches them.
 func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, runID, anchorRef, preserved string, detached bool, anchors *recoverAnchors) (err error) {
 	if !detached {
-		if err := git.FetchRemoteBranchToPrivateRef(ctx, s.workDir(), gateDir, branch, anchorRef); err != nil {
-			return err
+		fetchErr := git.FetchRemoteBranchToPrivateRef(ctx, s.workDir(), gateDir, branch, anchorRef)
+		s.noteAnchorIfWritten(ctx, anchorRef, anchors)
+		if fetchErr != nil {
+			return fetchErr
 		}
-		anchors.note(anchorRef)
 		return verifyPreservedAnchor(ctx, s.workDir(), anchorRef, preserved)
 	}
 	sourceRef := gatePreservedRef(runID)
 	if _, refErr := git.Run(ctx, gateDir, "update-ref", sourceRef, preserved); refErr != nil {
 		return fmt.Errorf("%w: %v", errPreservedPinAbsent, refErr)
 	}
+	anchors.noteGate(sourceRef)
 	defer func() {
 		if err != nil {
 			if repinErr := repinGatePreserved(ctx, gateDir, sourceRef, preserved, runID); repinErr != nil {
@@ -1271,17 +1279,32 @@ func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, run
 			}
 			return
 		}
-		releaseGatePreservedPin(ctx, gateDir, runID)
+		releaseGatePreservedPin(ctx, gateDir, runID, anchors)
 	}()
 	if s.beforePreservedFetch != nil {
 		s.beforePreservedFetch()
 	}
-	if err = git.FetchRefToPrivateRef(ctx, s.workDir(), gateDir, sourceRef, anchorRef); err != nil {
+	fetchErr := git.FetchRefToPrivateRef(ctx, s.workDir(), gateDir, sourceRef, anchorRef)
+	s.noteAnchorIfWritten(ctx, anchorRef, anchors)
+	if fetchErr != nil {
+		err = fetchErr
 		return err
 	}
-	anchors.note(anchorRef)
 	err = verifyPreservedAnchor(ctx, s.workDir(), anchorRef, preserved)
 	return err
+}
+
+// noteAnchorIfWritten records the clone-side anchor when the ref itself
+// resolves. A fetch that reports failure - including a cancelled one - may
+// still have updated the ref, so the ref, not the exit status, decides whether
+// the record carries it, and the probe runs detached from the caller's
+// cancellation so a cancelled fetch cannot also silence the check.
+func (s *Service) noteAnchorIfWritten(ctx context.Context, anchorRef string, anchors *recoverAnchors) {
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preservedRefCleanupTimeout)
+	defer cancel()
+	if _, err := git.Run(probeCtx, s.workDir(), "rev-parse", "--verify", "--quiet", anchorRef); err == nil {
+		anchors.note(anchorRef)
+	}
 }
 
 func verifyPreservedAnchor(ctx context.Context, wd, anchorRef, preserved string) error {
@@ -1301,7 +1324,9 @@ func verifyPreservedAnchor(ctx context.Context, wd, anchorRef, preserved string)
 // success as well as from a successful anchor fetch: a pin retained by an
 // earlier failed attempt would otherwise survive forever, because the next
 // recovery finds the anchor already in place and never fetches again.
-func releaseGatePreservedPin(ctx context.Context, gateDir, runID string) {
+// The pin is cleared from the record only on a confirmed delete, so a
+// discarded delete error can never become a claim that the gate is untouched.
+func releaseGatePreservedPin(ctx context.Context, gateDir, runID string, anchors *recoverAnchors) {
 	gateDir = strings.TrimSpace(gateDir)
 	if gateDir == "" {
 		return
@@ -1314,7 +1339,9 @@ func releaseGatePreservedPin(ctx context.Context, gateDir, runID string) {
 	}
 	if _, err := git.Run(cleanupCtx, gateDir, "update-ref", "-d", ref); err != nil {
 		slog.Warn("branchsync: gate preserved staging ref not deleted", "ref", ref, "run", runID, "error", err)
+		return
 	}
+	anchors.clearGate(ref)
 }
 
 // repinGatePreserved restores the retained pin to the preserved head after a

@@ -2,6 +2,7 @@ package steps
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -129,19 +130,35 @@ func TestBuildHostFailsClosedWithoutAGitHubSlug(t *testing.T) {
 }
 
 // The PR URL is the documented fallback slug source, so a run that has one is
-// still addressable and must keep building a host.
+// still addressable and must keep building a host. Building one is not enough:
+// the whole point of the fail-closed sibling above is that gh must never infer
+// the repository from its cwd, so the host has to carry the exact slug the PR
+// URL names on the wire.
 func TestBuildHostResolvesGitHubSlugFromThePRURL(t *testing.T) {
 	prURL := "https://github.com/test/repo/pull/7"
+	env, logFile := fakeGH(t, prURL)
 	sctx := &pipeline.StepContext{
 		Ctx:    context.Background(),
 		Config: &config.Config{},
 		Repo:   &db.Repo{UpstreamURL: "https://github.com/", WorkingPath: "/repo"},
 		Run:    &db.Run{PRURL: &prURL},
+		Env:    env,
 	}
 
 	host, skip := buildHost(sctx, scm.ProviderGitHub)
 	if host == nil {
 		t.Fatalf("buildHost refused a run whose PR URL names the repository: %s", skip)
+	}
+
+	if _, err := host.FindPR(context.Background(), "feature/x", "main"); err != nil {
+		t.Fatalf("FindPR: %v", err)
+	}
+	logged, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "--repo test/repo") {
+		t.Fatalf("gh invocation %q does not target the slug the PR URL names", strings.TrimSpace(string(logged)))
 	}
 }
 

@@ -296,6 +296,46 @@ func TestEffectiveRepoConfig_CIRerunTransientTrustedOnly(t *testing.T) {
 	}
 }
 
+// TestEffectiveRepoConfig_AutoFixMinSeverityTrustedOnly pins the single
+// trusted-only sub-field of an otherwise pushed-branch-readable block: the
+// severity floor is a gate strength a pushed branch must not raise, while the
+// retry counts beside it stay pushed-branch-readable.
+func TestEffectiveRepoConfig_AutoFixMinSeverityTrustedOnly(t *testing.T) {
+	pushedFloor := types.SeverityError
+	pushedReview := 3
+	trustedFloor := types.SeverityInfo
+	pushed := &RepoConfig{}
+	pushed.AutoFix.MinSeverity = &pushedFloor
+	pushed.AutoFix.Review = &pushedReview
+	trusted := &RepoConfig{}
+	trusted.AutoFix.MinSeverity = &trustedFloor
+
+	effective := EffectiveRepoConfig(pushed, trusted, false)
+	merged := Merge(DefaultGlobalConfig(), effective)
+	if merged.AutoFix.MinSeverity != trustedFloor {
+		t.Fatalf("min_severity = %q, want %q from the trusted copy", merged.AutoFix.MinSeverity, trustedFloor)
+	}
+	if merged.AutoFix.Review != pushedReview {
+		t.Fatalf("auto_fix.review = %d, want the pushed %d", merged.AutoFix.Review, pushedReview)
+	}
+
+	// allow_repo_commands opts in to pushed commands and agent selection, never
+	// to weakening the gate.
+	optedIn := Merge(DefaultGlobalConfig(), EffectiveRepoConfig(pushed, trusted, true))
+	if optedIn.AutoFix.MinSeverity != trustedFloor {
+		t.Fatalf("min_severity with allow_repo_commands = %q, want %q", optedIn.AutoFix.MinSeverity, trustedFloor)
+	}
+
+	// No trusted copy means the built-in default floor, not the pushed one.
+	withoutTrusted := Merge(DefaultGlobalConfig(), EffectiveRepoConfig(pushed, nil, false))
+	if withoutTrusted.AutoFix.MinSeverity != types.SeverityWarning {
+		t.Fatalf("min_severity without a trusted copy = %q, want the built-in default %q", withoutTrusted.AutoFix.MinSeverity, types.SeverityWarning)
+	}
+	if withoutTrusted.AutoFix.Review != pushedReview {
+		t.Fatalf("auto_fix.review without a trusted copy = %d, want the pushed %d", withoutTrusted.AutoFix.Review, pushedReview)
+	}
+}
+
 func TestLoadRepo_ReviewPathInstructions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")
