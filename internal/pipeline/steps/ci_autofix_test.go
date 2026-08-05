@@ -124,9 +124,12 @@ func TestCIStep_CIAutoFixDisabledWithZero(t *testing.T) {
 	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
 	sctx.Run.PRURL = &prURL
-	sctx.Config.CITimeout = 5 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 0} // disabled
-	sctx.Config.CITimeout = 3 * time.Second
+	// Generous idle budget on purpose: the failing checks are visible on the
+	// first poll, so the timeout must never be what ends this run. A short
+	// wall-clock budget made the test flake under parallel -race load, where
+	// the idle deadline expired before the first poll produced its verdict.
+	sctx.Config.CITimeout = 60 * time.Second
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }

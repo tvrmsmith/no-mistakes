@@ -1786,6 +1786,85 @@ func TestRecoverDirtyRefusalDoesNotDenyTheAnchorItWrote(t *testing.T) {
 	}
 }
 
+// TestRecoverAdoptingDetachedPreservedHeadHandsTheGateBranchBack is the
+// regression for the recovery whose own advertised next_action failed: a run
+// cancelled after the rebase leaves the preserved head detached in the gate
+// with the branch ref still at the submitted head, so adopting that rebased
+// head moves the operator's branch to a commit the gate branch has diverged
+// from. The recommended fresh `axi run` then dies on a non-fast-forward gate
+// push. Recovery must therefore hand the gate branch back to the head it just
+// gave the operator, which the test proves by performing the very push the
+// next run makes.
+func TestRecoverAdoptingDetachedPreservedHeadHandsTheGateBranchBack(t *testing.T) {
+	t.Parallel()
+
+	f := newRebasedRecoverFixture(t, types.RunCancelled)
+	f.strandDetachedPreserved()
+	if f.gateBranchHead() != f.submitted {
+		t.Fatal("fixture did not strand the preserved head behind the gate branch")
+	}
+
+	state := f.service.Recover(f.ctx, false)
+	if !state.Recovered || !state.Changed || state.State != StateCustodyReturned {
+		t.Fatalf("detached rebased recover = %#v", state)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.preserved {
+		t.Fatalf("HEAD = %s, want preserved %s", got, f.preserved)
+	}
+	// The next run pushes the recovered branch to the gate; that push is what
+	// the operator actually experiences, and it must fast-forward.
+	if _, err := gitpkg.Run(f.ctx, f.local, "push", f.gate, "HEAD:refs/heads/feature/recover"); err != nil {
+		t.Fatalf("the fresh run recovery recommends cannot push to the gate: %v", err)
+	}
+	if got := f.gateBranchHead(); got != f.preserved {
+		t.Fatalf("gate branch = %s, want the adopted preserved head %s", got, f.preserved)
+	}
+	if !f.gateRefMissing(f.gateStagingRef()) {
+		t.Fatalf("gate staging ref %s survived a successful recovery", f.gateStagingRef())
+	}
+	if !f.custodyReturned() {
+		t.Fatal("detached rebased adoption did not stamp custody")
+	}
+}
+
+// The gate hand-back is a compare-and-swap against the exact submitted head
+// recovery verified, so out-of-band gate-branch movement in the window before
+// it must refuse and leave the worktree alone rather than clobber whatever
+// arrived.
+func TestRecoverAdoptingDetachedPreservedHeadRefusesAGateBranchRace(t *testing.T) {
+	t.Parallel()
+
+	f := newRebasedRecoverFixture(t, types.RunCancelled)
+	f.strandDetachedPreserved()
+	local := mustRun(t, f.local, "rev-parse", "HEAD")
+
+	var raced string
+	f.service.beforeGateBranchHandback = func() {
+		mustRun(t, f.gate, "update-ref", "refs/heads/feature/recover", f.base, f.submitted)
+		raced = f.gateBranchHead()
+	}
+
+	state := f.service.Recover(f.ctx, false)
+	if raced != f.base {
+		t.Fatal("the race hook never moved the gate branch, so this run never reached the path under test")
+	}
+	if state.Recovered {
+		t.Fatalf("racing recover reported success: %#v", state)
+	}
+	if state.Safety != "blocked_recover_gate_race" {
+		t.Fatalf("safety = %q, want blocked_recover_gate_race: %#v", state.Safety, state)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != local {
+		t.Fatalf("HEAD = %s, want the untouched local head %s", got, local)
+	}
+	if got := f.gateBranchHead(); got != f.base {
+		t.Fatalf("gate branch = %s, want the out-of-band head %s left alone", got, f.base)
+	}
+	if f.custodyReturned() {
+		t.Fatal("a refused gate hand-back stamped custody")
+	}
+}
+
 // TestRecoverKeepLocalTakesBranchBackFromDetachedPreservedHead is the operator
 // exit from that same state when the local branch has moved on: keep-local
 // must return custody at the kept head, move the gate branch off the submitted
