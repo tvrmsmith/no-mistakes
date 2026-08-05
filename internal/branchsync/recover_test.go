@@ -1932,14 +1932,13 @@ func TestRecoverReportsTheGatePinItCouldNotDelete(t *testing.T) {
 	f.strandDetachedPreserved()
 	mustWrite(t, filepath.Join(f.local, "file.txt"), "uncommitted operator edit\n")
 
-	pinDir := filepath.Join(f.gate, "refs", "no-mistakes", "preserved")
 	f.service.beforePreservedFetch = func() {
-		// A read-only ref directory is the same lock refusal a stale .lock or
-		// a permission-hardened gate produces on `update-ref -d`.
-		if err := os.Chmod(pinDir, 0o555); err != nil {
-			t.Fatalf("chmod pin dir: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(pinDir, 0o755) })
+		// A stale lock file on the ref is git's own refusal to touch it, and it
+		// is the portable one: every platform's `update-ref -d` creates the lock
+		// exclusively and fails when it already exists, where a read-only ref
+		// directory is honored on neither Windows nor a root-owned run. The pin
+		// is written before this hook, so only its delete can fail here.
+		mustWrite(t, filepath.Join(f.gate, "refs", "no-mistakes", "preserved", f.run.ID+".lock"), "")
 	}
 
 	state := f.service.Recover(f.ctx, false)
@@ -2308,8 +2307,8 @@ func (f *recoverFixture) keepLocalStagingRef() string {
 // one recovery path that writes into the gate. The staging ref is deleted best
 // effort, so a delete that fails leaves a ref the operator can still find; a
 // refusal that then claimed nothing was written anywhere would be false. The
-// undeletable ref is produced the way a stale lock or a read-only gate
-// produces one: the directory holding the loose ref rejects the unlink.
+// undeletable ref is produced the way a real one appears: a stale lock file
+// git refuses to steal.
 func TestRecoverKeepLocalNamesAGateRefItCouldNotDelete(t *testing.T) {
 	t.Parallel()
 
@@ -2319,14 +2318,13 @@ func TestRecoverKeepLocalNamesAGateRefItCouldNotDelete(t *testing.T) {
 	mustRun(t, f.local, "commit", "-m", "diverging rescope")
 	local := mustRun(t, f.local, "rev-parse", "HEAD")
 
-	// Pre-stage the exact head the fetch would deliver, so the fetch is a no-op
-	// that needs no write, then freeze the directory so only the delete fails.
+	// Pre-stage the exact head the fetch would deliver, so the staging fetch
+	// updates nothing and never needs the ref lock, then leave a stale lock so
+	// only the delete fails. A lock file is the portable refusal: git creates
+	// it exclusively on every platform, where a read-only ref directory stops
+	// neither Windows nor a run as root.
 	mustRun(t, f.gate, "fetch", "--no-tags", f.local, "+refs/heads/feature/recover:"+f.keepLocalStagingRef())
-	refDir := filepath.Join(f.gate, "refs", "no-mistakes", "custody-return")
-	if err := os.Chmod(refDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(refDir, 0o755) })
+	mustWrite(t, filepath.Join(f.gate, "refs", "no-mistakes", "custody-return", f.run.ID+".lock"), "")
 
 	// Race the gate so the compare-and-swap refuses and a refusal is emitted
 	// after the failed delete.
