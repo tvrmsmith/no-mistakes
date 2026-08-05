@@ -2620,3 +2620,53 @@ func TestCIStep_DelayedSameNameCheckRetainsLegacyNameBehavior(t *testing.T) {
 		t.Fatal("new conclusive link did not retire the rerun record")
 	}
 }
+
+// A GitHub repository whose slug cannot be resolved leaves the forge unasked:
+// no check list was ever read, and an unread list is unproven rather than
+// empty. Completing the step as a skipped success there certifies a commit
+// nothing verified, so it has to park for a decision. The sibling case - no
+// provider integration to consult at all - keeps skipping, because there is no
+// forge answer being withheld.
+func TestCIStep_UnnameableRepoParksWhileMissingProviderStillSkips(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unresolvable_github_slug_parks", func(t *testing.T) {
+		t.Parallel()
+		dir, baseSHA, headSHA := setupGitRepo(t)
+		sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+		sctx.Repo.UpstreamURL = "https://github.com/"
+
+		outcome, err := (&CIStep{}).Execute(sctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome.Skipped {
+			t.Fatalf("outcome = %#v, want a park rather than a completed skipped step", outcome)
+		}
+		if !outcome.NeedsApproval {
+			t.Fatalf("outcome = %#v, want it parked for an operator decision", outcome)
+		}
+		var findings Findings
+		if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
+			t.Fatalf("findings %q: %v", outcome.Findings, err)
+		}
+		if len(findings.Items) != 1 || findings.Items[0].Action != types.ActionAskUser {
+			t.Fatalf("findings = %#v, want a single ask-user finding", findings)
+		}
+	})
+
+	t.Run("unsupported_provider_still_skips", func(t *testing.T) {
+		t.Parallel()
+		dir, baseSHA, headSHA := setupGitRepo(t)
+		sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+		sctx.Repo.UpstreamURL = "https://scm.example.invalid/test/repo.git"
+
+		outcome, err := (&CIStep{}).Execute(sctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !outcome.Skipped || outcome.NeedsApproval {
+			t.Fatalf("outcome = %#v, want the unchanged skip when there is no provider tooling here", outcome)
+		}
+	})
+}

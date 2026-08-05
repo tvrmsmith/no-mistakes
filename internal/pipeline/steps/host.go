@@ -15,11 +15,29 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/scm/gitlab"
 )
 
+// hostSkip explains why buildHost could not build a host. Reason is the
+// human-readable text. Unnameable separates the two cases a caller must not
+// treat alike: the repository is hosted on a provider this run understands but
+// cannot be named, which leaves the forge's answer unknown, versus every other
+// case, where there is simply no provider integration to consult here. A step
+// that verifies forge state may complete on the second and must not on the
+// first, because an unknown answer is not an answer.
+type hostSkip struct {
+	Reason     string
+	Unnameable bool
+}
+
+func (h hostSkip) String() string { return h.Reason }
+
+func skipReasonf(format string, args ...any) hostSkip {
+	return hostSkip{Reason: fmt.Sprintf(format, args...)}
+}
+
 // buildHost returns a scm.Host for the given provider, wired to sctx's
 // working directory and environment. When the host cannot be constructed
 // (unknown provider, missing Bitbucket config, etc) it returns nil and a
-// human-readable skip reason suitable for logging.
-func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, string) {
+// hostSkip describing why.
+func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, hostSkip) {
 	cmdFactory := func(_ context.Context, name string, args ...string) *exec.Cmd {
 		return stepCmd(sctx, name, args...)
 	}
@@ -48,7 +66,7 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 			// live checkout on whatever branch they left it on. Skipping the
 			// step is the only safe answer; there is nothing that names the
 			// repository this run belongs to.
-			return nil, "could not resolve the GitHub repository from the remote URL"
+			return nil, hostSkip{Reason: "could not resolve the GitHub repository from the remote URL", Unnameable: true}
 		}
 		forkRepo := ""
 		if sctx.Repo.ForkURL != "" {
@@ -56,54 +74,54 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 			// the plain slug (without host prefix) is correct here.
 			forkRepo = github.RepoSlug(sctx.Repo.ForkURL)
 		}
-		return github.NewWithFork(scmCLIFactory(sctx, cmdFactory), func() bool { return stepCLIAvailable(sctx, provider) }, host, repo, forkRepo), ""
+		return github.NewWithFork(scmCLIFactory(sctx, cmdFactory), func() bool { return stepCLIAvailable(sctx, provider) }, host, repo, forkRepo), hostSkip{}
 	case scm.ProviderGitLab:
 		if sctx.Repo.ForkURL != "" {
 			// Fork MR routing for GitLab is intentionally not half-wired.
 			// The push step may use fork_url, but PR creation must skip until
 			// GitLab source-project routing is implemented end to end.
-			return nil, "fork PR routing for GitLab is not implemented"
+			return nil, hostSkip{Reason: "fork PR routing for GitLab is not implemented"}
 		}
 		return gitlab.New(
 			cmdFactory,
 			func() bool { return stepCLIAvailable(sctx, provider) },
 			scm.ResolveHost(sctx.Ctx, sctx.Repo.UpstreamURL),
 			gitlab.ProjectPath(sctx.Repo.UpstreamURL),
-		), ""
+		), hostSkip{}
 	case scm.ProviderBitbucket:
 		if sctx.Repo.ForkURL != "" {
 			// Fork PR routing for Bitbucket is intentionally not half-wired.
 			// The API needs distinct source and destination repositories before
 			// this provider can safely consume fork_url for PR creation.
-			return nil, "fork PR routing for Bitbucket is not implemented"
+			return nil, hostSkip{Reason: "fork PR routing for Bitbucket is not implemented"}
 		}
 		client, err := bitbucket.NewClientFromEnv(sctx.Env)
 		if err != nil {
-			return nil, err.Error()
+			return nil, hostSkip{Reason: err.Error()}
 		}
 		repo, err := resolveBitbucketRepoRef(sctx.Repo.UpstreamURL, sctx.Run.PRURL)
 		if err != nil {
-			return nil, err.Error()
+			return nil, hostSkip{Reason: err.Error()}
 		}
-		return bitbucket.NewHost(client, repo), ""
+		return bitbucket.NewHost(client, repo), hostSkip{}
 	case scm.ProviderAzureDevOps:
 		if sctx.Repo.ForkURL != "" {
 			// Fork PR routing for Azure DevOps is intentionally not half-wired,
 			// mirroring GitLab and Bitbucket: the push step may use fork_url, but
 			// PR creation must skip until cross-repository routing is implemented
 			// end to end.
-			return nil, "fork PR routing for Azure DevOps is not implemented"
+			return nil, hostSkip{Reason: "fork PR routing for Azure DevOps is not implemented"}
 		}
 		org, project, repo, ok := azuredevops.ParseRemote(sctx.Repo.UpstreamURL)
 		if !ok && sctx.Run.PRURL != nil {
 			org, project, repo, ok = azuredevops.ParseRemote(*sctx.Run.PRURL)
 		}
 		if !ok {
-			return nil, "could not resolve Azure DevOps organization, project, and repository from the remote URL"
+			return nil, hostSkip{Reason: "could not resolve Azure DevOps organization, project, and repository from the remote URL", Unnameable: true}
 		}
-		return azuredevops.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo), ""
+		return azuredevops.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo), hostSkip{}
 	default:
-		return nil, fmt.Sprintf("provider %s is not supported yet", provider)
+		return nil, skipReasonf("provider %s is not supported yet", provider)
 	}
 }
 

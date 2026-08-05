@@ -136,9 +136,18 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	if provider == scm.ProviderUnknown && sctx.Run.PRURL != nil {
 		provider = scm.DetectProviderContext(ctx, *sctx.Run.PRURL)
 	}
-	host, skipReason := buildHost(sctx, provider)
+	host, skip := buildHost(sctx, provider)
 	if host == nil {
-		sctx.Log(fmt.Sprintf("skipping CI: %s", skipReason))
+		if skip.Unnameable {
+			// The repository is hosted on a provider this run understands and
+			// could not be named, so no check list was ever read. An unread
+			// list is unproven, not empty, and CI readiness never treats an
+			// unproven empty list as green: park for a decision instead of
+			// completing the step with zero verification.
+			sctx.Log(fmt.Sprintf("CI cannot be verified: %s", skip.Reason))
+			return ciUnnameableRepoOutcome(skip.Reason), nil
+		}
+		sctx.Log(fmt.Sprintf("skipping CI: %s", skip))
 		return &pipeline.StepOutcome{Skipped: true}, nil
 	}
 	if err := host.Available(ctx); err != nil {

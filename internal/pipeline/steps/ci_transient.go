@@ -644,6 +644,26 @@ func unresolvedCancelledDescription(name string, reruns int) string {
 	return fmt.Sprintf("CI check cancelled without a verdict: %s - the provider cancelled it rather than reporting a job failure, and no rerun is outstanding to replace that result, so it needs a decision rather than a code fix", name)
 }
 
+// ciUnnameableRepoOutcome parks a run whose repository could not be named on
+// its own provider. The forge was never asked, so there is no check list at
+// all - which is the unproven case, not the green one - and unlike a trusted
+// no_ci declaration nothing authorizes completing without verification.
+func ciUnnameableRepoOutcome(reason string) *pipeline.StepOutcome {
+	findings := Findings{
+		Summary: "CI could not be verified: the repository could not be named on its provider",
+		Items: []Finding{{
+			Severity:    "warning",
+			Description: fmt.Sprintf("CI checks were never read: %s, so no check list was observed for this commit - an unread list is unproven rather than green, and it needs a decision rather than a code fix", reason),
+			Action:      types.ActionAskUser,
+		}},
+	}
+	findingsJSON, _ := json.Marshal(findings)
+	return &pipeline.StepOutcome{
+		NeedsApproval: true,
+		Findings:      string(findingsJSON),
+	}
+}
+
 func ciRerunHeadMismatchOutcome(expected, observed string) *pipeline.StepOutcome {
 	findings := Findings{
 		Summary: "published branch head no longer matches the commit this run delivered",

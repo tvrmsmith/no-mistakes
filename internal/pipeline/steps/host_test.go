@@ -124,7 +124,10 @@ func TestBuildHostFailsClosedWithoutAGitHubSlug(t *testing.T) {
 	if host != nil {
 		t.Fatalf("buildHost returned a host for an unresolvable GitHub slug")
 	}
-	if !strings.Contains(skip, "GitHub repository") {
+	if !skip.Unnameable {
+		t.Fatalf("skip = %#v, want the unnameable-repository classification", skip)
+	}
+	if !strings.Contains(skip.Reason, "GitHub repository") {
 		t.Fatalf("skip reason = %q, want it to name the unresolved repository", skip)
 	}
 }

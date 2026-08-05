@@ -1,6 +1,7 @@
 package branchsync
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -1206,38 +1208,29 @@ func wasWere(n int) string {
 // that pin is known to exist: the staging ref is written before the fetch and
 // deliberately kept on failure, making it the only thing keeping the preserved
 // commits reachable in the gate. When the write itself failed, nothing
-// references those commits and the refusal has to say so instead. Both variants
-// read what already moved from anchors rather than from the failure's identity.
+// references those commits and the refusal has to say so instead. It words only
+// the cause and hands it to refusal, so which refs this invocation left behind
+// is still stated by the record alone rather than by this function.
 func preserveFailedMessage(err error, detached bool, runID string, anchors *recoverAnchors) string {
 	anchorRef := recoverAnchorRef(runID)
-	fetched := anchors.wrote(anchorRef)
-	mismatch := errors.Is(err, errPreservedAnchorMismatch)
-	cause := "the preserved pipeline commits could not be fetched from the local gate"
+	pinAbsent := errors.Is(err, errPreservedPinAbsent)
+	detail := "the preserved pipeline commits could not be fetched from the local gate"
 	switch {
-	case mismatch:
-		cause = "the ref anchoring the preserved pipeline commits does not hold the preserved head"
-	case errors.Is(err, errPreservedPinAbsent):
-		cause = "the preserved pipeline commits could not be pinned in the local gate"
-	case fetched:
-		cause = "the preserved pipeline commits were fetched from the local gate but the anchor could not be verified"
+	case errors.Is(err, errPreservedAnchorMismatch):
+		detail = "the ref anchoring the preserved pipeline commits does not hold the preserved head"
+	case pinAbsent:
+		detail = "the preserved pipeline commits could not be pinned in the local gate"
+	case anchors.wrote(anchorRef):
+		detail = "the preserved pipeline commits were fetched from the local gate but the anchor could not be verified"
 	}
-	anchor := ""
-	switch {
-	case fetched && mismatch:
-		anchor = fmt.Sprintf("%s in your clone was written but does not hold the preserved head; ", anchorRef)
-	case fetched:
-		anchor = fmt.Sprintf("%s in your clone was written; ", anchorRef)
-	}
-	if !detached {
-		if !fetched {
-			return cause + "; " + anchors.unchanged()
+	if detached {
+		if pinAbsent {
+			detail += fmt.Sprintf("; %s does not hold them, so they are reachable from no ref there and gate garbage collection can drop them", gatePreservedRef(runID))
+		} else {
+			detail += fmt.Sprintf("; the preserved commits stay pinned in the gate at %s, the only ref keeping them reachable there", gatePreservedRef(runID))
 		}
-		return fmt.Sprintf("%s; %sno worktree files were changed", cause, anchor)
 	}
-	if errors.Is(err, errPreservedPinAbsent) {
-		return fmt.Sprintf("%s; %s does not hold them, so they are reachable from no ref there and gate garbage collection can drop them; %sno worktree files were changed", cause, gatePreservedRef(runID), anchor)
-	}
-	return fmt.Sprintf("%s; the preserved commits stay pinned in the gate at %s, the only ref keeping them reachable there; %sno worktree files were changed", cause, gatePreservedRef(runID), anchor)
+	return anchors.refusal(detail)
 }
 
 // fetchPreservedAnchor copies the preserved pipeline commits from the local
@@ -1304,25 +1297,45 @@ func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, run
 // invocation's work, which is the difference between reporting a fetch that
 // landed and claiming one that never ran. Both probes run detached from the
 // caller's cancellation, so a cancelled write cannot also silence the check
-// that says what it left behind.
+// that says what it left behind. A probe that could not run at all proves
+// nothing either way and never subtracts from the record: only a probe that
+// proved the ref absent can withdraw a successful write's claim, and an
+// unverifiable ref after a failed write is reported rather than omitted,
+// because a refusal may overstate what the operator can find but must never
+// understate it.
 func writeRefAndRecord(ctx context.Context, dir, ref string, record func(string), write func() error) error {
-	before := readRefDetached(ctx, dir, ref)
+	before, _ := readRefDetached(ctx, dir, ref)
 	writeErr := write()
-	after := readRefDetached(ctx, dir, ref)
-	if after != "" && (writeErr == nil || after != before) {
+	after, known := readRefDetached(ctx, dir, ref)
+	switch {
+	case writeErr == nil:
+		if !known || after != "" {
+			record(ref)
+		}
+	case !known || (after != "" && after != before):
 		record(ref)
 	}
 	return writeErr
 }
 
-func readRefDetached(ctx context.Context, dir, ref string) string {
+// readRefDetached reports the ref's value and whether the probe itself is
+// conclusive. A `rev-parse --verify --quiet` that exits 1 with no diagnostics
+// is git's own way of saying the ref does not exist, which is knowledge; any
+// other failure - git could not be spawned, the probe timed out on a loaded
+// repository - is the absence of knowledge and must not be read as an absent
+// ref.
+func readRefDetached(ctx context.Context, dir, ref string) (string, bool) {
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preservedRefCleanupTimeout)
 	defer cancel()
 	out, err := git.Run(probeCtx, dir, "rev-parse", "--verify", "--quiet", ref)
-	if err != nil {
-		return ""
+	if err == nil {
+		return strings.TrimSpace(out), true
 	}
-	return strings.TrimSpace(out)
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(bytes.TrimSpace(exitErr.Stderr)) == 0 {
+		return "", true
+	}
+	return "", false
 }
 
 func verifyPreservedAnchor(ctx context.Context, wd, anchorRef, preserved string) error {
