@@ -271,7 +271,7 @@ Use `intent.disabled_readers` to disable specific transcript sources, or set `in
 
 Spawns a `claude` subprocess for each invocation with `--output-format stream-json`. The print-mode user prompt is sent as text on stdin rather than placed in the process arguments. By default it also adds `--dangerously-skip-permissions`, unless you already set your own Claude permission flag through `agent_args_override`. Reads JSONL events from stdout. Supports native structured output via `--json-schema`.
 For review-fixer reuse, Claude starts a stream-json session and resumes it with `claude -p --resume <id>`.
-The CLI reports transport failures such as a stalled stream as `API Error:` assistant text on that event stream rather than on stderr, so no-mistakes keeps those lines - only those - and uses them as the failure cause when stderr is empty; a stall then classifies as transient and is retried instead of failing the run without a stated cause.
+The CLI reports transport failures such as a stalled stream as `API Error:` assistant text on that event stream rather than on stderr, so no-mistakes keeps those lines - only those - and reports them as part of the failure cause, appended to whatever stderr said rather than used only when stderr is empty; a stall then classifies as transient and is retried instead of failing the run without a stated cause.
 
 ## Codex
 
