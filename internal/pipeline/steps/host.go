@@ -33,6 +33,16 @@ func skipReasonf(format string, args ...any) hostSkip {
 	return hostSkip{Reason: fmt.Sprintf(format, args...)}
 }
 
+// unnameableRepo is the one rule every provider shares: this run understands
+// the provider but cannot name the repository on it, so the forge's answer is
+// unknown rather than empty. Every provider arm builds the classification here
+// instead of repeating the flag, because three independently editable copies of
+// one rule is how the providers drift apart. Having no integration configured
+// at all is a different case and is not built through this.
+func unnameableRepo(reason string) hostSkip {
+	return hostSkip{Reason: reason, Unnameable: true}
+}
+
 // buildHost returns a scm.Host for the given provider, wired to sctx's
 // working directory and environment. When the host cannot be constructed
 // (unknown provider, missing Bitbucket config, etc) it returns nil and a
@@ -66,7 +76,7 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, hos
 			// live checkout on whatever branch they left it on. Skipping the
 			// step is the only safe answer; there is nothing that names the
 			// repository this run belongs to.
-			return nil, hostSkip{Reason: "could not resolve the GitHub repository from the remote URL", Unnameable: true}
+			return nil, unnameableRepo("could not resolve the GitHub repository from the remote URL")
 		}
 		forkRepo := ""
 		if sctx.Repo.ForkURL != "" {
@@ -101,7 +111,7 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, hos
 		}
 		repo, err := resolveBitbucketRepoRef(sctx.Repo.UpstreamURL, sctx.Run.PRURL)
 		if err != nil {
-			return nil, hostSkip{Reason: err.Error()}
+			return nil, unnameableRepo(err.Error())
 		}
 		return bitbucket.NewHost(client, repo), hostSkip{}
 	case scm.ProviderAzureDevOps:
@@ -117,7 +127,7 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, hos
 			org, project, repo, ok = azuredevops.ParseRemote(*sctx.Run.PRURL)
 		}
 		if !ok {
-			return nil, hostSkip{Reason: "could not resolve Azure DevOps organization, project, and repository from the remote URL", Unnameable: true}
+			return nil, unnameableRepo("could not resolve Azure DevOps organization, project, and repository from the remote URL")
 		}
 		return azuredevops.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo), hostSkip{}
 	default:

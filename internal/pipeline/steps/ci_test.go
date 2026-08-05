@@ -2621,52 +2621,94 @@ func TestCIStep_DelayedSameNameCheckRetainsLegacyNameBehavior(t *testing.T) {
 	}
 }
 
-// A GitHub repository whose slug cannot be resolved leaves the forge unasked:
-// no check list was ever read, and an unread list is unproven rather than
-// empty. Completing the step as a skipped success there certifies a commit
-// nothing verified, so it has to park for a decision. The sibling case - no
-// provider integration to consult at all - keeps skipping, because there is no
-// forge answer being withheld.
+// A repository whose name cannot be resolved on a provider this run
+// understands leaves the forge unasked: no check list was ever read, and an
+// unread list is unproven rather than empty. Completing the step as a skipped
+// success there certifies a commit nothing verified, so it has to park for a
+// decision, identically on every such provider. The sibling cases - no provider
+// integration at all, and a provider whose credentials are simply not
+// configured - keep skipping, because no forge answer is being withheld.
 func TestCIStep_UnnameableRepoParksWhileMissingProviderStillSkips(t *testing.T) {
 	t.Parallel()
 
-	t.Run("unresolvable_github_slug_parks", func(t *testing.T) {
-		t.Parallel()
-		dir, baseSHA, headSHA := setupGitRepo(t)
-		sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
-		sctx.Repo.UpstreamURL = "https://github.com/"
+	parks := []struct {
+		name     string
+		upstream string
+		env      []string
+	}{
+		{name: "unresolvable_github_slug", upstream: "https://github.com/"},
+		{name: "unresolvable_azure_devops_repo", upstream: "https://dev.azure.com/"},
+		{
+			name:     "unresolvable_bitbucket_repo",
+			upstream: "https://bitbucket.org/",
+			env: []string{
+				"NO_MISTAKES_BITBUCKET_EMAIL=test@example.com",
+				"NO_MISTAKES_BITBUCKET_API_TOKEN=token",
+			},
+		},
+	}
+	for _, tc := range parks {
+		t.Run(tc.name+"_parks", func(t *testing.T) {
+			t.Parallel()
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+			sctx.Repo.UpstreamURL = tc.upstream
+			sctx.Env = tc.env
 
-		outcome, err := (&CIStep{}).Execute(sctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if outcome.Skipped {
-			t.Fatalf("outcome = %#v, want a park rather than a completed skipped step", outcome)
-		}
-		if !outcome.NeedsApproval {
-			t.Fatalf("outcome = %#v, want it parked for an operator decision", outcome)
-		}
-		var findings Findings
-		if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
-			t.Fatalf("findings %q: %v", outcome.Findings, err)
-		}
-		if len(findings.Items) != 1 || findings.Items[0].Action != types.ActionAskUser {
-			t.Fatalf("findings = %#v, want a single ask-user finding", findings)
-		}
-	})
+			outcome, err := (&CIStep{}).Execute(sctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outcome.Skipped {
+				t.Fatalf("outcome = %#v, want a park rather than a completed skipped step", outcome)
+			}
+			if !outcome.NeedsApproval {
+				t.Fatalf("outcome = %#v, want it parked for an operator decision", outcome)
+			}
+			var findings Findings
+			if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
+				t.Fatalf("findings %q: %v", outcome.Findings, err)
+			}
+			if len(findings.Items) != 1 || findings.Items[0].Action != types.ActionAskUser {
+				t.Fatalf("findings = %#v, want a single ask-user finding", findings)
+			}
+		})
+	}
 
-	t.Run("unsupported_provider_still_skips", func(t *testing.T) {
-		t.Parallel()
-		dir, baseSHA, headSHA := setupGitRepo(t)
-		sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
-		sctx.Repo.UpstreamURL = "https://scm.example.invalid/test/repo.git"
+	skips := []struct {
+		name     string
+		upstream string
+		env      []string
+	}{
+		// No provider tooling to consult here at all.
+		{name: "unsupported_provider", upstream: "https://scm.example.invalid/test/repo.git"},
+		// A nameable Bitbucket repository with no credentials configured: the
+		// integration is absent rather than the answer unknown. The empty
+		// entries pin that state against an ambient token in the environment.
+		{
+			name:     "bitbucket_without_credentials",
+			upstream: "https://bitbucket.org/test/repo.git",
+			env: []string{
+				"NO_MISTAKES_BITBUCKET_EMAIL=",
+				"NO_MISTAKES_BITBUCKET_API_TOKEN=",
+			},
+		},
+	}
+	for _, tc := range skips {
+		t.Run(tc.name+"_still_skips", func(t *testing.T) {
+			t.Parallel()
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+			sctx.Repo.UpstreamURL = tc.upstream
+			sctx.Env = tc.env
 
-		outcome, err := (&CIStep{}).Execute(sctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !outcome.Skipped || outcome.NeedsApproval {
-			t.Fatalf("outcome = %#v, want the unchanged skip when there is no provider tooling here", outcome)
-		}
-	})
+			outcome, err := (&CIStep{}).Execute(sctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !outcome.Skipped || outcome.NeedsApproval {
+				t.Fatalf("outcome = %#v, want the unchanged skip when there is no provider integration to consult", outcome)
+			}
+		})
+	}
 }

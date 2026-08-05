@@ -1038,7 +1038,7 @@ func (s *Service) recoverAdoptPreserved(ctx context.Context, run *db.Run, state 
 		if _, rollbackErr := git.Run(ctx, wd, "update-ref", branchRef, head, preserved); rollbackErr != nil {
 			rolledBack = fmt.Sprintf("; the branch could not be restored to %s and now points at %s, whose content the pre-recovery head is contained in", head, preserved)
 		}
-		blocked := blockedPlan(state, StatePipelineOwned, "blocked_recover_worktree_busy", fmt.Sprintf("the working tree changed while custody was being returned, so no file was overwritten%s; re-run the recovery once the working tree is settled", rolledBack))
+		blocked := blockedPlan(state, StatePipelineOwned, "blocked_recover_worktree_busy", fmt.Sprintf("the working tree changed while custody was being returned, so no file was overwritten%s; the pre-recovery head is anchored at %s; re-run the recovery once the working tree is settled", rolledBack, localAnchor))
 		blocked.NextAction = inspectWorktreeAction()
 		return blocked
 	}
@@ -1143,9 +1143,24 @@ var errPreservedPinAbsent = errors.New("preserved pipeline commits are not pinne
 // A gate-side ref written as staging and then deleted best effort is cleared
 // only when the delete is confirmed, because a discarded delete error leaves a
 // ref the operator can still find.
+//
+// The two reasons a gate ref survives are recorded apart, because they are
+// different facts about the gate: a retained ref is the pin recovery keeps on
+// purpose on every failure path, and it is the only thing holding the preserved
+// pipeline commits reachable there, while any other recorded gate ref is
+// staging whose delete could not be confirmed. Wording both as an unconfirmed
+// delete told the operator a deliberate pin might be leftover litter.
 type recoverAnchors struct {
 	clone []string
-	gate  []string
+	gate  []gateAnchor
+}
+
+// gateAnchor is one gate-side ref this invocation wrote and has not provably
+// removed again. retained marks the deliberate pin; false means the ref is
+// still there only because its delete was not confirmed.
+type gateAnchor struct {
+	ref      string
+	retained bool
 }
 
 func (a *recoverAnchors) note(ref string) {
@@ -1154,20 +1169,38 @@ func (a *recoverAnchors) note(ref string) {
 	}
 }
 
+// noteGate records a gate-side ref that is still there because its delete was
+// not confirmed. It is also how a retained pin is downgraded once the reason it
+// survives stops being the deliberate retention: a released pin whose delete
+// failed, or a retention re-point that failed, is leftover state rather than
+// protection.
 func (a *recoverAnchors) noteGate(ref string) {
+	a.putGate(ref, false)
+}
+
+// noteGateRetained records the gate-side pin recovery keeps on purpose.
+func (a *recoverAnchors) noteGateRetained(ref string) {
+	a.putGate(ref, true)
+}
+
+func (a *recoverAnchors) putGate(ref string, retained bool) {
 	if a == nil {
 		return
 	}
-	if !slices.Contains(a.gate, ref) {
-		a.gate = append(a.gate, ref)
+	for i := range a.gate {
+		if a.gate[i].ref == ref {
+			a.gate[i].retained = retained
+			return
+		}
 	}
+	a.gate = append(a.gate, gateAnchor{ref: ref, retained: retained})
 }
 
 func (a *recoverAnchors) clearGate(ref string) {
 	if a == nil {
 		return
 	}
-	a.gate = slices.DeleteFunc(a.gate, func(existing string) bool { return existing == ref })
+	a.gate = slices.DeleteFunc(a.gate, func(existing gateAnchor) bool { return existing.ref == ref })
 }
 
 func (a *recoverAnchors) wrote(ref string) bool {
@@ -1181,8 +1214,19 @@ func (a *recoverAnchors) unchanged() string {
 	if len(a.clone) > 0 {
 		parts = append(parts, fmt.Sprintf("%s in your clone %s written", strings.Join(a.clone, " and "), wasWere(len(a.clone))))
 	}
-	if len(a.gate) > 0 {
-		parts = append(parts, fmt.Sprintf("%s in the local gate %s written and could not be confirmed deleted", strings.Join(a.gate, " and "), wasWere(len(a.gate))))
+	var retained, unconfirmed []string
+	for _, entry := range a.gate {
+		if entry.retained {
+			retained = append(retained, entry.ref)
+			continue
+		}
+		unconfirmed = append(unconfirmed, entry.ref)
+	}
+	if len(retained) > 0 {
+		parts = append(parts, fmt.Sprintf("%s in the local gate %s deliberately retained and %s the only ref keeping the preserved pipeline commits reachable there", strings.Join(retained, " and "), wasWere(len(retained)), isAre(len(retained))))
+	}
+	if len(unconfirmed) > 0 {
+		parts = append(parts, fmt.Sprintf("%s in the local gate %s written and could not be confirmed deleted", strings.Join(unconfirmed, " and "), wasWere(len(unconfirmed))))
 	}
 	if len(parts) == 0 {
 		return "no files or refs were changed"
@@ -1203,14 +1247,20 @@ func wasWere(n int) string {
 	return "were"
 }
 
+func isAre(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
+}
+
 // preserveFailedMessage words the blocked_recover_preserve_failed refusal for
-// the operator. The detached variant names the retained gate-side pin only when
-// that pin is known to exist: the staging ref is written before the fetch and
-// deliberately kept on failure, making it the only thing keeping the preserved
-// commits reachable in the gate. When the write itself failed, nothing
-// references those commits and the refusal has to say so instead. It words only
-// the cause and hands it to refusal, so which refs this invocation left behind
-// is still stated by the record alone rather than by this function.
+// the operator. It words only the cause and hands it to refusal, so which refs
+// this invocation left behind - including the deliberately retained gate-side
+// pin, which the record words as retained - is stated by the record alone
+// rather than restated here. What the record cannot say is the case where no
+// pin exists at all: nothing then references the preserved commits, and the
+// detached refusal has to warn that gate garbage collection can drop them.
 func preserveFailedMessage(err error, detached bool, runID string, anchors *recoverAnchors) string {
 	anchorRef := recoverAnchorRef(runID)
 	pinAbsent := errors.Is(err, errPreservedPinAbsent)
@@ -1223,12 +1273,8 @@ func preserveFailedMessage(err error, detached bool, runID string, anchors *reco
 	case anchors.wrote(anchorRef):
 		detail = "the preserved pipeline commits were fetched from the local gate but the anchor could not be verified"
 	}
-	if detached {
-		if pinAbsent {
-			detail += fmt.Sprintf("; %s does not hold them, so they are reachable from no ref there and gate garbage collection can drop them", gatePreservedRef(runID))
-		} else {
-			detail += fmt.Sprintf("; the preserved commits stay pinned in the gate at %s, the only ref keeping them reachable there", gatePreservedRef(runID))
-		}
+	if detached && pinAbsent {
+		detail += fmt.Sprintf("; %s does not hold them, so they are reachable from no ref there and gate garbage collection can drop them", gatePreservedRef(runID))
 	}
 	return anchors.refusal(detail)
 }
@@ -1263,10 +1309,14 @@ func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, run
 	if _, refErr := git.Run(ctx, gateDir, "update-ref", sourceRef, preserved); refErr != nil {
 		return fmt.Errorf("%w: %v", errPreservedPinAbsent, refErr)
 	}
-	anchors.noteGate(sourceRef)
+	anchors.noteGateRetained(sourceRef)
 	defer func() {
 		if err != nil {
 			if repinErr := repinGatePreserved(ctx, gateDir, sourceRef, preserved, runID); repinErr != nil {
+				// The ref survives but is not known to hold the preserved
+				// head, so it protects nothing and must stop being recorded
+				// as the pin that does.
+				anchors.noteGate(sourceRef)
 				err = errors.Join(err, fmt.Errorf("%w: %v", errPreservedPinAbsent, repinErr))
 			}
 			return
@@ -1324,12 +1374,22 @@ func writeRefAndRecord(ctx context.Context, dir, ref string, record func(string)
 // other failure - git could not be spawned, the probe timed out on a loaded
 // repository - is the absence of knowledge and must not be read as an absent
 // ref.
+//
+// The probe's own deadline is checked before its exit status, because a killed
+// probe can be indistinguishable from a conclusive one: exec kills a timed-out
+// command with Process.Kill, which on Windows is TerminateProcess(handle, 1),
+// so the process exits 1 and --quiet leaves stderr empty - exactly the shape
+// git uses to report an absent ref. Reading that as absence would withdraw the
+// record for a ref a successful write really left behind.
 func readRefDetached(ctx context.Context, dir, ref string) (string, bool) {
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preservedRefCleanupTimeout)
 	defer cancel()
 	out, err := git.Run(probeCtx, dir, "rev-parse", "--verify", "--quiet", ref)
 	if err == nil {
 		return strings.TrimSpace(out), true
+	}
+	if probeCtx.Err() != nil {
+		return "", false
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(bytes.TrimSpace(exitErr.Stderr)) == 0 {
@@ -1370,6 +1430,9 @@ func releaseGatePreservedPin(ctx context.Context, gateDir, runID string, anchors
 	}
 	if _, err := git.Run(cleanupCtx, gateDir, "update-ref", "-d", ref); err != nil {
 		slog.Warn("branchsync: gate preserved staging ref not deleted", "ref", ref, "run", runID, "error", err)
+		// The commits are already safe in the clone, so what survives here is
+		// a ref whose delete failed rather than the pin protecting them.
+		anchors.noteGate(ref)
 		return
 	}
 	anchors.clearGate(ref)
