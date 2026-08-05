@@ -553,29 +553,30 @@ func loadTrustedRepoConfig(ctx context.Context, wtDir, trustedSHA, runID string)
 }
 
 // resolveTrustedRepoConfig is the single owner of the trusted repo config a run
-// executes under: it reads the trusted default-branch copy, then layers the
-// maintainer's working-path copy over it.
+// executes under: it reads the trusted default-branch copy, then hands over to
+// the maintainer's working-path copy when there is one.
 //
 // SECURITY: allow_repo_commands is read from the default-branch copy BEFORE the
-// working-path merge, and is returned separately rather than read back off the
-// merged config, so a local override can never widen the push trust boundary
-// (config.MergeWorkingPathTrusted deliberately excludes the field). Both callers
-// (run start and crash recovery) go through here so that ordering has one home.
+// working-path copy is adopted, and is returned separately rather than read
+// back off the resolved config, so a local override can never widen the push
+// trust boundary (config.ResolveWorkingPathTrusted keeps the field on the
+// default-branch side). Both callers (run start and crash recovery) go through
+// here so that ordering has one home.
 func resolveTrustedRepoConfig(ctx context.Context, gitDir string, globalCfg *config.GlobalConfig, repo *db.Repo, trustedSHA, runID string) (*config.RepoConfig, bool) {
 	trusted := loadTrustedRepoConfig(ctx, gitDir, trustedSHA, runID)
 	allowRepoCommands := trusted != nil && trusted.AllowRepoCommands
 	return applyWorkingPathTrustedConfig(ctx, globalCfg, repo, trusted, runID), allowRepoCommands
 }
 
-// applyWorkingPathTrustedConfig layers the maintainer's own checkout copy of
-// .no-mistakes.yaml over the trusted default-branch copy, when the global
-// config opted in with trust_working_path_config. It returns trusted unchanged
-// when the opt-in is off, the working path is unknown, or the file is absent.
+// applyWorkingPathTrustedConfig promotes the maintainer's own checkout copy of
+// .no-mistakes.yaml to be the run's trusted config, when the global config
+// opted in with trust_working_path_config. It returns trusted unchanged when
+// the opt-in is off, the working path is unknown, or the file is absent.
 //
 // The working path is the registered primary checkout on the daemon host, not
 // the ephemeral gate worktree, so nothing a contributor pushed can reach it.
-// See config.MergeWorkingPathTrusted for the merge rules and for why
-// allow_repo_commands is excluded.
+// See config.ResolveWorkingPathTrusted for why a present file replaces the
+// default-branch copy outright and which two boundaries it still cannot weaken.
 func applyWorkingPathTrustedConfig(ctx context.Context, globalCfg *config.GlobalConfig, repo *db.Repo, trusted *config.RepoConfig, runID string) *config.RepoConfig {
 	if globalCfg == nil || !globalCfg.TrustWorkingPathConfig || repo == nil || repo.WorkingPath == "" {
 		return trusted
@@ -608,7 +609,7 @@ func applyWorkingPathTrustedConfig(ctx context.Context, globalCfg *config.Global
 		slog.Warn("working-path repo config is tracked by git: a branch checkout in the primary worktree can change trusted gate commands; keep it untracked (.git/info/exclude)", "run_id", runID, "path", path)
 	}
 	slog.Info("working-path repo config applied over the default-branch copy", "run_id", runID, "path", path)
-	return config.MergeWorkingPathTrusted(trusted, workingCfg)
+	return config.ResolveWorkingPathTrusted(trusted, workingCfg)
 }
 
 // assertGateTrustedConfigReadable fails a run LOUD when the trusted
@@ -994,7 +995,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	// Create executor with event broadcast.
 	runCtx, cancel := context.WithCancelCause(context.Background())
 	executor := pipeline.NewExecutor(m.db, m.paths, cfg, ag, execSteps, m.broadcast)
-	executor.SetSkippedSteps(skipSteps)
+	executor.SetSkippedSteps(cfg.SkippedSteps(skipSteps))
 
 	// Track executor.
 	done := make(chan struct{})

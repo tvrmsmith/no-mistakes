@@ -167,8 +167,8 @@ func TestApplyWorkingPathTrustedConfig_TrackedFileStillApplies(t *testing.T) {
 	if got.Commands.Lint != "working-lint" {
 		t.Fatalf("commands.lint = %q, want the tracked working-path value", got.Commands.Lint)
 	}
-	if got.Commands.Test != "trusted-test" {
-		t.Fatalf("commands.test = %q, want the trusted default-branch value", got.Commands.Test)
+	if got.Commands.Test != "" {
+		t.Fatalf("commands.test = %q, want it unset: the working-path copy replaces the default-branch copy outright", got.Commands.Test)
 	}
 }
 

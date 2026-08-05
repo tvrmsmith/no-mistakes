@@ -8,7 +8,7 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `ci.rerun_transient`, `test.evidence.branch`, and `auto_fix.min_severity` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `skip_steps`, `ci.rerun_transient`, `test.evidence.branch`, and `auto_fix.min_severity` only from that trusted copy.
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
@@ -16,7 +16,7 @@ Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`)
 
 If you genuinely want per-branch `commands` and `agent` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](#allow_repo_commands) in this same file on your default branch. This re-enables the previous behavior with eyes open. The switch is read only from the trusted default-branch copy, so a contributor cannot self-enable it from a pushed branch.
 
-If you cannot commit this file to the default branch at all — a repo owned by a team that does not run no-mistakes — set [`trust_working_path_config: true`](/no-mistakes/reference/global-config/#trust_working_path_config) in your global config. The daemon then layers the gate-control fields from your own checkout's `.no-mistakes.yaml` over the default-branch copy. That is a maintainer-side setting on the daemon host; the rule above still governs everything arriving over a push.
+If you cannot commit this file to the default branch at all — a repo owned by a team that does not run no-mistakes — set [`trust_working_path_config: true`](/no-mistakes/reference/global-config/#trust_working_path_config) in your global config. Your own checkout's `.no-mistakes.yaml` then becomes the trusted copy, replacing the default-branch one outright. That is a maintainer-side setting on the daemon host; the rule above still governs everything arriving over a push.
 :::
 
 ```yaml
@@ -169,6 +169,28 @@ If checks still appear on a declared no-CI repository, their actual states are p
 
 This field is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`.
 A feature branch cannot self-declare `no_ci: true` to bypass checks, and cannot clear a trusted declaration either.
+
+### skip_steps
+
+Pipeline steps every run of this repository skips — the standing form of `axi run --skip`.
+
+| | |
+| --- | --- |
+| Type | `list of string` |
+| Default | Empty (every step runs) |
+
+```yaml
+skip_steps:
+  - pr
+  - ci
+```
+
+Valid names are the [pipeline steps](/no-mistakes/reference/pipeline-steps/): `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, `ci`. An unrecognized name fails the config rather than being ignored — a typo that silently skipped nothing would read exactly like a step that ran.
+
+This list and a run's own `--skip` selection are additive: neither can re-enable what the other switched off. Skipping `review` also means no run of this repository ever records review approval, which the Push step requires, so a repository that skips `review` while keeping `push` will not publish.
+
+This field is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`.
+It removes whole validation phases, so a pushed branch that could list `review` would review itself.
 
 ### commands.test
 
