@@ -847,14 +847,12 @@ func (s *Service) recoverKeepLocal(ctx context.Context, run *db.Run, state State
 }
 
 // stageKeptHead publishes the kept local head into the gate's staging ref and
-// records it. A fetch that reports failure may still have updated the ref, so
-// the ref itself - not the exit status - decides whether the record carries it.
+// records it through the shared write-then-probe rule.
 func (s *Service) stageKeptHead(ctx context.Context, branch, source, stagingRef string, anchors *recoverAnchors) error {
-	_, fetchErr := git.Run(ctx, s.GateDir, "fetch", "--no-tags", "--no-write-fetch-head", source, "+refs/heads/"+branch+":"+stagingRef)
-	if _, err := git.Run(ctx, s.GateDir, "rev-parse", "--verify", "--quiet", stagingRef); err == nil {
-		anchors.noteGate(stagingRef)
-	}
-	return fetchErr
+	return writeRefAndRecord(ctx, s.GateDir, stagingRef, anchors.noteGate, func() error {
+		_, err := git.Run(ctx, s.GateDir, "fetch", "--no-tags", "--no-write-fetch-head", source, "+refs/heads/"+branch+":"+stagingRef)
+		return err
+	})
 }
 
 // dropKeptHeadStaging removes the staging ref and clears it from the record
@@ -1260,8 +1258,9 @@ func preserveFailedMessage(err error, detached bool, runID string, anchors *reco
 // commits are pinned when no ref reaches them.
 func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, runID, anchorRef, preserved string, detached bool, anchors *recoverAnchors) (err error) {
 	if !detached {
-		fetchErr := git.FetchRemoteBranchToPrivateRef(ctx, s.workDir(), gateDir, branch, anchorRef)
-		s.noteAnchorIfWritten(ctx, anchorRef, anchors)
+		fetchErr := writeRefAndRecord(ctx, s.workDir(), anchorRef, anchors.note, func() error {
+			return git.FetchRemoteBranchToPrivateRef(ctx, s.workDir(), gateDir, branch, anchorRef)
+		})
 		if fetchErr != nil {
 			return fetchErr
 		}
@@ -1281,11 +1280,12 @@ func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, run
 		}
 		releaseGatePreservedPin(ctx, gateDir, runID, anchors)
 	}()
-	if s.beforePreservedFetch != nil {
-		s.beforePreservedFetch()
-	}
-	fetchErr := git.FetchRefToPrivateRef(ctx, s.workDir(), gateDir, sourceRef, anchorRef)
-	s.noteAnchorIfWritten(ctx, anchorRef, anchors)
+	fetchErr := writeRefAndRecord(ctx, s.workDir(), anchorRef, anchors.note, func() error {
+		if s.beforePreservedFetch != nil {
+			s.beforePreservedFetch()
+		}
+		return git.FetchRefToPrivateRef(ctx, s.workDir(), gateDir, sourceRef, anchorRef)
+	})
 	if fetchErr != nil {
 		err = fetchErr
 		return err
@@ -1294,17 +1294,35 @@ func (s *Service) fetchPreservedAnchor(ctx context.Context, gateDir, branch, run
 	return err
 }
 
-// noteAnchorIfWritten records the clone-side anchor when the ref itself
-// resolves. A fetch that reports failure - including a cancelled one - may
-// still have updated the ref, so the ref, not the exit status, decides whether
-// the record carries it, and the probe runs detached from the caller's
-// cancellation so a cancelled fetch cannot also silence the check.
-func (s *Service) noteAnchorIfWritten(ctx context.Context, anchorRef string, anchors *recoverAnchors) {
+// writeRefAndRecord is the single rule by which a ref-writing recovery step
+// enters the record, on either side. A write that succeeded owns the ref it
+// left behind whatever it held before, including the no-op re-delivery of a
+// value an earlier attempt already staged. A write that reports failure -
+// including a cancelled one - may still have moved the ref, so the ref decides
+// rather than the exit status; but a ref that merely still holds what it held
+// before that failure was left by an earlier attempt and is not this
+// invocation's work, which is the difference between reporting a fetch that
+// landed and claiming one that never ran. Both probes run detached from the
+// caller's cancellation, so a cancelled write cannot also silence the check
+// that says what it left behind.
+func writeRefAndRecord(ctx context.Context, dir, ref string, record func(string), write func() error) error {
+	before := readRefDetached(ctx, dir, ref)
+	writeErr := write()
+	after := readRefDetached(ctx, dir, ref)
+	if after != "" && (writeErr == nil || after != before) {
+		record(ref)
+	}
+	return writeErr
+}
+
+func readRefDetached(ctx context.Context, dir, ref string) string {
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preservedRefCleanupTimeout)
 	defer cancel()
-	if _, err := git.Run(probeCtx, s.workDir(), "rev-parse", "--verify", "--quiet", anchorRef); err == nil {
-		anchors.note(anchorRef)
+	out, err := git.Run(probeCtx, dir, "rev-parse", "--verify", "--quiet", ref)
+	if err != nil {
+		return ""
 	}
+	return strings.TrimSpace(out)
 }
 
 func verifyPreservedAnchor(ctx context.Context, wd, anchorRef, preserved string) error {
