@@ -17,6 +17,12 @@ commands:
 auto_fix:
   review: 0
 
+# This clone is a personal build that never contributes upstream: the pipeline
+# validates and pushes to the fork, and there is no PR to open or CI to watch.
+skip_steps:
+  - pr
+  - ci
+
 # Documentation ownership map for the document step's placement policy.
 document:
   instructions: |
