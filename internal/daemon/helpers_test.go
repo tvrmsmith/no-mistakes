@@ -156,8 +156,15 @@ type mockApprovalStep struct {
 }
 
 func (s *mockApprovalStep) Name() types.StepName { return s.name }
-func (s *mockApprovalStep) Execute(_ *pipeline.StepContext) (*pipeline.StepOutcome, error) {
-	return &pipeline.StepOutcome{NeedsApproval: true, Findings: `{"findings":[],"summary":"needs review"}`}, nil
+func (s *mockApprovalStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	outcome := &pipeline.StepOutcome{NeedsApproval: true, Findings: `{"findings":[],"summary":"needs review"}`}
+	// The real review step always records the reviewed head, even when it
+	// parks for approval; a resumed run needs that as its durable reviewed
+	// head candidate (executor.go), so mirror it here for review-named steps.
+	if s.name == types.StepReview && sctx.Run != nil {
+		outcome.ReviewApprovedHeadSHA = sctx.Run.HeadSHA
+	}
+	return outcome, nil
 }
 
 // mockSlowStep blocks until context is cancelled.
@@ -187,6 +194,45 @@ func (s *mockPanicStep) Execute(_ *pipeline.StepContext) (*pipeline.StepOutcome,
 // startTestDaemonWithSteps starts a daemon with a custom step factory.
 func startTestDaemonWithSteps(t *testing.T, sf StepFactory) (*paths.Paths, *db.DB) {
 	t.Helper()
+	instance := startTestDaemonInstance(t, sf)
+	return instance.paths, instance.db
+}
+
+// testDaemonInstance is one in-process daemon over an NM_HOME. Callers that
+// start a second daemon over the same root must stop the first through
+// stopAndWait: only the daemon goroutine returning proves the singleton lock
+// was released, and only then can a replacement start deterministically.
+type testDaemonInstance struct {
+	paths   *paths.Paths
+	db      *db.DB
+	errCh   chan error
+	stopped bool
+}
+
+// stopAndWait requests shutdown over IPC and returns the daemon's own exit
+// error once its goroutine has returned. It is idempotent.
+func (i *testDaemonInstance) stopAndWait(t *testing.T) error {
+	t.Helper()
+	if i.stopped {
+		return nil
+	}
+	i.stopped = true
+	if client, err := ipc.Dial(i.paths.Socket()); err == nil {
+		_ = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
+		_ = client.Close()
+	}
+	select {
+	case err := <-i.errCh:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon did not stop within 5s")
+		return nil
+	}
+}
+
+// startTestDaemonInstance starts a daemon over a fresh NM_HOME.
+func startTestDaemonInstance(t *testing.T, sf StepFactory) *testDaemonInstance {
+	t.Helper()
 
 	tmpDir, err := os.MkdirTemp("", "dtest")
 	if err != nil {
@@ -212,33 +258,43 @@ func startTestDaemonWithSteps(t *testing.T, sf StepFactory) (*paths.Paths, *db.D
 	}
 	t.Cleanup(func() { d.Close() })
 
-	errCh := make(chan error, 1)
+	return restartTestDaemonInstance(t, p, d, sf)
+}
+
+// restartTestDaemonInstance starts a daemon over an existing NM_HOME and DB,
+// failing the test if it never becomes reachable.
+func restartTestDaemonInstance(t *testing.T, p *paths.Paths, d *db.DB, sf StepFactory) *testDaemonInstance {
+	t.Helper()
+
+	instance := &testDaemonInstance{paths: p, db: d, errCh: make(chan error, 1)}
 	go func() {
-		errCh <- RunWithOptions(p, d, sf)
+		instance.errCh <- RunWithOptions(p, d, sf)
 	}()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
 		if _, err := os.Stat(p.Socket()); err == nil {
 			break
+		}
+		select {
+		case err := <-instance.errCh:
+			instance.stopped = true
+			t.Fatalf("daemon exited before binding its socket: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("daemon socket never appeared")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
 	t.Cleanup(func() {
-		client, err := ipc.Dial(p.Socket())
-		if err == nil {
-			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
-			client.Close()
-		}
-		select {
-		case <-errCh:
-		case <-time.After(3 * time.Second):
-			t.Error("daemon did not stop within 3s")
+		if err := instance.stopAndWait(t); err != nil {
+			t.Errorf("daemon exited with error: %v", err)
 		}
 	})
 
-	return p, d
+	return instance
 }
 
 // setupTestGitRepo creates a git repo with one commit, pushes to a bare repo
@@ -422,7 +478,7 @@ func waitForRunTerminalState(t *testing.T, d *db.DB, runID string) *db.Run {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if run != nil && (run.Status == types.RunCompleted || run.Status == types.RunFailed) {
+		if run != nil && (run.Status == types.RunCompleted || run.Status == types.RunFailed || run.Status == types.RunCancelled) {
 			return run
 		}
 		time.Sleep(50 * time.Millisecond)

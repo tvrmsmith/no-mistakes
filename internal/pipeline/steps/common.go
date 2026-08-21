@@ -141,3 +141,21 @@ func AllSteps() []pipeline.Step {
 		&CIStep{},
 	}
 }
+
+// AllStepNames returns the ordered names of the steps AllSteps would run, so a
+// caller comparing a run's persisted step plan against this binary's layout
+// reads the same owner the daemon starts runs with, demo mode included.
+func AllStepNames() []types.StepName {
+	return StepNames(AllSteps())
+}
+
+// StepNames is the one mapping from a step list to the ordered names a run
+// records as its plan, so what a run persists and what a guard compares
+// against are produced the same way.
+func StepNames(list []pipeline.Step) []types.StepName {
+	names := make([]types.StepName, 0, len(list))
+	for _, step := range list {
+		names = append(names, step.Name())
+	}
+	return names
+}

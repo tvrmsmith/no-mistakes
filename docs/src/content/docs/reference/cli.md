@@ -268,7 +268,7 @@ no-mistakes axi abort --run <id>
 ```
 
 `--run` does not need a repo, branch, or worktree, so it works from anywhere.
-Use it to reap an orphaned CI monitor whose worktree was torn down before the PR merged - the run id is shown in `axi run` output and in the `axi` home view.
+Use it to reap an orphaned CI monitor whose worktree was torn down before the PR merged, or to end a run a daemon start [deferred instead of resuming](/no-mistakes/concepts/daemon/#starting-and-stopping) - the run id is shown in `axi run` output and in the `axi` home view.
 A `--run` id that is not currently active is resolved against the exact run's durable record rather than trusted blindly: a known already-terminal run returns an idempotent success carrying its terminal `run_status` with no fabricated new cancellation, a positively proven unknown id keeps the documented successful no-op with no fabricated state, and a run that is recorded as still nonterminal or cannot be read returns the nonzero terminal-unconfirmed contract.
 When the daemon is not running, nothing can be cancelled and abort never starts one: the durable record alone decides the same three outcomes, and a recorded nonterminal run reports that cancellation could not be requested.
 When the daemon is already running, `axi abort` can cancel an active run even if the global config file has become invalid, because it is not starting a fresh run.

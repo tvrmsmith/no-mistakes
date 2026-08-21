@@ -13,6 +13,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/lifecycle"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/spf13/cobra"
 )
@@ -306,12 +307,14 @@ func newDaemonStopCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon stop", force); err != nil {
+				parkedNotice, err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon stop", force)
+				if err != nil {
 					return err
 				}
 				if err := daemonStopFn(p); err != nil {
 					return err
 				}
+				fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
 				return nil
 			})
@@ -336,7 +339,8 @@ func newDaemonRestartCmd() *cobra.Command {
 				if err := p.EnsureDirs(); err != nil {
 					return err
 				}
-				if err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon restart", force); err != nil {
+				parkedNotice, err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon restart", force)
+				if err != nil {
 					return err
 				}
 				if err := daemonStopFn(p); err != nil {
@@ -345,6 +349,7 @@ func newDaemonRestartCmd() *cobra.Command {
 				if err := daemonStartFn(p); err != nil {
 					return fmt.Errorf("start daemon: %w", err)
 				}
+				fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon restarted\n", sGreen.Render("✓"))
 				return nil
 			})
@@ -354,20 +359,31 @@ func newDaemonRestartCmd() *cobra.Command {
 	return cmd
 }
 
-func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr io.Writer, action string, force bool) error {
-	runs, err := lifecycle.ActiveRuns(p)
+// guardDestructiveDaemonLifecycle answers whether the action may proceed and
+// returns the preservation promise for the parked runs it would preserve. The
+// caller prints that notice only after the daemon has actually stopped: a
+// refusal or a failed stop preserves nothing.
+func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr io.Writer, action string, force bool) (string, error) {
+	// This process is the one that starts the daemon back up, so its own step
+	// plan is the layout the preserved runs will resume under. The executable
+	// can have been replaced out of band since a parked run started, so the
+	// drift check is not free of charge here either.
+	decision, err := lifecycle.Decide(p, steps.AllSteps(), lifecycle.SameBinary)
 	if err != nil {
-		return fmt.Errorf("check active pipeline runs: %w", err)
+		return "", fmt.Errorf("check active pipeline runs: %w", err)
 	}
-	if len(runs) == 0 {
-		return nil
+	parkedNotice := decision.ParkedNotice()
+	blocking := decision.Blocking
+	if len(blocking) == 0 {
+		return parkedNotice, nil
 	}
+	runWord, verb := lifecycle.RunCountWords(len(blocking))
 	if force {
-		fmt.Fprintf(stderr, "FORCE: %s will stop/restart the daemon while %d active pipeline runs are in progress\n", action, len(runs))
-		fmt.Fprint(stderr, lifecycle.RunList(runs))
-		return nil
+		fmt.Fprintf(stderr, "FORCE: %s will stop/restart the daemon while %d active pipeline %s %s in progress\n", action, len(blocking), runWord, verb)
+		fmt.Fprint(stderr, lifecycle.RunList(blocking))
+		return parkedNotice, nil
 	}
-	return fmt.Errorf("refusing %s because %d active pipeline runs are in progress; pass --force to stop/restart the daemon anyway\n%s", action, len(runs), lifecycle.RunList(runs))
+	return "", fmt.Errorf("refusing %s because %d active pipeline %s %s in progress; pass --force to stop/restart the daemon anyway\n%s", action, len(blocking), runWord, verb, lifecycle.RunList(blocking))
 }
 
 func newDaemonStatusCmd() *cobra.Command {

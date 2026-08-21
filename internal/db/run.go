@@ -51,13 +51,22 @@ type Run struct {
 	// at a gate awaiting the driving agent's response (an awaiting_approval or
 	// fix_review step). It is nil whenever the run is not parked: the executor
 	// sets it on gate entry and clears it the moment the agent responds (or the
-	// wait is cancelled). It is observability only and does not affect gate
-	// resolution.
+	// wait is cancelled). It never changes gate resolution, but it is the
+	// authoritative signal that the run survives a clean daemon stop.
 	AwaitingAgentSince *int64
 	// ParkedMS accumulates the run's total parked-at-gate wall time in
 	// milliseconds across every gate wait (local performance telemetry;
 	// step duration_ms values exclude this time).
-	ParkedMS        int64
+	ParkedMS int64
+	// SkippedSteps is the run's requested skip set. It is empty for runs
+	// started without --skip and for legacy rows recorded before the set was
+	// persisted; a resumed run restores it so a stop cannot silently run a
+	// step the operator excluded.
+	SkippedSteps []types.StepName
+	// StepPlan is the ordered pipeline layout the run was started under. It is
+	// empty for legacy rows recorded before the plan was persisted; a lifecycle
+	// guard treats an unknown plan as incompatible with the resuming binary.
+	StepPlan        []types.StepName
 	Intent          *string
 	IntentSource    *string
 	IntentSessionID *string
@@ -66,20 +75,74 @@ type Run struct {
 	UpdatedAt       int64
 }
 
-const runColumns = `id, repo_id, branch, head_sha, base_sha, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, review_approved_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, COALESCE(ci_ready_no_ci, 0), last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), terminal_head_verified_at, custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
+const runColumns = `id, repo_id, branch, head_sha, base_sha, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, review_approved_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, COALESCE(ci_ready_no_ci, 0), last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), terminal_head_verified_at, custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), skipped_steps, step_plan, intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
 
 func scanRun(row interface {
 	Scan(...any) error
 }, r *Run) error {
-	return row.Scan(
+	var skipped, plan sql.NullString
+	err := row.Scan(
 		&r.ID, &r.RepoID, &r.Branch, &r.HeadSHA, &r.BaseSHA, &r.SubmittedHeadSHA, &r.NoMistakesVersion, &r.NoMistakesBuildSHA, &r.ReviewApprovedHeadSHA, &r.Status,
 		&r.PRURL, &r.PRState, &r.PRStateObservedAt, &r.CIReadyAt, &r.CIReadyNoCI,
 		&r.LastPushedSHA, &r.PushTargetKind, &r.PushTargetFingerprint, &r.PushRef,
 		&r.LastPushedAt, &r.PushGeneration, &r.PushActive, &r.TerminalHeadVerifiedAt,
-		&r.CustodyReturnedAt, &r.Error, &r.AwaitingAgentSince, &r.ParkedMS,
+		&r.CustodyReturnedAt, &r.Error, &r.AwaitingAgentSince, &r.ParkedMS, &skipped, &plan,
 		&r.Intent, &r.IntentSource, &r.IntentSessionID, &r.IntentScore,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
+	if err != nil {
+		return err
+	}
+	r.SkippedSteps = parseStepNames(skipped.String)
+	r.StepPlan = parseStepNames(plan.String)
+	return nil
+}
+
+func parseStepNames(value string) []types.StepName {
+	var steps []types.StepName
+	for _, name := range strings.Split(value, ",") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			steps = append(steps, types.StepName(name))
+		}
+	}
+	return steps
+}
+
+func formatStepNames(steps []types.StepName) string {
+	names := make([]string, 0, len(steps))
+	for _, step := range steps {
+		if name := strings.TrimSpace(string(step)); name != "" {
+			names = append(names, name)
+		}
+	}
+	return strings.Join(names, ",")
+}
+
+// SetRunSkippedSteps records the run's requested skip set so a run resumed
+// after a clean daemon stop still honors it. An empty set clears the column.
+func (d *DB) SetRunSkippedSteps(id string, steps []types.StepName) error {
+	return d.setRunStepNames(id, "skipped_steps", steps)
+}
+
+// SetRunStepPlan records the ordered pipeline layout the run executes under,
+// so a lifecycle guard can tell whether the binary that would resume the run
+// still runs the same plan. An empty plan clears the column.
+func (d *DB) SetRunStepPlan(id string, steps []types.StepName) error {
+	return d.setRunStepNames(id, "step_plan", steps)
+}
+
+// setRunStepNames writes a step-name list column on a run. column is a
+// package-internal literal, never caller input.
+func (d *DB) setRunStepNames(id, column string, steps []types.StepName) error {
+	var value *string
+	if joined := formatStepNames(steps); joined != "" {
+		value = &joined
+	}
+	if _, err := d.sql.Exec(`UPDATE runs SET `+column+` = ?, updated_at = ? WHERE id = ?`, value, now(), id); err != nil {
+		return fmt.Errorf("set run %s: %w", column, err)
+	}
+	return nil
 }
 
 // InsertRun creates a new run record.
@@ -597,6 +660,29 @@ func (d *DB) RecoverStaleRuns(errMsg string) (int, error) {
 // in preserved. Callers use preserved only after independently proving a run
 // can be reconstructed safely.
 func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}) (int, error) {
+	placeholders, args := recoveryExclusionClause(preserved)
+	return d.failActiveRuns(errMsg, placeholders, args)
+}
+
+// FailActiveRunWithReason ends one pending/running run and its in-progress
+// steps with a concrete reason. Startup recovery uses it for a run whose
+// preserved-park promise could not be honored, so the row records why that run
+// could not be resumed instead of the blanket crash message applied to every
+// other active row; the daemon also uses it to end a deferred run, whose reason
+// can be a cancellation. The recorded status follows
+// types.TerminalStatusForReason, so an aborted or superseded run records
+// cancelled. Returns whether a row was actually ended.
+func (d *DB) FailActiveRunWithReason(id, errMsg string) (bool, error) {
+	count, err := d.failActiveRuns(errMsg, " AND id = ?", []any{id})
+	return count > 0, err
+}
+
+// failActiveRuns ends every pending/running run matching scope (an extra SQL
+// predicate on runs.id plus its arguments) together with that run's in-progress
+// steps, in one transaction. The run's terminal status comes from
+// types.TerminalStatusForReason, the same owner the executor's own failure path
+// reads, so the two cannot disagree about what a cancellation records.
+func (d *DB) failActiveRuns(errMsg, scope string, args []any) (int, error) {
 	ts := now()
 
 	tx, err := d.sql.Begin()
@@ -605,7 +691,6 @@ func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}
 	}
 	defer tx.Rollback()
 
-	placeholders, args := recoveryExclusionClause(preserved)
 	stepArgs := []any{
 		types.StepStatusFailed, errMsg, ts,
 		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
@@ -615,30 +700,30 @@ func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}
 	_, err = tx.Exec(
 		`UPDATE step_results SET status = ?, error = ?, completed_at = ?
 		 WHERE status IN (?, ?, ?, ?) AND run_id IN (
-			SELECT id FROM runs WHERE status IN (?, ?)`+placeholders+`
+			SELECT id FROM runs WHERE status IN (?, ?)`+scope+`
 		 )`,
 		stepArgs...,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("recover stale steps: %w", err)
+		return 0, fmt.Errorf("fail active steps: %w", err)
 	}
 
 	// Fail stale runs. Clear any awaiting-agent marker so a recovered (now
 	// failed) run is never reported as still parked awaiting the agent,
 	// accumulating the marker's elapsed time into the run's parked total so
 	// the parked evidence survives the crash.
-	runArgs := []any{types.RunFailed, errMsg, ts, ts, ts, types.RunPending, types.RunRunning}
+	runArgs := []any{types.TerminalStatusForReason(errMsg), errMsg, ts, ts, ts, types.RunPending, types.RunRunning}
 	runArgs = append(runArgs, args...)
 	result, err := tx.Exec(
 		`UPDATE runs SET status = ?, error = ?, push_active = 0,
 			parked_ms = COALESCE(parked_ms, 0) + CASE
 				WHEN awaiting_agent_since IS NOT NULL AND ? > awaiting_agent_since
 				THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
-			awaiting_agent_since = NULL, updated_at = ? WHERE status IN (?, ?)`+placeholders,
+			awaiting_agent_since = NULL, updated_at = ? WHERE status IN (?, ?)`+scope,
 		runArgs...,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("recover stale runs: %w", err)
+		return 0, fmt.Errorf("fail active runs: %w", err)
 	}
 
 	count, err := result.RowsAffected()

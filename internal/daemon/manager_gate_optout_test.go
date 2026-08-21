@@ -170,3 +170,33 @@ func TestAssertGateTrustedConfigReadable_UnparseableAborts(t *testing.T) {
 		t.Errorf("abort error should say unparseable, got: %v", err)
 	}
 }
+
+// TestAssertGateTrustedConfigReadable_OnlyAnInvalidConfigIsAdverse proves the
+// aborts above are not all the same to a recovering run. A git read that never
+// completed leaves the trusted config unknown, so a preserved run defers on it
+// and keeps its worktree; a config that was read and is invalid is an
+// established fact, so that run is terminally rejected.
+func TestAssertGateTrustedConfigReadable_OnlyAnInvalidConfigIsAdverse(t *testing.T) {
+	readable, sha := gateOptOutWorktree(t, "")
+	bogus := "0123456789abcdef0123456789abcdef01234567"
+	unreadable := assertGateTrustedConfigReadable(context.Background(), readable, "main", bogus)
+	if unreadable == nil {
+		t.Fatal("an unreadable trusted commit must abort")
+	}
+	if resumeRejected(unreadable) {
+		t.Fatalf("an incomplete git read was classified as adverse evidence: %v", unreadable)
+	}
+
+	if err := assertGateTrustedConfigReadable(context.Background(), readable, "main", sha); err != nil {
+		t.Fatalf("a readable trusted tree must pass: %v", err)
+	}
+
+	invalid, invalidSHA := gateOptOutWorktree(t, "disable_project_settings: : : {{not yaml\n")
+	adverse := assertGateTrustedConfigReadable(context.Background(), invalid, "main", invalidSHA)
+	if adverse == nil {
+		t.Fatal("unparseable trusted config must abort")
+	}
+	if !resumeRejected(adverse) {
+		t.Fatalf("a config that was read and is invalid must be adverse evidence, got: %v", adverse)
+	}
+}

@@ -50,12 +50,21 @@ func TestLoadRecoveredConfig_BoundsFetchAndFailsClosed(t *testing.T) {
 	// disable_project_settings security boundary a trusted-config fetch failure
 	// must ABORT (not silently proceed as "not opted out"), so this now returns
 	// an error rather than a config with empty commands.
-	_, err := mgr.loadRecoveredConfig(context.Background(), &db.Run{ID: "run"}, &db.Repo{DefaultBranch: "main"}, workDir)
+	cfg, err := mgr.loadRecoveredConfig(context.Background(), &db.Run{ID: "run"}, &db.Repo{DefaultBranch: "main"}, workDir)
 	if err == nil {
 		t.Fatal("expected loadRecoveredConfig to abort on trusted-config fetch failure")
 	}
-	if !strings.Contains(err.Error(), "disable_project_settings") {
-		t.Fatalf("abort error should name the boundary, got: %v", err)
+	if cfg != nil {
+		t.Fatalf("aborted load returned a config %+v, want none", cfg)
+	}
+	// The branch was unreachable, which is a fact about this moment and not
+	// about the run, so the abort is classified as deferred: this start refuses
+	// to proceed without the trusted copy, and a later one retries.
+	if resumeRejected(err) {
+		t.Fatalf("abort error = %v, want it classified as a deferred resume", err)
+	}
+	if !strings.Contains(err.Error(), "fetch default branch") {
+		t.Fatalf("abort error should name the unreachable branch, got: %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("load recovered config took %s, want under 1s", elapsed)

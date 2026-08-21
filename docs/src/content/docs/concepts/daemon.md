@@ -55,11 +55,11 @@ no-mistakes update
 
 `no-mistakes update` stops and starts the daemon when it is running, or when stale daemon artifacts exist, so the new executable is used.
 It prefers the managed service path and falls back to a detached daemon if service startup is unavailable or fails.
-If pending or running pipeline runs exist, `update` refuses to restart the daemon by default and prints each active run's ID, status, branch, and short head SHA. Pass `--force` to restart the daemon anyway and accept that those runs may fail; `-y`/`--yes` does not bypass this guard.
+If pending or running pipeline runs exist, `update` refuses to restart the daemon by default and prints each active run's ID, status, branch, and short head SHA. Pass `--force` to restart the daemon anyway and accept that those runs may fail; `-y`/`--yes` does not bypass this guard. Runs parked at an approval or fix-review gate are exempt from this guard and from `--force`'s count: a stop or restart preserves them and the next daemon start resumes them, so `update` lists them under a separate preservation notice instead of counting them toward the refusal. That notice is printed only after the daemon has actually been stopped and restarted; a refusal, a failed download, or a failed restart preserves nothing, so none of them promises preservation. The exemption is conditional on resumability, checked against the same preconditions startup recovery applies: the run's worktree must still be on disk at the run's head, and its gate step must be complete rather than still holding a live agent. A parked run that fails either check counts as blocking, because the next start would refuse it too. `daemon stop`, `daemon restart`, and `update` all require a parked run's recorded step plan to match the pipeline layout the currently installed binary runs, because the executable that comes back can have been replaced since the run parked; a run recorded under a different or unrecorded layout cannot be assumed resumable and counts as blocking like any other active run. What is specific to `update` is the printed qualifier: an update also swaps the binary, and the incoming version's layout does not exist until after the download, so the preservation notice says so rather than promising a certainty the check cannot cover.
 If the daemon is already running from a different executable path, update still prompts before replacing it; `-y`/`--yes` answers that prompt non-interactively.
 If the daemon executable path cannot be determined, the update aborts before replacing anything.
 
-`no-mistakes daemon stop` and `no-mistakes daemon restart` apply the same guard: if pending or running pipeline runs exist, each refuses by default and lists the active runs, and each takes its own `--force` to proceed anyway.
+`no-mistakes daemon stop` and `no-mistakes daemon restart` apply the same guard, including the same gate-parked exemption and the same step-plan check: if pending or running pipeline runs exist, each refuses by default and lists the active runs, and each takes its own `--force` to proceed anyway.
 That `--force` override is available only to an ordinary top-level caller. A
 process descended from an active validation-step agent cannot start, stop,
 restart, or update the daemon; recursive containment refuses the command before
@@ -69,6 +69,8 @@ Every invocation of `daemon stop`, `daemon restart`, or `update` - forced or not
 The daemon writes an identity record to `~/.no-mistakes/daemon.pid` and listens on a Unix socket at `~/.no-mistakes/socket`. On Windows, it uses a localhost TCP listener and a protected endpoint file at the same path. CLI clients bound how long they wait for that socket to accept a connection with `daemon_connect_timeout` (default `3s`, override with `NM_DAEMON_CONNECT_TIMEOUT`), so a daemon process that is alive but stuck fails the connection instead of hanging the caller; see [Troubleshooting](/no-mistakes/guides/troubleshooting/#check-for-stale-artifacts).
 Commands that ensure the daemon is running (`no-mistakes`, `init`, `attach`, `rerun`, `axi run`, `axi respond`) also fail fast rather than silently starting a replacement daemon when the socket file exists but nothing answers at all, such as a dead socket left behind by an unclean exit; `no-mistakes daemon start` self-heals past that case.
 After accepting a shutdown request, `daemon stop` waits for the daemon process itself to exit before returning success. Losing IPC health is not enough because the listener closes near the start of shutdown, while the singleton lock and other process-owned resources are released only at process exit. `daemon restart` uses the same complete-stop handoff before starting the replacement, so the old and new processes do not contend for the root.
+
+A clean stop does not fail every run it interrupts. A run parked at an approval or fix-review gate keeps its run row, its gate step, and its worktree, and the next daemon start resumes it at the same gate through [recovery on startup](#crash-recovery). A run counts as parked only when two facts agree: the run row carries the awaiting-agent marker, and one of its step rows is actually sitting at an approval or fix-review gate. A run interrupted mid-step is still cancelled and fails with "daemon shutting down". If the next start cannot resume a preserved run for a reason that can heal on its own - the network is unreachable so the repository's trusted configuration cannot be read, the agent CLI is not on `PATH`, a configuration file, a database row, or the worktree's own git state could not be read - the run is neither resumed nor failed: it keeps its row, its gate, and its worktree, and a later start picks it up. A read that did not complete never costs a run its worktree. Such a deferred run is still yours to end: `no-mistakes axi abort --run <id>` terminates it, and records it as cancelled by you rather than as a pipeline failure. A parked or deferred run also wins its branch against a newer push, both while the daemon runs and at the next start ([concurrent push handling](#concurrent-push-handling)). If a branch somehow ends up with more than one parked run, there is no run to prefer, so a start resumes none of them and keeps every one of their worktrees; that group needs you to abort the runs you do not want, since a later start on its own will not clear it. Only evidence a completed read actually returned, which cannot improve by waiting - a missing worktree, a head that no longer matches the run, an incomplete gate step, a drifted step plan - fails a preserved run, and then the recorded error names that reason. A response and a shutdown that arrive at the same moment are a genuine race, and either can win: a cancellation already visible when the gate is about to act preserves the run and the gate is presented again on resume, while a response accepted just before it resolves the gate as normal.
 
 Process launch and daemon readiness are separate states. After taking the singleton lock, the daemon publishes its PID before exclusive crash recovery begins, but startup is not successful until the IPC server returns a real health response. `daemon start` allows up to 45 seconds for cold environment setup and recovery, reports a child that exits before readiness promptly, and never treats the PID file or a bound socket as proof that the daemon is ready. If detached startup times out, the command kills and reaps that child before returning; if managed startup fails, it cleans up the managed attempt before trying the detached fallback and preserves both errors when both paths fail.
 
@@ -120,6 +122,8 @@ If you push to the same branch while a run is already active, the daemon:
 2. Waits for it to finish
 3. Starts a new run with the latest push
 
+The exception is a run parked at a gate, which is never cancelled this way: cancelling it would destroy a worktree holding unpushed pipeline commits. The push is refused instead, so respond to that run or abort it before pushing the branch again. The daemon also refuses the push rather than guessing when it cannot read whether the active run is parked, and a run it deferred at startup holds its branch the same way.
+
 Pushes to different branches run concurrently.
 
 This is another reason the daemon exists: branch-level coordination is easier to
@@ -127,12 +131,14 @@ reason about in one long-lived process than inside independent hook invocations.
 
 ## Crash recovery
 
-On startup, the daemon checks for runs that were left in `pending` or `running` status (which means the daemon crashed while they were active):
+On startup, the daemon checks for runs that were left in `pending` or `running` status, whether the previous daemon crashed while they were active or was stopped cleanly while one of them was parked at a gate:
 
 - Completes legacy active rows whose persisted PR state is already `merged` or `closed`, including their CI step, before active-run recovery and parked-run planning
-- Resumes only fully recorded parked approval gates whose worktree and step history can be validated; incomplete or ambiguous active runs fail closed
+- Resumes a parked gate whose worktree and step history validate
+- Fails a preserved run it cannot resume only on evidence a completed read actually returned, such as a missing worktree, a head that no longer matches, an incomplete gate step, or a drifted step plan, and records that reason on the run; a read that did not complete instead defers the run, which keeps its row, its gate, and its worktree for a later start
+- Performs no stale-run sweep and no worktree cleanup at all when the active-run listing itself cannot be read, since a failed listing is not evidence that there is nothing to preserve
 - Before resuming a parked CI gate, re-checks its persisted PR URL through the configured provider; a currently merged or closed PR completes the stale gate, while an open, unknown, or unreachable PR remains parked
-- Marks every other stale active run as `failed` with the message "daemon crashed during execution"
+- Marks every other stale active run as `failed` with the message "daemon crashed during execution", never a run it resumed or deferred
 - Reaps orphaned managed agent servers left behind by a crashed daemon or setup wizard
 - Terminates processes a crashed daemon left running in worktrees no run owns any more, using the same working-directory scoping as run cleanup plus a ten-minute age floor so a run starting concurrently with startup is never mistaken for a leak
 - Removes orphaned worktree directories via `git worktree remove --force` - but never one whose run is still `pending` or `running`; only leftovers from terminal runs or directories with no matching run record are removed
@@ -162,6 +168,6 @@ The [starting and stopping](#starting-and-stopping) section owns the active-run
 guard, the top-level `--force` override, and the separate validation-step
 containment rule.
 
-1. Cancels all active runs
+1. Cancels every active run, which fails a run interrupted mid-step but leaves a run parked at a gate preserved for the next start
 2. Waits up to 30 seconds for goroutines to finish
 3. Removes the PID file and socket

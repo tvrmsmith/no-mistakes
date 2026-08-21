@@ -87,7 +87,7 @@ If you have multiple installs with different `NM_HOME` roots, each gets its own 
 
 Symptom: `update` refuses because active pipeline runs are in progress, prompts because the daemon is running from a different executable path, or aborts because the daemon executable path cannot be determined.
 
-`update`, `daemon stop`, and `daemon restart` all refuse by default while pipeline runs are active and list the affected runs; [Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping) owns the guard's exact rules, including why `-y`/`--yes` does not bypass it.
+`update`, `daemon stop`, and `daemon restart` all refuse by default while runs a restart would disrupt are active and list the affected runs; runs parked at a gate that the next start can resume are exempt and are listed separately instead. [Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping) owns the guard's exact rules, including why `-y`/`--yes` does not bypass it.
 
 First inspect each listed run with `no-mistakes axi status --run <id>`.
 A parked CI gate can clear itself after its PR becomes terminal, including after a daemon restart.
@@ -299,6 +299,7 @@ rm -rf ~/.no-mistakes/worktrees ~/.no-mistakes/servers ~/.no-mistakes/socket ~/.
 no-mistakes daemon start
 ```
 
+Deleting `worktrees` also discards the worktree of any run preserved at a gate, along with its unpushed pipeline commits, so resolve or abort those runs first.
 This keeps your gate repos, database, and config but clears transient state. For a full wipe, see the [Uninstall section](/no-mistakes/start-here/installation/#uninstall).
 Wedged state often means a run is stuck `pending` or `running`, so `daemon stop` refuses without `--force`; only force through once you've confirmed it's fine for the listed runs to fail.
 

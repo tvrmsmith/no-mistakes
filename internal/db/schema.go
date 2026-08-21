@@ -183,6 +183,13 @@ var migrationStatements = []string{
 	// written before the provider call, so a crash mid-request spends the
 	// budget rather than silently granting a free retry.
 	`ALTER TABLE runs ADD COLUMN ci_rerun_state TEXT`,
+	// The run's requested skip set, so a run resumed after a daemon stop still
+	// honors the --skip steps its start requested. NULL means no known skips.
+	`ALTER TABLE runs ADD COLUMN skipped_steps TEXT`,
+	// The ordered step plan the run was started under. A lifecycle guard
+	// compares it against the plan the resuming binary would run; NULL means a
+	// legacy row whose layout cannot be proven compatible.
+	`ALTER TABLE runs ADD COLUMN step_plan TEXT`,
 	// Branch synchronization provenance is intentionally nullable. Historical
 	// rows stay unbound because mutable head_sha cannot prove a successful push.
 	`ALTER TABLE runs ADD COLUMN submitted_head_sha TEXT`,

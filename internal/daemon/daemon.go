@@ -391,12 +391,23 @@ func recoverOnStartup(d *db.DB, p *paths.Paths, mgr *RunManager) {
 	}
 
 	parkedStarted := time.Now()
-	plans := mgr.recoverableParkedRuns(context.Background())
-	preserved := make(map[string]struct{}, len(plans))
+	plans, deferredRuns, err := mgr.recoverableParkedRuns(context.Background())
+	if err != nil {
+		// Without the active-run listing this start has no picture of which
+		// runs are preserved, and the blanket sweep plus worktree cleanup that
+		// follow are destructive. Defer the whole pass to a later start.
+		slog.Error("skipping crash recovery: could not list active runs", "error", err)
+		logStartupPhase("parked_runs", parkedStarted, "failed", true)
+		return
+	}
+	preserved := make(map[string]struct{}, len(plans)+len(deferredRuns))
 	for _, plan := range plans {
 		preserved[plan.run.ID] = struct{}{}
 	}
-	logStartupPhase("parked_runs", parkedStarted, "preserved", len(plans))
+	for _, runID := range deferredRuns {
+		preserved[runID] = struct{}{}
+	}
+	logStartupPhase("parked_runs", parkedStarted, "preserved", len(plans), "deferred", len(deferredRuns))
 
 	staleStarted := time.Now()
 	count, err := d.RecoverStaleRunsExcept("daemon crashed during execution", preserved)

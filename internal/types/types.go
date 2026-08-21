@@ -23,6 +23,17 @@ const (
 	RunCancelReasonSuperseded    = "cancelled: superseded by new push"
 )
 
+// TerminalStatusForReason is the single owner of the terminal status a run's
+// recorded reason implies: the two cancellation reasons record cancelled, and
+// everything else is a failure. Every path that ends an active run reads it
+// from here so an operator abort never lands as a pipeline failure.
+func TerminalStatusForReason(reason string) RunStatus {
+	if reason == RunCancelReasonAbortedByUser || reason == RunCancelReasonSuperseded {
+		return RunCancelled
+	}
+	return RunFailed
+}
+
 // StepName identifies a pipeline step.
 type StepName string
 

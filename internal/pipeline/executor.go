@@ -269,7 +269,12 @@ func ValidateRecoveredRun(database *db.DB, run *db.Run, steps []Step) error {
 	if run == nil || run.Status != types.RunRunning || run.AwaitingAgentSince == nil {
 		return fmt.Errorf("run is not a recoverable parked run")
 	}
-	_, err := (&Executor{db: database, steps: steps}).recoveredGate(run.ID)
+	validator := &Executor{db: database, steps: steps}
+	// The run's own skip set is what explains an already-resolved step row, so
+	// validation must read the recovered gate under the same set the resumed
+	// executor will run with.
+	validator.SetSkippedSteps(run.SkippedSteps)
+	_, err := validator.recoveredGate(run.ID)
 	return err
 }
 
@@ -335,7 +340,11 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		LogFile:    func(string) {},
 		OnPRMerged: e.onPRMerged,
 	}
-	if reconciled, reconcileErr := e.reconcileApprovalGate(ctx, gate.step, reconcileCtx); reconciled {
+	// A cancellation observed here falls through to the wait below, whose single
+	// return funnel translates a clean shutdown into ErrParkPreserved before any
+	// write completes the gate.
+	reconciled, reconcileErr := e.reconcileApprovalGate(ctx, gate.step, reconcileCtx)
+	if reconciled && ctx.Err() == nil {
 		if dbErr := e.db.CompleteRunAwaitingAgent(run.ID, time.Since(parkStart).Milliseconds()); dbErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("complete reconciled awaiting-agent state: %w", dbErr), ctx)
 		}
@@ -370,6 +379,12 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	)
 
 	response, reconciled, err := e.waitForApprovalOrReconcile(ctx, gate.step, reconcileCtx, false)
+	if errors.Is(err, ErrDaemonShutdown) {
+		// A clean shutdown interrupted the resumed run while it was still
+		// parked at this gate. Leave the run and gate step exactly as
+		// recovery restored them, unfolded and un-failed.
+		return ErrParkPreserved
+	}
 	if dbErr := e.db.CompleteRunAwaitingAgent(run.ID, time.Since(parkStart).Milliseconds()); dbErr != nil {
 		slog.Warn("failed to complete awaiting-agent state in db", "step", gate.step.Name(), "run", run.ID, "error", dbErr)
 	}
@@ -458,7 +473,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 func (e *Executor) recoveredGate(runID string) (*recoveredGate, error) {
 	results, err := e.db.GetStepsByRun(runID)
 	if err != nil {
-		return nil, fmt.Errorf("get recovered steps: %w", err)
+		return nil, evidenceUnavailable(fmt.Errorf("get recovered steps: %w", err))
 	}
 	if len(results) != len(e.steps) {
 		return nil, fmt.Errorf("recovered run has %d step records for %d steps", len(results), len(e.steps))
@@ -474,7 +489,10 @@ func (e *Executor) recoveredGate(runID string) (*recoveredGate, error) {
 				return nil, fmt.Errorf("recovered approval gate is incomplete")
 			}
 			rounds, err := e.db.GetRoundsByStep(result.ID)
-			if err != nil || len(rounds) == 0 {
+			if err != nil {
+				return nil, evidenceUnavailable(fmt.Errorf("get recovered gate rounds: %w", err))
+			}
+			if len(rounds) == 0 {
 				return nil, fmt.Errorf("recovered approval gate has no complete round")
 			}
 			latest := rounds[len(rounds)-1]
@@ -507,8 +525,8 @@ func (e *Executor) recoveredGate(runID string) (*recoveredGate, error) {
 			}
 			continue
 		}
-		if result.Status != types.StepStatusPending {
-			return nil, fmt.Errorf("recovered step %s is %s after approval gate", result.StepName, result.Status)
+		if _, err := e.recoveredStepHasWork(result, e.steps[index].Name()); err != nil {
+			return nil, fmt.Errorf("%w after approval gate", err)
 		}
 	}
 	if gate == nil {
@@ -526,10 +544,22 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		if ctx.Err() != nil {
 			return e.failRun(run, repo, context.Cause(ctx), ctx)
 		}
-		if index >= len(results) || results[index].StepName != e.steps[index].Name() || results[index].Status != types.StepStatusPending {
-			return e.failRun(run, repo, fmt.Errorf("recovered step plan changed at %d", index), ctx)
+		result, hasWork, err := e.recoveredStepRow(results, index)
+		if err != nil {
+			return e.failRun(run, repo, err, ctx)
 		}
-		skipRemaining, err := e.executeStep(ctx, e.steps[index], results[index], run, repo, workDir, logDir, stepExecutionState{})
+		if !hasWork {
+			continue
+		}
+		// The resumed executor carries the run's persisted skip set, so a step
+		// the operator excluded stays excluded across a daemon stop.
+		if e.skips[e.steps[index].Name()] {
+			if err := e.markRecoveredStepSkipped(run, repo, result, e.steps[index].Name()); err != nil {
+				return e.failRun(run, repo, err, ctx)
+			}
+			continue
+		}
+		skipRemaining, err := e.executeStep(ctx, e.steps[index], result, run, repo, workDir, logDir, stepExecutionState{})
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
@@ -549,17 +579,61 @@ func (e *Executor) skipRecoveredRemainder(run *db.Run, repo *db.Repo, start int)
 		return e.failRun(run, repo, fmt.Errorf("get recovered steps: %w", err))
 	}
 	for index := start; index < len(e.steps); index++ {
-		if index >= len(results) || results[index].StepName != e.steps[index].Name() || results[index].Status != types.StepStatusPending {
-			return e.failRun(run, repo, fmt.Errorf("recovered step plan changed at %d", index))
+		result, hasWork, err := e.recoveredStepRow(results, index)
+		if err != nil {
+			return e.failRun(run, repo, err)
 		}
-		if err := e.db.CompleteStepWithStatus(results[index].ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
-			return e.failRun(run, repo, fmt.Errorf("skip recovered step %s: %w", e.steps[index].Name(), err))
+		if !hasWork {
+			continue
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, e.steps[index].Name(), string(types.StepStatusSkipped), "", "", nil)
+		if err := e.markRecoveredStepSkipped(run, repo, result, e.steps[index].Name()); err != nil {
+			return e.failRun(run, repo, err)
+		}
 	}
 	if err := e.completeRun(run, repo); err != nil {
 		return e.failRun(run, repo, fmt.Errorf("complete recovered run: %w", err))
 	}
+	return nil
+}
+
+// recoveredStepHasWork reports whether a recovered step row still has work
+// left. Pending is the ordinary case. A row already marked skipped is resolved
+// and carries no remaining work, but only the run's own restored skip set
+// makes that acceptable: an unexplained resolved row after the gate is
+// unresolved state and is an error. This is the single owner of that
+// tolerance, so a new one cannot be added to some recovery paths and not
+// others.
+func (e *Executor) recoveredStepHasWork(result *db.StepResult, name types.StepName) (bool, error) {
+	switch {
+	case result.Status == types.StepStatusPending:
+		return true, nil
+	case result.Status == types.StepStatusSkipped && e.skips[name]:
+		return false, nil
+	default:
+		return false, fmt.Errorf("recovered step %s is %s", result.StepName, result.Status)
+	}
+}
+
+// recoveredStepRow returns the recovered row for step index after checking it
+// against this binary's plan, plus whether that step still has work left.
+func (e *Executor) recoveredStepRow(results []*db.StepResult, index int) (*db.StepResult, bool, error) {
+	if index >= len(results) || results[index].StepName != e.steps[index].Name() {
+		return nil, false, fmt.Errorf("recovered step plan changed at %d", index)
+	}
+	hasWork, err := e.recoveredStepHasWork(results[index], e.steps[index].Name())
+	if err != nil {
+		return nil, false, fmt.Errorf("recovered step plan changed at %d: %w", index, err)
+	}
+	return results[index], hasWork, nil
+}
+
+// markRecoveredStepSkipped resolves a recovered step the run excluded, and
+// emits the completion event for it.
+func (e *Executor) markRecoveredStepSkipped(run *db.Run, repo *db.Repo, result *db.StepResult, name types.StepName) error {
+	if err := e.db.CompleteStepWithStatus(result.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
+		return fmt.Errorf("skip recovered step %s: %w", name, err)
+	}
+	e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, name, string(types.StepStatusSkipped), "", "", nil)
 	return nil
 }
 
@@ -899,8 +973,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 
 		// Surface the park as a pollable, run-level signal so a supervisor can
 		// tell in one `axi status` read that the run is waiting for the agent
-		// to drive this gate (versus actively running/fixing/ci). Observability
-		// only: it does not change the wait below. Cleared once the wait ends.
+		// to drive this gate (versus actively running/fixing/ci). It does not
+		// change the wait below, but it is also the authoritative "this run
+		// survives a clean daemon stop" marker that startup recovery and
+		// lifecycle.ParkedAtGate read. Cleared once the wait ends.
 		if dbErr := e.db.ParkStepForApproval(run.ID, sr.ID, approvalStatus, executionMS, findingsPtr); dbErr != nil {
 			e.mu.Lock()
 			e.waiting = false
@@ -911,6 +987,13 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), outcome.Findings, "", &executionMS)
 
 		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, true)
+		if errors.Is(err, ErrDaemonShutdown) {
+			// A clean shutdown interrupted the run while it was parked at this
+			// gate. Leave the run row, the awaiting-agent marker, and the gate
+			// step row exactly as they are so startup recovery can resume it;
+			// do not fold parked time, fail the step, or fail the run.
+			return false, ErrParkPreserved
+		}
 		if dbErr := e.db.CompleteRunAwaitingAgent(run.ID, time.Since(parkStart).Milliseconds()); dbErr != nil {
 			slog.Warn("failed to complete awaiting-agent state in db", "step", stepName, "run", run.ID, "error", dbErr)
 		}
@@ -1145,6 +1228,13 @@ func pluralize(n int, singular, plural string) string {
 // gate's external source of truth makes it obsolete, or the context is
 // cancelled. Reconciliation runs synchronously under a bounded child context,
 // so no watcher goroutine can outlive approval, cancellation, or shutdown.
+// A cancellation that is already visible beats a response already buffered,
+// because every return path re-checks the context before it consumes one:
+// consuming the response instead would complete the gate under a cancelled
+// context, which fails the run one step later and destroys the park a clean
+// shutdown exists to preserve. The decision is not lost, it is re-presented at
+// the same gate when the run resumes. A response and a cancellation that land
+// concurrently are still a genuine race, and the response may win that one.
 // The caller must set e.waiting and e.waitingStep before calling this method.
 func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sctx *StepContext, immediate bool) (approvalResponse, bool, error) {
 	defer func() {
@@ -1161,6 +1251,9 @@ func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sc
 	}()
 
 	if _, ok := step.(ApprovalGateReconciler); !ok {
+		if ctx.Err() != nil {
+			return approvalResponse{}, false, context.Cause(ctx)
+		}
 		select {
 		case response := <-e.approvalCh:
 			return response, false, nil
@@ -1176,6 +1269,9 @@ func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sc
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	for {
+		if ctx.Err() != nil {
+			return approvalResponse{}, false, context.Cause(ctx)
+		}
 		select {
 		case response := <-e.approvalCh:
 			return response, false, nil
@@ -1183,11 +1279,19 @@ func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sc
 			return approvalResponse{}, false, context.Cause(ctx)
 		case <-timer.C:
 			resolved, err := e.reconcileApprovalGate(ctx, step, sctx)
+			if ctx.Err() != nil {
+				return approvalResponse{}, false, context.Cause(ctx)
+			}
 			if resolved {
 				if e.claimGateReconciliation() {
 					return approvalResponse{}, true, nil
 				}
-				return <-e.approvalCh, false, nil
+				select {
+				case response := <-e.approvalCh:
+					return response, false, nil
+				case <-ctx.Done():
+					return approvalResponse{}, false, context.Cause(ctx)
+				}
 			}
 			if errors.Is(err, ErrFatalGateReconciliation) {
 				return approvalResponse{}, false, err
@@ -1231,10 +1335,19 @@ func (e *Executor) reconcileApprovalGate(ctx context.Context, step Step, sctx *S
 	return reconciler.ReconcileApprovalGate(&copyCtx)
 }
 
-// failRun marks a run as failed and returns the error.
+// failRun marks a run as failed and returns the error, except for a run left
+// parked by a clean shutdown (ErrParkPreserved), which it returns unchanged
+// without writing anything.
 // It accepts an optional context; if the context was cancelled with a cause,
 // the cause message is used as the run's error (more informative than "context canceled").
 func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...context.Context) error {
+	// A run left parked for a clean shutdown is not a failure: its row, gate
+	// step and worktree are deliberately intact so the next daemon start can
+	// resume it. Guarding here rather than at each step-error call site makes
+	// it structurally impossible for a new caller to fail a preserved run.
+	if errors.Is(err, ErrParkPreserved) {
+		return err
+	}
 	errMsg := err.Error()
 	for _, ctx := range ctxs {
 		if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
@@ -1242,10 +1355,7 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 			break
 		}
 	}
-	runStatus := types.RunFailed
-	if errMsg == types.RunCancelReasonAbortedByUser || errMsg == types.RunCancelReasonSuperseded {
-		runStatus = types.RunCancelled
-	}
+	runStatus := types.TerminalStatusForReason(errMsg)
 	verifiedHead, verified := e.reconcileTerminalRunHead(run)
 	var dbErr error
 	if verified {

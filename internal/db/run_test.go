@@ -787,6 +787,129 @@ func TestRecoverStaleRunsExceptPreservesOnlyValidatedRuns(t *testing.T) {
 	}
 }
 
+func TestRunSkippedStepsRoundTripAndDefaultEmpty(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/skip-project", "git@github.com:user/skip-project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+
+	fresh, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh.SkippedSteps) != 0 {
+		t.Fatalf("new run skipped steps = %v, want none", fresh.SkippedSteps)
+	}
+
+	if err := d.SetRunSkippedSteps(run.ID, []types.StepName{types.StepTest, types.StepLint}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SkippedSteps) != 2 || got.SkippedSteps[0] != types.StepTest || got.SkippedSteps[1] != types.StepLint {
+		t.Fatalf("skipped steps = %v, want [test lint]", got.SkippedSteps)
+	}
+
+	if err := d.SetRunSkippedSteps(run.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared.SkippedSteps) != 0 {
+		t.Fatalf("cleared skipped steps = %v, want none", cleared.SkippedSteps)
+	}
+}
+
+func TestRunStepPlanRoundTripAndDefaultEmpty(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/plan-project", "git@github.com:user/plan-project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+
+	fresh, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh.StepPlan) != 0 {
+		t.Fatalf("new run step plan = %v, want none", fresh.StepPlan)
+	}
+
+	plan := types.AllSteps()
+	if err := d.SetRunStepPlan(run.ID, plan); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.StepPlan) != len(plan) {
+		t.Fatalf("step plan = %v, want %v", got.StepPlan, plan)
+	}
+	for i := range plan {
+		if got.StepPlan[i] != plan[i] {
+			t.Fatalf("step plan = %v, want %v", got.StepPlan, plan)
+		}
+	}
+
+	if err := d.SetRunStepPlan(run.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared.StepPlan) != 0 {
+		t.Fatalf("cleared step plan = %v, want none", cleared.StepPlan)
+	}
+}
+
+func TestFailActiveRunWithReasonScopesToOneRun(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/reason-project", "git@github.com:user/reason-project.git", "main")
+	target, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	bystander, _ := d.InsertRun(repo.ID, "feat-b", "ccc", "ddd")
+	if err := d.UpdateRunStatus(target.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunStatus(bystander.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	targetStep, _ := d.InsertStepResult(target.ID, types.StepReview)
+	if err := d.UpdateStepStatus(targetStep.ID, types.StepStatusAwaitingApproval); err != nil {
+		t.Fatal(err)
+	}
+
+	failed, err := d.FailActiveRunWithReason(target.ID, "worktree is missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !failed {
+		t.Fatal("FailActiveRunWithReason() = false, want true for an active run")
+	}
+	gotTarget, _ := d.GetRun(target.ID)
+	if gotTarget.Status != types.RunFailed || gotTarget.Error == nil || *gotTarget.Error != "worktree is missing" {
+		t.Fatalf("target run = %s / %v, want failed with the concrete reason", gotTarget.Status, gotTarget.Error)
+	}
+	gotStep, _ := d.GetStepResult(targetStep.ID)
+	if gotStep.Status != types.StepStatusFailed {
+		t.Fatalf("target step status = %s, want %s", gotStep.Status, types.StepStatusFailed)
+	}
+	gotBystander, _ := d.GetRun(bystander.ID)
+	if gotBystander.Status != types.RunRunning || gotBystander.Error != nil {
+		t.Fatalf("bystander run = %s / %v, want untouched running", gotBystander.Status, gotBystander.Error)
+	}
+
+	again, err := d.FailActiveRunWithReason(target.ID, "worktree is missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again {
+		t.Fatal("FailActiveRunWithReason() = true for an already terminal run, want false")
+	}
+}
+
 func TestRecoverStaleRunsMarksStepsFailed(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project2", "git@github.com:user/project2.git", "main")

@@ -16,7 +16,10 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/lifecycle/lifecycletest"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -350,6 +353,11 @@ func TestUpdaterActiveRunGuardAllowsForce(t *testing.T) {
 	if _, err := database.InsertRun(repo.ID, "feature-a", "aaa111", "000"); err != nil {
 		t.Fatalf("insert run: %v", err)
 	}
+	parked, err := database.InsertRun(repo.ID, "feature-parked", "ccc333", "000")
+	if err != nil {
+		t.Fatalf("insert parked run: %v", err)
+	}
+	parkRunAtGate(t, p, database, repo.ID, parked.ID, steps.AllSteps())
 	if err := database.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}
@@ -362,12 +370,309 @@ func TestUpdaterActiveRunGuardAllowsForce(t *testing.T) {
 	transcript := stderr.String()
 	for _, want := range []string{
 		"FORCE: continuing update",
+		// Only the run the force actually disrupts is warned about.
+		"1 active pipeline run is in progress",
 		"feature-a",
 		"aaa111",
 	} {
 		if !strings.Contains(transcript, want) {
 			t.Fatalf("stderr should contain %q, got %q", want, transcript)
 		}
+	}
+	// The daemon has not been restarted yet, so --force must not print the
+	// preservation promise either; only a completed restart may.
+	if strings.Contains(transcript, "will be preserved and resumed") {
+		t.Fatalf("force guard should not promise preservation before the restart, got %q", transcript)
+	}
+}
+
+func TestUpdaterAllowsGateParkedRunsWithoutForce(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure paths: %v", err)
+	}
+	database, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	repo, err := database.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	parked, err := database.InsertRun(repo.ID, "feature-parked", "ccc333", "000")
+	if err != nil {
+		t.Fatalf("insert parked run: %v", err)
+	}
+	parkRunAtGate(t, p, database, repo.ID, parked.ID, steps.AllSteps())
+	if err := database.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	stderr := new(bytes.Buffer)
+	u := &updater{paths: p, stderr: stderr}
+	if err := u.confirmActiveRunsBeforeUpdate(); err != nil {
+		t.Fatalf("confirmActiveRunsBeforeUpdate with only gate-parked runs error = %v", err)
+	}
+	notice := u.parkedNoticeAtRestart()
+	if !strings.Contains(notice, "will be preserved and resumed") {
+		t.Fatalf("guard should return the preservation promise for parked runs, got %q", notice)
+	}
+	// Nothing has stopped the daemon yet, so nothing may have been printed.
+	if stderr.Len() != 0 {
+		t.Fatalf("guard should not print the promise before the daemon restarts, got %q", stderr.String())
+	}
+}
+
+func TestUpdaterRefusalDoesNotPromisePreservation(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure paths: %v", err)
+	}
+	database, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	repo, err := database.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	parked, err := database.InsertRun(repo.ID, "feature-parked", "ccc333", "000")
+	if err != nil {
+		t.Fatalf("insert parked run: %v", err)
+	}
+	parkRunAtGate(t, p, database, repo.ID, parked.ID, steps.AllSteps())
+	if _, err := database.InsertRun(repo.ID, "feature-active", "aaa111", "000"); err != nil {
+		t.Fatalf("insert active run: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	stderr := new(bytes.Buffer)
+	u := &updater{paths: p, stderr: stderr}
+	err = u.confirmActiveRunsBeforeUpdate()
+	if err == nil {
+		t.Fatal("confirmActiveRunsBeforeUpdate should refuse while a non-parked active run exists")
+	}
+	if !strings.Contains(err.Error(), "1 active pipeline run is in progress") {
+		t.Fatalf("refusal = %v, want it to count only the non-parked run", err)
+	}
+	// The refusal leaves the daemon running, so nothing is preserved or
+	// resumed and the promise must not appear.
+	if strings.Contains(stderr.String(), "will be preserved and resumed") {
+		t.Fatalf("refusal should not promise preservation, got %q", stderr.String())
+	}
+}
+
+// TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts proves the
+// preservation promise tracks the action that honors it: a failed download
+// never stops the daemon, so it must stay silent, while a completed update
+// that restarted the daemon prints it.
+func TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts(t *testing.T) {
+	allowInsecureDownloads = true
+	t.Cleanup(func() { allowInsecureDownloads = false })
+
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure paths: %v", err)
+	}
+	database, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	repo, err := database.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	parked, err := database.InsertRun(repo.ID, "feature-parked", "ccc333", "000")
+	if err != nil {
+		t.Fatalf("insert parked run: %v", err)
+	}
+	parkRunAtGate(t, p, database, repo.ID, parked.ID, steps.AllSteps())
+	if err := database.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archive := makeTarGz(t, map[string][]byte{
+		"bin/no-mistakes": []byte("new-binary"),
+	})
+	sum := sha256.Sum256(archive)
+	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	archiveBroken := true
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/kunchenguid/no-mistakes/releases/latest":
+			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
+				archiveName,
+				server.URL+"/archive",
+				server.URL+"/checksums",
+			)
+		case "/archive":
+			if archiveBroken {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Write(archive)
+		case "/checksums":
+			fmt.Fprint(w, checksums)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	newUpdater := func(stderr *bytes.Buffer, restarted *bool) *updater {
+		execPath := filepath.Join(t.TempDir(), "no-mistakes")
+		if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return &updater{
+			appName:        "no-mistakes",
+			repo:           "kunchenguid/no-mistakes",
+			currentVersion: "v1.2.2",
+			platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
+			apiBaseURL:     server.URL,
+			httpClient:     server.Client(),
+			cachePath:      filepath.Join(t.TempDir(), "update-check.json"),
+			executablePath: execPath,
+			paths:          p,
+			stdout:         new(bytes.Buffer),
+			stderr:         stderr,
+			now:            func() time.Time { return time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC) },
+			resetDaemon: func() error {
+				*restarted = true
+				return nil
+			},
+		}
+	}
+
+	failedStderr := new(bytes.Buffer)
+	failedRestart := false
+	if err := newUpdater(failedStderr, &failedRestart).run(context.Background()); err == nil {
+		t.Fatal("run should fail when the archive download fails")
+	}
+	if failedRestart {
+		t.Fatal("daemon must not be restarted after a failed download")
+	}
+	if strings.Contains(failedStderr.String(), "will be preserved and resumed") {
+		t.Fatalf("a failed update must not promise preservation, got %q", failedStderr.String())
+	}
+
+	archiveBroken = false
+	okStderr := new(bytes.Buffer)
+	okRestart := false
+	if err := newUpdater(okStderr, &okRestart).run(context.Background()); err != nil {
+		t.Fatalf("run error = %v", err)
+	}
+	if !okRestart {
+		t.Fatal("successful update should restart the daemon")
+	}
+	if !strings.Contains(okStderr.String(), "will be preserved and resumed") {
+		t.Fatalf("completed update should promise preservation, got %q", okStderr.String())
+	}
+}
+
+// TestUpdaterPreservationNoticeDescribesTheStateAtRestart proves the promise is
+// rendered from a fresh read taken just before the daemon is reset, not from
+// the guard snapshot taken before a multi-minute download: a run that finished
+// while the update ran is no longer promised preservation.
+func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
+	allowInsecureDownloads = true
+	t.Cleanup(func() { allowInsecureDownloads = false })
+
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure paths: %v", err)
+	}
+	database, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	repo, err := database.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	parked, err := database.InsertRun(repo.ID, "feature-parked", "ccc333", "000")
+	if err != nil {
+		t.Fatalf("insert parked run: %v", err)
+	}
+	parkRunAtGate(t, p, database, repo.ID, parked.ID, steps.AllSteps())
+	if err := database.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archive := makeTarGz(t, map[string][]byte{
+		"bin/no-mistakes": []byte("new-binary"),
+	})
+	sum := sha256.Sum256(archive)
+	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/kunchenguid/no-mistakes/releases/latest":
+			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
+				archiveName,
+				server.URL+"/archive",
+				server.URL+"/checksums",
+			)
+		case "/archive":
+			// The operator answered the gate while the download ran, so the
+			// run is complete by the time the daemon is actually reset.
+			live, err := db.Open(p.DB())
+			if err != nil {
+				t.Errorf("open db during download: %v", err)
+				return
+			}
+			defer live.Close()
+			if err := live.UpdateRunStatus(parked.ID, types.RunCompleted); err != nil {
+				t.Errorf("complete run during download: %v", err)
+			}
+			w.Write(archive)
+		case "/checksums":
+			fmt.Fprint(w, checksums)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	execPath := filepath.Join(t.TempDir(), "no-mistakes")
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stderr := new(bytes.Buffer)
+	restarted := false
+	u := &updater{
+		appName:        "no-mistakes",
+		repo:           "kunchenguid/no-mistakes",
+		currentVersion: "v1.2.2",
+		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
+		apiBaseURL:     server.URL,
+		httpClient:     server.Client(),
+		cachePath:      filepath.Join(t.TempDir(), "update-check.json"),
+		executablePath: execPath,
+		paths:          p,
+		stdout:         new(bytes.Buffer),
+		stderr:         stderr,
+		now:            func() time.Time { return time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC) },
+		resetDaemon: func() error {
+			restarted = true
+			return nil
+		},
+	}
+	if err := u.run(context.Background()); err != nil {
+		t.Fatalf("run error = %v", err)
+	}
+	if !restarted {
+		t.Fatal("successful update should restart the daemon")
+	}
+	if strings.Contains(stderr.String(), "will be preserved and resumed") {
+		t.Fatalf("notice must describe the state at restart, got %q", stderr.String())
 	}
 }
 
@@ -1152,5 +1457,56 @@ func TestUpdaterCachedLatestVersion(t *testing.T) {
 	u.currentVersion = "v1.2.3"
 	if got := u.cachedLatestVersion(); got != "" {
 		t.Fatalf("cachedLatestVersion() = %q, want empty when already current", got)
+	}
+}
+
+// parkRunAtGate makes a run indistinguishable from a real gate-parked run: the
+// awaiting-agent marker, a step row actually sitting at the gate, and the step
+// plan it was started under.
+func parkRunAtGate(t *testing.T, p *paths.Paths, database *db.DB, repoID, runID string, plan []pipeline.Step) {
+	t.Helper()
+	lifecycletest.ParkRunAtGate(t, p, database, repoID, runID, plan)
+}
+
+// TestUpdaterCountsStepPlanDriftedParkedRunAsBlocking proves the parked-run
+// exemption is conditional on the run still being resumable after the binary
+// swap: a run recorded under a different pipeline layout is counted, listed,
+// and refused like any other active run.
+func TestUpdaterCountsStepPlanDriftedParkedRunAsBlocking(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure paths: %v", err)
+	}
+	database, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	repo, err := database.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	drifted, err := database.InsertRun(repo.ID, "feature-drifted", "ddd444", "000")
+	if err != nil {
+		t.Fatalf("insert parked run: %v", err)
+	}
+	parkRunAtGate(t, p, database, repo.ID, drifted.ID, lifecycletest.Plan(types.StepReview, types.StepName("retired-step")))
+	if err := database.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	stderr := new(bytes.Buffer)
+	u := &updater{paths: p, stderr: stderr}
+	err = u.confirmActiveRunsBeforeUpdate()
+	if err == nil {
+		t.Fatal("update should refuse while a parked run cannot be resumed by the new binary")
+	}
+	if !strings.Contains(err.Error(), "1 active pipeline run is in progress") {
+		t.Fatalf("refusal = %v, want it to count the drifted parked run", err)
+	}
+	if !strings.Contains(stderr.String(), "feature-drifted") {
+		t.Fatalf("stderr should list the drifted parked run, got %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "will be preserved and resumed") {
+		t.Fatalf("a drifted parked run must not be promised preservation, got %q", stderr.String())
 	}
 }

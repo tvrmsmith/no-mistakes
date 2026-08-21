@@ -21,6 +21,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/gate"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/kunchenguid/no-mistakes/internal/lifecycle"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
@@ -48,6 +49,12 @@ type RunManager struct {
 	db           *db.DB
 	paths        *paths.Paths
 	steps        StepFactory
+
+	// persistSkippedSteps is the run-scope write whose failure aborts a run
+	// start. It is a field so a test can fault it: the outcome of that branch
+	// (no worktree, no executor, a recorded reason) is the guarantee that
+	// stops a resumed run from pushing a branch the operator excluded.
+	persistSkippedSteps func(runID string, skipSteps []types.StepName) error
 
 	branchLocks sync.Map // repoID+"/"+branch → *sync.Mutex
 
@@ -103,50 +110,337 @@ type recoveredRunPlan struct {
 	steps   []pipeline.Step
 }
 
-func (m *RunManager) recoverableParkedRuns(ctx context.Context) []recoveredRunPlan {
+// errRunUnresumable marks a recovery failure as adverse evidence a completed
+// read actually returned: a missing worktree, a head that no longer matches,
+// a worktree outside its gate repository, an incomplete gate row (including
+// one still holding an agent PID), a drifted step plan, a session provider the
+// configuration no longer offers, a trusted config that parsed as invalid.
+// Only those are recorded through rejectUnresumableRun.
+//
+// Deferral is the DEFAULT for everything else, and the direction of that
+// default is the whole point. A clean stop promises the operator a parked run
+// is preserved, and a parked run's worktree can hold unpushed pipeline
+// commits; terminally failing such a run makes cleanupOrphanWorktrees delete
+// that worktree. So an error reaches the destructive side only by an explicit
+// positive classification at the point the adverse fact is established, and a
+// read added to this path later - a database row, a git object, a config file
+// - waits for a later start instead of costing a preserved run its work.
+var errRunUnresumable = errors.New("run cannot be resumed")
+
+// unresumable classifies cause as adverse evidence. It leaves the message
+// untouched, because rejectUnresumableRun records it verbatim as the run's
+// error and startRun surfaces the same text to the operator.
+func unresumable(cause error) error {
+	return &unresumableError{cause: cause}
+}
+
+type unresumableError struct{ cause error }
+
+func (e *unresumableError) Error() string   { return e.cause.Error() }
+func (e *unresumableError) Unwrap() []error { return []error{errRunUnresumable, e.cause} }
+
+// resumeRejected is the single reader of that classification: recovery
+// terminally fails a run only when it answers true.
+func resumeRejected(err error) bool {
+	return errors.Is(err, errRunUnresumable)
+}
+
+// recoverableParkedRuns returns the runs to resume now, plus the IDs of the
+// runs deferred to a later start. Deferred IDs are NOT resumed and must still
+// be excluded from the blanket stale-run sweep, which would otherwise stamp
+// them failed and forfeit their worktrees.
+//
+// The active-run listing is the read every other recovery read depends on, so
+// the deferral default applies to it hardest: a listing that failed is not a
+// picture with no parked runs in it. It returns an error instead, and the
+// caller defers the whole pass rather than sweeping every preserved run away
+// on an empty picture.
+func (m *RunManager) recoverableParkedRuns(ctx context.Context) ([]recoveredRunPlan, []string, error) {
 	runs, err := m.db.GetActiveRuns()
 	if err != nil {
-		slog.Error("failed to list active runs for recovery", "error", err)
-		return nil
+		return nil, nil, fmt.Errorf("list active runs for recovery: %w", err)
 	}
 	plans := make([]recoveredRunPlan, 0, len(runs))
-	branchCounts := make(map[string]int, len(runs))
+	var deferred []string
+	contention := branchContentionOf(runs, m.gateStepRowsOf)
 	for _, run := range runs {
-		branchCounts[run.RepoID+"\x00"+run.Branch]++
-	}
-	for _, run := range runs {
-		if branchCounts[run.RepoID+"\x00"+run.Branch] != 1 {
-			slog.Warn("active run cannot be safely resumed", "run_id", run.ID, "error", "conflicting active run for branch")
+		if contention.superseded[run.ID] {
+			m.rejectUnresumableRun(run, errors.New("conflicting active run for branch"))
+			continue
+		}
+		if contenders, ok := contention.unresolved[run.ID]; ok {
+			slog.Warn("branch has more than one parked run; resuming none of them until an operator resolves it",
+				"run_id", run.ID, "branch", run.Branch, "contending_runs", contenders)
+			m.registerDeferredRun(run)
+			deferred = append(deferred, run.ID)
 			continue
 		}
 		plan, err := m.prepareRecoveredRun(ctx, run)
 		if err != nil {
-			slog.Warn("active run cannot be safely resumed", "run_id", run.ID, "error", err)
+			if resumeRejected(err) {
+				m.rejectUnresumableRun(run, err)
+				continue
+			}
+			slog.Warn("parked run left for a later daemon start",
+				"run_id", run.ID, "reason", boundedRecoveryReason(err))
+			m.registerDeferredRun(run)
+			deferred = append(deferred, run.ID)
 			continue
 		}
 		plans = append(plans, *plan)
 	}
-	return plans
+	return plans, deferred, nil
 }
 
+// gateStepRowsOf reads the step rows a parked claim is corroborated against.
+type gateStepReader func(runID string) ([]*db.StepResult, error)
+
+func (m *RunManager) gateStepRowsOf(runID string) ([]*db.StepResult, error) {
+	return m.db.GetStepsByRun(runID)
+}
+
+// preservedBranchRuns is the single owner of the branch-contention preference,
+// shared by startup recovery and the live push path so the two cannot drift
+// apart. Two active runs cannot share a branch, but the choice between them is
+// not symmetric: a parked run was promised preservation and its worktree can
+// hold unpushed pipeline commits, while the run competing with it is a push
+// that can simply be pushed again.
+//
+// A claim to be parked takes two facts, exactly as it does everywhere else in
+// this package: the awaiting-agent marker is a best-effort write, so it is
+// corroborated against a real gate step row through lifecycle.ParkedAtGate and
+// a stuck marker alone never wins a branch. A step read that fails leaves the
+// claim unproven rather than refuted, so that run stays a candidate and the
+// caller resolves the ambiguity conservatively.
+func preservedBranchRuns(runs []*db.Run, stepsOf gateStepReader) []*db.Run {
+	var keep []*db.Run
+	for _, run := range runs {
+		stepRows, err := stepsOf(run.ID)
+		if err != nil {
+			slog.Warn("could not read steps while resolving branch contention; treating the run as possibly parked",
+				"run_id", run.ID, "error", err)
+			if run.AwaitingAgentSince != nil {
+				keep = append(keep, run)
+			}
+			continue
+		}
+		if lifecycle.ParkedAtGate(run, stepRows) {
+			keep = append(keep, run)
+		}
+	}
+	return keep
+}
+
+// branchContention is how startup divides the active runs of contended
+// branches. superseded holds the runs a start ends to clear the branch;
+// unresolved maps a run whose branch no single candidate wins to the IDs
+// contending for it, for the log line that asks an operator to resolve it.
+type branchContention struct {
+	superseded map[string]bool
+	unresolved map[string][]string
+}
+
+// branchContentionOf applies the preservation preference at startup: every run
+// of a contended branch other than the single preserved one is superseded.
+// With no preserved run the contention is unresolved state and every run on
+// the branch goes.
+//
+// With more than one candidate there is no run to prefer. Superseding any of
+// them could destroy a preserved worktree, and resuming them all is worse
+// still: two runs would drive push and PR at the same remote branch from two
+// worktrees at two head SHAs. The whole group is therefore unresolved, and its
+// runs are deferred rather than resumed.
+func branchContentionOf(runs []*db.Run, stepsOf gateStepReader) branchContention {
+	byBranch := make(map[string][]*db.Run, len(runs))
+	for _, run := range runs {
+		key := run.RepoID + "\x00" + run.Branch
+		byBranch[key] = append(byBranch[key], run)
+	}
+	contention := branchContention{
+		superseded: make(map[string]bool),
+		unresolved: make(map[string][]string),
+	}
+	for _, group := range byBranch {
+		if len(group) < 2 {
+			continue
+		}
+		keep := preservedBranchRuns(group, stepsOf)
+		if len(keep) > 1 {
+			ids := make([]string, 0, len(keep))
+			for _, run := range keep {
+				ids = append(ids, run.ID)
+			}
+			for _, run := range group {
+				contention.unresolved[run.ID] = ids
+			}
+			continue
+		}
+		for _, run := range group {
+			if len(keep) == 1 && run.ID == keep[0].ID {
+				continue
+			}
+			contention.superseded[run.ID] = true
+		}
+	}
+	return contention
+}
+
+// registerDeferredRun gives a deferred run an owner in the manager. Without an
+// entry the row is unreachable: `axi abort --run` would report a successful
+// no-op while the row stayed running forever, and a superseding push could not
+// resolve it. Cancelling it ends the row with the cause - recorded cancelled or
+// failed by the same reason mapping every other cancellation path uses - except
+// for a clean shutdown, which preserves a deferred run exactly as it preserves
+// a parked one.
+func (m *RunManager) registerDeferredRun(run *db.Run) {
+	runID := run.ID
+	done := make(chan struct{})
+	var once sync.Once
+	cancel := func(cause error) {
+		if errors.Is(cause, pipeline.ErrDaemonShutdown) {
+			return
+		}
+		once.Do(func() {
+			reason := types.RunCancelReasonAbortedByUser
+			if cause != nil {
+				reason = cause.Error()
+			}
+			if _, err := m.db.FailActiveRunWithReason(runID, reason); err != nil {
+				slog.Error("failed to terminate a deferred run", "run_id", runID, "error", err)
+			}
+			m.mu.Lock()
+			delete(m.cancels, runID)
+			delete(m.dones, runID)
+			m.mu.Unlock()
+			m.closeSubscribers(runID)
+			close(done)
+		})
+	}
+	m.mu.Lock()
+	m.cancels[runID] = cancel
+	m.dones[runID] = done
+	m.mu.Unlock()
+}
+
+// boundedRecoveryReason caps a logged recovery reason so a verbose git or
+// network failure cannot flood the bounded daemon log.
+func boundedRecoveryReason(err error) string {
+	const maxReasonLen = 200
+	reason := err.Error()
+	if len(reason) > maxReasonLen {
+		return reason[:maxReasonLen] + "..."
+	}
+	return reason
+}
+
+// rejectUnresumableRun records why an active run could not be resumed. A run
+// that was parked at a gate was promised preservation by the stop that left
+// it, so it must not inherit the blanket "daemon crashed during execution"
+// stamp the generic recovery pass applies: it records the concrete reason
+// instead. Every other active row is left to that pass.
+func (m *RunManager) rejectUnresumableRun(run *db.Run, reason error) {
+	slog.Warn("active run cannot be safely resumed", "run_id", run.ID, "error", reason)
+	parked := run.AwaitingAgentSince != nil
+	stepRows, err := m.db.GetStepsByRun(run.ID)
+	if err != nil {
+		// The step rows exist to stop a stale marker from over-claiming
+		// preservation; recording a concrete rejection reason over-claims
+		// nothing, so a read failure falls back to the marker rather than
+		// dropping the run into the blanket crash stamp.
+		slog.Warn("could not read steps while rejecting an unresumable run; falling back to its parked marker",
+			"run_id", run.ID, "error", err, "records_reason", parked)
+	} else {
+		parked = lifecycle.ParkedAtGate(run, stepRows)
+	}
+	if !parked {
+		return
+	}
+	errMsg := fmt.Sprintf("run was parked at a gate but could not be resumed: %s", reason)
+	failed, err := m.db.FailActiveRunWithReason(run.ID, errMsg)
+	if err != nil {
+		slog.Error("failed to record why a parked run could not be resumed", "run_id", run.ID, "error", err)
+		return
+	}
+	if !failed {
+		slog.Warn("parked run was no longer active when its rejection reason was recorded", "run_id", run.ID)
+	}
+}
+
+func (m *RunManager) setRunSkippedSteps(runID string, skipSteps []types.StepName) error {
+	if m.persistSkippedSteps != nil {
+		return m.persistSkippedSteps(runID, skipSteps)
+	}
+	return m.db.SetRunSkippedSteps(runID, skipSteps)
+}
+
+// finishRunGoroutine releases everything a run goroutine owns. parked is the
+// one variation: a clean shutdown that caught the run at a gate leaves the
+// worktree in place, because prepareRecoveredRun requires it on the next
+// daemon start (its HEAD must match run.HeadSHA).
+func (m *RunManager) finishRunGoroutine(runID string, cfg *config.Config, cancel context.CancelCauseFunc, ag agent.Agent, gateDir, workDir string, parked bool) {
+	cancel(nil)
+	if ag != nil {
+		_ = ag.Close()
+	}
+	m.closeSubscribers(runID)
+	if !parked {
+		// Identity-based reap before the directory goes: a descendant that
+		// left the process group can only be named by the worktree its cwd
+		// resolves under.
+		m.sweepRunWorktreeProcesses(workDir)
+		if err := git.WorktreeRemove(context.Background(), gateDir, workDir); err != nil {
+			slog.Warn("failed to remove worktree", "path", workDir, "error", err)
+		}
+		// A preserved run resumes and still owns its evidence; only a run that
+		// is really finished gives its directory up.
+		m.cleanupRunEvidence(cfg, runID)
+	}
+	m.mu.Lock()
+	delete(m.executors, runID)
+	delete(m.cancels, runID)
+	delete(m.dones, runID)
+	m.mu.Unlock()
+}
+
+// parkPreserved reports whether an execution error is the clean-shutdown park
+// signal, which is not a failure: the run keeps its running status, its gate
+// and its worktree for the next daemon start.
+func (m *RunManager) parkPreserved(runID string, err error) bool {
+	if !errors.Is(err, pipeline.ErrParkPreserved) {
+		return false
+	}
+	slog.Info("pipeline parked for shutdown", "run_id", runID)
+	return true
+}
+
+// prepareRecoveredRun builds everything a parked run needs to resume, or says
+// why it cannot. Every failure here defers by default; only the calls below
+// that establish an adverse fact wrap it in unresumable, so a read added here
+// later waits for a later start instead of costing the run its worktree.
 func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*recoveredRunPlan, error) {
 	if run == nil || run.Status != types.RunRunning || run.AwaitingAgentSince == nil || run.Branch == "" {
-		return nil, fmt.Errorf("run is not a parked running run")
+		return nil, unresumable(fmt.Errorf("run is not a parked running run"))
 	}
 	repo, err := m.db.GetRepo(run.RepoID)
 	if err != nil {
 		return nil, fmt.Errorf("get repo: %w", err)
 	}
 	if repo == nil {
-		return nil, fmt.Errorf("run repository is missing")
+		return nil, unresumable(fmt.Errorf("run repository is missing"))
 	}
 	workDir := m.paths.WorktreeDir(repo.ID, run.ID)
-	if info, err := os.Stat(workDir); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("worktree is missing")
-	}
-	headSHA, err := git.HeadSHA(ctx, workDir)
-	if err != nil || headSHA != run.HeadSHA {
-		return nil, fmt.Errorf("worktree head does not match run head")
+	execSteps := m.steps()
+	// The destructive lifecycle guard promises an operator that a parked run
+	// survives a stop, so it corroborates its candidates against this same
+	// owner: the two must decide resumability by one rule, not two.
+	// That owner already separates the two: a read that did not complete comes
+	// back as pipeline.ErrRecoveryEvidenceUnavailable, so everything else it
+	// reports is an established adverse fact.
+	if err := lifecycle.ResumePreconditionsMet(ctx, m.db, m.paths, run, execSteps); err != nil {
+		if errors.Is(err, pipeline.ErrRecoveryEvidenceUnavailable) {
+			return nil, err
+		}
+		return nil, unresumable(err)
 	}
 	gateDir := m.paths.RepoDir(repo.ID)
 	commonDir, err := git.Run(ctx, workDir, "rev-parse", "--git-common-dir")
@@ -154,20 +448,18 @@ func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*rec
 		return nil, fmt.Errorf("resolve worktree common git dir: %w", err)
 	}
 	if !samePath(resolveGitPath(workDir, commonDir), gateDir) {
-		return nil, fmt.Errorf("worktree does not belong to its gate repository")
+		return nil, unresumable(fmt.Errorf("worktree does not belong to its gate repository"))
 	}
 
-	execSteps := m.steps()
-	if err := pipeline.ValidateRecoveredRun(m.db, run, execSteps); err != nil {
-		return nil, err
-	}
 	cfg, err := m.loadRecoveredConfig(ctx, run, repo, workDir)
 	if err != nil {
 		return nil, err
 	}
 	ag, err := newPipelineAgent(ctx, cfg, m.paths.EvidenceRoot(cfg.Test.Evidence.LocalRoot), exec.LookPath)
 	if err != nil {
-		return nil, err
+		// The agent launcher is resolved from PATH at this moment; one that is
+		// absent right now says nothing adverse about the run.
+		return nil, fmt.Errorf("resolve pipeline agent: %w", err)
 	}
 	if cfg.SessionReuse {
 		if err := validateRecoveredSessionProviders(m.db, run.ID, ag); err != nil {
@@ -193,19 +485,21 @@ func validateRecoveredSessionProviders(database *db.DB, runID string, ag agent.A
 	}
 	for _, session := range sessions {
 		if session.Role != string(pipeline.SessionRoleReviewer) && session.Role != string(pipeline.SessionRoleFixer) {
-			return fmt.Errorf("recovered run has unknown session role %q", session.Role)
+			return unresumable(fmt.Errorf("recovered run has unknown session role %q", session.Role))
 		}
 		if session.Agent == "" || session.SessionID == "" {
-			return fmt.Errorf("recovered run has incomplete session metadata")
+			return unresumable(fmt.Errorf("recovered run has incomplete session metadata"))
 		}
 		if session.Role == string(pipeline.SessionRoleFixer) && !agent.SupportsSessionProvider(ag, session.Agent) {
-			return fmt.Errorf("session provider %q is no longer configured", session.Agent)
+			return unresumable(fmt.Errorf("session provider %q is no longer configured", session.Agent))
 		}
 	}
 	return nil
 }
 
 func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo *db.Repo, workDir string) (*config.Config, error) {
+	// A config read that fails right now is a fact about this filesystem
+	// moment, not about the run, so both reads defer rather than reject.
 	globalCfg, err := config.LoadGlobal(m.paths.ConfigFile())
 	if err != nil {
 		return nil, fmt.Errorf("load global config: %w", err)
@@ -215,12 +509,15 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 		return nil, fmt.Errorf("load repo config: %w", err)
 	}
 	var trustedSHA string
+	var reachErr error
 	if repo.DefaultBranch != "" {
 		fetchCtx, cancel := context.WithTimeout(ctx, recoveredConfigFetchTimeout)
 		defer cancel()
 		if err := fetchRecoveredRemoteBranch(fetchCtx, workDir, "origin", repo.DefaultBranch); err != nil {
+			reachErr = fmt.Errorf("fetch default branch %q: %w", repo.DefaultBranch, err)
 			slog.Warn("failed to fetch default branch while recovering run; trusted config disabled", "run_id", run.ID, "branch", repo.DefaultBranch, "error", err)
 		} else if sha, err := git.ResolveRef(ctx, workDir, "refs/remotes/origin/"+repo.DefaultBranch); err != nil {
+			reachErr = fmt.Errorf("resolve default branch %q: %w", repo.DefaultBranch, err)
 			slog.Warn("failed to resolve default branch while recovering run; trusted config disabled", "run_id", run.ID, "branch", repo.DefaultBranch, "error", err)
 		} else {
 			trustedSHA = sha
@@ -228,7 +525,13 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 	}
 	// SECURITY: a trusted-config fetch failure must abort, not silently disable
 	// the disable_project_settings opt-out (see assertGateTrustedConfigReadable).
+	// It aborts THIS start only: an unreachable branch is a network fact about
+	// the moment, and so is a git read that did not complete, so both defer and
+	// only a config that was read and did not parse rejects.
 	if err := assertGateTrustedConfigReadable(ctx, workDir, repo.DefaultBranch, trustedSHA); err != nil {
+		if reachErr != nil && !resumeRejected(err) {
+			return nil, reachErr
+		}
 		return nil, err
 	}
 	trustedRepoCfg, allowRepoCommands := resolveTrustedRepoConfig(ctx, workDir, globalCfg, repo, trustedSHA, run.ID)
@@ -324,6 +627,9 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 			m.relabelEvalRun(context.Background(), plan.cfg, runID)
 		}()
 	})
+	// Restore the run's own skip set: without it a resumed run would run the
+	// very steps its start excluded with --skip.
+	executor.SetSkippedSteps(plan.run.SkippedSteps)
 	done := make(chan struct{})
 	m.mu.Lock()
 	m.executors[plan.run.ID] = executor
@@ -334,6 +640,8 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 	m.wg.Add(1)
 	go func() {
 		startedAt := time.Now()
+		parked := false
+		deferredToLaterStart := false
 		defer m.wg.Done()
 		defer close(done)
 		defer func() {
@@ -345,25 +653,26 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 					slog.Error("failed to update recovered run after panic", "run_id", plan.run.ID, "error", err)
 				}
 			}
-			cancel(nil)
-			_ = plan.agent.Close()
-			m.closeSubscribers(plan.run.ID)
-			if err := git.WorktreeRemove(context.Background(), plan.gateDir, plan.workDir); err != nil {
-				slog.Warn("failed to remove recovered worktree", "path", plan.workDir, "error", err)
+			m.finishRunGoroutine(plan.run.ID, plan.cfg, cancel, plan.agent, plan.gateDir, plan.workDir, parked || deferredToLaterStart)
+			if deferredToLaterStart {
+				m.registerDeferredRun(plan.run)
 			}
-			// A recovered run is a finished run too. This is the second of the
-			// two completion boundaries, and leaving it out is what let a run
-			// resumed after a daemon restart keep its empty evidence directory
-			// until some later run or restart happened to sweep it.
-			m.cleanupRunEvidence(plan.cfg, plan.run.ID)
-			m.mu.Lock()
-			delete(m.executors, plan.run.ID)
-			delete(m.cancels, plan.run.ID)
-			delete(m.dones, plan.run.ID)
-			m.mu.Unlock()
 		}()
 
 		if err := executor.Resume(runCtx, plan.run, plan.repo, plan.workDir); err != nil {
+			if parked = m.parkPreserved(plan.run.ID, err); parked {
+				return
+			}
+			// Resume re-reads the gate evidence at entry, so the same
+			// classifier prepareRecoveredRun defers on can arrive here too. It
+			// must mean the same thing on both sides of that seam: a read that
+			// did not complete never costs a preserved run its worktree.
+			if errors.Is(err, pipeline.ErrRecoveryEvidenceUnavailable) && plan.run.Status == types.RunRunning {
+				deferredToLaterStart = true
+				slog.Warn("resumed run left for a later daemon start",
+					"run_id", plan.run.ID, "reason", boundedRecoveryReason(err))
+				return
+			}
 			if plan.run.Status == types.RunRunning {
 				errMsg := err.Error()
 				plan.run.Status = types.RunFailed
@@ -713,7 +1022,10 @@ func assertGateTrustedConfigReadable(ctx context.Context, wtDir, defaultBranch, 
 		return fmt.Errorf("cannot evaluate disable_project_settings: trusted .no-mistakes.yaml at %s is present but not readable: %w", trustedSHA, err)
 	}
 	if _, err := config.LoadRepoFromBytes([]byte(content)); err != nil {
-		return fmt.Errorf("cannot evaluate disable_project_settings: trusted .no-mistakes.yaml at %s is present but unparseable: %w", trustedSHA, err)
+		// The only established fact here: the file was read and is invalid.
+		// Every abort above is a read that did not complete, so a recovering
+		// run defers on it and keeps its worktree.
+		return unresumable(fmt.Errorf("cannot evaluate disable_project_settings: trusted .no-mistakes.yaml at %s is present but unparseable: %w", trustedSHA, err))
 	}
 	return nil
 }
@@ -875,8 +1187,12 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		repo = refreshed
 	}
 
-	// Cancel any active run for this repo+branch.
-	m.cancelActiveRuns(repo.ID, branch)
+	// Cancel any active run for this repo+branch, unless one of them is parked
+	// and must be preserved, in which case this newer run is the one that loses.
+	if err := m.cancelActiveRuns(repo.ID, branch); err != nil {
+		trackStartFailure("branch_run_preserved")
+		return "", err
+	}
 
 	storedIntent := intent
 	if source != db.RunIntentSourceRerun {
@@ -894,6 +1210,19 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	if err != nil {
 		trackStartFailure("create_run")
 		return "", fmt.Errorf("create run: %w", err)
+	}
+	// Persist the skip set so a run preserved across a clean daemon stop
+	// resumes with it. --skip accepts delivery steps (push, pr, ci), so a
+	// resume that lost the set could push a branch and open a PR the operator
+	// explicitly excluded. The write is therefore authoritative: the run does
+	// not start at all rather than start with a scope that cannot survive.
+	if len(skipSteps) > 0 {
+		run.SkippedSteps = skipSteps
+		if err := m.setRunSkippedSteps(run.ID, skipSteps); err != nil {
+			m.db.UpdateRunError(run.ID, fmt.Sprintf("persist run skip set: %s", err))
+			trackStartFailure("persist_skip_set")
+			return "", fmt.Errorf("persist run skip set: %w", err)
+		}
 	}
 
 	// Create worktree from the gate bare repo.
@@ -1059,6 +1388,14 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	}
 
 	execSteps := m.steps()
+	// Persist the step plan so a lifecycle guard can tell whether the binary
+	// that would resume this run still runs the same layout. A write failure
+	// only leaves the plan unknown, which the guard treats as unresumable.
+	planNames := steps.StepNames(execSteps)
+	run.StepPlan = planNames
+	if err := m.db.SetRunStepPlan(run.ID, planNames); err != nil {
+		slog.Warn("failed to persist run step plan", "run_id", run.ID, "error", err)
+	}
 	telemetry.Track("run", telemetry.Fields{
 		"action":      "started",
 		"trigger":     trigger,
@@ -1095,6 +1432,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	m.wg.Add(1)
 	go func() {
 		startedAt := time.Now()
+		parked := false
 		defer m.wg.Done()
 		defer close(done)
 		defer func() {
@@ -1122,25 +1460,13 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 					slog.Error("failed to update run after panic", "run_id", run.ID, "error", dbErr)
 				}
 			}
-			cancel(nil)
-			ag.Close()
-			// Close subscriber channels for this run.
-			m.closeSubscribers(run.ID)
-			m.sweepRunWorktreeProcesses(wtDir)
-			// Clean up worktree.
-			if rmErr := git.WorktreeRemove(context.Background(), gateDir, wtDir); rmErr != nil {
-				slog.Warn("failed to remove worktree", "path", wtDir, "error", rmErr)
-			}
-			m.cleanupRunEvidence(cfg, run.ID)
-			// Remove tracking.
-			m.mu.Lock()
-			delete(m.executors, run.ID)
-			delete(m.cancels, run.ID)
-			delete(m.dones, run.ID)
-			m.mu.Unlock()
+			m.finishRunGoroutine(run.ID, cfg, cancel, ag, gateDir, wtDir, parked)
 		}()
 
 		if err := executor.Execute(runCtx, run, repo, wtDir); err != nil {
+			if parked = m.parkPreserved(run.ID, err); parked {
+				return
+			}
 			fields := telemetry.Fields{
 				"action":      "finished",
 				"trigger":     trigger,
@@ -1329,8 +1655,12 @@ func (m *RunManager) HandleRespondWithOverrides(runID string, step types.StepNam
 	return exec.RespondWithOverrides(step, action, findingIDs, instructions, addedFindings)
 }
 
-// Shutdown cancels all active runs. Called during daemon shutdown to prevent
-// orphaned goroutines from continuing agent calls and git operations.
+// Shutdown signals all active runs to stop. Called during daemon shutdown to
+// prevent orphaned goroutines from continuing agent calls and git operations.
+// The cause is pipeline.ErrDaemonShutdown, which a run parked at an approval
+// gate treats as "leave me resumable" rather than "fail": it keeps its run
+// row, its gate step and its worktree, and the next daemon start resumes it.
+// A run cancelled mid-step still fails with "daemon shutting down".
 func (m *RunManager) Shutdown() {
 	m.shuttingDown.Store(true)
 
@@ -1342,8 +1672,8 @@ func (m *RunManager) Shutdown() {
 	m.mu.Unlock()
 
 	for id, cancel := range cancels {
-		cancel(fmt.Errorf("daemon shutting down"))
-		slog.Info("cancelled run on shutdown", "run_id", id)
+		cancel(pipeline.ErrDaemonShutdown)
+		slog.Info("signalled run to stop for shutdown", "run_id", id)
 	}
 
 	done := make(chan struct{})
@@ -1377,14 +1707,17 @@ func (m *RunManager) HandleCancel(runID string) error {
 // concurrent pushes to upstream.
 // The cancellation cause is propagated to the executor via context.Cause,
 // which uses it as the run's error message in the DB.
-func (m *RunManager) cancelActiveRuns(repoID, branch string) {
+func (m *RunManager) cancelActiveRuns(repoID, branch string) error {
 	runs, err := m.db.GetRunsByRepo(repoID)
 	if err != nil {
+		// A listing that failed is not a branch with nothing on it: proceeding
+		// would start a second run over a run this read never saw, including a
+		// parked one holding unpushed commits.
 		slog.Error("failed to query active runs for cancellation", "repo", repoID, "branch", branch, "error", err)
-		return
+		return fmt.Errorf("could not check branch %q for active runs: %w", branch, err)
 	}
 
-	var toWait []chan struct{}
+	var active []*db.Run
 	for _, run := range runs {
 		if run.Branch != branch {
 			continue
@@ -1392,7 +1725,17 @@ func (m *RunManager) cancelActiveRuns(repoID, branch string) {
 		if run.Status != types.RunPending && run.Status != types.RunRunning {
 			continue
 		}
+		active = append(active, run)
+	}
+	// The live path decides branch contention by the same owner startup uses:
+	// a parked or deferred run holds unpushed pipeline commits it was promised
+	// would survive, so the newer push loses instead of destroying it.
+	if preserved := preservedBranchRuns(active, m.gateStepRowsOf); len(preserved) > 0 {
+		return fmt.Errorf("run %s is parked at a gate on branch %q and would be destroyed by a new run; resolve or abort it first", preserved[0].ID, branch)
+	}
 
+	var toWait []chan struct{}
+	for _, run := range active {
 		m.mu.Lock()
 		cancel, ok := m.cancels[run.ID]
 		done := m.dones[run.ID]
@@ -1414,7 +1757,8 @@ func (m *RunManager) cancelActiveRuns(repoID, branch string) {
 		case <-done:
 		case <-timeout:
 			slog.Warn("timed out waiting for cancelled runs to finish")
-			return
+			return nil
 		}
 	}
+	return nil
 }

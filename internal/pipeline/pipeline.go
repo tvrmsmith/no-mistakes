@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
@@ -11,6 +12,29 @@ import (
 )
 
 var ErrFatalGateReconciliation = errors.New("fatal gate reconciliation")
+
+// ErrDaemonShutdown is the cancellation cause a clean daemon stop uses. The
+// message is unchanged so a run that is not gate-parked still records the
+// same error it always did.
+var ErrDaemonShutdown = errors.New("daemon shutting down")
+
+// ErrParkPreserved is returned by Execute and Resume when a clean shutdown
+// interrupted a run parked at an approval gate. The run row is left running
+// and parked, the gate step row is untouched, and the caller must keep the
+// worktree so startup recovery can resume the run.
+var ErrParkPreserved = errors.New("run left parked for daemon shutdown")
+
+// ErrRecoveryEvidenceUnavailable marks a recovery check that could not be
+// completed because a read failed, as opposed to one that completed and found
+// adverse evidence. A failed read says nothing about the run, so callers that
+// would otherwise terminally fail a preserved run must wait instead.
+var ErrRecoveryEvidenceUnavailable = errors.New("recovery evidence unavailable")
+
+// evidenceUnavailable marks cause as a failed read rather than adverse
+// evidence about the run.
+func evidenceUnavailable(cause error) error {
+	return fmt.Errorf("%w: %w", ErrRecoveryEvidenceUnavailable, cause)
+}
 
 // StepContext provides shared resources to pipeline steps during execution.
 type StepContext struct {

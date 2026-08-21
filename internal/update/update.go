@@ -242,6 +242,7 @@ func (u *updater) run(ctx context.Context) error {
 		return err
 	}
 	if u.resetDaemon != nil {
+		parkedNotice := u.parkedNoticeAtRestart()
 		if err := u.resetDaemon(); err != nil {
 			var resetErr *daemonResetError
 			if errors.As(err, &resetErr) && resetErr.daemonOffline {
@@ -249,6 +250,9 @@ func (u *updater) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("updated %s to %s, but failed to reset daemon: %w", u.appName, plan.LatestVersion, err)
 		}
+		// The daemon really was stopped and restarted, so the preservation
+		// promise is finally true for this invocation.
+		fmt.Fprint(u.stderrWriter(), parkedNotice)
 	}
 	fmt.Fprintf(u.stdoutWriter(), "updated %s from %s to %s\n", u.appName, u.currentVersion, plan.LatestVersion)
 	return nil
