@@ -430,6 +430,8 @@ Checks:
 
 Uses indicators: `✓` (available), `–` (not found, optional), `✗` (problem detected).
 
+If the CLI and the daemon speak different IPC protocol versions, the daemon row is a warning naming both versions with the remedy on the next line; [Daemon & Worktrees](/no-mistakes/concepts/daemon/#cli-and-daemon-protocol-versions) owns that model.
+
 The standalone runner rows inspect default binary names; the `cursor` row reports whichever of `cursor-agent` and `acpx` are missing.
 The [Global Config Reference](/no-mistakes/reference/global-config/) owns ACP gate-validation availability and probing semantics.
 Each validation run performs the authoritative agent resolution again after applying any trusted repository-level override.

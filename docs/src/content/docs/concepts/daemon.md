@@ -78,6 +78,21 @@ A second daemon started against the same root fails with "a no-mistakes daemon i
 The OS releases the lock automatically when the owning process exits or crashes, even on SIGKILL, so unlike the PID file the lock can never go stale.
 As an independent safety layer, the daemon also refuses to bind the Unix socket while something is still answering on it; only a provably stale socket file (nothing listening) is removed and rebound.
 
+## CLI and daemon protocol versions
+
+The CLI and the daemon speak a versioned IPC protocol, and both sides must be on the same version. That happens automatically when they come from the same binary; a skew means an old daemon is still running after a new binary was installed, or a stale CLI is being invoked against a current daemon.
+
+A skew is reported, never worked around. Every command other than the three meta operations below fails closed with `ipc protocol version mismatch`, naming both versions and the remedy for whichever side is stale: run `no-mistakes daemon restart` when the daemon is the old one, or invoke the installed binary (then `no-mistakes init` in the repository to refresh its gate hooks) when the CLI is. A mismatch never starts a replacement daemon, so the running daemon and its active runs are left alone.
+
+Three operations stay reachable under a skew, so the remedy itself is never blocked: the health probe, daemon shutdown, and the recursive-containment check that pipeline-control commands run first. `daemon stop`, `daemon restart`, and `update` therefore still work.
+
+Consequences elsewhere:
+
+- `git push no-mistakes` is rejected by the gate's pre-receive hook rather than starting a run against a daemon that may misread the request.
+- `no-mistakes init` reports the skew but keeps the gate it created; `init` is idempotent, so re-run it once the versions match.
+- `no-mistakes doctor` shows the daemon row as a warning with both versions and the remedy, instead of reporting it as stopped.
+- Read-only surfaces (`no-mistakes status`, the `axi` home view) still render a skewed daemon as stopped.
+
 ## What it does
 
 When a push arrives via the post-receive hook:

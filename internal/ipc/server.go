@@ -149,6 +149,32 @@ func (s *Server) CloseListener() {
 	}
 }
 
+// versionExemptMethod reports whether a method must reach its handler even
+// when the peer speaks a different protocol version.
+//
+// These three are the meta methods, each needed to get OUT of a skew rather
+// than to do work under one.
+//
+//   - health is the negotiation method itself, so a skewed peer must still be
+//     able to learn the daemon's version.
+//   - shutdown is how any peer, skewed or not, ends the daemon.
+//   - gate_context is the recursive-containment query that every
+//     pipeline-control command runs first. Gating it deadlocks the remedy:
+//     daemon stop, daemon restart and update all live behind that guard, so a
+//     refusal there means every command capable of resolving the skew fails
+//     with the very error that names them.
+//
+// Their param and result wire shapes are therefore pinned as
+// version-independent by TestExemptMethodWireShapesArePinned
+// (exempt_wire_shape_test.go): any future change to them must stay both
+// backward and forward compatible, because a peer on any version may call
+// them. gate_context is the one whose payload IS the answer - a renamed field
+// makes a skewed peer decode nested as false and containment permit the
+// mutation - so its drift fails open, not closed.
+func versionExemptMethod(method string) bool {
+	return method == MethodHealth || method == MethodShutdown || method == MethodGateContext
+}
+
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 	scanner := bufio.NewScanner(conn)
@@ -181,6 +207,21 @@ func (s *Server) handleConn(conn net.Conn) {
 			slog.Warn("ipc request failed", "method", "<parse>", "error", "invalid json")
 			resp := NewErrorResponse(0, ErrParseError, "invalid json")
 			encoder.Encode(resp)
+			continue
+		}
+
+		// Every method outside the meta set (see versionExemptMethod) is gated
+		// on the client speaking the daemon's exact ProtocolVersion, checked
+		// before both the stream-handler lookup and dispatch so a mismatched
+		// peer's handler never runs and no stream ever starts.
+		if !versionExemptMethod(req.Method) && req.ProtocolVersion != ProtocolVersion {
+			mismatch := &VersionMismatchError{Local: ProtocolVersion, Remote: req.ProtocolVersion, RemoteRole: RoleClient}
+			slog.Warn("ipc request failed", "method", req.Method, "error", mismatch.Error())
+			resp := NewErrorResponse(req.ID, ErrProtocolMismatch, mismatch.Error())
+			if err := encoder.Encode(resp); err != nil {
+				slog.Error("write response", "error", err)
+				return
+			}
 			continue
 		}
 

@@ -22,6 +22,8 @@ var daemonProcessRunning = processRunning
 var daemonProcessStartTime = processStartTime
 var daemonKillPID = killPID
 var daemonEndpointUsesRegularFile = func() bool { return runtime.GOOS == "windows" }
+var daemonInstallManagedService = installManagedService
+var daemonStartDetachedDaemon = startDetachedDaemon
 
 func daemonStartTimeout() time.Duration {
 	// Login-shell environment resolution alone has a 30s safety budget. A
@@ -76,7 +78,11 @@ func Start(p *paths.Paths) error {
 	if err := p.EnsureDirs(); err != nil {
 		return err
 	}
-	if alive, _ := daemonHealthCheck(p); alive {
+	alive, err := daemonHealthCheck(p)
+	if ipc.IsVersionMismatch(err) {
+		return err
+	}
+	if alive {
 		reloaded, err := reinstallManagedServiceIfChanged(p)
 		if err != nil {
 			return err
@@ -95,11 +101,18 @@ func Start(p *paths.Paths) error {
 		return err
 	}
 	var managedErr error
-	if managed, err := installManagedService(p); err == nil {
+	if managed, err := daemonInstallManagedService(p); err == nil {
 		if managed {
-			if err := startManagedDaemon(p); err == nil {
+			err := startManagedDaemon(p)
+			switch {
+			case err == nil:
 				return nil
-			} else {
+			case ipc.IsVersionMismatch(err):
+				// A skew is terminal and the answering daemon is a foreign one
+				// this call did not launch. Cleaning up here would bootout a
+				// perfectly healthy daemon on the way to reporting the skew.
+				return err
+			default:
 				managedErr = err
 			}
 			if cleanupErr := stopManagedFallback(p); cleanupErr != nil {
@@ -110,13 +123,35 @@ func Start(p *paths.Paths) error {
 			}
 		}
 	} else {
-		if alive, _ := daemonHealthCheck(p); alive {
-			return nil
-		}
 		managedErr = fmt.Errorf("install managed service: %w", err)
 	}
 
-	fallbackErr := startDetachedDaemon(p)
+	// Every path above can reach here, and time has passed since the
+	// top-of-function health guard (collision reconciliation, install work,
+	// a managed start attempt and its cleanup). Re-check rather than trusting
+	// that stale absent read: a daemon that came up in between and speaks an
+	// incompatible protocol version is fully alive, so reading its health
+	// error as a plain "not alive" would launch a detached daemon against it
+	// and report the singleton lock's refusal instead of the actual skew.
+	alive, healthErr := daemonHealthCheck(p)
+	if ipc.IsVersionMismatch(healthErr) {
+		return healthErr
+	}
+	if alive {
+		if managedErr != nil {
+			slog.Warn("managed daemon startup failed; an already-running daemon satisfied start", "error", managedErr)
+			// The managed cleanup above uninstalls the service definition so a
+			// detached fallback can own the socket. No fallback is happening,
+			// so restore the definition rather than silently costing the user
+			// login auto-start.
+			if _, err := daemonInstallManagedService(p); err != nil {
+				slog.Warn("reinstall managed service definition after skipping the detached fallback", "error", err)
+			}
+		}
+		return nil
+	}
+
+	fallbackErr := daemonStartDetachedDaemon(p)
 	if fallbackErr == nil {
 		return nil
 	}
@@ -371,7 +406,14 @@ func startManagedDaemon(p *paths.Paths) error {
 		return fmt.Errorf("inspect managed daemon before launch: %w", err)
 	}
 	if _, err := startManagedService(p); err != nil {
-		if alive, _ := daemonHealthCheck(p); alive {
+		alive, healthErr := daemonHealthCheck(p)
+		if ipc.IsVersionMismatch(healthErr) {
+			// A skewed daemon is alive, so the end state this branch reports as
+			// already reached is not reached: it is a daemon this CLI cannot
+			// talk to. Surface the skew rather than a bare launch failure.
+			return healthErr
+		}
+		if alive {
 			return nil
 		}
 		return err
@@ -387,7 +429,8 @@ func waitForDaemonStart(p *paths.Paths, pid int, startedAt time.Time) error {
 func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-chan error, pid int, startedAt time.Time, launch managedServiceLaunch) error {
 	timeout := daemonStartTimeout()
 	pollInterval := daemonStartPollInterval()
-	deadline := time.Now().Add(timeout)
+	launchedAt := time.Now()
+	deadline := launchedAt.Add(timeout)
 	managedPID := 0
 	nextManagedProbe := time.Time{}
 	var lastHealthErr error
@@ -398,6 +441,23 @@ func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-ch
 			return nil
 		} else if err != nil {
 			lastHealthErr = err
+			// A skewed daemon answered, so some daemon is up and no amount of
+			// further waiting changes the verdict. Who that daemon is decides
+			// the outcome. When it is the child this call launched, the child
+			// is by construction the installed binary and THIS process is the
+			// stale peer - self-update replaces the executable before resetting
+			// the daemon, so an old CLI supervising a newer child is the normal
+			// upgrade path. Readiness is genuinely reached there; reaping would
+			// destroy the correct daemon. Any other answering daemon is foreign,
+			// so the launched child is reaped exactly as on the timeout path
+			// and the mismatch is returned for ipc.IsVersionMismatch to classify.
+			if ipc.IsVersionMismatch(err) {
+				if launchedChildAnsweredSkew(p, pid, launchedAt) {
+					slog.Info("daemon ready on a newer protocol than this client", "pid", pid, "error", err)
+					return nil
+				}
+				return reapLaunchedDaemonChild(err, proc, exitCh, pid, startedAt, timeout)
+			}
 		}
 
 		if exitCh != nil {
@@ -442,27 +502,67 @@ func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-ch
 		timeoutErr = fmt.Errorf("%w: last health check: %v", timeoutErr, lastHealthErr)
 	}
 
+	return reapLaunchedDaemonChild(timeoutErr, proc, exitCh, pid, startedAt, timeout)
+}
+
+// launchedChildAnsweredSkew reports whether the daemon answering the socket is
+// the one this start launched. The daemon publishes its PID record after taking
+// the singleton lock and before it serves IPC, so a record is always present by
+// the time any answer - skewed or not - comes back.
+//
+// A detached launch owns the child's PID outright. A managed launch has no
+// process handle, so the record must instead name a live process that started
+// no earlier than this launch did; an older record belongs to a daemon this
+// call did not start, which is the foreign peer the reap path exists for.
+func launchedChildAnsweredSkew(p *paths.Paths, pid int, launchedAt time.Time) bool {
+	record, err := readDaemonPIDFile(p.PIDFile())
+	if err != nil || record.PID <= 0 {
+		return false
+	}
+	if pid > 0 {
+		return record.PID == pid
+	}
+	recorded := record.StartedAt.UTC()
+	if recorded.IsZero() || recorded.Before(launchedAt.UTC().Add(-orphanStartTimeTolerance)) {
+		return false
+	}
+	actual, err := daemonProcessStartTime(record.PID)
+	if err != nil {
+		return false
+	}
+	diff := actual.UTC().Sub(recorded)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= orphanStartTimeTolerance
+}
+
+// reapLaunchedDaemonChild kills and reaps the child this start launched, then
+// returns baseErr (wrapped when the reap itself failed, so the caller can still
+// classify the original failure). Every abandoning exit from
+// waitForDaemonStartWithProcess goes through here: a child left alive races
+// rollback or a fallback service and can steal the socket the caller is about
+// to rebuild. Managed cleanup is owned by Start.
+func reapLaunchedDaemonChild(baseErr error, proc *os.Process, exitCh <-chan error, pid int, startedAt time.Time, timeout time.Duration) error {
 	cleanupWait := 5 * time.Second
 	if timeout < cleanupWait {
 		cleanupWait = timeout
 	}
 
-	// Kill and reap the detached child so it cannot race rollback or a fallback
-	// service after the caller gives up. Managed cleanup is owned by Start.
 	if proc != nil && pid > 0 {
 		if err := proc.Kill(); err != nil {
 			select {
 			case <-exitCh:
-				return timeoutErr
+				return baseErr
 			default:
-				return fmt.Errorf("%w: cleanup daemon child %d: %v", timeoutErr, pid, err)
+				return fmt.Errorf("%w: cleanup daemon child %d: %v", baseErr, pid, err)
 			}
 		}
 		select {
 		case <-exitCh:
-			return timeoutErr
+			return baseErr
 		case <-time.After(cleanupWait):
-			return fmt.Errorf("%w: cleanup daemon child %d: wait for exit timed out", timeoutErr, pid)
+			return fmt.Errorf("%w: cleanup daemon child %d: wait for exit timed out", baseErr, pid)
 		}
 	}
 
@@ -470,13 +570,13 @@ func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-ch
 	// detached process but do not have an os.Process handle.
 	if pid > 0 {
 		if err := killTimedOutDaemonPID(pid, startedAt); err != nil {
-			return fmt.Errorf("%w: cleanup daemon child %d: %v", timeoutErr, pid, err)
+			return fmt.Errorf("%w: cleanup daemon child %d: %v", baseErr, pid, err)
 		}
 		if !startedAt.IsZero() {
 			waitForProcessExit(pid, cleanupWait)
 		}
 	}
-	return timeoutErr
+	return baseErr
 }
 
 func cleanupStartedDaemonProcess(proc *os.Process) error {
@@ -545,6 +645,9 @@ func daemonIsRunningViaIPC(p *paths.Paths) (bool, error) {
 	var result ipc.HealthResult
 	if err := client.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &result, ipc.DefaultDialTimeout); err != nil {
 		return false, err
+	}
+	if result.Status == "ok" && result.ProtocolVersion != ipc.ProtocolVersion {
+		return false, &ipc.VersionMismatchError{Local: ipc.ProtocolVersion, Remote: result.ProtocolVersion, RemoteRole: ipc.RoleDaemon}
 	}
 	return result.Status == "ok", nil
 }
@@ -890,6 +993,9 @@ func upsertEnv(env []string, key, value string) []string {
 func EnsureDaemon(p *paths.Paths) error {
 	alive, err := daemonHealthCheck(p)
 	if err != nil {
+		if ipc.IsVersionMismatch(err) {
+			return err
+		}
 		return fmt.Errorf("%w (run 'no-mistakes daemon start' to recover)", err)
 	}
 	if alive {

@@ -172,6 +172,12 @@ func (r *runReconciler) connect(ctx context.Context) error {
 			return nil
 		}
 		lastErr = err
+		// subscribe is a gated method, so a protocol skew is terminal by
+		// construction: no amount of retrying makes the daemon speak this
+		// binary's version. Surface it now instead of after the whole budget.
+		if ipc.IsVersionMismatch(lastErr) {
+			return fmt.Errorf("subscribe to run %s events: %w", r.runID, lastErr)
+		}
 		remaining := r.reconnectTimeout - time.Since(started)
 		if r.reconnectTimeout <= 0 || remaining <= 0 {
 			return fmt.Errorf("subscribe to run %s events after reconnect: %w", r.runID, lastErr)

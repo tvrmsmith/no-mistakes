@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/kunchenguid/no-mistakes/internal/winproc"
@@ -38,6 +40,11 @@ func newDoctorCmd() *cobra.Command {
 				}
 				fail := func(label, detail string) {
 					fmt.Fprintf(w, "  %s %s  %s\n", sRed.Render("✗"), sDim.Render(label), detail)
+				}
+				// note continues the row above it, for detail too long to sit in
+				// a checklist column whose other values are a word or two.
+				note := func(detail string) {
+					fmt.Fprintf(w, "      %s\n", sDim.Render(detail))
 				}
 
 				fmt.Fprintf(w, "  %s\n", sCyan.Render("System"))
@@ -96,10 +103,24 @@ func newDoctorCmd() *cobra.Command {
 				}
 
 				if p != nil {
-					alive, _ := daemon.IsRunning(p)
-					if alive {
+					alive, err := daemon.IsRunning(p)
+					var mismatch *ipc.VersionMismatchError
+					switch {
+					case alive:
 						ok("daemon        ", "running")
-					} else {
+					case ipc.IsVersionMismatch(err):
+						// errors.As only supplies the struct that splits the
+						// short row from its remedy; a peer-reported mismatch
+						// carries no struct, so the row falls back to the
+						// error's own text rather than rendering nothing.
+						if errors.As(err, &mismatch) {
+							warn("daemon        ", mismatch.Summary())
+							note(mismatch.Remedy())
+						} else {
+							warn("daemon        ", "protocol version mismatch")
+							note(err.Error())
+						}
+					default:
 						warn("daemon        ", "stopped")
 					}
 				}

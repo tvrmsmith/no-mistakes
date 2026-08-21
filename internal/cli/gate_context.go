@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -59,28 +60,36 @@ func classifyGateControlCaller(ctx context.Context) (gatecontext.Result, error) 
 	}
 	marker := gatecontext.MarkerPresent()
 	alive, runningErr := daemon.IsRunning(p)
-	if alive {
-		if runningErr != nil {
-			return gatecontext.Result{}, fmt.Errorf("inspect daemon for gate execution context: %w", runningErr)
+	if alive && runningErr != nil {
+		return gatecontext.Result{}, fmt.Errorf("inspect daemon for gate execution context: %w", runningErr)
+	}
+	// A version-mismatched daemon is fully alive but reports not-alive. The
+	// local-only fallback below has no authenticated peer to ask about step
+	// ancestry, so classifying from cwd alone there is weaker: a step-spawned
+	// agent outside its managed worktree can read as not-nested and mutate gate
+	// ownership. gate_context is version-exempt on the wire precisely so the
+	// skewed daemon can still be asked; query it rather than degrading. The one
+	// deliberate exception is handled below, for daemons that predate the
+	// method entirely.
+	skewed := ipc.IsVersionMismatch(runningErr)
+	if alive || skewed {
+		result, err := queryDaemonGateContext(p, cwd, marker)
+		switch {
+		case err == nil:
+			return result, nil
+		// A daemon old enough to predate gate_context itself cannot answer, and
+		// it reports no version at all, which is the whole population this
+		// fallback is for. Refusing them would deadlock the very commands that
+		// resolve the skew, so classify locally exactly as for an absent daemon.
+		// Containment IS weaker for that one population than it would be with a
+		// peer answer, and that is the accepted price of a reachable remedy.
+		// Any daemon that DOES report a version and still lacks gate_context is
+		// a future one that retired the method; degrading containment to the
+		// peerless cwd-only inspector for it would widen this into a bypass.
+		case reportsNoProtocolVersion(runningErr) && ipc.IsMethodNotFound(err):
+		default:
+			return gatecontext.Result{}, err
 		}
-		client, err := ipc.Dial(p.Socket())
-		if err != nil {
-			return gatecontext.Result{}, fmt.Errorf("connect to daemon for gate execution context: %w", err)
-		}
-		defer client.Close()
-		var wire ipc.GateContextResult
-		if err := client.Call(ipc.MethodGateContext, &ipc.GateContextParams{CWD: cwd, MarkerPresent: marker}, &wire); err != nil {
-			return gatecontext.Result{}, fmt.Errorf("classify gate execution context: %w", err)
-		}
-		return gatecontext.Result{
-			Nested:           wire.Nested,
-			ManagedGit:       wire.ManagedGit,
-			AgentDescendant:  wire.AgentDescendant,
-			DaemonDescendant: wire.DaemonDescendant,
-			MarkerPresent:    wire.MarkerPresent,
-			RunID:            wire.RunID,
-			Phase:            wire.Phase,
-		}, nil
 	}
 	// A stale/non-socket endpoint can make IsRunning return an error together
 	// with alive=false. There is no authenticated peer to query in that state;
@@ -98,6 +107,39 @@ func classifyGateControlCaller(ctx context.Context) (gatecontext.Result, error) 
 		return gatecontext.Result{}, fmt.Errorf("open gate registry read-only: %w", openErr)
 	}
 	return (gatecontext.Inspector{DB: database, Paths: p}).Inspect(ctx, gatecontext.Request{CWD: cwd, MarkerPresent: marker})
+}
+
+// reportsNoProtocolVersion reports whether err describes a peer that carried no
+// protocol version at all, which is how every daemon predating the handshake
+// reads. A peer on any declared version is a deliberate later protocol, not a
+// pre-handshake one, so it never qualifies for compatibility fallbacks.
+func reportsNoProtocolVersion(err error) bool {
+	var mismatch *ipc.VersionMismatchError
+	return errors.As(err, &mismatch) && mismatch.RemoteRole == ipc.RoleDaemon && mismatch.Remote == 0
+}
+
+// queryDaemonGateContext asks the running daemon to classify this caller. Its
+// error is always wrapped; callers distinguish "this daemon has no such method"
+// with ipc.IsMethodNotFound, which unwraps.
+func queryDaemonGateContext(p *paths.Paths, cwd string, marker bool) (gatecontext.Result, error) {
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		return gatecontext.Result{}, fmt.Errorf("connect to daemon for gate execution context: %w", err)
+	}
+	defer client.Close()
+	var wire ipc.GateContextResult
+	if err := client.Call(ipc.MethodGateContext, &ipc.GateContextParams{CWD: cwd, MarkerPresent: marker}, &wire); err != nil {
+		return gatecontext.Result{}, fmt.Errorf("classify gate execution context: %w", err)
+	}
+	return gatecontext.Result{
+		Nested:           wire.Nested,
+		ManagedGit:       wire.ManagedGit,
+		AgentDescendant:  wire.AgentDescendant,
+		DaemonDescendant: wire.DaemonDescendant,
+		MarkerPresent:    wire.MarkerPresent,
+		RunID:            wire.RunID,
+		Phase:            wire.Phase,
+	}, nil
 }
 
 func emitGateContextRefusal(cmd *cobra.Command, result gatecontext.Result) error {

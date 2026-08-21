@@ -94,6 +94,15 @@ func openAxiRunEnv() (*axiEnv, error) {
 	return openAxiDaemonEnv()
 }
 
+// daemonAliveForConfigDeferral reports whether a daemon is live enough to
+// defer a global-config load error to. A version-skewed daemon reports
+// not-alive but is fully running, so it counts: the deferral decision is
+// about whether a process is there, not about whether this CLI can talk to it.
+func daemonAliveForConfigDeferral(p *paths.Paths) bool {
+	alive, err := daemon.IsRunning(p)
+	return alive || ipc.IsVersionMismatch(err)
+}
+
 func openAxiEnvWithOptions(opts axiEnvOptions) (*axiEnv, error) {
 	p, d, err := openResources()
 	if err != nil {
@@ -102,8 +111,7 @@ func openAxiEnvWithOptions(opts axiEnvOptions) (*axiEnv, error) {
 	globalCfg, err := config.LoadGlobal(p.ConfigFile())
 	if err != nil {
 		if opts.deferGlobalConfigErrorForRunningDaemon {
-			alive, _ := daemon.IsRunning(p)
-			if !alive {
+			if !daemonAliveForConfigDeferral(p) {
 				d.Close()
 				return nil, err
 			}
@@ -139,7 +147,7 @@ func openAxiEnvWithOptions(opts axiEnvOptions) (*axiEnv, error) {
 	if opts.ensureDaemonConn {
 		if err := daemon.EnsureDaemon(p); err != nil {
 			env.close()
-			return nil, fmt.Errorf("start daemon: %w", err)
+			return nil, ensureDaemonError(err)
 		}
 		client, err := ipc.Dial(p.Socket())
 		if err != nil {

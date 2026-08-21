@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -32,7 +33,14 @@ const (
 	ErrMethodNotFound = -32601
 	ErrInvalidParams  = -32602
 	ErrInternal       = -32603
+	// ErrProtocolMismatch reports a peer speaking a different ProtocolVersion.
+	ErrProtocolMismatch = -32000
 )
+
+// ProtocolVersion is the version of the daemon IPC wire contract this
+// binary speaks. Bump it whenever a change makes an older peer's
+// understanding of the protocol wrong.
+const ProtocolVersion = 1
 
 // Request is a JSON-RPC 2.0 request.
 type Request struct {
@@ -40,6 +48,11 @@ type Request struct {
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 	ID      int64           `json:"id"`
+	// ProtocolVersion is the wire-contract version the sender speaks. The
+	// server gates every method on it matching ProtocolVersion except the
+	// three meta methods listed by versionExemptMethod (health, shutdown,
+	// gate_context), which must reach their handlers across a skew.
+	ProtocolVersion int `json:"protocol_version,omitempty"`
 }
 
 // Response is a JSON-RPC 2.0 response.
@@ -57,6 +70,14 @@ type RPCError struct {
 }
 
 func (e *RPCError) Error() string { return e.Message }
+
+// IsMethodNotFound reports whether err is a peer's answer that it does not
+// implement the requested method, which is how a daemon predating a method
+// answers a caller that knows it.
+func IsMethodNotFound(err error) bool {
+	var rpcErr *RPCError
+	return errors.As(err, &rpcErr) && rpcErr.Code == ErrMethodNotFound
+}
 
 // --- Method parameters ---
 
@@ -177,9 +198,12 @@ type ShutdownParams struct{}
 
 // --- Method results ---
 
-// PushReceivedResult confirms the push was accepted.
+// PushReceivedResult confirms the push was accepted. ProtocolVersion carries
+// the answering daemon's version so the git-hook caller detects a skew from
+// the reply it already waits for; see DaemonVersionMismatch.
 type PushReceivedResult struct {
-	RunID string `json:"run_id"`
+	RunID           string `json:"run_id"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
 }
 
 // GetRunResult wraps a single run.
@@ -224,13 +248,20 @@ type GateContextResult struct {
 }
 
 // AdmitPushResult is returned before a receive hook permits ref mutation.
+// ProtocolVersion carries the answering daemon's version: the hook has no
+// health probe to negotiate with, and a stale daemon whose reply shape has
+// drifted would otherwise decode as a permissive Context. See
+// DaemonVersionMismatch.
 type AdmitPushResult struct {
-	Context GateContextResult `json:"context"`
+	Context         GateContextResult `json:"context"`
+	ProtocolVersion int               `json:"protocol_version,omitempty"`
 }
 
-// HealthResult confirms the daemon is alive.
+// HealthResult confirms the daemon is alive. Health is the negotiation
+// method, so ProtocolVersion is how a client learns the daemon's version.
 type HealthResult struct {
-	Status string `json:"status"`
+	Status          string `json:"status"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
 }
 
 // ShutdownResult confirms shutdown was initiated.
@@ -354,10 +385,11 @@ func NewRequest(method string, params interface{}) (*Request, error) {
 		return nil, err
 	}
 	return &Request{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  raw,
-		ID:      reqID.Add(1),
+		JSONRPC:         "2.0",
+		Method:          method,
+		Params:          raw,
+		ID:              reqID.Add(1),
+		ProtocolVersion: ProtocolVersion,
 	}, nil
 }
 

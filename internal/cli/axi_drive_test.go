@@ -267,6 +267,42 @@ func TestRunReconciler_ReconnectAndReconcileFailuresStayVisible(t *testing.T) {
 	})
 }
 
+// A protocol skew is terminal: no amount of reconnecting makes the peer speak
+// this version. Retrying it burns the whole reconnect budget before reporting
+// an answer the first attempt already had, and buries the actionable remedy.
+func TestRunReconciler_ProtocolSkewAbortsReconnectImmediately(t *testing.T) {
+	skew := &ipc.RPCError{Code: ipc.ErrProtocolMismatch, Message: "ipc protocol version mismatch"}
+	source := &scriptedRunStateSource{
+		subscriptions: []scriptedSubscription{{err: skew}},
+	}
+	reconciler := newRunReconciler(source, "run-1")
+	reconciler.reconnectInterval = 10 * time.Millisecond
+	reconciler.reconnectTimeout = 5 * time.Second
+	defer reconciler.Close()
+
+	started := time.Now()
+	_, err := reconciler.Next(context.Background())
+	elapsed := time.Since(started)
+
+	if !ipc.IsVersionMismatch(err) {
+		t.Fatalf("err = %v, want a protocol version mismatch", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("expected an immediate abort on a terminal skew, spent %v", elapsed)
+	}
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	subscribes := 0
+	for _, op := range source.operations {
+		if op == "subscribe" {
+			subscribes++
+		}
+	}
+	if subscribes != 1 {
+		t.Fatalf("expected exactly one subscribe attempt against a skewed daemon, got %d", subscribes)
+	}
+}
+
 type scriptedSubscription struct {
 	events <-chan ipc.Event
 	err    error

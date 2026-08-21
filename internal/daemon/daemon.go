@@ -658,7 +658,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 	}
 
 	srv.Handle(ipc.MethodHealth, func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		return &ipc.HealthResult{Status: "ok"}, nil
+		return &ipc.HealthResult{Status: "ok", ProtocolVersion: ipc.ProtocolVersion}, nil
 	})
 
 	srv.Handle(ipc.MethodShutdown, func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
@@ -792,7 +792,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err != nil {
 			return nil, err
 		}
-		return &ipc.AdmitPushResult{Context: gateContextResult(result)}, nil
+		return &ipc.AdmitPushResult{Context: gateContextResult(result), ProtocolVersion: ipc.ProtocolVersion}, nil
 	})
 
 	srv.Handle(ipc.MethodRerun, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
@@ -825,7 +825,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err != nil {
 			return nil, err
 		}
-		return &ipc.PushReceivedResult{RunID: runID}, nil
+		return &ipc.PushReceivedResult{RunID: runID, ProtocolVersion: ipc.ProtocolVersion}, nil
 	})
 
 	srv.Handle(ipc.MethodRespond, func(ctx context.Context, params json.RawMessage) (interface{}, error) {

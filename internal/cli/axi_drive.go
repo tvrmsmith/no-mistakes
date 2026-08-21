@@ -1065,7 +1065,14 @@ func runAxiAbortByRunID(cmd *cobra.Command, runID string) error {
 		return emitError(cmd, 1, fmt.Sprintf("create directories: %v", err))
 	}
 
-	if alive, _ := daemon.IsRunning(p); !alive {
+	alive, runningErr := daemon.IsRunning(p)
+	// A version-mismatched daemon is alive and may still be running the very
+	// monitor this command exists to reap, so it must not be reported as an
+	// already-reached end state.
+	if ipc.IsVersionMismatch(runningErr) {
+		return emitError(cmd, 1, fmt.Sprintf("abort run: %v", runningErr))
+	}
+	if !alive {
 		return resolveDaemonDownAbortTruth(cmd, p, runID)
 	}
 

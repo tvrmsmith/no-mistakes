@@ -6,6 +6,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
 	"github.com/kunchenguid/no-mistakes/internal/skill"
 	"github.com/spf13/cobra"
@@ -42,13 +43,21 @@ func newInitCmd() *cobra.Command {
 				}
 				if err := daemon.EnsureDaemon(p); err != nil {
 					// Only roll back a gate we created in this run; a re-init
-					// must never eject a user's pre-existing gate.
-					if created {
+					// must never eject a user's pre-existing gate. A protocol
+					// skew is not a failed setup either: the daemon is healthy
+					// and the gate is sound, so failing closed here means
+					// refusing to proceed, not undoing work the user would
+					// have to redo after a 'daemon restart'.
+					if ipc.IsVersionMismatch(err) {
+						if created {
+							fmt.Fprintf(cmd.ErrOrStderr(), "The gate was created and kept; init is idempotent, so re-running it is safe once the skew is resolved. %s\n", versionMismatchRemedy(err))
+						}
+					} else if created {
 						if _, ejectErr := gate.Eject(cmd.Context(), d, p, "."); ejectErr != nil {
-							return fmt.Errorf("start daemon: %w, rollback init: %v", err, ejectErr)
+							return fmt.Errorf("%w, rollback init: %v", ensureDaemonError(err), ejectErr)
 						}
 					}
-					return fmt.Errorf("start daemon: %w", err)
+					return ensureDaemonError(err)
 				}
 
 				// Install the agent skill at user level so agents can drive

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
 
@@ -173,10 +174,25 @@ func reconcileCollidingDaemons(p *paths.Paths) error {
 	}
 
 	for _, m := range matches {
-		if alive, _ := daemonHealthCheck(paths.WithRoot(m.root)); alive {
-			slog.Info("daemon already running under alternate root path", "pid", m.pid, "root", m.root)
-			return fmt.Errorf("%w (pid %d)", errDaemonCollisionHealthy, m.pid)
+		// A version-mismatched daemon is fully alive, so treating its health
+		// error as "unhealthy" here would fall through to the kill loop below
+		// and kill a healthy process instead of refusing like the
+		// plain-healthy-stray case. Ask for the mismatch explicitly rather
+		// than collapsing it into the alive bool.
+		alive, err := daemonHealthCheck(paths.WithRoot(m.root))
+		mismatched := ipc.IsVersionMismatch(err)
+		if !alive && !mismatched {
+			continue
 		}
+		slog.Info("daemon already running under alternate root path", "pid", m.pid, "root", m.root)
+		// The alternate spelling is the whole explanation for why a plain
+		// restart on the canonical root keeps refusing, so it belongs in the
+		// error the user reads, not only in the log.
+		collision := fmt.Errorf("%w (pid %d, root %s)", errDaemonCollisionHealthy, m.pid, m.root)
+		if mismatched {
+			return fmt.Errorf("%w: %w", collision, err)
+		}
+		return collision
 	}
 
 	for _, m := range matches {

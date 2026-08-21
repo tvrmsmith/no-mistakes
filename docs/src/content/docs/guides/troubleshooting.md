@@ -69,6 +69,10 @@ no-mistakes daemon start
 
 If the socket file exists but nothing answers at all (a dead socket left behind by an unclean exit, e.g. a crash or `SIGKILL`), commands that ensure the daemon is running (`no-mistakes`, `init`, `attach`, `rerun`, `axi run`, `axi respond`) now fail fast with a `connect to daemon socket` error instead of silently starting a replacement daemon. The error message itself includes a `(run 'no-mistakes daemon start' to recover)` hint - run `no-mistakes daemon start` directly to recover, since it self-heals past a dead socket and starts a fresh daemon.
 
+### "ipc protocol version mismatch"
+
+The CLI and the daemon come from binaries speaking different IPC protocol versions, usually because a new binary was installed while the old daemon is still running, or because a stale CLI is on `PATH`. The error names both versions and the command that fixes whichever side is stale - typically `no-mistakes daemon restart`. `git push no-mistakes` is rejected while the skew lasts, and `no-mistakes doctor` reports it on the daemon row. [Daemon & Worktrees](/no-mistakes/concepts/daemon/#cli-and-daemon-protocol-versions) owns the model, including which commands stay available.
+
 ### Managed service logs
 
 - **macOS (launchd):** `launchctl list | grep no-mistakes` and check `~/Library/LaunchAgents/com.kunchenguid.no-mistakes.daemon.*.plist`

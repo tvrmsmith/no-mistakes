@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
 
@@ -31,7 +32,13 @@ func (u *updater) ensureDaemonUsesCurrentExecutable() error {
 		return nil
 	}
 	alive, err := daemonIsRunning(u.paths)
-	if err != nil || !alive {
+	switch {
+	// A protocol-version mismatch reports not-alive, yet it is the strongest
+	// evidence there is that the running daemon is a different executable
+	// than this update - exactly what this guard exists to catch - so it must
+	// reach the takeover prompt rather than skip it.
+	case ipc.IsVersionMismatch(err):
+	case err != nil, !alive:
 		return nil
 	}
 	runningPath, err := daemonExecutablePath(u.paths)

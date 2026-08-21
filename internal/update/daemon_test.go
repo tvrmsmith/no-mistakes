@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
 
@@ -321,5 +323,44 @@ func TestDefaultResetDaemonDoesNotReportOfflineWhenRestartLeavesDaemonRunning(t 
 	}
 	if checks < 2 {
 		t.Fatalf("expected follow-up daemon check, got %d checks", checks)
+	}
+}
+
+// A protocol-version mismatch reports not-alive while the daemon is very much
+// alive, and it is the strongest evidence that the running daemon is a
+// different executable than this update. The takeover guard must run rather
+// than be skipped.
+func TestEnsureDaemonUsesCurrentExecutablePromptsOnVersionMismatch(t *testing.T) {
+	origIsRunning := daemonIsRunning
+	origExecutablePath := daemonExecutablePath
+	t.Cleanup(func() {
+		daemonIsRunning = origIsRunning
+		daemonExecutablePath = origExecutablePath
+	})
+
+	daemonIsRunning = func(*paths.Paths) (bool, error) {
+		return false, &ipc.VersionMismatchError{Local: ipc.ProtocolVersion, Remote: 0, RemoteRole: ipc.RoleDaemon}
+	}
+	daemonExecutablePath = func(*paths.Paths) (string, error) {
+		return "/opt/old/no-mistakes", nil
+	}
+
+	var stderr bytes.Buffer
+	u := &updater{
+		executablePath: "/opt/new/no-mistakes",
+		paths:          paths.WithRoot(t.TempDir()),
+		stdin:          strings.NewReader("n\n"),
+		stderr:         &stderr,
+	}
+
+	err := u.ensureDaemonUsesCurrentExecutable()
+	if err == nil {
+		t.Fatal("expected the different-binary error when the takeover prompt is declined")
+	}
+	if !strings.Contains(err.Error(), "/opt/old/no-mistakes") {
+		t.Fatalf("error should name the running daemon binary, got: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "Replace the running daemon with this binary?") {
+		t.Fatalf("expected the takeover prompt, got:\n%s", stderr.String())
 	}
 }

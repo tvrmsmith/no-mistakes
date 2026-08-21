@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
 
@@ -232,8 +233,15 @@ func orphanStartTimeMatches(info agent.ServerPIDInfo) (bool, error) {
 func daemonPIDRecordMatchesProcess(p *paths.Paths, record daemonPIDFile, actualStart time.Time) (bool, error) {
 	expectedStart := record.StartedAt.UTC()
 	if expectedStart.IsZero() {
+		// A version-skewed daemon answers health and is therefore running; only
+		// its payload is unusable. Reading the bool alone would report the
+		// legacy record as unvalidatable and leave `daemon stop` unable to prove
+		// the process it must wait for ever exited.
 		alive, err := daemonHealthCheck(p)
-		if err != nil {
+		switch {
+		case ipc.IsVersionMismatch(err):
+			alive = true
+		case err != nil:
 			return false, fmt.Errorf("health check daemon: %w", err)
 		}
 		if !alive {

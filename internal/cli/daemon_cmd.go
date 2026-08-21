@@ -66,6 +66,15 @@ func newDaemonAdmitPushCmd() *cobra.Command {
 			if err := client.Call(ipc.MethodAdmitPush, &ipc.AdmitPushParams{Gate: gatePath}, &result); err != nil {
 				return err
 			}
+			// This pre-receive hook is the enforcing gate: a non-nil error here
+			// rejects the ref update. The hooks are the one caller with no
+			// health probe ahead of them, so the daemon's version rides on the
+			// reply itself, and verifying it before reading Context keeps a
+			// stale daemon whose reply shape has drifted from decoding as a
+			// permissive not-nested verdict.
+			if err := ipc.DaemonVersionMismatch(result.ProtocolVersion); err != nil {
+				return err
+			}
 			if !result.Context.Nested {
 				return nil
 			}
@@ -123,14 +132,22 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			defer client.Close()
 
 			var result ipc.PushReceivedResult
-			return client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+			if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 				Gate:      gatePath,
 				Ref:       ref,
 				Old:       oldSHA,
 				New:       newSHA,
 				SkipSteps: skipSteps,
 				Intent:    intent,
-			}, &result)
+			}, &result); err != nil {
+				return err
+			}
+			// Same reason as admit-push: the hook has no negotiation ahead of
+			// it, so the daemon's version rides on the reply. This is
+			// post-receive, so the ref already moved and admit-push is the
+			// enforcing gate; reporting the skew here is a post-hoc signal that
+			// a stale daemon accepted new-shaped params it may have read wrong.
+			return ipc.DaemonVersionMismatch(result.ProtocolVersion)
 		},
 	}
 

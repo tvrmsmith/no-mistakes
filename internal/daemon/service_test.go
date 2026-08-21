@@ -627,7 +627,7 @@ func TestStartFallsBackToDetachedDaemonWhenManagedStartFails(t *testing.T) {
 	checks := 0
 	daemonHealthCheck = func(*paths.Paths) (bool, error) {
 		checks++
-		return checks >= 3, nil
+		return checks >= 4, nil
 	}
 
 	if err := Start(p); err != nil {
@@ -661,8 +661,8 @@ func TestStartFallsBackToDetachedDaemonWhenManagedStartFails(t *testing.T) {
 	if pidData, err := os.ReadFile(p.PIDFile()); err == nil && len(pidData) > 0 {
 		t.Fatalf("helper detached process should not leave a pid file, got %q", string(pidData))
 	}
-	if checks < 3 {
-		t.Fatalf("expected health checks for preflight, managed failure, and detached wait, got %d", checks)
+	if checks < 4 {
+		t.Fatalf("expected health checks for preflight, managed start, the pre-fallback recheck, and the detached wait, got %d", checks)
 	}
 	_ = os.Remove(p.DaemonLog())
 	_ = os.Remove(p.PIDFile())
@@ -801,12 +801,17 @@ func TestStartStopsManagedServiceBeforeDetachedFallbackAfterTimeout(t *testing.T
 		return nil, nil
 	}
 	checks := 0
+	postStopChecks := 0
 	daemonHealthCheck = func(*paths.Paths) (bool, error) {
 		checks++
 		if !managedStopped {
 			return false, nil
 		}
-		return checks > 2, nil
+		// The first probe after the managed stop is the pre-fallback recheck,
+		// which must still see a dead daemon; the daemon only comes up once the
+		// detached fallback has launched it.
+		postStopChecks++
+		return postStopChecks > 1, nil
 	}
 
 	oldListProcesses := daemonListDaemonProcesses
@@ -856,8 +861,8 @@ func TestStartStopsManagedServiceBeforeDetachedFallbackAfterTimeout(t *testing.T
 	if _, err := os.Stat(p.DaemonBootstrapLog()); err != nil {
 		t.Fatalf("detached fallback should open daemon bootstrap log: %v", err)
 	}
-	if checks < 3 {
-		t.Fatalf("expected health checks during managed timeout and detached wait, got %d", checks)
+	if checks < 4 {
+		t.Fatalf("expected health checks during the managed timeout, the pre-fallback recheck, and the detached wait, got %d", checks)
 	}
 	_ = os.Remove(p.DaemonLog())
 	_ = os.Remove(p.PIDFile())
@@ -956,7 +961,11 @@ func TestStartReturnsManagedStopErrorWhenFallbackCleanupFails(t *testing.T) {
 	}
 }
 
-func TestStartRemovesLaunchAgentBeforeDetachedFallbackAfterBootoutESRCH(t *testing.T) {
+// The bootout-ESRCH cleanup removes the launch agent plist to clear the way for
+// a detached fallback. When the pre-fallback re-check finds a daemon already
+// answering, that fallback never happens, so returning success with the
+// definition still uninstalled silently costs the user login auto-start.
+func TestStartRestoresLaunchAgentWhenTheDetachedFallbackIsSkippedAfterBootoutESRCH(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -991,11 +1000,11 @@ func TestStartRemovesLaunchAgentBeforeDetachedFallbackAfterBootoutESRCH(t *testi
 	}
 
 	if err := Start(p); err != nil {
-		t.Fatalf("Start should fall back to detached mode: %v", err)
+		t.Fatalf("Start should accept the daemon that came up: %v", err)
 	}
 
-	if _, err := os.Stat(launchAgentPath(p)); !os.IsNotExist(err) {
-		t.Fatalf("launch agent plist should be removed before detached fallback, stat err = %v", err)
+	if _, err := os.Stat(launchAgentPath(p)); err != nil {
+		t.Fatalf("launch agent plist should be restored when no detached fallback happens, stat err = %v", err)
 	}
 	_ = os.Remove(p.DaemonLog())
 	_ = os.Remove(p.PIDFile())
