@@ -1287,20 +1287,6 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		trackStartFailure("create_run")
 		return "", fmt.Errorf("create run: %w", err)
 	}
-	// Persist the skip set so a run preserved across a clean daemon stop
-	// resumes with it. --skip accepts delivery steps (push, pr, ci), so a
-	// resume that lost the set could push a branch and open a PR the operator
-	// explicitly excluded. The write is therefore authoritative: the run does
-	// not start at all rather than start with a scope that cannot survive.
-	if len(skipSteps) > 0 {
-		run.SkippedSteps = skipSteps
-		if err := m.setRunSkippedSteps(run.ID, skipSteps); err != nil {
-			m.db.UpdateRunError(run.ID, fmt.Sprintf("persist run skip set: %s", err))
-			trackStartFailure("persist_skip_set")
-			return "", fmt.Errorf("persist run skip set: %w", err)
-		}
-	}
-
 	globalCfg, err := config.LoadGlobal(m.paths.ConfigFile())
 	if err != nil {
 		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
@@ -1435,6 +1421,28 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		return "", err
 	}
 	cfg.TrustedConfigSHA = trustedSHA
+
+	// Persist the EFFECTIVE skip set, the same union the executor runs with,
+	// so a run preserved across a clean daemon stop resumes with the scope it
+	// started under. Both sources reach delivery steps: --skip accepts push,
+	// pr and ci, and the trusted repo config's skip_steps is the standing form
+	// of the same selection. Persisting only the run argument leaves a resumed
+	// run free to push a branch and open a PR the repository itself excluded,
+	// because config skips are applied lazily inside the execution loop and
+	// post-gate step rows are still pending at park. Resolving it here rather
+	// than at the executor keeps one owner for what the run is scoped to. The
+	// write is authoritative: the run does not start at all rather than start
+	// with a scope that cannot survive a stop.
+	effectiveSkips := cfg.SkippedSteps(skipSteps)
+	if len(effectiveSkips) > 0 {
+		run.SkippedSteps = effectiveSkips
+		if err := m.setRunSkippedSteps(run.ID, effectiveSkips); err != nil {
+			m.db.UpdateRunError(run.ID, fmt.Sprintf("persist run skip set: %s", err))
+			trackStartFailure("persist_skip_set")
+			return "", fmt.Errorf("persist run skip set: %w", err)
+		}
+	}
+
 	if globalCfg.Eval.CaptureProvenance {
 		if err := cfg.EnableEvalProvenance(globalCfg, effectiveRepoCfg); err != nil {
 			m.db.UpdateRunError(run.ID, err.Error())
@@ -1518,7 +1526,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	runCtx, cancel := context.WithCancelCause(context.Background())
 	executor := pipeline.NewExecutor(m.db, m.paths, cfg, ag, execSteps, m.broadcast)
 	executor.SetForgeContext(forgeCtx)
-	executor.SetSkippedSteps(cfg.SkippedSteps(skipSteps))
+	executor.SetSkippedSteps(effectiveSkips)
 	executor.SetOnPRMerged(func(_ context.Context, runID string) {
 		m.wg.Add(1)
 		go func() {

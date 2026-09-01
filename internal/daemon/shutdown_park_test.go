@@ -74,8 +74,16 @@ func findStepRow(t *testing.T, d *db.DB, runID string, step types.StepName) *db.
 // parked at its first approval gate.
 func startParkedRun(t *testing.T, p *paths.Paths, d *db.DB, repoID string, skipSteps []types.StepName) (*db.Repo, string) {
 	t.Helper()
+	return startParkedRunWithRepoConfig(t, p, d, repoID, "", skipSteps)
+}
 
-	repo, headSHA := setupTestGitRepo(t, p, d, repoID)
+// startParkedRunWithRepoConfig is startParkedRun for a repo whose trusted
+// default branch carries extra config, so a test can tell a setting the run
+// argument supplies apart from one the repo owns.
+func startParkedRunWithRepoConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, extraConfig string, skipSteps []types.StepName) (*db.Repo, string) {
+	t.Helper()
+
+	repo, headSHA := setupTestGitRepoWithConfig(t, p, d, repoID, extraConfig)
 
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
@@ -359,6 +367,41 @@ func TestResumedRunStillHonorsItsRequestedSkipSet(t *testing.T) {
 	}
 	if got := skipped.execCnt.Load(); got != 0 {
 		t.Fatalf("skipped step executed %d times after resume, want 0", got)
+	}
+	row := findStepRow(t, d, runID, types.StepTest)
+	if row == nil || row.Status != types.StepStatusSkipped {
+		t.Fatalf("test step row = %v, want %s", row, types.StepStatusSkipped)
+	}
+}
+
+// TestResumedRunStillHonorsTheRepoConfigSkipSet proves the trusted repo's
+// standing skip_steps survives a stop too. The run carries no --skip, so the
+// only thing that can keep the step out of the resumed run is the persisted
+// EFFECTIVE set: persisting the run argument alone leaves a resume free to
+// run a delivery step the repository's own config excluded.
+func TestResumedRunStillHonorsTheRepoConfigSkipSet(t *testing.T) {
+	skipped := &mockPassStep{name: types.StepTest}
+	steps := func() []pipeline.Step {
+		return []pipeline.Step{&mockApprovalStep{name: types.StepReview}, skipped}
+	}
+	first := startTestDaemonInstance(t, steps)
+	p, d := first.paths, first.db
+
+	_, runID := startParkedRunWithRepoConfig(t, p, d, "shutdown-park-config-skip-repo", "skip_steps:\n  - test\n", nil)
+
+	if err := first.stopAndWait(t); err != nil {
+		t.Fatalf("first daemon exited with error: %v", err)
+	}
+
+	restartTestDaemonInstance(t, p, d, steps)
+	approveWhenResumed(t, p, runID, types.StepReview)
+
+	completed := waitForRunTerminalState(t, d, runID)
+	if completed.Status != types.RunCompleted {
+		t.Fatalf("resumed run status = %s, want %s", completed.Status, types.RunCompleted)
+	}
+	if got := skipped.execCnt.Load(); got != 0 {
+		t.Fatalf("config-skipped step executed %d times after resume, want 0", got)
 	}
 	row := findStepRow(t, d, runID, types.StepTest)
 	if row == nil || row.Status != types.StepStatusSkipped {

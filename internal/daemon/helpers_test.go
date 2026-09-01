@@ -302,6 +302,14 @@ func restartTestDaemonInstance(t *testing.T, p *paths.Paths, d *db.DB, sf StepFa
 // Returns the repo record and the head SHA.
 func setupTestGitRepo(t *testing.T, p *paths.Paths, d *db.DB, repoID string) (*db.Repo, string) {
 	t.Helper()
+	return setupTestGitRepoWithConfig(t, p, d, repoID, "")
+}
+
+// setupTestGitRepoWithConfig is setupTestGitRepo with extra trusted repo
+// config appended to the committed .no-mistakes.yaml, for tests that need a
+// setting the default branch owns rather than one a run argument carries.
+func setupTestGitRepoWithConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, extraConfig string) (*db.Repo, string) {
+	t.Helper()
 	ctx := context.Background()
 
 	// Create a work repo with an initial commit.
@@ -316,7 +324,8 @@ func setupTestGitRepo(t *testing.T, p *paths.Paths, d *db.DB, repoID string) (*d
 		t.Fatal(err)
 	}
 	// Disable auto-fix so approval-based tests pause immediately.
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("auto_fix:\n  lint: 0\n  test: 0\n  review: 0\n"), 0o644); err != nil {
+	repoConfig := "auto_fix:\n  lint: 0\n  test: 0\n  review: 0\n" + extraConfig
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte(repoConfig), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", ".")
