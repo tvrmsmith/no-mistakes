@@ -95,6 +95,7 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
 	if !agentCalled {
@@ -152,6 +153,7 @@ func TestCIStep_CIAutoFixDisabledWithZero(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected approval outcome, got error: %v", err)
@@ -262,6 +264,7 @@ func TestCIStep_CIAutoFixLimitExhausted(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected approval outcome, got error: %v", err)
@@ -348,6 +351,7 @@ func TestCIStep_CIAutoFixRetriesAfterChecksRerun(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected approval outcome after retries, got error: %v", err)
@@ -591,6 +595,7 @@ func TestCIStep_CIAutoFixRetriesWhenSomeChecksStayFailing(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected approval outcome after retries, got error: %v", err)
@@ -671,6 +676,7 @@ func TestCIStep_DoesNotRetryOnUnrelatedPendingCheck(t *testing.T) {
 		},
 	}
 
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
 	if fixCount != 1 {
@@ -740,6 +746,7 @@ func TestCIStep_RetriesMergeConflictAfterRerun(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected approval outcome after retries, got error: %v", err)
@@ -825,6 +832,7 @@ func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
 	if fixCount != 1 {
@@ -898,6 +906,7 @@ func TestCIStep_AutoFixNoChanges_CountsAsAttempt(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected approval outcome, got error: %v", err)
@@ -970,7 +979,9 @@ func TestCIStep_AutoFixExternalFailureStopsWithAgentConclusion(t *testing.T) {
 	}
 	sctx.StepResultID = stepResult.ID
 
-	outcome, err := (&CIStep{waitForNextPoll: func(context.Context, time.Duration) error { return nil }}).Execute(sctx)
+	step := &CIStep{waitForNextPoll: func(context.Context, time.Duration) error { return nil }}
+	pinCIMonitorClock(step)
+	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1060,6 +1071,7 @@ func TestCIStep_FixMode_NoChanges_CountsAsAttempt(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected approval outcome, got error: %v", err)
@@ -1145,6 +1157,7 @@ func TestCIStep_AutoFixPromptIncludesMustFixInstruction(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	step.Execute(sctx)
 
 	if capturedPrompt == "" {
@@ -1434,6 +1447,7 @@ func TestCIStep_FixAgentBudgetExhaustionParksForADecisionInsteadOfRetrying(t *te
 		},
 	}
 
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("CI step returned error %v, want a parked decision that keeps the run alive", err)
@@ -1515,6 +1529,7 @@ func TestCIStep_NonTimeoutFixFailureKeepsRetrying(t *testing.T) {
 		},
 	}
 
+	pinCIMonitorClock(step)
 	outcome, _ := step.Execute(sctx)
 	if outcome != nil && outcome.NeedsApproval {
 		t.Fatalf("outcome = %#v, want a transient fix failure to keep retrying rather than park", outcome)

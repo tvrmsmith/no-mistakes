@@ -43,6 +43,7 @@ func TestCIStep_BitbucketPassesWhenStatusesPass(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected Bitbucket CI pass to keep monitoring while PR is open, got %v", err)
@@ -91,6 +92,7 @@ func TestCIStep_BitbucketUsesProcessEnvWhenStepEnvIsNil(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected Bitbucket CI pass to keep monitoring while PR is open, got %v", err)
@@ -115,6 +117,7 @@ func TestCIStep_BitbucketFailureNeedsApproval(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 0}
 
 	step := &CIStep{}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +171,7 @@ func TestCIStep_BitbucketStoppedCheckParksForADecision(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected an approval outcome, got error: %v", err)
@@ -249,6 +253,7 @@ func TestCIStep_BitbucketAutoFixIncludesPipelineLogs(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
 	if capturedPrompt == "" {
@@ -331,6 +336,7 @@ func TestCIStep_BitbucketAutoFixUsesLivePRHeadSHAForLogs(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
 	if capturedPrompt == "" {
@@ -416,6 +422,7 @@ func TestCIStep_BitbucketAutoFixUsesMatchingPipelineLogs(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
 	if capturedPrompt == "" {

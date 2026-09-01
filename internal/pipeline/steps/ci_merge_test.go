@@ -41,6 +41,7 @@ func TestCIStep_MergeConflictDetected_ReturnsNeedsApproval(t *testing.T) {
 			return nil
 		},
 	}
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected outcome, got error: %v", err)
@@ -123,6 +124,7 @@ func TestCIStep_MergeConflictAndCIFailure_FixPromptIncludesBoth(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	step.Execute(sctx)
 
 	if capturedPrompt == "" {
@@ -198,6 +200,7 @@ func TestCIStep_MergeConflictOnly_AutoFix(t *testing.T) {
 			return ctx.Err()
 		},
 	}
+	pinCIMonitorClock(step)
 	step.Execute(sctx)
 
 	if !agentCalled {
@@ -286,7 +289,6 @@ func TestCIStep_MergeConflictAutoFixPromptUsesBaseBranchTip(t *testing.T) {
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
 	sctx.Repo.DefaultBranch = "main"
-	sctx.Config.CITimeout = 30 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 1}
 
 	// This test pins the ci.revalidate_repairs: true path, where the

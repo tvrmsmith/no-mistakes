@@ -77,6 +77,7 @@ The rationale lives in the `resolveRun` doc comment and the status-rendering com
 
 - Fake `gh`/`glab`/`git` on PATH must be the tiny helper at `internal/pipeline/fakecli`, compiled once per test process without `-race` (`stepstest.Init` / `LinkFakeCLI`). Do not re-exec the race-instrumented test binary as those names: that was ~0.8-1.1s per spawn and pushed `internal/pipeline/steps` into the 10-minute package timeout.
 - CI-monitor tests live in `internal/pipeline/steps/citest` so no child of `internal/pipeline/steps` sits near that cap. Both packages run under `go test ./...`; do not move them behind the `e2e` tag.
+- A CI-monitor test that sets a seconds-scale `ci_timeout` must call `pinCIMonitorClock(step)`. The monitor measures its idle timeout with `step.now` and re-arms it by resolving the base-branch tip, so a live clock makes the test assert that several fake-CLI spawns plus a git read finish inside that bound; when a loaded runner misses it the step returns its timeout outcome in place of the outcome under test, which reads as a real defect rather than a flake. `stepstest.PinnedCIMonitorClock` owns the rationale and `stepstest.AssertShortCITimeoutTestsPinTheClock` enforces it in both packages (`TestEveryShortTimeoutTestPinsTheClock`). A test that genuinely asserts the timeout drives its own advancing `SetNow` instead.
 
 **Telemetry Shape**
 

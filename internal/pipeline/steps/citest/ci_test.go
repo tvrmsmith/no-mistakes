@@ -234,6 +234,7 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 		cancel()
 		return ctx.Err()
 	})
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
 
@@ -266,6 +267,7 @@ func TestCIStep_PRMergedExitsEarly(t *testing.T) {
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
 	step := (&steps.CIStep{})
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
@@ -303,6 +305,7 @@ func TestCIStep_PRClosedExitsEarly(t *testing.T) {
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
 	step := (&steps.CIStep{})
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
@@ -378,6 +381,7 @@ func TestCIStep_AllChecksPassingKeepsMonitoringOpenPR(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	})
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected open PR monitoring to continue after passing checks, got %v", err)
@@ -528,7 +532,8 @@ func TestCIStep_PersistentCheckReadFailureParksAtAskUser(t *testing.T) {
 	defer cancel()
 	sctx.Ctx = ctx
 
-	step := (&steps.CIStep{}).SetBaseBranchTip(func(context.Context) (string, bool) { return baseSHA, true }).SetWaitForNextPoll(func(ctx context.Context, _ time.Duration) error { return nil })
+	step := (&steps.CIStep{}).SetWaitForNextPoll(func(ctx context.Context, _ time.Duration) error { return nil })
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatalf("expected ask-user approval outcome, got error: %v", err)
@@ -590,7 +595,7 @@ func TestCIStep_CheckReadFailureCounterResetsAfterSuccessfulRead(t *testing.T) {
 	sctx.Ctx = ctx
 
 	waits := 0
-	step := (&steps.CIStep{}).SetBaseBranchTip(func(context.Context) (string, bool) { return baseSHA, true }).SetWaitForNextPoll(func(ctx context.Context, _ time.Duration) error {
+	step := (&steps.CIStep{}).SetWaitForNextPoll(func(ctx context.Context, _ time.Duration) error {
 		waits++
 		if waits == 8 {
 			cancel()
@@ -598,6 +603,7 @@ func TestCIStep_CheckReadFailureCounterResetsAfterSuccessfulRead(t *testing.T) {
 		}
 		return nil
 	})
+	pinCIMonitorClock(step)
 	outcome, err := step.Execute(sctx)
 	if err == nil && outcome != nil && outcome.NeedsApproval {
 		t.Fatalf("a successful read must reset the consecutive failure counter; parked after transient failures: %s", outcome.Findings)
@@ -644,6 +650,7 @@ func TestCIStep_CIWarningClearsPersistedReadiness(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	})
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected open PR monitoring to continue, got %v", err)
@@ -703,6 +710,7 @@ func TestCIStep_UncertainProviderStateClearsPersistedReadiness(t *testing.T) {
 				cancel()
 				return ctx.Err()
 			})
+			pinCIMonitorClock(step)
 			_, err := step.Execute(sctx)
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("expected open PR monitoring to continue, got %v", err)
@@ -743,6 +751,7 @@ func TestCIStep_OpenPRKeepsMonitoringAfterChecksPass(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	})
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected open PR monitoring to continue after passing checks, got %v", err)
@@ -855,6 +864,7 @@ func TestCIStep_EmptyChecksWithTrustedNoCIBecomesReady(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	})
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected continued monitoring after declared no-CI ready, got %v", err)
@@ -1079,6 +1089,7 @@ func TestCIStep_NonEmptyPassingChecksContinueMonitoring(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	})
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected open PR monitoring to continue after passing checks, got %v", err)

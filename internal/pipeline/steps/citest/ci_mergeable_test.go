@@ -89,6 +89,7 @@ func TestCIStep_UnknownMergeableStateDoesNotExitCleanly(t *testing.T) {
 		return ctx.Err()
 	})
 
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected polling to continue until canceled, got %v", err)
@@ -127,6 +128,7 @@ func TestCIStep_MergeableLookupErrorDoesNotReportReadyWhenChecksPass(t *testing.
 		return ctx.Err()
 	})
 
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected polling to continue after passing checks, got %v", err)
@@ -172,6 +174,7 @@ func TestCIStep_PRStateLookupErrorDoesNotReportReadyWhenChecksPass(t *testing.T)
 		return ctx.Err()
 	})
 
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected polling to continue after passing checks, got %v", err)
@@ -406,6 +409,7 @@ func TestCIStep_WaitsForPendingChecksBeforeFixing(t *testing.T) {
 		}
 		return nil
 	})
+	pinCIMonitorClock(step)
 	_, err := step.Execute(sctx)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("unexpected error: %v", err)
