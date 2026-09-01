@@ -68,7 +68,7 @@ func newAbortQuiescenceFixtureWithCancel(t *testing.T, getRun func(context.Conte
 
 	srv := ipc.NewServer()
 	srv.Handle(ipc.MethodHealth, func(context.Context, json.RawMessage) (interface{}, error) {
-		return &ipc.HealthResult{Status: "ok"}, nil
+		return &ipc.HealthResult{Status: "ok", ProtocolVersion: ipc.ProtocolVersion}, nil
 	})
 	srv.Handle(ipc.MethodGateContext, func(context.Context, json.RawMessage) (interface{}, error) {
 		return &ipc.GateContextResult{Nested: false}, nil
