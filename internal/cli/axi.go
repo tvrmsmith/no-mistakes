@@ -174,10 +174,11 @@ func runAxiHome(cmd *cobra.Command) (string, error) {
 	}
 	defer env.close()
 
-	daemonState := "stopped"
-	if alive, _ := daemon.IsRunning(env.p); alive {
-		daemonState = "running"
-	}
+	// Home reads the daemon exactly as `status` does, through daemonReading: a
+	// version-skewed daemon holds the socket and answers, so calling it
+	// stopped here sent an agent to start a daemon that is already there.
+	alive, runningErr := daemonIsRunningFn(env.p)
+	daemonState, daemonSkew := daemonReading(alive, runningErr)
 	branch, _ := currentBranchForRunResolve(cmd.Context())
 	branchDisplay := branch
 	if branchDisplay == "" {
@@ -190,6 +191,11 @@ func runAxiHome(cmd *cobra.Command) (string, error) {
 		{Key: "repo", Value: env.repo.WorkingPath},
 		{Key: "current_branch", Value: branchDisplay},
 		{Key: "daemon", Value: daemonState},
+	}
+	// The skew is the actionable fact, and the `daemon` key keeps its
+	// running/stopped contract, so it rides an additive field of its own.
+	if daemonSkew != nil {
+		fields = append(fields, toon.Field{Key: "daemon_version_skew", Value: daemonSkew.Summary() + ". " + daemonSkew.Remedy()})
 	}
 
 	var currentActive *db.Run
@@ -213,7 +219,7 @@ func runAxiHome(cmd *cobra.Command) (string, error) {
 
 	gated := false
 	hasBranchSync := false
-	fingerprint := env.repo.ID + "|" + daemonState
+	fingerprint := env.repo.ID + "|" + daemonFingerprintState(daemonState, daemonSkew)
 	if currentActive != nil {
 		steps, _ := env.d.GetStepsByRun(currentActive.ID)
 		rv := runViewFromDB(currentActive, steps)

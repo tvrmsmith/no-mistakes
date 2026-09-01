@@ -47,7 +47,9 @@ func newStatusCmd() *cobra.Command {
 
 				// Check daemon status.
 				alive, runningErr := daemonIsRunningFn(p)
-				daemonState, daemonText := daemonStatusRow(alive, runningErr)
+				state, daemonSkew := daemonReading(alive, runningErr)
+				_, daemonText := daemonStatusRow(alive, runningErr)
+				daemonState := daemonFingerprintState(state, daemonSkew)
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("daemon:"), daemonText)
 
 				// Check for active run.
@@ -88,15 +90,43 @@ func newStatusCmd() *cobra.Command {
 // remedy instead of a bare "running". Any other read failure stays stopped:
 // only a mismatch proves something answered.
 func daemonStatusRow(alive bool, err error) (state, text string) {
+	state, skew := daemonReading(alive, err)
+	switch {
+	case skew != nil:
+		return state, fmt.Sprintf("%s running - %s. %s",
+			sYellow.Render("●"), skew.Summary(), skew.Remedy())
+	case state == "running":
+		return state, fmt.Sprintf("%s running", sGreen.Render("●"))
+	}
+	return state, fmt.Sprintf("%s stopped", sDim.Render("○"))
+}
+
+// daemonReading is the reading itself, without a rendering: the state string
+// every surface reports plus the skew when one was proven. The axi home view
+// renders the same reading as TOON rather than a styled row, so the two share
+// this and not daemonStatusRow's text.
+func daemonReading(alive bool, err error) (state string, skew *ipc.VersionMismatchError) {
 	var mismatch *ipc.VersionMismatchError
 	if errors.As(err, &mismatch) {
-		return "running", fmt.Sprintf("%s running - %s. %s",
-			sYellow.Render("●"), mismatch.Summary(), mismatch.Remedy())
+		return "running", mismatch
 	}
 	if alive {
-		return "running", fmt.Sprintf("%s running", sGreen.Render("●"))
+		return "running", nil
 	}
-	return "stopped", fmt.Sprintf("%s stopped", sDim.Render("○"))
+	return "stopped", nil
+}
+
+// daemonFingerprintState keys the read-surface telemetry gate, which re-emits
+// only when the fingerprint changes. A skew and a healthy daemon share the
+// state string "running", so the skew is carried separately here: resolving it
+// with a daemon restart is a state change, and folding the two together would
+// swallow that transition. The versions are bounded ints, so the cardinality
+// stays low.
+func daemonFingerprintState(state string, skew *ipc.VersionMismatchError) string {
+	if skew == nil {
+		return state
+	}
+	return fmt.Sprintf("%s+skew:%d/%d", state, skew.Local, skew.Remote)
 }
 
 func statusFingerprint(repoID, daemonState string, activeRun *db.Run) string {

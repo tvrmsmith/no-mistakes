@@ -81,6 +81,7 @@ no-mistakes axi
 ```
 
 With no subcommand, shows the executable path, description, repo, current branch, daemon state, recent runs, and next-step help, including a pointer to `no-mistakes axi run --help` and the installed `/no-mistakes` skill for full driving guidance.
+A daemon speaking a different IPC protocol version is still holding the socket and answering, so `daemon` reads `running` for it, and an extra `daemon_version_skew` field states the mismatch and the command that resolves it.
 When the current branch has an active run, that run appears as `active_run` with any approval gate and help for `axi respond` when it is parked or `axi status` when it is still running.
 If an active run object is parked at a decision gate, it includes `awaiting_agent: parked <duration>` immediately after `status`.
 That field is observability only; the `gate:` object still tells the agent which response to send.
