@@ -1,11 +1,15 @@
 package steps
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/testguidance"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -39,7 +43,7 @@ func (s *TestStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	var newTestsFromFix []string
 	var fixSummary string
 	if sctx.Fixing {
-		historySection := executionContextPromptSection() + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + testguidance.Rule
+		historySection := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + testguidance.Rule
 		fixPrompt := fmt.Sprintf(
 			`Fix the failing tests in this repository. Reproduce the specific failure, identify the root cause, and fix either the tests or the code so that failure passes.
 
@@ -72,18 +76,21 @@ Rules:
 Previous test findings to address:
 ` + sanitizedPreviousFindingsForPrompt(sctx.PreviousFindings)
 		}
+		fixCtx, cancelFix, fixTimeout := testAgentContext(sctx)
 		summary, err := executeFixMode(sctx, s.Name(), fixExecutionOptions{
 			LogMessage:      "asking agent to fix test failures...",
 			Prompt:          fixPrompt,
 			ErrorPrefix:     "agent fix tests",
 			FallbackSummary: "fix test failures",
+			AgentContext:    fixCtx,
 			AfterAgentRun: func(*agent.Result) error {
 				newTestsFromFix = detectNewTestFiles(ctx, sctx.WorkDir)
 				return nil
 			},
 		})
+		cancelFix()
 		if err != nil {
-			return nil, err
+			return nil, testAgentError(fixCtx, fixTimeout, "agent fix tests", err)
 		}
 		fixSummary = summary
 	}
@@ -134,7 +141,7 @@ Previous test findings to address:
 		} else {
 			sctx.Log("user intent available, asking agent to gather test evidence...")
 		}
-		reassessHistory := executionContextPromptSection() + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + testguidance.Rule
+		reassessHistory := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + testguidance.Rule
 		evidenceGuidance := fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree: %s", evidenceDir)
 		if sctx.Config.Test.Evidence.StoreInRepo {
 			evidenceGuidance = fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; they are published to the repository's %s branch automatically and linked from the PR: %s", sctx.Config.Test.Evidence.Branch, evidenceDir)
@@ -143,7 +150,8 @@ Previous test findings to address:
 		if testCmd != "" {
 			configuredTestCommand = fmt.Sprintf("\nConfigured test command already ran successfully as baseline: `%s`\n", testCmd)
 		}
-		result, err := sctx.Agent.Run(ctx, agent.RunOpts{
+		evidenceCtx, cancelEvidence, evidenceTimeout := testAgentContext(sctx)
+		result, err := sctx.RunAgentContext(evidenceCtx, agent.RunOpts{
 			Prompt: fmt.Sprintf(
 				`You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself.
 
@@ -170,7 +178,7 @@ Task:
 - Never treat "do not run everything" as permission to run nothing: if no targeted automated test can establish the intent, write or improve a focused test, perform manual verification with evidence, or report a warning finding that sufficient targeted evidence is not possible.
 - If no existing test produces sufficient evidence, write or improve a focused test so that it does.
 - If automated testing cannot produce the needed evidence, execute manual verification steps and record the evidence-producing steps you performed.
-- If sufficient evidence is not possible, report a warning finding explaining what evidence is missing and why the user needs to decide what to do.
+- If sufficient evidence is not possible, report a warning finding explaining what evidence is missing and why the user needs to decide what to do. When the blocker is a host capability or OS permission the agent's own process lacks (for example, the Screen Recording permission macOS requires to capture a native GUI application), name the specific capability or permission and how to grant it so the user can enable it and re-run, instead of retrying blindly or failing opaquely.
 - Include a concise "testing_summary" sentence describing what you exercised and the overall result.
 - The "testing_summary" must account for the complete test step: baseline commands that already ran, automated tests, manual or evidence-producing checks, artifacts gathered, and the overall result.
 - Record the exact tests, manual checks, and evidence-producing steps you ran in a "tested" array. Prefer concrete commands or test selectors wrapped in backticks.
@@ -200,8 +208,10 @@ Rules:
 			JSONSchema: testFindingsSchema,
 			OnChunk:    sctx.LogChunk,
 		})
-		if err != nil {
-			return nil, fmt.Errorf("agent run tests: %w", err)
+		runErr := testAgentError(evidenceCtx, evidenceTimeout, "agent run tests", err)
+		cancelEvidence()
+		if runErr != nil {
+			return nil, runErr
 		}
 
 		var findings Findings
@@ -267,4 +277,32 @@ Rules:
 	sctx.Log("all tests passed")
 	findingsJSON, _ := json.Marshal(Findings{Tested: tested})
 	return &pipeline.StepOutcome{Findings: string(findingsJSON), FixSummary: fixSummary}, nil
+}
+
+func testAgentContext(sctx *pipeline.StepContext) (context.Context, context.CancelFunc, time.Duration) {
+	timeout := config.DefaultTestAgentTimeout
+	if sctx != nil && sctx.Config != nil && sctx.Config.TestAgentTimeout > 0 {
+		timeout = sctx.Config.TestAgentTimeout
+	}
+	ctx, cancel := context.WithTimeoutCause(sctx.Ctx, timeout, errTestAgentTimeout)
+	return ctx, cancel, timeout
+}
+
+var errTestAgentTimeout = errors.New("test agent timeout")
+
+// testAgentError renders a Test-invocation budget expiry. It keeps the agent's
+// own error rather than replacing it with the bare context cause: for a native
+// agent that error carries the killed subprocess's exit status and stderr, and
+// is the only account of what the process was doing when the budget ran out.
+func testAgentError(ctx context.Context, timeout time.Duration, prefix string, err error) error {
+	if timeout > 0 && errors.Is(context.Cause(ctx), errTestAgentTimeout) {
+		if err == nil {
+			err = context.Cause(ctx)
+		}
+		return fmt.Errorf("%s timed out after %s: %w", prefix, timeout, err)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+	return nil
 }

@@ -1,10 +1,12 @@
 ---
-description: macOS Developer ID signing contract for official release artifacts.
-paths:
-  - .github/workflows/**
+name: release-signing
+description: Use when changing macOS release signing, release artifact verification, or the release workflow.
+user-invocable: false
+metadata:
+  internal: true
 ---
 
-# macOS Release Signing (permanent identity)
+**macOS Release Signing (permanent identity)**
 
 - Every official macOS release artifact - both `darwin/arm64` and `darwin/amd64` - is Developer ID Application signed on a macOS runner with a fixed identifier, hardened runtime, secure timestamp, and no entitlements, then strictly verified before it is archived or checksummed; the Linux and Windows release paths are unchanged.
 - The executable identifier `com.kunchenguid.no-mistakes` and Team ID `9T2J7MNUP9` are the permanent Developer ID identity and MUST NEVER change: they are the invariant of the identity-based designated requirement that lets macOS permission grants survive `no-mistakes update`, so changing either resets every grant once.

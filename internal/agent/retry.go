@@ -147,6 +147,31 @@ var transientNeedles = []struct {
 	{"stream idle timeout", "stream idle timeout"},
 	{"no chunks received", "stream idle timeout"},
 	{"response stalled mid-stream", "stream stalled mid-stream"},
+	// A model ending its turn with prose instead of the required JSON object
+	// is a stochastic behavior, not a deterministic defect: the step's real
+	// work is typically already complete, so a cold retry succeeds often
+	// enough to be worth more than a terminal failure.
+	{"ended its turn with prose", "prose final turn"},
+	// agy's strict tool-call validation kills the whole run when the model
+	// emits one malformed call; the step work is usually already complete.
+	{"declaring permissions", "agy permission declaration"},
+	{"invalid tool call", "invalid tool call"},
+}
+
+var terminalNeedles = []struct {
+	needle string
+	label  string
+}{
+	{"freeusagelimit", "free usage limit"},
+	{"free usage limit", "free usage limit"},
+	{"free_usage_limit", "free usage limit"},
+	{"insufficient quota", "insufficient quota"},
+	{"insufficient_quota", "insufficient quota"},
+	{"exceeded your current quota", "quota exceeded"},
+	{"quota exceeded", "quota exceeded"},
+	{"quota_exceeded", "quota exceeded"},
+	{"quota exhausted", "quota exhausted"},
+	{"quota_exhausted", "quota exhausted"},
 }
 
 // classifyTransient reports whether an error message looks like a transient
@@ -160,6 +185,9 @@ func classifyTransient(err error) (string, bool) {
 		return "", false
 	}
 	msg := strings.ToLower(err.Error())
+	if isTerminalRetryError(msg) {
+		return "", false
+	}
 	for _, sig := range transientNeedles {
 		if strings.Contains(msg, sig.needle) {
 			return sig.label, true
@@ -169,4 +197,13 @@ func classifyTransient(err error) (string, bool) {
 		return "http " + m, true
 	}
 	return "", false
+}
+
+func isTerminalRetryError(msg string) bool {
+	for _, sig := range terminalNeedles {
+		if strings.Contains(msg, sig.needle) {
+			return true
+		}
+	}
+	return false
 }

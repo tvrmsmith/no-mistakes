@@ -3,18 +3,175 @@ package steps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
+
+func TestReviewStep_HangingAgentFailsRunAfterTimeout(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{
+		name: "hanging-review-agent",
+		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config.ReviewAgentTimeout = 20 * time.Millisecond
+
+	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
+	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+		t.Fatal("expected hanging review agent to fail the run")
+	}
+
+	run, err := sctx.DB.GetRun(sctx.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if run.Status != types.RunFailed {
+		t.Fatalf("run status = %s, want %s", run.Status, types.RunFailed)
+	}
+	var got string
+	if run.Error != nil {
+		got = *run.Error
+	}
+	// The diagnostic must name the budget that expired AND report what was
+	// actually observed. An agent that never emitted anything is a different
+	// operator problem from one that streamed until the deadline, and the run
+	// error is the only place that distinction survives.
+	if !strings.Contains(got, "timed out after 20ms") {
+		t.Fatalf("run error = %q, want the expired review budget named", got)
+	}
+	if !strings.Contains(got, "produced no output at all") {
+		t.Fatalf("run error = %q, want the measured silence of a never-emitting agent", got)
+	}
+	if strings.Contains(got, "silent for 20ms") {
+		t.Fatalf("run error = %q, must not restate the budget as if it were a measurement", got)
+	}
+}
+
+// TestReviewStep_RoundBudgetTimeoutPreservesTheAgentReport pins the other half
+// of the diagnostic contract at the review round budget: whatever the adapter
+// managed to report reaches the operator. For a native agent that error is the
+// killed subprocess's exit status and stderr - the only account of what the
+// process was actually doing - and it is what makes a silent 30-minute review
+// timeout diagnosable instead of a dead end.
+func TestReviewStep_RoundBudgetTimeoutPreservesTheAgentReport(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{
+		name: "reporting-review-agent",
+		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
+			<-ctx.Done()
+			return nil, errors.New("pi exited: signal: killed: pi: provider authentication required")
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config.ReviewAgentTimeout = 20 * time.Millisecond
+
+	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
+	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+		t.Fatal("expected the review round budget to fail the run")
+	}
+
+	run, err := sctx.DB.GetRun(sctx.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	var got string
+	if run.Error != nil {
+		got = *run.Error
+	}
+	if !strings.Contains(got, "provider authentication required") {
+		t.Fatalf("run error = %q, want the agent's own report preserved", got)
+	}
+	if !strings.Contains(got, "timed out after 20ms") {
+		t.Fatalf("run error = %q, want the expired review budget named", got)
+	}
+}
+
+// TestReviewStep_EachRoundGetsItsOwnAgentBudget pins the documented
+// review_agent_timeout contract: the deadline bounds ONE review round -
+// its optional fix turn plus the rereview turn share a single budget - and
+// every later auto-fix round is derived fresh from the step's parent context.
+// Without the fresh derivation, a step context reused across rounds would
+// carry round 1's already-spent deadline into round 2 and fail a healthy agent.
+func TestReviewStep_EachRoundGetsItsOwnAgentBudget(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	const timeout = time.Hour
+	type call struct {
+		fixTurn  bool
+		deadline time.Time
+	}
+	var calls []call
+
+	findings := `{"findings":[{"file":"a.txt","line":1,"severity":"warning","action":"auto-fix","description":"tidy"}]}`
+	ag := &mockAgent{
+		name: "budget-probe",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			dl, ok := ctx.Deadline()
+			if !ok {
+				t.Errorf("agent call %d ran with no deadline", len(calls)+1)
+			}
+			isFix := strings.Contains(opts.Prompt, "Investigate previous review findings")
+			calls = append(calls, call{fixTurn: isFix, deadline: dl})
+			if isFix {
+				return &agent.Result{Output: json.RawMessage("fixed it")}, nil
+			}
+			// Round 1 raises an auto-fixable finding; later rounds are clean.
+			if len(calls) == 1 {
+				return &agent.Result{Output: json.RawMessage(findings)}, nil
+			}
+			return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
+		},
+	}
+
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config.ReviewAgentTimeout = timeout
+	sctx.Config.AutoFix.Review = 1
+
+	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
+	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	// round 1: review. round 2: fix + rereview.
+	if len(calls) != 3 {
+		t.Fatalf("agent calls = %d, want 3 (review, fix, rereview); got %+v", len(calls), calls)
+	}
+	if calls[0].fixTurn || !calls[1].fixTurn || calls[2].fixTurn {
+		t.Fatalf("turn order = %+v, want review, fix, rereview", calls)
+	}
+
+	// The fix turn and the rereview turn of round 2 share one round budget.
+	if !calls[1].deadline.Equal(calls[2].deadline) {
+		t.Errorf("round 2 fix and rereview deadlines differ (%v vs %v); one round must share one budget",
+			calls[1].deadline, calls[2].deadline)
+	}
+	// Round 2 is derived fresh, so its budget starts after round 1's.
+	if !calls[1].deadline.After(calls[0].deadline) {
+		t.Errorf("round 2 deadline %v is not later than round 1 deadline %v; the round budget leaked across rounds",
+			calls[1].deadline, calls[0].deadline)
+	}
+	// Each round's budget is the configured timeout, not a shrinking remainder.
+	if remaining := time.Until(calls[2].deadline); remaining <= timeout/2 {
+		t.Errorf("round 2 budget remaining %v is far below the configured %v; the round did not get a full budget",
+			remaining, timeout)
+	}
+}
 
 func TestReviewStep_FixMode(t *testing.T) {
 	t.Parallel()
@@ -82,8 +239,8 @@ func TestReviewStep_FixMode(t *testing.T) {
 	if !strings.Contains(ag.calls[0].Prompt, "deeper design, abstraction, validation, ownership, or test-coverage flaw") {
 		t.Error("expected review fix prompt to require root-cause diagnosis before editing")
 	}
-	if !strings.Contains(ag.calls[0].Prompt, "leave the same class of bug likely elsewhere") {
-		t.Error("expected review fix prompt to avoid narrow fixes that leave systemic bugs")
+	if !strings.Contains(ag.calls[0].Prompt, "Fix the reported instance narrowly") {
+		t.Error("expected review fix prompt to scope the fix to the reported instance")
 	}
 	assertTestQualityRulePrompt(t, ag.calls[0].Prompt)
 	if len(ag.calls[0].JSONSchema) == 0 {
@@ -806,7 +963,7 @@ func reviewPromptFor(t *testing.T, rules []config.PathInstruction) string {
 	if len(ag.calls) != 1 {
 		t.Fatalf("expected 1 review call, got %d", len(ag.calls))
 	}
-	return ag.calls[0].Prompt
+	return strings.ReplaceAll(ag.calls[0].Prompt, dir, "<WORKDIR>")
 }
 
 // A repository with no review.path_instructions must get the review prompt it
@@ -1090,4 +1247,195 @@ func TestReviewStep_CarriesPreviousBranchReviewIntoPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "\n"+branchHistoryDeclined+":") {
 		t.Errorf("previous finding not labelled with its disposition:\n%s", prompt)
 	}
+}
+
+// TestReviewStep_PromptClassifiesFindingsByRemedyScope pins the reviewer's
+// remedy-scope classification rule as it is actually rendered to the model. A
+// finding whose smallest honest remedy would extend the change - new durable
+// state, a schema change, new background/retry/persistence machinery, a new
+// subsystem - must be classified ask-user even when the defect itself reads as
+// mechanical, and the description must name the remedy as the thing needing
+// authorization. This routes expanding remedies to the existing gate instead of
+// letting them be built silently inside an auto-fix round.
+func TestReviewStep_PromptClassifiesFindingsByRemedyScope(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	findingsJSON, _ := json.Marshal(Findings{Summary: "clean"})
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			return &agent.Result{Output: findingsJSON}, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+
+	if _, err := (&ReviewStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	prompt := ag.calls[0].Prompt
+	for _, want := range []string{
+		"Classify by the remedy, not only by the topic",
+		"new durable state, a schema change, new background, retry, or persistence machinery, a new subsystem",
+		"EXTEND the change beyond its stated intent rather than CORRECT what it already does",
+		`the action must be "ask-user" even when the defect itself looks mechanical`,
+		"the remedy, not the defect, is what needs authorization",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("review prompt missing remedy-scope classification rule %q:\n%s", want, prompt)
+		}
+	}
+	// The rule belongs to the reviewer's action vocabulary, not the fixer.
+	if !strings.Contains(prompt, `- For each finding, set the action field to one of:`) {
+		t.Fatalf("review prompt lost the action vocabulary it must extend:\n%s", prompt)
+	}
+}
+
+// TestReviewStep_FixPromptPrefersSimplificationOverMachinery pins the fixer's
+// depth rule as rendered: fix the reported instance narrowly, and when depth is
+// warranted reach it by simplifying an architectural reason rather than bolting
+// on machinery that manages the symptoms. The preceding diagnosis rule stays -
+// depth is not forbidden, symptom machinery is.
+func TestReviewStep_FixPromptPrefersSimplificationOverMachinery(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	callCount := 0
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			callCount++
+			if callCount == 1 {
+				return &agent.Result{Output: json.RawMessage(`{"summary":"address findings"}`)}, nil
+			}
+			j, _ := json.Marshal(Findings{Summary: "clean"})
+			return &agent.Result{Output: j}, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Fixing = true
+	sctx.PreviousFindings = `{"findings":[{"id":"review-1","severity":"warning","file":"main.go","description":"possible nil deref","action":"auto-fix"}],"summary":"1 issue"}`
+
+	if _, err := (&ReviewStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	fixPrompt := ag.calls[0].Prompt
+	for _, want := range []string{
+		"Fix the reported instance narrowly.",
+		"Prefer doing so by addressing a deeper architectural reason and simplifying it, than introducing machinery to handle the symptoms.",
+		// Depth diagnosis is retained; the two rules are complementary.
+		"identify whether each finding is a local defect or a symptom of a deeper design",
+		"smallest correct root-cause fix",
+	} {
+		if !strings.Contains(fixPrompt, want) {
+			t.Errorf("review fix prompt missing narrow-fix contract %q:\n%s", want, fixPrompt)
+		}
+	}
+	// The superseded rule licensed expanding the fix to "the deepest practical
+	// cause", which is how symptom machinery entered fix rounds.
+	if strings.Contains(fixPrompt, "fix the deepest practical cause instead") {
+		t.Errorf("review fix prompt still licenses expanding to the deepest practical cause:\n%s", fixPrompt)
+	}
+}
+
+// TestReviewStep_RereviewOffersRevertExitFromPriorRoundMachinery pins the
+// rereview's exit ramp from the fix-round ratchet: defects located in code a
+// prior fix round introduced, where that code exceeds what the original finding
+// required, become one ask-user finding recommending a revert to the minimal
+// fix instead of another round of repairs layered on that code. The obligation
+// is emitted for both provenance framings - this run's own fix rounds, and a
+// previous run's uncertified fixer commits - because both are prior-round code.
+func TestReviewStep_RereviewOffersRevertExitFromPriorRoundMachinery(t *testing.T) {
+	t.Parallel()
+	const revertExit = `report a single "ask-user" finding recommending that the prior round be reverted to the minimal fix, instead of filing further repairs on that machinery`
+
+	t.Run("rereview_after_this_runs_fix_round", func(t *testing.T) {
+		t.Parallel()
+		dir, baseSHA, headSHA := setupGitRepo(t)
+		gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+		callCount := 0
+		ag := &mockAgent{
+			name: "test",
+			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+				callCount++
+				if callCount == 1 {
+					os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+					return &agent.Result{Output: json.RawMessage(`{"summary":"address findings"}`)}, nil
+				}
+				j, _ := json.Marshal(Findings{Summary: "clean"})
+				return &agent.Result{Output: j}, nil
+			},
+		}
+		sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+		sctx.Fixing = true
+		sctx.PreviousFindings = `{"findings":[{"id":"review-1","severity":"warning","file":"main.go","description":"possible nil deref","action":"auto-fix"}],"summary":"1 issue"}`
+
+		if _, err := (&ReviewStep{}).Execute(sctx); err != nil {
+			t.Fatal(err)
+		}
+		if len(ag.calls) != 2 {
+			t.Fatalf("expected fix + rereview calls, got %d", len(ag.calls))
+		}
+		rereviewPrompt := ag.calls[1].Prompt
+		if !strings.Contains(rereviewPrompt, "located in code a prior fix round introduced") {
+			t.Errorf("rereview prompt does not condition the exit ramp on prior-round code:\n%s", rereviewPrompt)
+		}
+		if !strings.Contains(rereviewPrompt, "that code exceeds what the original finding required") {
+			t.Errorf("rereview prompt does not condition the exit ramp on excess scope:\n%s", rereviewPrompt)
+		}
+		if !strings.Contains(rereviewPrompt, revertExit) {
+			t.Errorf("rereview prompt missing the revert exit ramp:\n%s", rereviewPrompt)
+		}
+		// The ramp is a reviewer obligation; the fixer never receives it.
+		if strings.Contains(ag.calls[0].Prompt, revertExit) {
+			t.Error("fixer prompt must not carry the rereview's revert exit ramp")
+		}
+	})
+
+	t.Run("initial_review_over_uncertified_prior_run_commits", func(t *testing.T) {
+		t.Parallel()
+		dir, baseSHA, headSHA := setupGitRepo(t)
+
+		findingsJSON, _ := json.Marshal(Findings{Summary: "clean"})
+		ag := &mockAgent{
+			name: "test",
+			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+				return &agent.Result{Output: findingsJSON}, nil
+			},
+		}
+		sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+		sctx.UncertifiedFromSHA = "from-sha"
+		sctx.UncertifiedToSHA = "to-sha"
+		sctx.UncertifiedSourceRunID = "prior-run"
+
+		if _, err := (&ReviewStep{}).Execute(sctx); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(ag.calls[0].Prompt, revertExit) {
+			t.Errorf("uncertified-range review missing the revert exit ramp:\n%s", ag.calls[0].Prompt)
+		}
+	})
+
+	t.Run("ordinary_initial_review_has_no_exit_ramp", func(t *testing.T) {
+		t.Parallel()
+		dir, baseSHA, headSHA := setupGitRepo(t)
+
+		findingsJSON, _ := json.Marshal(Findings{Summary: "clean"})
+		ag := &mockAgent{
+			name: "test",
+			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+				return &agent.Result{Output: findingsJSON}, nil
+			},
+		}
+		sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+
+		if _, err := (&ReviewStep{}).Execute(sctx); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(ag.calls[0].Prompt, revertExit) {
+			t.Errorf("a review with no prior-round code must not carry the revert exit ramp:\n%s", ag.calls[0].Prompt)
+		}
+	})
 }

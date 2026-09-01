@@ -468,9 +468,13 @@ func TestStartDetachedDaemon_SkewStillKillsAndReapsTheChild(t *testing.T) {
 
 	oldStartTime := daemonProcessStartTime
 	startedPID := 0
+	var childStartedAt time.Time
 	daemonProcessStartTime = func(pid int) (time.Time, error) {
-		startedPID = pid
-		return oldStartTime(pid)
+		observed, err := oldStartTime(pid)
+		if err == nil {
+			startedPID, childStartedAt = pid, observed
+		}
+		return observed, err
 	}
 	t.Cleanup(func() { daemonProcessStartTime = oldStartTime })
 
@@ -482,7 +486,7 @@ func TestStartDetachedDaemon_SkewStillKillsAndReapsTheChild(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 8*time.Second {
 		t.Fatalf("expected the settled skew to short-circuit the readiness budget, waited %v", elapsed)
 	}
-	assertTestDaemonNotRunning(t, startedPID)
+	assertTestDaemonNotRunning(t, startedPID, childStartedAt)
 }
 
 // TestHookRepliesCarryTheProtocolVersionStamp pins the stamp the git hooks read

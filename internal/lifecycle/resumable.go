@@ -10,6 +10,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/worktrees"
 )
 
 // WorktreeMatchesRun reports whether the run's worktree is still on disk at the
@@ -25,7 +26,9 @@ func WorktreeMatchesRun(ctx context.Context, p *paths.Paths, run *db.Run) error 
 	if p == nil || run == nil {
 		return errors.New("worktree is missing")
 	}
-	workDir := p.WorktreeDir(run.RepoID, run.ID)
+	// A run may be placed under a configured worktree root rather than the
+	// default one, so the recorded path is authoritative when it exists.
+	workDir := worktrees.RecordedDir(p, run.WorktreePath(), run.RepoID, run.ID)
 	info, err := os.Stat(workDir)
 	switch {
 	case errors.Is(err, os.ErrNotExist):

@@ -13,6 +13,8 @@ Customization is welcome exactly as far as it strengthens what a pass means; no 
 A person may explicitly skip steps for one run; a standing rule may never skip them on anyone's behalf.
 A gate that cannot run completely refuses loudly with guidance; it never degrades silently into a weaker check.
 Efficiency never buys itself a skipped check: when a shortcut fails, the gate falls back to the slower correct path instead of skipping the validation.
+Cost is a user-visible property of the gate, not an implementation detail: pipeline latency and total token spend are already among the first things users raise, so any design that clearly adds significant end-to-end latency or token consumption must be opt-in, or confined to the extremely rare cases where it is genuinely necessary.
+The default path buys the strongest guarantee it can at a price a user will keep paying; a stronger guarantee that costs another full pass over the change is offered, never imposed.
 
 ## Never lose work
 
@@ -46,7 +48,7 @@ The pushed branch is untrusted input: nothing on it may choose what executes wit
 Every verdict must be traceable to something inspectable: findings, executed tests, gathered evidence, and the history of what was fixed and how many attempts it took.
 A verdict is attributable: every run records the exact tool build and configuration that produced it, so a surprising outcome can always be traced to the software that made it.
 Evidence stays attached to the change without contaminating it: artifacts are durable and PR-visible, but the shipped branch's history is the author's change and nothing else.
-The gate does not define compliance: external systems do, and the gate's duty is to publish facts sufficient for any of them to derive its own verdict.
+The gate does not define compliance: external systems do, and the gate's duty is to publish facts sufficient for any of them to derive its own verdict. An external repository policy may explicitly exempt a class of pull requests it does not route through no-mistakes, but that policy bypass must stay distinguishable from evidence that the gate passed and must never skip a step inside a no-mistakes run.
 The PR a run raises is written for a reviewer who was not there: what changed, what was checked, what the risks are, and what the pipeline had to fix.
 Run state must honestly distinguish working, parked waiting on a human, and dead; a stall that looks alive is a lie.
 Failure is a first-class outcome: loud, attributed, explained, and followed by a next action.

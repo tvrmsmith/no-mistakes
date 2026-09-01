@@ -12,6 +12,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/kunchenguid/no-mistakes/internal/worktrees"
 )
 
 // parkedRunForRecovery leaves a real gate-parked run behind a stopped daemon,
@@ -113,7 +114,7 @@ func TestStartupDefersEveryPreservedRunWhenTheActiveRunListCannotBeRead(t *testi
 
 	blindManager := NewRunManager(d, p, steps)
 	t.Cleanup(blindManager.Shutdown)
-	recoverOnStartup(d, p, blindManager)
+	recoverOnStartup(d, p, blindManager, worktrees.New(p, nil))
 
 	if swept, err := d.GetRun(crashed.ID); err != nil {
 		t.Fatal(err)

@@ -8,7 +8,8 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `skip_steps`, `ci.rerun_transient`, `test.evidence.branch`, and `auto_fix.min_severity` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), `test.evidence.branch`, and `auto_fix.min_severity` only from that trusted copy.
+`pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
@@ -58,6 +59,11 @@ disable_project_settings: true
 # Read only from the trusted default branch. Defaults to false (CI expected).
 # no_ci: true
 
+# Optional PR target branch, read from the trusted default branch.
+# When unset, PRs target the repository's forge default branch.
+pr:
+  base_branch: develop
+
 auto_fix:
   rebase: 3
   review: 3
@@ -66,9 +72,11 @@ auto_fix:
   lint: 5
   ci: 3
 
-# Read only from the trusted default branch: each rerun is another workflow run.
+# Read only from the trusted default branch: each rerun is another workflow run,
+# and revalidation decides whether a CI repair may ship without review.
 ci:
   rerun_transient: 0
+  revalidate_repairs: false
 
 commit:
   fix_message: "chore(no-mistakes-{{.Step}}): {{.Summary}}"
@@ -95,10 +103,10 @@ Override the default agent for this repo and its setup-wizard suggestions.
 | | |
 | --- | --- |
 | Type | `string` or `string[]` |
-| Values | `auto`, `claude`, `codex`, `rovodev`, `opencode`, `pi`, `copilot`, `cursor`, `acp:<target>` |
+| Values | `auto`, `claude`, `codex`, `grok`, `rovodev`, `opencode`, `pi`, `copilot`, `antigravity`, `cursor`, `acp:<target>` |
 | Default | Inherits from global config |
 
-`auto` resolves to the first supported native agent or ACP alias in this order: `claude`, `codex`, `opencode`, `acli` with `rovodev` support, `pi`, `copilot`, then `cursor`.
+`auto` resolves to the first supported native agent or ACP alias in this order: `claude`, `codex`, `grok`, `opencode`, `acli` with `rovodev` support, `pi`, `copilot`, `antigravity`, then `cursor`.
 `cursor` is an ACP alias for the `cursor` target with default command `cursor-agent acp`.
 Its availability uses the global `acpx_path` and `acp_registry_overrides.cursor` settings when present.
 `acp:<target>` uses the user-installed `acpx` binary configured in global config; `acp:cursor` uses the same default command as `cursor`.
@@ -109,7 +117,7 @@ If the selected explicit agent or `auto` is unavailable, the gate fails before i
 You can also set an ordered fallback list:
 
 ```yaml
-agent: [codex, claude]
+agent: [codex, grok]
 ```
 
 The list is filtered to entries available to the daemon at run startup, and the first available entry becomes the primary agent.
@@ -142,6 +150,7 @@ Suppress project-level agent settings and instructions for every gate-agent star
 This opt-in is intended for agent-orchestration repositories whose `AGENTS.md`, `CLAUDE.md`, or harness-specific project settings would give a validation agent an operator identity and authority that it must not adopt.
 When enabled, no-mistakes suppresses the target checkout's project settings for every agent-driven gate step while preserving user-level agent configuration.
 Codex, Claude, and Pi are the currently verified agents: Codex receives `project_doc_max_bytes=0` and `--ignore-rules`, Claude loads only its user setting source, and Pi runs with `--no-context-files` (preserving a pinned `--no-context-files` or `-nc` spelling).
+Grok 1.0.5 still discovers native project instructions and `.grok` project surfaces, so it is not a verified agent for this boundary. A configuration that resolves Grok while this option is enabled therefore fails closed before launch.
 The setting applies to both new and resumed sessions.
 
 The gate fails before launching an agent if any resolved agent or fallback lacks a verified suppression mechanism.
@@ -191,6 +200,28 @@ This list and a run's own `--skip` selection are additive: neither can re-enable
 
 This field is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`.
 It removes whole validation phases, so a pushed branch that could list `review` would review itself.
+
+### pr.base_branch
+
+Select the branch that newly created pull requests target.
+
+| | |
+| --- | --- |
+| Type | `string` |
+| Default | The repository's forge default branch |
+| Trust | Trusted default branch, unless `allow_repo_commands: true` is explicitly enabled there |
+
+Use this when the repository's integration branch differs from its forge default branch, for example `develop` instead of `main`.
+The configured branch is used for PR creation, and as the integration base for the rebase step.
+When unset, no-mistakes preserves the existing behavior and targets `Repo.DefaultBranch`.
+
+PR lookup matches an existing PR by branch alone, never filtered by base, so a `pr.base_branch` change after a PR was opened updates that PR instead of opening a duplicate against the new base.
+Once a PR exists, its actual forge base branch is authoritative over `pr.base_branch` for the CI step's merge-conflict auto-fix and base-branch tip monitoring, protecting a resumed run from a configuration change made after the PR was created.
+
+Because this setting controls where a PR lands, a pushed branch cannot redirect its own PR target by changing `pr.base_branch`.
+It is read from the trusted default-branch copy regardless of `allow_repo_commands` by default.
+The established explicit `allow_repo_commands: true` opt-in also applies to this setting for repositories that intentionally trust their pushed configuration, including a repository with no trusted default-branch copy of this file at all.
+An empty value is valid and means "fall back to the forge default branch"; a non-empty value that Git would reject as a branch name fails config parsing closed, naming `pr.base_branch` in the error.
 
 ### commands.test
 
@@ -358,7 +389,8 @@ Legacy alias: `auto_fix.babysit`.
 
 ### ci.rerun_transient
 
-How many times the CI step may re-run a single check the provider reported as cancelled before that check reaches an approval gate.
+How many times the CI step may re-run a single provider-attributed check before that check reaches an approval gate.
+This covers cancellations on supported providers and, when the value is positive, opts GitHub into detecting jobs that failed before any repository step ran.
 
 | | |
 |---|---|
@@ -371,37 +403,97 @@ Every rerun this budget authorizes is another provider-side workflow run billed 
 A pushed branch cannot raise its own rerun budget.
 The default is `0` because a cancelled conclusion does not identify its cause: the same value covers the provider aborting its own infrastructure, a maintainer stopping a runaway or unsafe job, and repository concurrency with `cancel-in-progress`.
 Rerunning on that ambiguity can restart work someone deliberately stopped, so raise this only for a repository whose cancellations are known to be provider-side.
+At `0`, no-mistakes makes no extra provider call to classify a GitHub setup failure, so that failure keeps the earlier CI failure and auto-fix behavior.
 
 With no trusted copy of this file, the operator's own [`ci.rerun_transient`](/no-mistakes/reference/global-config/#cirerun_transient) applies, then the built-in default.
 A value set here always wins over the global one, so the maintainer of the repository has the last word on how many workflow runs their project is billed for.
 
-A rerun is requested only when the provider itself reported the outcome as `cancelled`, which is the one terminal outcome it attributes to itself rather than to the job:
+With a positive budget, a rerun is requested when the provider attributes the outcome to itself rather than to the job, which is true in two cases:
 
-- `failure`, `error`, `action_required`, and `startup_failure` are the job's own verdict on the commit, so they escalate on the first failure with no added latency.
+- The provider reported the outcome as `cancelled`, the one terminal conclusion it attributes to itself rather than to the job.
+- On GitHub, the job failed before any repository step ran because its setup/action-resolution phase failed, for example during a "Failed to resolve action download info" / HTTP 503 outage while downloading the actions the job uses. This is read structurally from the job's own setup-step conclusion, never from log text, so it cannot mask a real failure: a genuine test or lint failure cleared setup and failed a later step. When the detected setup failure persists past the budget, it reaches the same approval gate as an unresolved cancellation rather than the fix agent. An unreadable or unmatched job fails closed and remains an ordinary failure.
+
+The remaining outcomes are the job's own verdict on the commit and are never re-run:
+
+- `failure`, `error`, `action_required`, and `startup_failure` (after any repository step ran) are the job's verdict, so they escalate on the first failure with no added latency.
 - `timed_out` means the job exceeded its own `timeout-minutes`, which is usually the branch's own code hanging. Re-running it burns another full timeout window reproducing the same failure, so it is treated as a genuine failure and is not opt-in.
 - `stale` is already treated as skipped rather than failed, so it never reaches this decision.
 - An outcome no-mistakes recognizes as none of the above never earns a rerun either.
 
-A single non-cancelled failure, or a merge conflict, suppresses the rerun for that poll: the fix agent is needed regardless, and no rerun can clear a merge conflict.
+A single genuine job failure, or a merge conflict, suppresses the rerun for that poll: the fix agent is needed regardless, and no rerun can clear a merge conflict.
 
 The budget is per check per run and is spent when the rerun is requested, so a provider that refuses the request cannot be retried in a loop.
 Check names are not unique on a pull request, so same-named checks share one budget.
 
-A rerun request returns as soon as the provider accepts it, while the new attempt replaces the cancelled check in the status rollup a moment later.
+A rerun request returns as soon as the provider accepts it, while the new attempt replaces the provider-attributed check in the status rollup a moment later.
 A poll that still reads the exact completion the rerun was requested for has observed nothing new, so the monitor waits for a bounded couple of polls rather than escalating a check it never actually re-ran.
 A provider that accepts a rerun and never publishes it cannot stall the run past that.
 Once the provider publishes a conclusive replacement, no-mistakes durably stops treating that rerun as outstanding while preserving the spent budget; if the exact watched head is then green, the monitor reports `checks-passed` normally.
 
-A cancelled check that no rerun is going to replace pauses the step for user approval when cancellation is the only remaining issue, so the pull request never looks green.
-That is a check that came back cancelled after its rerun, and - at the default budget of `0`, once the budget is spent, or on a provider with no rerun API - the cancellation itself: the provider has already published its conclusion for that check and will not publish another one on its own, so there is nothing left for the monitor to wait for.
-It does not enter the `auto_fix.ci` loop and never consumes an auto-fix attempt: a cancellation is the provider reporting itself, so there is nothing for the fix agent to repair and no reason to let it edit code the provider never tested.
-Answering that gate with `fix` is still honored, and the fix round you asked for is told about the cancelled check alongside any other issue.
+A provider-attributed check that no rerun is going to replace pauses the step for user approval when it is the only remaining issue, so the pull request never looks green.
+That includes a check that came back cancelled after its rerun and a detected GitHub setup failure that persisted after its budget.
+At the default budget of `0`, once the budget is spent, or on a provider with no rerun API, cancellation itself reaches this gate because the provider has published its conclusion and will not publish another one on its own.
+The check does not enter the `auto_fix.ci` loop and never consumes an auto-fix attempt: it is not a verdict on the code, so there is nothing for the fix agent to repair and no reason to let it edit code the provider never tested.
+Answering that gate with `fix` is still honored, and the fix round you asked for is told about the check alongside any other issue.
 
 Reruns are skipped when:
 
-- The provider has no rerun API (only GitHub implements one today; GitLab, Bitbucket Cloud, and Azure DevOps reach the approval gate without a rerun).
-- The check's details link names nothing the provider can re-run, for example a third-party status pointing at an external dashboard, or a link under a workflow run that names no job the API accepts. A link naming one job re-runs that job; a link naming only the workflow run re-runs that run's failed jobs; an unrecognized link is widened into neither.
+- The provider has no rerun API (only GitHub implements one today; GitLab, Forgejo, Bitbucket Cloud, Azure DevOps, and Gitea reach the approval gate without a rerun).
+- The check's details link names nothing the provider can re-run, for example a third-party status pointing at an external dashboard, or a link under a workflow run that names no job the API accepts. A link naming one job re-runs that job; a cancelled check naming only the workflow run re-runs the whole workflow, while other run-only links re-run failed jobs; an unrecognized link is widened into neither.
 - The published branch head no longer equals the commit the run delivered. That case terminates with the expected and observed commits instead: re-running checks against a different head would certify a revision this run never produced. See [pipeline steps: CI](/no-mistakes/reference/pipeline-steps/#ci).
+
+### ci.revalidate_repairs
+
+Whether every CI repair must re-pass the pipeline before it is published, or only the ones whose continuity with the reviewed head cannot be proven.
+
+| | |
+|---|---|
+| Type | `bool` |
+| Default | `false` |
+| Trust | Read only from the trusted default branch |
+
+```yaml
+ci:
+  revalidate_repairs: true
+```
+
+One rule decides how every CI repair is delivered, on every CI-fix path - automatic and manual, CI failure and merge conflict alike:
+
+> A repair is published without revalidating only when its continuity with the reviewed, published head can be **proven**. When that continuity cannot be proven, the repair revalidates from Review.
+
+Continuity is proven when the repaired head is the run's durably review-approved commit or a descendant of it. That is the same fact the Push step's publication guard enforces, so the decision to publish and the guard that permits the push can never disagree.
+
+`revalidate_repairs` sets the intent, identically on every path:
+
+- **`false` (default)** asks to publish when it is safe to. A repair that builds on the reviewed head - the ordinary case, where the fix agent adds a commit - is committed and published immediately through the same guarded path the [Push step](/no-mistakes/reference/pipeline-steps/#push) uses (review-approved-head continuity, the force-with-lease anchor, remote verification, and the durable push binding all still apply), and the CI monitor keeps watching the same run for the new head. One repair costs one agent round.
+- **`true`** asks for revalidation outright: every repair is kept local, the run's review approval is revoked, and validation restarts at Review so the repaired head re-passes Review, Test, Document, and Lint before Push republishes it.
+
+CI repair publication uses the same settlement order as Push. The [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns the publication and retry behavior.
+
+**Merge-conflict repairs always revalidate, under either setting.** They are not carved out - they simply always land in the cannot-be-proven half. A conflict repair rebases, so the repaired head is never a descendant of the reviewed head; resolving a conflict changes the commit's patch-id; and no content-based guard can separate "rebased and resolved" from "dropped the work". Revalidating is what keeps that safe: the rewritten head is not published until Review has approved it, so the reviewed commits stay on the remote in the meantime.
+
+Provenance is deliberately not accepted as a substitute for that proof. In the reproduction this rule exists for, the repair that deleted a reviewed commit was authored by no-mistakes' own CI repair agent: it reset to the rebase base, left a clean tree, and the pipeline reported success while the remote lost the work. Who wrote a repair says nothing about what it did to the reviewed commits.
+
+The tradeoff `true` buys is cost against an unreviewed repair:
+
+| | `false` (default) | `true` |
+|---|---|---|
+| Ordinary repair that builds on the reviewed head | published immediately, one agent round | revalidated: one agent round plus a full Review, Test, Document, Lint, Push, PR pass |
+| Merge-conflict repair | revalidated | revalidated |
+| Ordinary repair is reviewed before it reaches the PR | no | yes |
+| Steps that re-run when a repair revalidates | Review onward; Intent and Rebase do not | same |
+| Run identity | unchanged; a restart is a same-run rewind | same |
+
+Turn it on where even an ordinary unreviewed CI repair is unacceptable.
+The concrete case this exists for: when a review bot posts product-behavior findings as a failing check, the fix agent treats them as CI failures and can reverse what the change was supposed to do.
+On [firstmate#3250](https://github.com/kunchenguid/firstmate/pull/3250) a CI repair made a `--changed` test run serial by default, contradicting the change's stated intent; the restarted Review caught it and reversed it. Without revalidation that repair would have shipped.
+That is the safety this option buys, and the reason it is offered rather than removed.
+
+This value is read only from the trusted default-branch copy of this file, like `ci.rerun_transient` and `disable_project_settings`.
+A pushed branch cannot turn a maintainer's revalidation requirement off for its own repairs, and cannot turn it on either.
+
+A value set here always wins over the operator's own [`ci.revalidate_repairs`](/no-mistakes/reference/global-config/#cirevalidate_repairs), in both directions: `true` here enables revalidation even when the global value is `false`, and an explicit `false` here opts out even when the global value is `true`.
+With no trusted copy of this file, the operator's global value applies, then the built-in default of `false`.
 
 ### commit.fix_message
 
@@ -414,7 +506,7 @@ Override the auto-fix commit subject template for this repository.
 
 The value follows the [global `commit.fix_message` template syntax and validation rules](/no-mistakes/reference/global-config/#commitfix_message).
 That includes the 1,024-byte template limit, 16-placeholder limit, 4,096-byte summary and rendered-subject limits, and rejection of bidi and invisible Unicode format characters.
-The setting applies to the Review, Test, Document, and Lint fix path, not commits created by the Rebase, CI, or Push steps.
+The setting applies to the Review, Test, Document, Lint, and CI repair paths, not commits created by the Rebase or Push steps.
 
 This non-executing field is read from the pushed branch, so a branch can adopt its own commit convention without enabling `allow_repo_commands`.
 

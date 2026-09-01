@@ -237,6 +237,7 @@ func TestCIStep_BitbucketAutoFixIncludesPipelineLogs(t *testing.T) {
 	sctx.Run.Branch = "refs/heads/feature"
 	sctx.Config.CITimeout = 30 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 1}
+	sctx.Config.CI.RevalidateRepairs = true
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -248,10 +249,8 @@ func TestCIStep_BitbucketAutoFixIncludesPipelineLogs(t *testing.T) {
 			return ctx.Err()
 		},
 	}
-	_, err := step.Execute(sctx)
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context cancellation after auto-fix poll, got %v", err)
-	}
+	outcome, err := step.Execute(sctx)
+	assertCIRestartsValidation(t, outcome, err)
 	if capturedPrompt == "" {
 		t.Fatal("expected Bitbucket auto-fix to call the agent")
 	}
@@ -320,6 +319,7 @@ func TestCIStep_BitbucketAutoFixUsesLivePRHeadSHAForLogs(t *testing.T) {
 	sctx.Run.Branch = "refs/heads/feature"
 	sctx.Config.CITimeout = 30 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 1}
+	sctx.Config.CI.RevalidateRepairs = true
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -331,10 +331,8 @@ func TestCIStep_BitbucketAutoFixUsesLivePRHeadSHAForLogs(t *testing.T) {
 			return ctx.Err()
 		},
 	}
-	_, err := step.Execute(sctx)
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context cancellation after auto-fix poll, got %v", err)
-	}
+	outcome, err := step.Execute(sctx)
+	assertCIRestartsValidation(t, outcome, err)
 	if capturedPrompt == "" {
 		t.Fatal("expected Bitbucket auto-fix to call the agent")
 	}
@@ -406,6 +404,7 @@ func TestCIStep_BitbucketAutoFixUsesMatchingPipelineLogs(t *testing.T) {
 	sctx.Run.Branch = "refs/heads/feature"
 	sctx.Config.CITimeout = 30 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 1}
+	sctx.Config.CI.RevalidateRepairs = true
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -417,10 +416,8 @@ func TestCIStep_BitbucketAutoFixUsesMatchingPipelineLogs(t *testing.T) {
 			return ctx.Err()
 		},
 	}
-	_, err := step.Execute(sctx)
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context cancellation after auto-fix poll, got %v", err)
-	}
+	outcome, err := step.Execute(sctx)
+	assertCIRestartsValidation(t, outcome, err)
 	if capturedPrompt == "" {
 		t.Fatal("expected Bitbucket auto-fix to call the agent")
 	}

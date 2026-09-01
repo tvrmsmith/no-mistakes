@@ -218,7 +218,9 @@ Because that background monitor stays live, a PR that falls behind the default b
 hits a merge conflict after checks pass - commonly because another PR merged
 first - needs **no command from you**: leave it to the live monitor and
 never hand-rebase it yourself. When the CI monitor sees an actual conflict it
-**rebases onto the base, resolves it, and re-pushes the branch itself**; a PR
+**rebases onto the base, resolves it, revalidates from Review because
+rebasing cannot prove continuity with the reviewed head, and re-pushes the
+branch through Push**; a PR
 that is merely behind but still clean needs nothing either, since the platform
 merges it. The one
 exception is when that monitor is no longer running - the PR was closed, the run
@@ -377,6 +379,7 @@ Exit ` + "`1`" + ` alone does not mean the run failed - read whether you got an 
 const readingOutput = `# Reading AXI output
 
 - Output is TOON: ` + "`key: value`" + ` pairs, ` + "`name[N]{cols}:`" + ` tables, and ` + "`help[N]:`" + ` hints.
+- ` + "`axi status`" + ` is scoped to your current branch when ` + "`--run`" + ` is omitted: with a known current branch, an implicitly resolved ` + "`run:`" + ` is this branch's. A run under ` + "`other_branch_run:`" + ` is one you named with ` + "`--run <id>`" + ` that belongs to another branch - never read its status or outcome as your own work. An explicit ` + "`--run <id>`" + ` rendered under ` + "`run:`" + ` while the current branch is unknown (detached ` + "`HEAD`" + ` or a branch-lookup failure) encodes no branch relationship. In a successful status response, no run object at all means this branch has no run yet, whatever the recent-runs table lists; an ` + "`error:`" + ` response proves nothing about run ownership, so act on the error instead of concluding the branch is idle.
 - The ` + "`help`" + ` list at the bottom of most responses tells you the next commands to run.
 - Errors are printed as ` + "`error: ...`" + ` on stdout with a ` + "`help`" + ` list; act on the suggestion.
 - A final state shows ` + "`outcome: <checks-passed|passed|failed|cancelled>`" + ` with no ` + "`findings`" + ` table.
@@ -404,7 +407,7 @@ help[4]:
 
 ` + "`axi status`" + ` and other non-terminal run objects report progress with these fields:
 
-- ` + "`awaiting_agent: parked <duration>`" + `, immediately after ` + "`status`" + `, means the run is parked at an approval or fix-review gate and waiting for you to send ` + "`axi respond`" + `. It is observability only: it does not change gate resolution, auto-resume the run, or make ` + "`--yes`" + ` the default.
+- ` + "`awaiting_agent: parked <duration>`" + `, immediately after ` + "`status`" + `, means the run is parked at an approval or fix-review gate and waiting for you to send ` + "`axi respond`" + `. Only an implicitly resolved current-branch gate offers ` + "`axi respond`" + `; an explicit ` + "`--run <id>`" + ` status is inspection-only even when its branch matches, because the branch may have a newer active run. Follow the response's ` + "`help`" + `. It is observability only: it does not change gate resolution, auto-resume the run, or make ` + "`--yes`" + ` the default.
 - ` + "`active_steps`" + ` appears while a step is ` + "`running`" + ` or ` + "`fixing`" + `, with ` + "`active_for`" + `, ` + "`last_activity`" + `, a native ` + "`agent_pid`" + ` when a subprocess agent is running, and the current round such as ` + "`round 1`" + `, ` + "`auto-fix 1/3`" + `, or ` + "`fix 2`" + `.
 - A ` + "`last_activity`" + ` prefixed with ` + "`quiet`" + ` means no step log or native-agent lifecycle activity has arrived for longer than ` + "`step_quiet_warning`" + `. Treat that as a liveness clue only.
 `

@@ -8,7 +8,23 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 )
+
+func setupGateMirror(t *testing.T, sctx *pipeline.StepContext) string {
+	t.Helper()
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+	gateDir := paths.WithRoot(t.TempDir()).RepoDir(sctx.Repo.ID)
+	sctx.GateDir = gateDir
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
+	return gateDir
+}
 
 // TestPushStep_RefusesPostReviewClobberWithoutLaterPipelineCommit reproduces
 // the end-user incident at the real push boundary. Review approved R, then an
@@ -45,6 +61,7 @@ func TestPushStep_RefusesPostReviewClobberWithoutLaterPipelineCommit(t *testing.
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
+	setupGateMirror(t, sctx)
 	// Let the entry guard pass so this regression continues to isolate the
 	// independent durable review-approved binding added at the push boundary.
 	sctx.Run.HeadSHA = clobberedHead
@@ -166,6 +183,44 @@ func TestAssertReviewApprovedPushHead_RefusesMissingLegacyState(t *testing.T) {
 	}
 }
 
+func TestAssertReviewApprovedPushHead_UsesStepScopedGit(t *testing.T) {
+	dir, baseSHA, approvedHead := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, approvedHead, config.Commands{})
+	recordReviewApproval(t, sctx, approvedHead)
+	if err := os.WriteFile(filepath.Join(dir, "descendant.txt"), []byte("descendant\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "descendant")
+	proposedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := fakeCLIBinDir(t)
+	linkTestBinary(t, binDir, "git")
+	logFile := filepath.Join(t.TempDir(), "git.log")
+	sctx.Env = []string{
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"FAKE_CLI_MODE=git-passthrough",
+		"FAKE_CLI_REAL_GIT=" + realGit,
+		"FAKE_CLI_LOG=" + logFile,
+	}
+
+	if err := assertReviewApprovedPushHead(sctx, proposedHead); err != nil {
+		t.Fatalf("expected descendant approval, got %v", err)
+	}
+	logBytes, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(logBytes)
+	if !strings.Contains(logText, "rev-parse --verify") || !strings.Contains(logText, "merge-base --is-ancestor") {
+		t.Fatalf("step-scoped git did not run both continuity checks; log:\n%s", logText)
+	}
+}
+
 func TestPushStep_BindsRemoteAndDatabaseToVerifiedCommitWhenHEADMovesDuringPush(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
@@ -205,6 +260,7 @@ func TestPushStep_BindsRemoteAndDatabaseToVerifiedCommitWhenHEADMovesDuringPush(
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
+	setupGateMirror(t, sctx)
 	recordReviewApproval(t, sctx, approvedHead)
 
 	if _, err := (&PushStep{}).Execute(sctx); err != nil {
@@ -234,7 +290,6 @@ func TestPushStep_BindsRemoteAndDatabaseToVerifiedCommitWhenHEADMovesDuringPush(
 }
 
 func TestPushStep_ReconcilesStaleDatabaseHeadSHA(t *testing.T) {
-	t.Parallel()
 	// When push retries after a prior UpdateRunHeadSHA failure, there are no
 	// uncommitted changes. The step must still reconcile the DB if HeadSHA is stale.
 	upstream := t.TempDir()
@@ -264,6 +319,7 @@ func TestPushStep_ReconcilesStaleDatabaseHeadSHA(t *testing.T) {
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, staleHeadSHA, config.Commands{})
 	sctx.Repo.UpstreamURL = upstream
+	setupGateMirror(t, sctx)
 	recordReviewApproval(t, sctx, actualHeadSHA)
 
 	step := &PushStep{}
@@ -294,7 +350,6 @@ func TestPushStep_ReconcilesStaleDatabaseHeadSHA(t *testing.T) {
 }
 
 func TestPushStep_DoesNotPublishTestEvidenceIntoThePushedBranch(t *testing.T) {
-	t.Parallel()
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 
@@ -319,6 +374,7 @@ func TestPushStep_DoesNotPublishTestEvidenceIntoThePushedBranch(t *testing.T) {
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "feature"
+	setupGateMirror(t, sctx)
 	sctx.Config.Test.Evidence = config.Evidence{StoreInRepo: true, Dir: "evidence", Branch: "no-mistakes/evidence"}
 	recordReviewApproval(t, sctx, headSHA)
 
@@ -346,7 +402,6 @@ func TestPushStep_DoesNotPublishTestEvidenceIntoThePushedBranch(t *testing.T) {
 }
 
 func TestPushStep_TargetsForkWhenConfigured(t *testing.T) {
-	t.Parallel()
 	parent := t.TempDir()
 	fork := t.TempDir()
 	gitCmd(t, parent, "init", "--bare")
@@ -380,6 +435,7 @@ func TestPushStep_TargetsForkWhenConfigured(t *testing.T) {
 	sctx.Repo.UpstreamURL = parent
 	sctx.Repo.ForkURL = fork
 	sctx.Run.Branch = "feature"
+	setupGateMirror(t, sctx)
 	recordReviewApproval(t, sctx, headSHA)
 
 	step := &PushStep{}
@@ -424,6 +480,7 @@ func TestPushStep_RedactsForkURLInGitErrors(t *testing.T) {
 	sctx.Repo.UpstreamURL = "https://github.com/parent/project.git"
 	sctx.Repo.ForkURL = "https://user:secret@example.com/fork/project.git"
 	sctx.Run.Branch = "refs/heads/feature"
+	setupGateMirror(t, sctx)
 	recordReviewApproval(t, sctx, headSHA)
 
 	step := &PushStep{}
@@ -436,5 +493,549 @@ func TestPushStep_RedactsForkURLInGitErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "https://redacted@example.com/fork/project.git") {
 		t.Fatalf("expected redacted fork URL in error, got %v", err)
+	}
+}
+
+// TestPushStep_CommitsLeftoverChangesWhenLegacyHuskyRuntimeIsMissing pins the
+// Push step's leftover-worktree commit against the same fresh-worktree hook
+// failure the correction-commit helper exists to survive: core.hooksPath=.husky
+// with a tracked pre-commit hook sourcing the generated .husky/_/husky.sh that
+// this worktree never had. The formatter or the Test step's evidence agent left
+// an uncommitted edit behind, and the run must still deliver it.
+func TestPushStep_CommitsLeftoverChangesWhenLegacyHuskyRuntimeIsMissing(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, _ := setupGitRepo(t)
+	hooksDir := filepath.Join(dir, ".husky")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/usr/bin/env sh\n. \"$(dirname -- \"$0\")/_/husky.sh\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", ".husky/pre-commit")
+	gitCmd(t, dir, "commit", "-m", "add legacy Husky hook")
+	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, dir, "config", "core.hooksPath", ".husky")
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	// Positive control: with the hook live, a verified commit cannot succeed in
+	// this worktree, so the assertions below prove the bypass rather than an
+	// inert hook configuration.
+	if err := os.WriteFile(filepath.Join(dir, "hook-probe.txt"), []byte("probe\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "hook-probe.txt")
+	if out, err := runGitDirect(dir, "commit", "-m", "probe"); err == nil {
+		t.Fatalf("expected the legacy Husky hook to block a verified commit, got success:\n%s", out)
+	}
+	gitCmd(t, dir, "reset", "HEAD", "hook-probe.txt")
+	if err := os.Remove(filepath.Join(dir, "hook-probe.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Leftover worktree change the Push step must commit before pushing.
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("formatted feature code\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	setupGateMirror(t, sctx)
+	recordReviewApproval(t, sctx, headSHA)
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push failed on a worktree whose legacy Husky runtime is absent: %v", err)
+	}
+
+	if got := gitStatusPorcelain(t, dir); got != "" {
+		t.Fatalf("expected clean worktree after the leftover commit, got %q", got)
+	}
+	pushedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+	if pushedHead == headSHA {
+		t.Fatal("expected a new correction commit carrying the leftover change")
+	}
+	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got != pushedHead {
+		t.Fatalf("remote head = %s, want pushed correction commit %s", got, pushedHead)
+	}
+	if got := gitCmd(t, dir, "show", pushedHead+":feature.txt"); got != "formatted feature code" {
+		t.Fatalf("delivered feature.txt = %q, want the leftover change", got)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "_", "husky.sh")); !os.IsNotExist(err) {
+		t.Fatalf("legacy Husky runtime unexpectedly exists: %v", err)
+	}
+}
+
+// TestPushStep_AllowsForcePushAfterMidRunRebaseOverPriorPushedGeneration (Issue #837)
+// reproduces the exact pipeline sequence:
+// 1. Generation 1 pushed gen1Head to the remote.
+// 2. Upstream main advanced mid-run.
+// 3. The worktree rebased onto the new main, dropping duplicate fix hunks.
+// 4. PushStep must allow force-pushing the new rebased head over the pipeline's own prior push.
+func TestPushStep_AllowsForcePushAfterMidRunRebaseOverPriorPushedGeneration(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, submittedHead := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+
+	// Generation 1: feature branch is pushed to remote.
+	if err := os.WriteFile(filepath.Join(dir, "gen1_fix.txt"), []byte("gen1 fix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "gen1 pipeline fix")
+	gen1Head := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	// Upstream main advances mid-run.
+	other := t.TempDir()
+	gitCmd(t, other, "clone", upstream, ".")
+	gitCmd(t, other, "config", "user.name", "o")
+	gitCmd(t, other, "config", "user.email", "o@test.com")
+	gitCmd(t, other, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(other, "main_advance.txt"), []byte("advance\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, other, "add", "-A")
+	gitCmd(t, other, "commit", "-m", "main advance")
+	gitCmd(t, other, "push", "origin", "main")
+	newBaseSHA := gitCmd(t, other, "rev-parse", "HEAD")
+
+	// Mid-run rebase onto new main drops duplicate hunks from gen1Head.
+	gitCmd(t, dir, "fetch", "origin", "main")
+	gitCmd(t, dir, "reset", "--hard", newBaseSHA)
+	if err := os.WriteFile(filepath.Join(dir, "rebased_work.txt"), []byte("rebased work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "rebased work")
+	rebasedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	sctx.Run.HeadSHA = rebasedHead
+	sctx.Run.BaseSHA = newBaseSHA
+	sctx.Run.LastPushedSHA = &gen1Head
+	setupGateMirror(t, sctx)
+	recordReviewApproval(t, sctx, rebasedHead)
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push step failed after mid-run rebase over prior pushed generation: %v", err)
+	}
+
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if remoteHead != rebasedHead {
+		t.Fatalf("expected remote head = %s, got %s", rebasedHead, remoteHead)
+	}
+}
+
+// TestPushStep_AllowsForcePushOnRerunOverPriorRunPushedGeneration (Issue #837)
+// reproduces a `rerun` where Run1 pushed gen1Head, then Run2 (with LastPushedSHA==nil)
+// validates a rebased head. PushStep must look up the branch's prior pushed head
+// from durable DB records and allow the force-push over the prior run's push.
+func TestPushStep_AllowsForcePushOnRerunOverPriorRunPushedGeneration(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, submittedHead := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+
+	// Prior Run 1: pushed gen1Head to the remote.
+	if err := os.WriteFile(filepath.Join(dir, "gen1_fix.txt"), []byte("gen1 fix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "gen1 pipeline fix")
+	gen1Head := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	// Upstream main advances mid-run.
+	other := t.TempDir()
+	gitCmd(t, other, "clone", upstream, ".")
+	gitCmd(t, other, "config", "user.name", "o")
+	gitCmd(t, other, "config", "user.email", "o@test.com")
+	gitCmd(t, other, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(other, "main_advance.txt"), []byte("advance\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, other, "add", "-A")
+	gitCmd(t, other, "commit", "-m", "main advance")
+	gitCmd(t, other, "push", "origin", "main")
+	newBaseSHA := gitCmd(t, other, "rev-parse", "HEAD")
+
+	// Rebase onto new main produces rebasedHead.
+	gitCmd(t, dir, "fetch", "origin", "main")
+	gitCmd(t, dir, "reset", "--hard", newBaseSHA)
+	if err := os.WriteFile(filepath.Join(dir, "rebased_work.txt"), []byte("rebased work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "rebased work")
+	rebasedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	sctx.Run.HeadSHA = rebasedHead
+	sctx.Run.BaseSHA = newBaseSHA
+	// Run2 itself has not pushed yet (LastPushedSHA is nil)
+	sctx.Run.LastPushedSHA = nil
+	setupGateMirror(t, sctx)
+	recordReviewApproval(t, sctx, rebasedHead)
+
+	// Record that a prior run for this repo/branch pushed gen1Head.
+	priorRun, err := sctx.DB.InsertRun(sctx.Repo.ID, "refs/heads/feature", gen1Head, baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.UpdateRunPushBinding(priorRun.ID, db.PushBinding{
+		HeadSHA:           gen1Head,
+		TargetKind:        "upstream",
+		TargetFingerprint: "fingerprint",
+		Ref:               "refs/heads/feature",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push step failed on rerun over prior run's pushed generation: %v", err)
+	}
+
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if remoteHead != rebasedHead {
+		t.Fatalf("expected remote head = %s, got %s", rebasedHead, remoteHead)
+	}
+}
+
+func TestLastKnownBranchTip_BranchRefNormalization(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Run.LastPushedSHA = nil
+
+	sha1 := "1111111111111111111111111111111111111111"
+	priorRun1, err := sctx.DB.InsertRun(sctx.Repo.ID, "refs/heads/feature", sha1, baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.UpdateRunPushBinding(priorRun1.ID, db.PushBinding{
+		HeadSHA:           sha1,
+		TargetKind:        "upstream",
+		TargetFingerprint: "fingerprint",
+		Ref:               "refs/heads/feature",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := lastKnownBranchTip(sctx.Ctx, sctx, "feature", false); got != sha1 {
+		t.Fatalf("lastKnownBranchTip with query 'feature' = %q, want %q", got, sha1)
+	}
+	if got := lastKnownBranchTip(sctx.Ctx, sctx, "refs/heads/feature", false); got != sha1 {
+		t.Fatalf("lastKnownBranchTip with query 'refs/heads/feature' = %q, want %q", got, sha1)
+	}
+
+	sha2 := "2222222222222222222222222222222222222222"
+	priorRun2, err := sctx.DB.InsertRun(sctx.Repo.ID, "unprefixed-branch", sha2, baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.UpdateRunPushBinding(priorRun2.ID, db.PushBinding{
+		HeadSHA:           sha2,
+		TargetKind:        "upstream",
+		TargetFingerprint: "fingerprint",
+		Ref:               "unprefixed-branch",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := lastKnownBranchTip(sctx.Ctx, sctx, "unprefixed-branch", false); got != sha2 {
+		t.Fatalf("lastKnownBranchTip with query 'unprefixed-branch' = %q, want %q", got, sha2)
+	}
+	if got := lastKnownBranchTip(sctx.Ctx, sctx, "refs/heads/unprefixed-branch", false); got != sha2 {
+		t.Fatalf("lastKnownBranchTip with query 'refs/heads/unprefixed-branch' = %q, want %q", got, sha2)
+	}
+}
+
+func TestPushStep_UpdatesGateMirrorRefOnSuccessfulPush(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, submittedHead := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+
+	p, err := paths.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateDir := p.RepoDir(sctx.Repo.ID)
+	sctx.GateDir = gateDir
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
+
+	// Initial gate head is submittedHead
+	gitCmd(t, gateDir, "fetch", dir, "refs/heads/feature:refs/heads/feature")
+	initialGateHead := gitCmd(t, gateDir, "rev-parse", "refs/heads/feature")
+	if initialGateHead != submittedHead {
+		t.Fatalf("expected initial gate head = %s, got %s", submittedHead, initialGateHead)
+	}
+
+	// Worktree produces a new non-fast-forward rebased head
+	gitCmd(t, dir, "reset", "--hard", baseSHA)
+	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "non-fast-forward rebased commit")
+	rebasedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	sctx.Run.HeadSHA = rebasedHead
+	recordReviewApproval(t, sctx, rebasedHead)
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push step failed: %v", err)
+	}
+
+	// Remote head should be updated
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if remoteHead != rebasedHead {
+		t.Fatalf("expected remote head = %s, got %s", rebasedHead, remoteHead)
+	}
+
+	// Gate mirror ref should also be updated
+	gateHead := gitCmd(t, gateDir, "rev-parse", "refs/heads/feature")
+	if gateHead != rebasedHead {
+		t.Fatalf("expected gate mirror ref = %s, got %s", rebasedHead, gateHead)
+	}
+}
+
+func TestPushStep_GateMirrorUpdateFailurePropagatesError(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, submittedHead := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+
+	p, err := paths.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateDir := p.RepoDir(sctx.Repo.ID)
+	sctx.GateDir = gateDir
+	// Create gateDir as a normal directory that is NOT a valid git repository
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	recordReviewApproval(t, sctx, submittedHead)
+
+	_, err = (&PushStep{}).Execute(sctx)
+	if err == nil {
+		t.Fatal("expected push step to fail when gate mirror update fails, but got nil")
+	}
+	if !strings.Contains(err.Error(), "update gate mirror ref") {
+		t.Fatalf("expected error to mention gate mirror ref update, got: %v", err)
+	}
+}
+
+func TestPushStep_GateMirrorFetchesExplicitPushedHeadInDetachedWorktree(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, submittedHead := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+
+	p, err := paths.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateDir := p.RepoDir(sctx.Repo.ID)
+	sctx.GateDir = gateDir
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
+
+	// Initial gate head is submittedHead
+	gitCmd(t, gateDir, "fetch", dir, "refs/heads/feature:refs/heads/feature")
+	initialGateHead := gitCmd(t, gateDir, "rev-parse", "refs/heads/feature")
+	if initialGateHead != submittedHead {
+		t.Fatalf("expected initial gate head = %s, got %s", submittedHead, initialGateHead)
+	}
+
+	// Detach worktree and create rebased commit on detached HEAD
+	gitCmd(t, dir, "checkout", "--detach", submittedHead)
+	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "rebased commit in detached HEAD")
+	rebasedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	// Ensure local branch ref "feature" is still pointing to submittedHead (stale)
+	staleLocalRef := gitCmd(t, dir, "rev-parse", "refs/heads/feature")
+	if staleLocalRef != submittedHead {
+		t.Fatalf("expected local branch ref to be stale submittedHead %s, got %s", submittedHead, staleLocalRef)
+	}
+
+	sctx.Run.HeadSHA = rebasedHead
+	recordReviewApproval(t, sctx, rebasedHead)
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push step failed: %v", err)
+	}
+
+	// Remote head should be updated to rebasedHead
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if remoteHead != rebasedHead {
+		t.Fatalf("expected remote head = %s, got %s", rebasedHead, remoteHead)
+	}
+
+	// Gate mirror ref should be updated to rebasedHead (not the stale local branch ref)
+	gateHead := gitCmd(t, gateDir, "rev-parse", "refs/heads/feature")
+	if gateHead != rebasedHead {
+		t.Fatalf("expected gate mirror ref = %s, got %s", rebasedHead, gateHead)
+	}
+}
+
+func TestPushStep_SkipsWhenGateMirrorDirectoryMissing(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, submittedHead := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+
+	p, err := paths.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateDir := p.RepoDir(sctx.Repo.ID)
+	sctx.GateDir = gateDir
+	// Explicitly remove gateDir to test missing directory failure
+	_ = os.RemoveAll(gateDir)
+
+	recordReviewApproval(t, sctx, submittedHead)
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push step failed with missing gate mirror: %v", err)
+	}
+	if remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); remoteHead != submittedHead {
+		t.Fatalf("remote head = %s, want %s", remoteHead, submittedHead)
+	}
+}
+
+func TestPushStep_GateMirrorDoesNotRewindNewerInterveningPush(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, submittedHead := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	sctx.Run.SubmittedHeadSHA = &submittedHead
+
+	p, err := paths.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateDir := p.RepoDir(sctx.Repo.ID)
+	sctx.GateDir = gateDir
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
+
+	// Initial gate head is submittedHead
+	gitCmd(t, gateDir, "fetch", dir, "refs/heads/feature:refs/heads/feature")
+
+	// Worktree produces a new rebased head
+	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "rebased commit")
+	rebasedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	// Simulate an intervening push advancing gateDir to a newer commit
+	if err := os.WriteFile(filepath.Join(dir, "intervening.txt"), []byte("intervening\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "intervening commit")
+	interveningHead := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, gateDir, "fetch", dir, "HEAD:refs/heads/feature")
+
+	// Reset worktree back to rebasedHead
+	gitCmd(t, dir, "reset", "--hard", rebasedHead)
+
+	sctx.Run.HeadSHA = rebasedHead
+	recordReviewApproval(t, sctx, rebasedHead)
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push step failed: %v", err)
+	}
+
+	// Remote head should be updated to rebasedHead
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if remoteHead != rebasedHead {
+		t.Fatalf("expected remote head = %s, got %s", rebasedHead, remoteHead)
+	}
+
+	// Gate mirror ref must NOT be rewound to rebasedHead; it must remain at interveningHead
+	gateHead := gitCmd(t, gateDir, "rev-parse", "refs/heads/feature")
+	if gateHead != interveningHead {
+		t.Fatalf("expected gate mirror ref to remain at %s, got %s", interveningHead, gateHead)
 	}
 }

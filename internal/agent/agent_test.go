@@ -21,6 +21,7 @@ func TestNew_KnownAgents(t *testing.T) {
 	}{
 		{name: "claude", agent: types.AgentClaude, bin: "claude", wantName: "claude"},
 		{name: "codex", agent: types.AgentCodex, bin: "codex", wantName: "codex"},
+		{name: "grok", agent: types.AgentGrok, bin: "grok", wantName: "grok"},
 		{name: "rovodev", agent: types.AgentRovoDev, bin: "acli", wantName: "rovodev"},
 		{name: "opencode", agent: types.AgentOpenCode, bin: "opencode", wantName: "opencode"},
 		{name: "pi", agent: types.AgentPi, bin: "pi", wantName: "pi"},
@@ -152,7 +153,7 @@ func TestACPAgentBuildArgsUsesExecMode(t *testing.T) {
 	a := &acpxAgent{target: "gemini"}
 	args := a.buildArgs(RunOpts{Prompt: "do work"})
 
-	if got, want := args[len(args)-3:], []string{"gemini", "exec", "do work"}; strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+	if got, want := args[len(args)-4:], []string{"gemini", "exec", "--file", "-"}; strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("trailing args = %q, want %q", got, want)
 	}
 }
@@ -256,9 +257,12 @@ func TestACPAgentRunParsesAcpxJSONOutput(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "acpx")
 	argLog := filepath.Join(dir, "args.txt")
+	stdinLog := filepath.Join(dir, "stdin.txt")
 	t.Setenv("ARG_LOG", argLog)
+	t.Setenv("STDIN_LOG", stdinLog)
 	contents := `#!/bin/sh
 printf '%s\n' "$@" > "$ARG_LOG"
+cat > "$STDIN_LOG"
 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":123,"size":1000}}}'
 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{\"done\":true}"}}}}'
 `
@@ -271,10 +275,11 @@ printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"s
 		t.Fatalf("New() error = %v", err)
 	}
 	var chunks []string
+	schema := json.RawMessage(`{"type":"object"}`)
 	result, err := a.Run(context.Background(), RunOpts{
 		Prompt:     "do work",
 		CWD:        dir,
-		JSONSchema: json.RawMessage(`{"type":"object"}`),
+		JSONSchema: schema,
 		OnChunk:    func(text string) { chunks = append(chunks, text) },
 	})
 	if err != nil {
@@ -298,10 +303,20 @@ printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"s
 		t.Fatalf("read args: %v", err)
 	}
 	argsText := string(argsData)
-	for _, want := range []string{"--cwd\n" + dir, "--format\njson", "--json-strict", "gemini", "do work"} {
+	for _, want := range []string{"--cwd\n" + dir, "--format\njson", "--json-strict", "gemini", "exec\n--file\n-"} {
 		if !strings.Contains(argsText, want) {
 			t.Errorf("args missing %q in:\n%s", want, argsText)
 		}
+	}
+	if strings.Contains(argsText, "do work") {
+		t.Errorf("args contain prompt:\n%s", argsText)
+	}
+	stdinData, err := os.ReadFile(stdinLog)
+	if err != nil {
+		t.Fatalf("read stdin: %v", err)
+	}
+	if got, want := string(stdinData), buildACPStructuredPrompt("do work", schema); got != want {
+		t.Errorf("stdin = %q, want %q", got, want)
 	}
 }
 
@@ -378,6 +393,23 @@ func TestFinalizeTextResult_WithSchemaParsesJSON(t *testing.T) {
 	}
 }
 
+func TestFinalizeTextResult_WithSchemaPreservesTypeErrorForValidJSON(t *testing.T) {
+	for _, text := range []string{"[]", "null"} {
+		t.Run(text, func(t *testing.T) {
+			_, err := finalizeTextResult("codex", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+			if err == nil {
+				t.Fatal("expected schema validation error")
+			}
+			if strings.Contains(err.Error(), "ended its turn with prose") {
+				t.Fatalf("schema error was masked as prose turn ending: %v", err)
+			}
+			if !strings.Contains(err.Error(), "JSON output must be object") {
+				t.Fatalf("expected object type error, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestFinalizeTextResult_WithSchemaParsesFencedJSON(t *testing.T) {
 	text := "review complete\n\n```json\n{\"done\":true}\n```"
 	result, err := finalizeTextResult("codex", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
@@ -446,11 +478,18 @@ func TestFinalizeTextResult_WithSchemaParsesBareJSONAfterText(t *testing.T) {
 	}
 }
 
-func TestFinalizeTextResult_WithSchemaPrefersLastBareJSON(t *testing.T) {
-	// If reasoning text embeds a decorative JSON object and the final
-	// answer is a separate object at the end, the final one should win.
+func TestFinalizeTextResult_WithSchemaIgnoresNonMatchingBareJSON(t *testing.T) {
+	// If reasoning text embeds a non-matching JSON object and the final
+	// answer is a schema-valid object, the schema-valid one should be returned.
 	text := `I considered {"foo":"bar"} as one option. Final: {"done":true}`
-	result, err := finalizeTextResult("codex", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"done":{"type":"boolean"}
+		},
+		"required":["done"]
+	}`)
+	result, err := finalizeTextResult("codex", text, schema, TokenUsage{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -460,6 +499,27 @@ func TestFinalizeTextResult_WithSchemaPrefersLastBareJSON(t *testing.T) {
 	}
 	if output["done"] != true {
 		t.Errorf("expected done=true, got %v", output["done"])
+	}
+}
+
+func TestFinalizeTextResult_WithSchemaRejectsAmbiguousBareJSON(t *testing.T) {
+	// If multiple bare JSON objects in prose validate against the schema,
+	// reject rather than silently picking the last one and discarding prior verdicts/findings.
+	text := `First verdict: {"findings":["issue 1"],"summary":"first"}. Another candidate: {"findings":[],"summary":"second"}`
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"findings":{"type":"array"},
+			"summary":{"type":"string"}
+		},
+		"required":["findings","summary"]
+	}`)
+	_, err := finalizeTextResult("codex", text, schema, TokenUsage{})
+	if err == nil {
+		t.Fatal("expected ambiguous bare JSON to fail")
+	}
+	if !strings.Contains(err.Error(), "multiple bare JSON objects") {
+		t.Fatalf("expected multiple bare JSON objects error, got %v", err)
 	}
 }
 
@@ -593,26 +653,32 @@ func TestFinalizeTextResult_WithSchemaRejectsAmbiguousFencedJSON(t *testing.T) {
 func TestFencedJSONCandidates_IgnoreBackticksInsideJSONString(t *testing.T) {
 	text := "review complete\n```json\n{\"summary\":\"quoted ```snippet``` in markdown\",\"findings\":[]}\n```\npostlude"
 
-	got := fencedJSONCandidates(text)
-	if len(got) != 1 {
-		t.Fatalf("expected 1 candidate, got %d", len(got))
+	closed, open := fencedJSONCandidates(text)
+	if len(open) != 0 {
+		t.Fatalf("expected no open candidates, got %d", len(open))
+	}
+	if len(closed) != 1 {
+		t.Fatalf("expected 1 closed candidate, got %d", len(closed))
 	}
 	want := "{\"summary\":\"quoted ```snippet``` in markdown\",\"findings\":[]}\n"
-	if got[0] != want {
-		t.Fatalf("candidate = %q, want %q", got[0], want)
+	if closed[0] != want {
+		t.Fatalf("candidate = %q, want %q", closed[0], want)
 	}
 }
 
 func TestFencedJSONCandidates_AllowIndentedClosingFence(t *testing.T) {
 	text := "review complete\n```json\n{\"summary\":\"ok\",\"findings\":[]}\n   ```\nnext paragraph"
 
-	got := fencedJSONCandidates(text)
-	if len(got) != 1 {
-		t.Fatalf("expected 1 candidate, got %d", len(got))
+	closed, open := fencedJSONCandidates(text)
+	if len(open) != 0 {
+		t.Fatalf("expected no open candidates, got %d", len(open))
+	}
+	if len(closed) != 1 {
+		t.Fatalf("expected 1 closed candidate, got %d", len(closed))
 	}
 	want := "{\"summary\":\"ok\",\"findings\":[]}\n"
-	if got[0] != want {
-		t.Fatalf("candidate = %q, want %q", got[0], want)
+	if closed[0] != want {
+		t.Fatalf("candidate = %q, want %q", closed[0], want)
 	}
 }
 
@@ -628,8 +694,9 @@ func TestFinalizeTextResult_WithSchemaIgnoresJSONInsideNonJSONFence(t *testing.T
 		"Final answer: not valid JSON",
 	}, "\n")
 
-	if got := fencedJSONCandidates(text); len(got) != 0 {
-		t.Fatalf("expected no fenced JSON candidates, got %q", got)
+	closed, open := fencedJSONCandidates(text)
+	if len(closed) != 0 || len(open) != 0 {
+		t.Fatalf("expected no fenced JSON candidates, got closed=%q open=%q", closed, open)
 	}
 
 	_, err := finalizeTextResult("codex", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
@@ -660,5 +727,333 @@ func TestOutputSnippet_TruncatesLongText(t *testing.T) {
 	}
 	if runes := []rune(got); len(runes) != 201 {
 		t.Errorf("expected 200 runes plus ellipsis, got %d runes", len(runes))
+	}
+}
+
+func TestFinalizeTextResult_WithSchemaParsesPiSameLineFence(t *testing.T) {
+	// Regression: pi JSONL output concatenates content blocks without
+	// separators, producing ```json glued to the JSON body on the same line
+	// (no newline after the fence info token). The fence parser must still
+	// recognize the ```json fence and extract the body.
+	text := "The change is docs-only: 3 lines appended to README.md.```json{  \"findings\": [],  \"summary\": \"docs-only change\"}"
+	result, err := finalizeTextResult("pi", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var output struct {
+		Findings []any  `json:"findings"`
+		Summary  string `json:"summary"`
+	}
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	if output.Summary != "docs-only change" {
+		t.Errorf("expected summary=docs-only change, got %q", output.Summary)
+	}
+}
+
+func TestFenceContentStart_InfoTokenWithSameLineBody(t *testing.T) {
+	// fence info token followed immediately by content on the same line.
+	start, info := fenceContentStart("```json{\"findings\":[]}", 0)
+	if info != "json" {
+		t.Errorf("expected info=json, got %q", info)
+	}
+	want := `{"findings":[]}`
+	if got := "```json{\"findings\":[]}"[start:]; got != want {
+		t.Errorf("content start = %d (got %q), want %q", start, got, want)
+	}
+}
+
+func TestFinalizeTextResult_WithSchemaParsesProseQuotingFenceExampleThenClosedBlock(t *testing.T) {
+	// Regression (upstream PR review failure): pi review output quotes
+	// ```json{...} as an inline example inside prose (an unclosed fence),
+	// then ends with a real closed ```json block. The quoted example must
+	// not shadow the trailing block, and must not fail the whole parse.
+	text := strings.Join([]string{
+		"The fix: ` ```json{\"findings\":[]}` glued to the body on the same line.",
+		"I traced the old fence parser in internal/agent/agent.go.",
+		"```json",
+		`{"findings":[{"id":"F1","severity":"warning"}],"summary":"one issue"}`,
+		"```",
+	}, "\n")
+	result, err := finalizeTextResult("pi", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var output struct {
+		Findings []struct {
+			ID       string `json:"id"`
+			Severity string `json:"severity"`
+		} `json:"findings"`
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	if len(output.Findings) != 1 || output.Findings[0].ID != "F1" {
+		t.Errorf("expected trailing block findings F1, got %+v", output.Findings)
+	}
+	if output.Summary != "one issue" {
+		t.Errorf("expected summary=one issue, got %q", output.Summary)
+	}
+}
+
+func TestFinalizeTextResult_WithSchemaParsesProseWrappedJSONObject(t *testing.T) {
+	// Models routinely end a turn with a narration sentence before the JSON
+	// object without markdown code fences.
+	text := "I have completed testing and found no issues.\n{\"findings\":[],\"summary\":\"clean test run\"}"
+	result, err := finalizeTextResult("antigravity", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var output struct {
+		Findings []any  `json:"findings"`
+		Summary  string `json:"summary"`
+	}
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	if output.Summary != "clean test run" {
+		t.Errorf("expected summary=%q, got %q", "clean test run", output.Summary)
+	}
+}
+
+func TestFinalizeTextResult_WithSchemaRejectsBareJSONBeforeTrailingProse(t *testing.T) {
+	text := `Example: {"findings":[],"summary":"clean"}. I found a bug in the diff.`
+	_, err := finalizeTextResult("antigravity", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	if err == nil {
+		t.Fatal("expected trailing prose after bare JSON to fail")
+	}
+}
+
+func TestFinalizeTextResult_WithSchemaParsesProseWrappedJSONObjectWithBracesInStrings(t *testing.T) {
+	text := "Done with verification.\n{\"findings\":[],\"summary\":\"fixed {unmatched brace} in pattern\"}"
+	result, err := finalizeTextResult("antigravity", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var output struct {
+		Findings []any  `json:"findings"`
+		Summary  string `json:"summary"`
+	}
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	if output.Summary != "fixed {unmatched brace} in pattern" {
+		t.Errorf("expected summary=%q, got %q", "fixed {unmatched brace} in pattern", output.Summary)
+	}
+}
+
+func TestFinalizeTextResult_WithSchemaPreservesSchemaErrorOnProseWrappedJSON(t *testing.T) {
+	text := "I checked the diff and here is my review:\n{\"unexpected_field\":\"value\"}\nThanks."
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"findings":{"type":"array"},
+			"summary":{"type":"string"}
+		},
+		"required":["findings","summary"]
+	}`)
+	_, err := finalizeTextResult("antigravity", text, schema, TokenUsage{})
+	if err == nil {
+		t.Fatal("expected schema validation error")
+	}
+	if strings.Contains(err.Error(), "ended its turn with prose") {
+		t.Fatalf("schema error was masked as prose turn ending: %v", err)
+	}
+	if !strings.Contains(err.Error(), "violates schema") && !strings.Contains(err.Error(), "missing required") {
+		t.Fatalf("expected schema violation error, got: %v", err)
+	}
+}
+
+func TestFinalizeTextResult_ProseWithoutJSONReturnsEndedWithProseError(t *testing.T) {
+	text := "I have completed testing and found no issues. Everything passes."
+	_, err := finalizeTextResult("antigravity", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	if err == nil {
+		t.Fatal("expected error for prose turn ending")
+	}
+	if !strings.Contains(err.Error(), "ended its turn with prose instead of the required JSON object") {
+		t.Fatalf("expected ended with prose error, got: %v", err)
+	}
+}
+
+func TestLastBareJSONObject_IgnoresIncidentalExamplePrecedingProse(t *testing.T) {
+	// Greptile review regression: an incidental schema-valid JSON example quoted
+	// mid-prose before substantive findings must not be mistaken for the final verdict.
+	text := strings.Join([]string{
+		"Here is an example of what a clean output looks like:",
+		"{\"findings\":[],\"summary\":\"clean\"}",
+		"",
+		"However, upon actual inspection of the diff, I found several critical bugs:",
+		"Line 42 has a nil dereference.",
+	}, "\n")
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"findings":{"type":"array"},
+			"summary":{"type":"string"}
+		},
+		"required":["findings","summary"]
+	}`)
+	_, err := finalizeTextResult("antigravity", text, schema, TokenUsage{})
+	if err == nil {
+		t.Fatal("expected failure because bare JSON was an incidental example before substantive prose")
+	}
+}
+
+func TestFinalizeTextResult_ConflictingFencedAndBareJSONReturnsError(t *testing.T) {
+	// Greptile review regression: when an agent response contains a schema-valid fenced
+	// verdict and a different schema-valid bare verdict in prose, the conflicting verdict
+	// must be rejected instead of silently picking one format over the other.
+	text := strings.Join([]string{
+		"I completed the review and found an issue:",
+		"```json",
+		`{"findings":[{"id":"BUG1","severity":"error"}],"summary":"bug found"}`,
+		"```",
+		`{"findings":[],"summary":"all clean"}`,
+	}, "\n")
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"findings":{"type":"array"},
+			"summary":{"type":"string"}
+		},
+		"required":["findings","summary"]
+	}`)
+	_, err := finalizeTextResult("antigravity", text, schema, TokenUsage{})
+	if err == nil {
+		t.Fatal("expected error on conflicting fenced and bare JSON verdicts")
+	}
+	if !strings.Contains(err.Error(), "conflicting JSON candidates") && !strings.Contains(err.Error(), "multiple JSON") {
+		t.Fatalf("expected conflicting/multiple JSON candidates error, got: %v", err)
+	}
+}
+
+func TestFinalizeTextResult_IdenticalFencedAndBareJSONSucceeds(t *testing.T) {
+	text := strings.Join([]string{
+		"```json",
+		`{"findings":[],"summary":"all clean"}`,
+		"```",
+		`{"findings":[],"summary":"all clean"}`,
+	}, "\n")
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"findings":{"type":"array"},
+			"summary":{"type":"string"}
+		},
+		"required":["findings","summary"]
+	}`)
+	result, err := finalizeTextResult("antigravity", text, schema, TokenUsage{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var output struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+	if output.Summary != "all clean" {
+		t.Errorf("expected summary='all clean', got %q", output.Summary)
+	}
+}
+
+func TestFinalizeTextResult_ConflictingLargeIntegerVerdictsReturnError(t *testing.T) {
+	text := strings.Join([]string{
+		"```json",
+		`{"value":9007199254740992}`,
+		"```",
+		`{"value":9007199254740993}`,
+	}, "\n")
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{"value":{"type":"integer"}},
+		"required":["value"]
+	}`)
+	_, err := finalizeTextResult("antigravity", text, schema, TokenUsage{})
+	if err == nil {
+		t.Fatal("expected distinct large integer verdicts to conflict")
+	}
+	if !strings.Contains(err.Error(), "conflicting JSON candidates") {
+		t.Fatalf("expected conflicting JSON candidates error, got %v", err)
+	}
+}
+
+func TestFinalizeTextResult_IdenticalNumericSpellingSucceeds(t *testing.T) {
+	text := strings.Join([]string{
+		"```json",
+		`{"confidence":1}`,
+		"```",
+		`{"confidence":1.0}`,
+	}, "\n")
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{"confidence":{"type":"number"}},
+		"required":["confidence"]
+	}`)
+	result, err := finalizeTextResult("antigravity", text, schema, TokenUsage{})
+	if err != nil {
+		t.Fatalf("expected equivalent numeric verdicts to succeed, got %v", err)
+	}
+	var output map[string]any
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+	if output["confidence"] != float64(1) {
+		t.Fatalf("confidence = %v, want 1", output["confidence"])
+	}
+}
+
+func TestFinalizeTextResult_EquivalentLargeExponentVerdictsSucceed(t *testing.T) {
+	text := strings.Join([]string{
+		"```json",
+		`{"confidence":1e1000001}`,
+		"```",
+		`{"confidence":10e1000000}`,
+	}, "\n")
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{"confidence":{"type":"number"}},
+		"required":["confidence"]
+	}`)
+	result, err := finalizeTextResult("antigravity", text, schema, TokenUsage{})
+	if err != nil {
+		t.Fatalf("expected equivalent large-exponent verdicts to succeed, got %v", err)
+	}
+	if string(result.Output) != `{"confidence":1e1000001}` {
+		t.Fatalf("unexpected output: %s", string(result.Output))
+	}
+}
+
+func TestFinalizeTextResult_DistinctLargeExponentVerdictsConflict(t *testing.T) {
+	text := strings.Join([]string{
+		"```json",
+		`{"confidence":1e1000001}`,
+		"```",
+		`{"confidence":2e1000001}`,
+	}, "\n")
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{"confidence":{"type":"number"}},
+		"required":["confidence"]
+	}`)
+	_, err := finalizeTextResult("antigravity", text, schema, TokenUsage{})
+	if err == nil {
+		t.Fatal("expected distinct large-exponent verdicts to conflict")
+	}
+	if !strings.Contains(err.Error(), "conflicting JSON candidates") {
+		t.Fatalf("expected conflicting JSON candidates error, got %v", err)
+	}
+}
+
+func TestFinalizeTextResult_ProseWithNonJSONFenceReturnsEndedWithProseError(t *testing.T) {
+	text := "I ran tests and they passed:\n```bash\ngo test ./...\n```\nAll done."
+	_, err := finalizeTextResult("antigravity", text, json.RawMessage(`{"type":"object"}`), TokenUsage{})
+	if err == nil {
+		t.Fatal("expected error for prose turn ending")
+	}
+	if !strings.Contains(err.Error(), "ended its turn with prose instead of the required JSON object") {
+		t.Fatalf("expected ended with prose error, got: %v", err)
 	}
 }

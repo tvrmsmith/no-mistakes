@@ -226,7 +226,7 @@ func TestFindPRWithoutIIDKeepsNumberEmptyAndUpdatesByNumberFromURL(t *testing.T)
 		"glab mr list --source-branch " + branch + " --target-branch main --output json": {
 			stdout: fmt.Sprintf(`[{"web_url":%q}]`+"\n", url),
 		},
-		"glab mr update 42 --title updated --description body --yes": {
+		"glab mr update 42 --title updated --description body": {
 			stdout: "updated\n",
 		},
 	}), nil, "", "")
@@ -254,6 +254,31 @@ func TestFindPRWithoutIIDKeepsNumberEmptyAndUpdatesByNumberFromURL(t *testing.T)
 	}
 }
 
+// TestUpdatePRDoesNotPassUnsupportedYesFlag guards against reintroducing
+// -y/--yes on `glab mr update`: unlike `glab mr create`, glab v1.5x's
+// `mr update` has no such flag, so passing it fails the whole command with
+// "unknown flag: --yes" and every UpdatePR call errors. The fake CmdFactory
+// below matches by exact command string, so a regression here would hit the
+// "unexpected command" fallback and surface as an UpdatePR error.
+func TestUpdatePRDoesNotPassUnsupportedYesFlag(t *testing.T) {
+	t.Parallel()
+
+	host := New(gitlabTestCmdFactory(map[string]gitlabTestResponse{
+		"glab mr update 7 --title updated --description body": {
+			stdout: "updated\n",
+		},
+	}), nil, "", "")
+
+	pr := &scm.PR{Number: "7"}
+	updated, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "updated", Body: "body"})
+	if err != nil {
+		t.Fatalf("UpdatePR() error = %v", err)
+	}
+	if updated != pr {
+		t.Fatalf("UpdatePR() returned unexpected PR: %+v", updated)
+	}
+}
+
 func TestFindPRFiltersByBaseBranch(t *testing.T) {
 	t.Parallel()
 
@@ -261,7 +286,7 @@ func TestFindPRFiltersByBaseBranch(t *testing.T) {
 		"glab mr list --source-branch feature/refactor --target-branch release/1.0 --output json": {
 			stdout: `[{"iid":42,"web_url":"https://gitlab.example.com/group/project/-/merge_requests/42"}]` + "\n",
 		},
-	}), nil, "", "")
+	}), nil, "gitlab.example.com", "group/project")
 
 	pr, err := host.FindPR(context.Background(), "feature/refactor", "release/1.0")
 	if err != nil {
@@ -297,6 +322,94 @@ func TestFindPRReturnsCLIError(t *testing.T) {
 	}
 	if pr != nil {
 		t.Fatalf("FindPR() PR = %+v, want nil", pr)
+	}
+}
+
+func TestFindPRRejectsURLForDifferentProject(t *testing.T) {
+	t.Parallel()
+
+	host := New(gitlabTestCmdFactory(map[string]gitlabTestResponse{
+		"glab mr list --source-branch feature/refactor --target-branch main --output json": {
+			stdout: `[{"iid":42,"web_url":"https://gitlab.example.com/group/other/-/merge_requests/42"}]` + "\n",
+		},
+	}), nil, "gitlab.example.com", "group/project")
+
+	pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+	if err == nil {
+		t.Fatal("FindPR() error = nil, want project mismatch error")
+	}
+	if !strings.Contains(err.Error(), "parse glab mr list") {
+		t.Fatalf("FindPR() error = %v, want parse context", err)
+	}
+	if pr != nil {
+		t.Fatalf("FindPR() PR = %+v, want nil", pr)
+	}
+}
+
+func TestFindPRReturnsJSONError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{name: "no JSON", output: "not-json\n"},
+		{name: "malformed JSON", output: "[{\n"},
+		{name: "null", output: "null\n"},
+		{name: "missing identity", output: "notice\n[{}]\n"},
+		{
+			name:   "later missing identity",
+			output: `[{"iid":42,"web_url":"https://gitlab.example.com/group/project/-/merge_requests/42"},{}]` + "\n",
+		},
+		{
+			name:   "invalid URL",
+			output: `[{"web_url":"not-a-merge-request-url"}]` + "\n",
+		},
+		{
+			name:   "IID URL mismatch",
+			output: `[{"iid":42,"web_url":"https://gitlab.example.com/group/project/-/merge_requests/43"}]` + "\n",
+		},
+		{
+			name:   "negative identity",
+			output: `[{"iid":-1,"web_url":"https://gitlab.example.com/group/project/-/merge_requests/-1"}]` + "\n",
+		},
+		{
+			name:   "bare identity",
+			output: `[{"iid":42,"web_url":"42"}]` + "\n",
+		},
+		{
+			name:   "query suffix",
+			output: `[{"iid":42,"web_url":"https://gitlab.example.com/group/project/-/merge_requests/42?view=files"}]` + "\n",
+		},
+		{
+			name:   "fragment suffix",
+			output: `[{"iid":42,"web_url":"https://gitlab.example.com/group/project/-/merge_requests/42#discussion"}]` + "\n",
+		},
+		{
+			name:   "encoded identity",
+			output: `[{"iid":42,"web_url":"https://gitlab.example.com/group/project/-/merge_requests/%34%32"}]` + "\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			host := New(gitlabTestCmdFactory(map[string]gitlabTestResponse{
+				"glab mr list --source-branch feature/refactor --target-branch main --output json": {
+					stdout: tc.output,
+				},
+			}), nil, "", "")
+
+			pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+			if err == nil {
+				t.Fatal("FindPR() error = nil, want JSON error")
+			}
+			if !strings.Contains(err.Error(), "parse glab mr list") {
+				t.Fatalf("FindPR() error = %v, want parse context", err)
+			}
+			if pr != nil {
+				t.Fatalf("FindPR() PR = %+v, want nil", pr)
+			}
+		})
 	}
 }
 

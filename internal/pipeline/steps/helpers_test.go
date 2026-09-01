@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -19,8 +18,11 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps/internal/stepstest"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
+
+var testGitExecutable, _ = exec.LookPath("git")
 
 type mockAgent struct {
 	name  string
@@ -139,6 +141,21 @@ func setupGitRepo(t *testing.T) (string, string, string) {
 func newTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA string, cmds config.Commands) *pipeline.StepContext {
 	t.Helper()
 
+	// Most step tests do not exercise remote transport. Give repositories that
+	// lack an explicitly configured origin a local one so incidental upstream
+	// refreshes stay hermetic. Without this, CI monitor tests fetch the
+	// placeholder github.com/test/repo URL; under process-saturated macOS CI the
+	// fetch can consume their entire idle timeout before the fake provider is
+	// queried.
+	if gitDir, err := os.Stat(filepath.Join(workDir, ".git")); err == nil && gitDir.IsDir() && testGitExecutable != "" {
+		if cmd := exec.Command(testGitExecutable, "-C", workDir, "remote", "get-url", "origin"); cmd.Run() != nil {
+			cmd = exec.Command(testGitExecutable, "-C", workDir, "remote", "add", "origin", workDir)
+			if output, addErr := cmd.CombinedOutput(); addErr != nil {
+				t.Fatalf("add hermetic test origin: %v: %s", addErr, output)
+			}
+		}
+	}
+
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	database, err := db.Open(dbPath)
 	if err != nil {
@@ -196,28 +213,10 @@ func fakeCLIBinDir(t *testing.T) string {
 	return dir
 }
 
-// linkTestBinary creates a hard link (or copy) of the current test binary
-// with the given name in binDir. On Windows, .exe is appended.
+// linkTestBinary places the tiny fake-CLI helper on PATH under name.
 func linkTestBinary(t *testing.T, binDir, name string) {
 	t.Helper()
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	dst := filepath.Join(binDir, name)
-	if err := os.Link(exe, dst); err != nil {
-		// Fallback to copy if hard link fails (cross-device, etc.)
-		data, readErr := os.ReadFile(exe)
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		if err := os.WriteFile(dst, data, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	stepstest.LinkFakeCLI(t, binDir, name)
 }
 
 // fakeGH creates a mock gh binary in a temp dir and returns env entries for StepContext.Env.
@@ -231,6 +230,23 @@ func fakeGH(t *testing.T, prViewURL string) (env []string, logFile string) {
 		"FAKE_CLI_MODE":   "gh",
 		"FAKE_CLI_LOG":    logFile,
 		"FAKE_CLI_PR_URL": prViewURL,
+	})
+	return env, logFile
+}
+
+// fakeGHWithBase behaves like fakeGH but additionally records the existing
+// PR's actual base branch, so the fake `gh pr list --base X` only returns the
+// PR when X matches it - mirroring GitHub's server-side base filtering.
+func fakeGHWithBase(t *testing.T, prViewURL, prBase string) (env []string, logFile string) {
+	t.Helper()
+	binDir := fakeCLIBinDir(t)
+	logFile = filepath.Join(t.TempDir(), "gh.log")
+	linkTestBinary(t, binDir, "gh")
+	env = fakeCLIEnv(binDir, map[string]string{
+		"FAKE_CLI_MODE":    "gh",
+		"FAKE_CLI_LOG":     logFile,
+		"FAKE_CLI_PR_URL":  prViewURL,
+		"FAKE_CLI_PR_BASE": prBase,
 	})
 	return env, logFile
 }
@@ -431,9 +447,10 @@ func fakeCIGH(t *testing.T, state, checksJSON string) []string {
 	binDir := fakeCLIBinDir(t)
 	linkTestBinary(t, binDir, "gh")
 	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":   "ci-gh",
-		"FAKE_CLI_STATE":  state,
-		"FAKE_CLI_CHECKS": checksJSON,
+		"FAKE_CLI_MODE":        "ci-gh",
+		"FAKE_CLI_STATE":       state,
+		"FAKE_CLI_CHECKS":      checksJSON,
+		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
 	})
 }
 
@@ -442,10 +459,11 @@ func fakeCIGHMergeable(t *testing.T, state, checksJSON, mergeable string) []stri
 	binDir := fakeCLIBinDir(t)
 	linkTestBinary(t, binDir, "gh")
 	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":      "ci-gh",
-		"FAKE_CLI_STATE":     state,
-		"FAKE_CLI_CHECKS":    checksJSON,
-		"FAKE_CLI_MERGEABLE": mergeable,
+		"FAKE_CLI_MODE":        "ci-gh",
+		"FAKE_CLI_STATE":       state,
+		"FAKE_CLI_CHECKS":      checksJSON,
+		"FAKE_CLI_MERGEABLE":   mergeable,
+		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
 	})
 }
 
@@ -458,6 +476,7 @@ func fakeCIGHMergeableError(t *testing.T, state, checksJSON, mergeableErr string
 		"FAKE_CLI_STATE":         state,
 		"FAKE_CLI_CHECKS":        checksJSON,
 		"FAKE_CLI_MERGEABLE_ERR": mergeableErr,
+		"FAKE_CLI_PR_HEAD_SHA":   "deadbeef",
 	})
 }
 
@@ -466,9 +485,10 @@ func fakeCIGHStateError(t *testing.T, stateErr, checksJSON string) []string {
 	binDir := fakeCLIBinDir(t)
 	linkTestBinary(t, binDir, "gh")
 	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":      "ci-gh",
-		"FAKE_CLI_STATE_ERR": stateErr,
-		"FAKE_CLI_CHECKS":    checksJSON,
+		"FAKE_CLI_MODE":        "ci-gh",
+		"FAKE_CLI_STATE_ERR":   stateErr,
+		"FAKE_CLI_CHECKS":      checksJSON,
+		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
 	})
 }
 
@@ -477,10 +497,11 @@ func fakeCIGHChecksError(t *testing.T, state, mergeable, checksErr string) []str
 	binDir := fakeCLIBinDir(t)
 	linkTestBinary(t, binDir, "gh")
 	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":       "ci-gh",
-		"FAKE_CLI_STATE":      state,
-		"FAKE_CLI_MERGEABLE":  mergeable,
-		"FAKE_CLI_CHECKS_ERR": checksErr,
+		"FAKE_CLI_MODE":        "ci-gh",
+		"FAKE_CLI_STATE":       state,
+		"FAKE_CLI_MERGEABLE":   mergeable,
+		"FAKE_CLI_CHECKS_ERR":  checksErr,
+		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
 	})
 }
 
@@ -505,6 +526,7 @@ func fakeCIGHSequenceMergeable(t *testing.T, state string, checks []string, merg
 		"FAKE_CLI_CHECKS_PATH":       checksPath,
 		"FAKE_CLI_CHECKS_INDEX_PATH": indexPath,
 		"FAKE_CLI_MERGEABLE":         mergeable,
+		"FAKE_CLI_PR_HEAD_SHA":       "deadbeef",
 	})
 }
 
@@ -528,6 +550,7 @@ func fakeCIGHSequence(t *testing.T, state string, checks []string) []string {
 		"FAKE_CLI_STATE":             state,
 		"FAKE_CLI_CHECKS_PATH":       checksPath,
 		"FAKE_CLI_CHECKS_INDEX_PATH": indexPath,
+		"FAKE_CLI_PR_HEAD_SHA":       "deadbeef",
 	})
 }
 
@@ -560,6 +583,7 @@ func fakeCIGHLoggedSequence(t *testing.T, state string, checks []string, mergeab
 		"FAKE_CLI_MERGEABLE":         mergeable,
 		"FAKE_CLI_LOG":               logFile,
 		"FAKE_CLI_RERUN_ERR":         rerunErr,
+		"FAKE_CLI_PR_HEAD_SHA":       "deadbeef",
 	}), logFile
 }
 
@@ -568,7 +592,8 @@ func fakeCIGHNoChecks(t *testing.T) []string {
 	binDir := fakeCLIBinDir(t)
 	linkTestBinary(t, binDir, "gh")
 	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE": "ci-gh-nochecks",
+		"FAKE_CLI_MODE":        "ci-gh-nochecks",
+		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
 	})
 }
 
@@ -635,4 +660,13 @@ func fakeCIGlabSequence(t *testing.T, state string, checks []string) []string {
 		"FAKE_CLI_CHECKS_PATH":       checksPath,
 		"FAKE_CLI_CHECKS_INDEX_PATH": indexPath,
 	})
+}
+
+// runGitDirect runs git without any of the repository's step helpers, so a test
+// can observe what a plain, hook-verified git invocation does in dir.
+func runGitDirect(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

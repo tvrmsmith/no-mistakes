@@ -3,13 +3,13 @@ package branchsync
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -53,9 +53,6 @@ func (s *cancellationRaceStep) Execute(sctx *pipelinepkg.StepContext) (*pipeline
 	}
 	head, err := gitpkg.HeadSHA(sctx.Ctx, sctx.WorkDir)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := gitpkg.Run(sctx.Ctx, sctx.WorkDir, "update-ref", "refs/heads/feature/recover", head); err != nil {
 		return nil, err
 	}
 	s.committed <- head
@@ -320,6 +317,9 @@ func TestRecoverReportsDirtyFinalStateWhenPostMergeHookMutatesWorktree(t *testin
 	t.Parallel()
 
 	f := newRecoverFixture(t, types.RunCancelled)
+	// Pin hooks to the repo's own dir: an ambient global core.hooksPath
+	// would silently hijack the hook installed below.
+	mustRun(t, f.local, "config", "core.hooksPath", ".git/hooks")
 	hooks := filepath.Join(f.local, ".git", "hooks")
 	hook := filepath.Join(hooks, "post-merge")
 	mustWrite(t, hook, "#!/bin/sh\nprintf hook > hook-output.txt\nexit 1\n")
@@ -363,6 +363,10 @@ func TestRecoverWorktreeAlreadyAtPreservedHeadReturnsCustodyWithoutMutation(t *t
 	if err := os.RemoveAll(f.gate); err != nil {
 		t.Fatal(err)
 	}
+	inspected := f.service.InspectCached(f.ctx)
+	if inspected.NextAction == nil || inspected.NextAction.Code != "recover_custody" {
+		t.Fatalf("equal status without gate did not advertise recovery = %#v", inspected)
+	}
 	state := f.service.Recover(f.ctx, false)
 	if !state.Recovered || state.Changed || state.State != StateCustodyReturned || state.Relation != RelationEqual {
 		t.Fatalf("recover equal = %#v", state)
@@ -390,6 +394,10 @@ func TestRecoverLocalAheadOfPreservedHeadReturnsCustodyWithoutMutation(t *testin
 	if err := os.RemoveAll(f.gate); err != nil {
 		t.Fatal(err)
 	}
+	inspected := f.service.InspectCached(f.ctx)
+	if inspected.NextAction == nil || inspected.NextAction.Code != "recover_custody" {
+		t.Fatalf("ahead status without gate did not advertise recovery = %#v", inspected)
+	}
 	state := f.service.Recover(f.ctx, false)
 	if !state.Recovered || state.Changed || state.State != StateCustodyReturned || state.Relation != RelationAhead {
 		t.Fatalf("recover ahead = %#v", state)
@@ -408,7 +416,12 @@ func TestRecoverDirtyWorktreeRefusesWithoutMutation(t *testing.T) {
 	t.Parallel()
 
 	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.gate, "update-ref", f.anchorRef(), f.preserved)
 	mustWrite(t, filepath.Join(f.local, "file.txt"), "dirty\n")
+	inspected := f.service.InspectCached(f.ctx)
+	if inspected.NextAction == nil || inspected.NextAction.Code == "recover_custody" {
+		t.Fatalf("dirty behind status advertised recovery = %#v", inspected)
+	}
 	state := f.service.Recover(f.ctx, false)
 	if state.Recovered || state.Changed || state.Safety != "blocked_recover_dirty" {
 		t.Fatalf("recover dirty = %#v", state)
@@ -432,10 +445,15 @@ func TestRecoverDivergedRefusesButKeepLocalReturnsCustody(t *testing.T) {
 	t.Parallel()
 
 	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.gate, "update-ref", f.anchorRef(), f.preserved)
 	mustWrite(t, filepath.Join(f.local, "rescope.txt"), "rescope\n")
 	mustRun(t, f.local, "add", "rescope.txt")
 	mustRun(t, f.local, "commit", "-m", "diverging rescope")
 	divergedHead := mustRun(t, f.local, "rev-parse", "HEAD")
+	inspected := f.service.InspectCached(f.ctx)
+	if inspected.NextAction == nil || inspected.NextAction.Code == "recover_custody" {
+		t.Fatalf("uncontained divergence advertised recovery = %#v", inspected)
+	}
 
 	refused := f.service.Recover(f.ctx, false)
 	if refused.Recovered || refused.Safety != "blocked_recover_diverged" || refused.Relation != RelationDiverged {
@@ -504,9 +522,9 @@ func TestRecoverKeepLocalDirtyBehindReturnsCustodyWithoutTouchingWorktree(t *tes
 	}
 }
 
-// TestRecoverGateDivergenceAndUnavailabilityFailClosed: recovery must refuse
-// whenever the preserved head cannot be verified and anchored - a moved gate
-// branch, a deleted gate branch, or a missing gate.
+// TestRecoverGateDivergenceAndUnavailabilityFailClosed: an independently moved
+// gate no longer hides a separately anchored preserved head, while deleted or
+// unavailable preservation still refuses.
 func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 	t.Parallel()
 
@@ -520,20 +538,28 @@ func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 		mustRun(t, writer, "add", "other.txt")
 		mustRun(t, writer, "commit", "-m", "out of band gate commit")
 		mustRun(t, writer, "push", "origin", "HEAD:refs/heads/feature/recover")
+		movedGate := mustRun(t, f.gate, "rev-parse", "refs/heads/feature/recover")
 		state := f.service.Recover(f.ctx, false)
-		if state.Recovered || state.Safety != "blocked_recover_gate_diverged" {
+		if !state.Recovered || !state.Changed {
 			t.Fatalf("recover with moved gate = %#v", state)
 		}
-		if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.submitted {
-			t.Fatal("moved-gate refusal mutated HEAD")
+		if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.preserved {
+			t.Fatalf("moved-gate recovery HEAD = %s, want %s", got, f.preserved)
+		}
+		if got := mustRun(t, f.gate, "rev-parse", "refs/heads/feature/recover"); got != movedGate {
+			t.Fatalf("recovery rewrote independent gate head = %s, want %s", got, movedGate)
 		}
 	})
-	t.Run("gate branch deleted", func(t *testing.T) {
+	t.Run("gate branch deleted with recovery ref", func(t *testing.T) {
 		f := newRecoverFixture(t, types.RunCancelled)
+		mustRun(t, f.gate, "update-ref", f.anchorRef(), f.preserved)
 		mustRun(t, f.gate, "update-ref", "-d", "refs/heads/feature/recover")
 		state := f.service.Recover(f.ctx, false)
-		if state.Recovered || state.Safety != "blocked_recover_gate_unavailable" {
+		if !state.Recovered || !state.Changed {
 			t.Fatalf("recover with deleted gate branch = %#v", state)
+		}
+		if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.preserved {
+			t.Fatalf("recovered HEAD = %s, want %s", got, f.preserved)
 		}
 	})
 	t.Run("gate missing", func(t *testing.T) {
@@ -549,6 +575,103 @@ func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 			t.Fatal("unverifiable preservation stamped custody")
 		}
 	})
+}
+
+func TestRecoverReachableHeadRejectsConflictingGateAnchor(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.gate, "update-ref", f.anchorRef(), f.submitted)
+	mustRun(t, f.local, "fetch", f.gate, f.preserved)
+	mustRun(t, f.local, "reset", "--hard", f.preserved)
+
+	inspected := f.service.InspectCached(f.ctx)
+	if inspected.NextAction == nil || inspected.NextAction.Code == "recover_custody" {
+		t.Fatalf("inspect advertised recovery despite conflicting gate evidence = %#v", inspected)
+	}
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Changed || state.Safety != "blocked_recover_anchor_mismatch" {
+		t.Fatalf("recover with conflicting anchor = %#v", state)
+	}
+	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()); got != f.preserved {
+		t.Fatalf("local recovery anchor = %s, want %s", got, f.preserved)
+	}
+	if got := mustRun(t, f.gate, "rev-parse", f.anchorRef()); got != f.submitted {
+		t.Fatalf("gate recovery anchor = %s, want preserved conflict %s", got, f.submitted)
+	}
+	if f.custodyReturned() {
+		t.Fatal("conflicting recovery evidence stamped custody")
+	}
+}
+
+func TestRecoverRejectsUnpeelableGateAnchorWithoutOverwritingIt(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	blob := mustRun(t, f.gate, "hash-object", "-w", filepath.Join(f.local, "file.txt"))
+	mustRun(t, f.gate, "update-ref", f.anchorRef(), blob)
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Safety != "blocked_recover_anchor_mismatch" {
+		t.Fatalf("recover with unpeelable anchor = %#v", state)
+	}
+	if got := mustRun(t, f.gate, "rev-parse", f.anchorRef()); got != blob {
+		t.Fatalf("recovery anchor = %s, want original blob %s", got, blob)
+	}
+	if f.custodyReturned() {
+		t.Fatal("unpeelable recovery evidence stamped custody")
+	}
+}
+
+func TestRecoverRejectsSymbolicGateAnchorWithoutOverwritingIt(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.gate, "symbolic-ref", f.anchorRef(), "refs/heads/feature/recover")
+	mustRun(t, f.local, "fetch", f.gate, f.preserved)
+	mustRun(t, f.local, "reset", "--hard", f.preserved)
+
+	inspected := f.service.InspectCached(f.ctx)
+	if inspected.NextAction == nil || inspected.NextAction.Code == "recover_custody" {
+		t.Fatalf("inspect advertised recovery despite symbolic gate evidence = %#v", inspected)
+	}
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Safety != "blocked_recover_anchor_mismatch" {
+		t.Fatalf("recover with symbolic anchor = %#v", state)
+	}
+	if got := mustRun(t, f.gate, "symbolic-ref", f.anchorRef()); got != "refs/heads/feature/recover" {
+		t.Fatalf("symbolic recovery anchor = %s, want refs/heads/feature/recover", got)
+	}
+}
+
+func TestRecoverKeepLocalAnchorsIndependentlyMovedGateHead(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	writer := filepath.Join(t.TempDir(), "writer")
+	mustRun(t, filepath.Dir(writer), "-c", "core.autocrlf=false", "clone", f.gate, writer)
+	configureIdentity(t, writer)
+	mustRun(t, writer, "checkout", "feature/recover")
+	mustWrite(t, filepath.Join(writer, "other.txt"), "independent gate work\n")
+	mustRun(t, writer, "add", "other.txt")
+	mustRun(t, writer, "commit", "-m", "independent gate work")
+	mustRun(t, writer, "push", "origin", "HEAD:refs/heads/feature/recover")
+	movedGate := mustRun(t, f.gate, "rev-parse", "refs/heads/feature/recover")
+
+	recovered := f.service.Recover(f.ctx, true)
+	if !recovered.Recovered || recovered.Changed {
+		t.Fatalf("keep-local recovery = %#v", recovered)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.submitted {
+		t.Fatalf("keep-local moved HEAD = %s, want %s", got, f.submitted)
+	}
+	if got := mustRun(t, f.gate, "rev-parse", "refs/heads/feature/recover"); got != f.submitted {
+		t.Fatalf("keep-local gate branch = %s, want %s", got, f.submitted)
+	}
+	if got := mustRun(t, f.gate, "rev-parse", "refs/no-mistakes/recover-gate/"+f.run.ID); got != movedGate {
+		t.Fatalf("independent gate anchor = %s, want %s", got, movedGate)
+	}
 }
 
 // TestRecoverTerminalPostPushRunWithMovedHead covers the post-push class cell:
@@ -709,6 +832,12 @@ func TestCancellationReconcilesCommittedWorktreeHeadBeforeReleaseClassification(
 	if terminal.Status != types.RunCancelled || terminal.HeadSHA != committed {
 		t.Fatalf("terminal run = status %s head %s, want cancelled head %s", terminal.Status, terminal.HeadSHA, committed)
 	}
+	if got := mustRun(t, f.gate, "rev-parse", f.anchorRef()+"^{commit}"); got != committed {
+		t.Fatalf("terminal recovery anchor = %s, want %s", got, committed)
+	}
+	if got := mustRun(t, f.gate, "rev-parse", "refs/heads/feature/recover"); got != f.submitted {
+		t.Fatalf("terminalization moved gate branch = %s, want submitted %s", got, f.submitted)
+	}
 	state := f.service.InspectCached(f.ctx)
 	if state.State != StatePipelineOwned || state.Safety != "blocked_pipeline_owned_recoverable" {
 		t.Fatalf("cancelled committed state = %#v", state)
@@ -718,6 +847,125 @@ func TestCancellationReconcilesCommittedWorktreeHeadBeforeReleaseClassification(
 	}
 	if state.NextAction == nil || state.NextAction.Code != "recover_custody" {
 		t.Fatalf("cancelled committed next action = %#v", state.NextAction)
+	}
+}
+
+func TestRecoverUsesTerminalAnchorWhenGateBranchLags(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.gate, "update-ref", f.anchorRef(), f.preserved)
+	mustRun(t, f.gate, "update-ref", "refs/heads/feature/recover", f.submitted, f.preserved)
+
+	state := f.service.InspectCached(f.ctx)
+	if state.NextAction == nil || state.NextAction.Code != "recover_custody" {
+		t.Fatalf("anchored stale-gate state = %#v", state)
+	}
+	recovered := f.service.Recover(f.ctx, false)
+	if !recovered.Recovered || !recovered.Changed {
+		t.Fatalf("anchored stale-gate recovery = %#v", recovered)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.preserved {
+		t.Fatalf("recovered HEAD = %s, want %s", got, f.preserved)
+	}
+}
+
+func TestInspectDoesNotAdvertiseRecoveryWhenRecordedHeadIsMissing(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	missing := strings.Repeat("f", 40)
+	if err := f.db.UpdateRunStatusWithVerifiedHead(f.run.ID, types.RunCancelled, missing); err != nil {
+		t.Fatal(err)
+	}
+
+	state := f.service.InspectCached(f.ctx)
+	if state.Safety != "blocked_recover_preserved_head_missing" {
+		t.Fatalf("missing-head safety = %q, want blocked_recover_preserved_head_missing: %#v", state.Safety, state)
+	}
+	if state.NextAction == nil || state.NextAction.Code != "inspect_and_reconcile_manually" {
+		t.Fatalf("missing-head next action = %#v", state.NextAction)
+	}
+	if state.NextAction.Code == "recover_custody" {
+		t.Fatal("missing recorded head advertised an impossible recovery")
+	}
+}
+
+func TestInspectDoesNotAdvertiseRecoveryWhenTerminalAnchorConflicts(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	// The recorded preserved commit remains available in the gate, but the
+	// run-specific evidence points elsewhere. Status must honor that conflict
+	// instead of advertising a recovery command that Recover will refuse.
+	mustRun(t, f.local, "fetch", f.gate, f.preserved)
+	mustRun(t, f.gate, "update-ref", f.anchorRef(), f.submitted)
+
+	state := f.service.InspectCached(f.ctx)
+	if state.Safety != "blocked_recover_preserved_head_missing" {
+		t.Fatalf("conflicting-anchor safety = %q, want blocked_recover_preserved_head_missing: %#v", state.Safety, state)
+	}
+	if state.NextAction == nil || state.NextAction.Code != "inspect_and_reconcile_manually" {
+		t.Fatalf("conflicting-anchor next action = %#v", state.NextAction)
+	}
+	if state.NextAction.Code == "recover_custody" {
+		t.Fatal("conflicting terminal anchor advertised a recovery that must fail")
+	}
+}
+
+func TestInspectDoesNotAdvertiseRecoveryWhenTerminalAnchorIsNotACommit(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.local, "fetch", f.gate, f.preserved)
+	blobPath := filepath.Join(f.local, "anchor-evidence.txt")
+	mustWrite(t, blobPath, "conflicting evidence\n")
+	blob := mustRun(t, f.gate, "hash-object", "-w", blobPath)
+	mustRun(t, f.gate, "update-ref", f.anchorRef(), blob)
+
+	state := f.service.InspectCached(f.ctx)
+	if state.NextAction == nil || state.NextAction.Code != "inspect_and_reconcile_manually" {
+		t.Fatalf("non-commit-anchor next action = %#v", state.NextAction)
+	}
+	if state.NextAction.Code == "recover_custody" {
+		t.Fatal("non-commit terminal anchor advertised a recovery that must fail")
+	}
+	if got := mustRun(t, f.gate, "rev-parse", f.anchorRef()); got != blob {
+		t.Fatalf("status inspection changed conflicting anchor: got %s, want %s", got, blob)
+	}
+}
+
+func TestInspectDoesNotAdvertiseRecoveryFromLooseObjectWithoutUsableGate(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.local, "fetch", f.gate, f.preserved)
+	f.service.GateDir = filepath.Join(t.TempDir(), "missing-gate.git")
+
+	state := f.service.InspectCached(f.ctx)
+	if state.NextAction == nil || state.NextAction.Code != "inspect_and_reconcile_manually" {
+		t.Fatalf("loose-object-only next action = %#v", state.NextAction)
+	}
+	if state.NextAction.Code == "recover_custody" {
+		t.Fatal("a locally present object advertised recovery even though the behind branch still requires gate evidence")
+	}
+}
+
+func TestRecoverDoesNotOverwriteConflictingCheckoutAnchor(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustRun(t, f.local, "update-ref", f.anchorRef(), f.submitted)
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Safety != "blocked_recover_anchor_mismatch" {
+		t.Fatalf("recover with conflicting checkout anchor = %#v", state)
+	}
+	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()+"^{commit}"); got != f.submitted {
+		t.Fatalf("checkout recovery evidence was overwritten: got %s, want %s", got, f.submitted)
+	}
+	if f.custodyReturned() {
+		t.Fatal("conflicting checkout recovery evidence stamped custody")
 	}
 }
 
@@ -1146,6 +1394,47 @@ func TestRecoverConcurrentGatePushLosesCleanly(t *testing.T) {
 	}
 	if f.custodyReturned() {
 		t.Fatal("racing recover stamped custody")
+	}
+}
+
+func TestRecoverRetryDoesNotOverwriteIndependentGateAnchor(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustWrite(t, filepath.Join(f.local, "rescope.txt"), "rescope\n")
+	mustRun(t, f.local, "add", "rescope.txt")
+	mustRun(t, f.local, "commit", "-m", "diverging rescope")
+	writer := filepath.Join(t.TempDir(), "writer")
+	mustRun(t, filepath.Dir(writer), "-c", "core.autocrlf=false", "clone", f.gate, writer)
+	configureIdentity(t, writer)
+	mustRun(t, writer, "checkout", "feature/recover")
+	mustWrite(t, filepath.Join(writer, "first.txt"), "first independent head\n")
+	mustRun(t, writer, "add", "first.txt")
+	mustRun(t, writer, "commit", "-m", "first independent head")
+	mustRun(t, writer, "push", "origin", "HEAD:refs/heads/feature/recover")
+	firstGate := mustRun(t, f.gate, "rev-parse", "refs/heads/feature/recover")
+	f.service.beforeGateReset = func() {
+		mustWrite(t, filepath.Join(writer, "second.txt"), "second independent head\n")
+		mustRun(t, writer, "add", "second.txt")
+		mustRun(t, writer, "commit", "-m", "second independent head")
+		mustRun(t, writer, "push", "origin", "HEAD:refs/heads/feature/recover")
+	}
+	first := f.service.Recover(f.ctx, true)
+	if first.Recovered || first.Safety != "blocked_recover_gate_race" {
+		t.Fatalf("first recovery = %#v", first)
+	}
+	f.service.beforeGateReset = nil
+	secondGate := mustRun(t, f.gate, "rev-parse", "refs/heads/feature/recover")
+	second := f.service.Recover(f.ctx, true)
+	if second.Recovered || second.Safety != "blocked_recover_preserve_failed" {
+		t.Fatalf("retry recovery = %#v", second)
+	}
+	anchor := custody.RecoveryGateRef(f.run.ID)
+	if got := mustRun(t, f.gate, "rev-parse", anchor); got != firstGate {
+		t.Fatalf("independent gate anchor = %s, want original %s", got, firstGate)
+	}
+	if got := mustRun(t, f.gate, "rev-parse", "refs/heads/feature/recover"); got != secondGate {
+		t.Fatalf("retry moved gate branch = %s, want %s", got, secondGate)
 	}
 }
 
@@ -1685,107 +1974,6 @@ func TestRecoverAnchorsDetachedPreservedHeadBehindGateBranch(t *testing.T) {
 	}
 }
 
-// The refusal text is the operator's only evidence of what a failed recovery
-// touched, so no refusal reached after the anchor fetch may claim nothing
-// moved, and none may blame the gate fetch for a failure that happened after
-// it succeeded.
-func TestPreserveFailedMessageDoesNotDenyTheAnchorItAlreadyWrote(t *testing.T) {
-	t.Parallel()
-
-	written := &recoverAnchors{}
-	written.note(recoverAnchorRef("run-1"))
-
-	mismatch := preserveFailedMessage(fmt.Errorf("%w: deadbeef", errPreservedAnchorMismatch), false, "run-1", written)
-	if strings.Contains(mismatch, "no files or refs were changed") {
-		t.Fatalf("mismatch refusal = %q: the anchor ref was written before the mismatch was observed", mismatch)
-	}
-	if !strings.Contains(mismatch, recoverAnchorRef("run-1")) {
-		t.Fatalf("mismatch refusal = %q, want it to name the anchor ref that was written", mismatch)
-	}
-	if !strings.Contains(mismatch, "no worktree files were changed") {
-		t.Fatalf("mismatch refusal = %q, want it to keep the true worktree claim", mismatch)
-	}
-
-	// Verification can also fail without deciding anything about the ref - a
-	// git failure, or a context cancelled between the fetch and the rev-parse.
-	// The fetch still wrote the anchor and still succeeded, so the refusal may
-	// neither deny the ref nor send the operator to the gate.
-	unverified := preserveFailedMessage(errors.New("rev-parse exploded"), false, "run-1", written)
-	if strings.Contains(unverified, "no files or refs were changed") {
-		t.Fatalf("post-fetch refusal = %q: the anchor ref was written before verification ran", unverified)
-	}
-	if !strings.Contains(unverified, recoverAnchorRef("run-1")) {
-		t.Fatalf("post-fetch refusal = %q, want it to name the anchor ref that was written", unverified)
-	}
-	if strings.Contains(unverified, "could not be fetched from the local gate") {
-		t.Fatalf("post-fetch refusal = %q blames the gate fetch, which had already succeeded", unverified)
-	}
-	if !strings.Contains(unverified, "no worktree files were changed") {
-		t.Fatalf("post-fetch refusal = %q, want it to keep the true worktree claim", unverified)
-	}
-
-	// A fetch that never succeeded wrote no ref, so that claim stays.
-	fetchFailed := preserveFailedMessage(errors.New("fetch exploded"), false, "run-1", &recoverAnchors{})
-	if !strings.Contains(fetchFailed, "no files or refs were changed") {
-		t.Fatalf("fetch-failure refusal = %q, want the unchanged claim kept", fetchFailed)
-	}
-	if !strings.Contains(fetchFailed, "could not be fetched from the local gate") {
-		t.Fatalf("fetch-failure refusal = %q, want the fetch-failure wording", fetchFailed)
-	}
-}
-
-// The split is on how far the sequence got, so fetchPreservedAnchor has to be
-// the thing that records the anchor it wrote: a real gate whose branch does not
-// hold the preserved head fetches cleanly and then fails verification, and the
-// refusal built from that state must not deny the ref the fetch just wrote.
-func TestFetchPreservedAnchorRecordsTheAnchorItWrote(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	anchors := &recoverAnchors{}
-	err := f.service.fetchPreservedAnchor(f.ctx, f.gate, "feature/recover", f.run.ID, f.anchorRef(), strings.Repeat("0", 40), false, anchors)
-	if err == nil {
-		t.Fatal("expected the anchor verification to fail for a head the gate branch does not hold")
-	}
-	if !anchors.wrote(f.anchorRef()) {
-		t.Fatalf("the fetch wrote %s but did not record it", f.anchorRef())
-	}
-	if got := preserveFailedMessage(err, false, f.run.ID, anchors); strings.Contains(got, "no files or refs were changed") {
-		t.Fatalf("refusal = %q: the anchor fetch already wrote %s", got, f.anchorRef())
-	}
-}
-
-// Every refusal downstream of the anchor fetch reads the same record, so the
-// routine dirty-worktree exit may not deny the ref either. A dirty behind
-// worktree is the reachable case: the fetch has already run by the time
-// cleanliness is checked.
-func TestRecoverDirtyRefusalDoesNotDenyTheAnchorItWrote(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	mustWrite(t, filepath.Join(f.local, "file.txt"), "uncommitted operator edit\n")
-
-	state := f.service.Recover(f.ctx, false)
-	if state.Recovered || state.Safety != "blocked_recover_dirty" {
-		t.Fatalf("dirty recover = %#v", state)
-	}
-	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()); got != f.preserved {
-		t.Fatalf("anchor ref = %s, want the preserved head %s: this run never reached the path under test", got, f.preserved)
-	}
-	if strings.Contains(state.Error, "no files or refs were changed") {
-		t.Fatalf("dirty refusal = %q: the anchor fetch already wrote %s", state.Error, f.anchorRef())
-	}
-	if !strings.Contains(state.Error, f.anchorRef()) {
-		t.Fatalf("dirty refusal = %q, want it to name the anchor ref that now exists", state.Error)
-	}
-	if !strings.Contains(state.Error, "no worktree files were changed") {
-		t.Fatalf("dirty refusal = %q, want it to keep the true worktree claim", state.Error)
-	}
-	if f.custodyReturned() {
-		t.Fatal("a dirty refusal stamped custody")
-	}
-}
-
 // TestRecoverAdoptingDetachedPreservedHeadHandsTheGateBranchBack is the
 // regression for the recovery whose own advertised next_action failed: a run
 // cancelled after the rebase leaves the preserved head detached in the gate
@@ -1827,44 +2015,6 @@ func TestRecoverAdoptingDetachedPreservedHeadHandsTheGateBranchBack(t *testing.T
 	}
 }
 
-// The gate hand-back is a compare-and-swap against the exact submitted head
-// recovery verified, so out-of-band gate-branch movement in the window before
-// it must refuse and leave the worktree alone rather than clobber whatever
-// arrived.
-func TestRecoverAdoptingDetachedPreservedHeadRefusesAGateBranchRace(t *testing.T) {
-	t.Parallel()
-
-	f := newRebasedRecoverFixture(t, types.RunCancelled)
-	f.strandDetachedPreserved()
-	local := mustRun(t, f.local, "rev-parse", "HEAD")
-
-	var raced string
-	f.service.beforeGateBranchHandback = func() {
-		mustRun(t, f.gate, "update-ref", "refs/heads/feature/recover", f.base, f.submitted)
-		raced = f.gateBranchHead()
-	}
-
-	state := f.service.Recover(f.ctx, false)
-	if raced != f.base {
-		t.Fatal("the race hook never moved the gate branch, so this run never reached the path under test")
-	}
-	if state.Recovered {
-		t.Fatalf("racing recover reported success: %#v", state)
-	}
-	if state.Safety != "blocked_recover_gate_race" {
-		t.Fatalf("safety = %q, want blocked_recover_gate_race: %#v", state.Safety, state)
-	}
-	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != local {
-		t.Fatalf("HEAD = %s, want the untouched local head %s", got, local)
-	}
-	if got := f.gateBranchHead(); got != f.base {
-		t.Fatalf("gate branch = %s, want the out-of-band head %s left alone", got, f.base)
-	}
-	if f.custodyReturned() {
-		t.Fatal("a refused gate hand-back stamped custody")
-	}
-}
-
 // TestRecoverKeepLocalTakesBranchBackFromDetachedPreservedHead is the operator
 // exit from that same state when the local branch has moved on: keep-local
 // must return custody at the kept head, move the gate branch off the submitted
@@ -1897,255 +2047,6 @@ func TestRecoverKeepLocalTakesBranchBackFromDetachedPreservedHead(t *testing.T) 
 	}
 	if !f.custodyReturned() {
 		t.Fatal("detached keep-local did not stamp custody")
-	}
-}
-
-// TestRecoverKeepsStagingRefWhenTheFetchIsCancelled covers the exit path where
-// the pin is the only protection left: the caller cancels while the preserved
-// commit is being fetched, so recovery refuses and nothing in the operator's
-// clone holds the commit. The gate-side staging ref must survive, because no
-// gate branch reaches a detached preserved head and deleting it would leave
-// pipeline-authored work reachable from nothing.
-func TestRecoverKeepsStagingRefWhenTheFetchIsCancelled(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	f.strandDetachedPreserved()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	staged := false
-	f.service.beforePreservedFetch = func() {
-		staged = !f.gateRefMissing(f.gateStagingRef())
-		cancel()
-	}
-
-	state := f.service.Recover(ctx, false)
-	if !staged {
-		t.Fatalf("gate staging ref %s was never written, so this run never reached the path under test", f.gateStagingRef())
-	}
-	if state.Recovered {
-		t.Fatalf("cancelled recover reported success: %#v", state)
-	}
-	if state.Safety != "blocked_recover_preserve_failed" {
-		t.Fatalf("safety = %q, want blocked_recover_preserve_failed: %#v", state.Safety, state)
-	}
-	if !strings.Contains(state.Error, "could not be fetched from the local gate") {
-		t.Fatalf("cancelled fetch refusal = %q, want the fetch-failure wording", state.Error)
-	}
-	if !strings.Contains(state.Error, f.gateStagingRef()) {
-		t.Fatalf("refusal %q does not name the retained pin %s", state.Error, f.gateStagingRef())
-	}
-	if f.gateRefMissing(f.gateStagingRef()) {
-		t.Fatalf("gate staging ref %s was deleted after a failed recovery, leaving preserved commit %s unreachable in the gate", f.gateStagingRef(), f.preserved)
-	}
-	if got := mustRun(t, f.gate, "rev-parse", f.gateStagingRef()+"^{commit}"); got != f.preserved {
-		t.Fatalf("retained staging ref = %s, want preserved %s", got, f.preserved)
-	}
-}
-
-// A fetch can land the anchor ref and still report failure - a cancellation or
-// a gate error observed after the ref update. The refusal then has to name the
-// ref that now exists in the operator's clone, because it is real state the
-// operator can find and the exit status alone would deny it.
-func TestRecoverRecordsTheAnchorAFailedFetchStillWrote(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	f.strandDetachedPreserved()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	f.service.beforePreservedFetch = func() {
-		// The ref lands, exactly as a fetch that completed its ref update
-		// leaves it, and the fetch itself then fails.
-		mustRun(t, f.local, "update-ref", f.anchorRef(), f.submitted)
-		cancel()
-	}
-
-	state := f.service.Recover(ctx, false)
-	if state.Recovered || state.Safety != "blocked_recover_preserve_failed" {
-		t.Fatalf("recover = %#v, want blocked_recover_preserve_failed", state)
-	}
-	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", "--quiet", f.anchorRef()); err != nil {
-		t.Fatalf("anchor ref %s does not exist, so this run never reached the path under test", f.anchorRef())
-	}
-	if !strings.Contains(state.Error, f.anchorRef()+" in your clone was written") {
-		t.Fatalf("refusal = %q, want it to name the anchor ref the failed fetch left in the clone", state.Error)
-	}
-}
-
-// The counterfactual: an anchor left by an EARLIER attempt at a commit other
-// than the preserved head is not this invocation's work. Recovery re-fetches
-// precisely because that ref is wrong, so a refusal that reports it as written
-// tells the operator their commits are anchored there when they are not.
-func TestRecoverDoesNotClaimAStaleAnchorItDidNotWrite(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	f.strandDetachedPreserved()
-	mustRun(t, f.local, "update-ref", f.anchorRef(), f.submitted)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	f.service.beforePreservedFetch = cancel
-
-	state := f.service.Recover(ctx, false)
-	if state.Recovered || state.Safety != "blocked_recover_preserve_failed" {
-		t.Fatalf("recover = %#v, want blocked_recover_preserve_failed", state)
-	}
-	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()); got != f.submitted {
-		t.Fatalf("anchor ref = %s, want the stale %s: this run never reached the path under test", got, f.submitted)
-	}
-	if strings.Contains(state.Error, "in your clone was written") {
-		t.Fatalf("refusal = %q claims a fetch wrote %s, which still holds the stale head %s", state.Error, f.anchorRef(), f.submitted)
-	}
-	if !strings.Contains(state.Error, "could not be fetched from the local gate") {
-		t.Fatalf("refusal = %q, want the fetch-failure wording", state.Error)
-	}
-}
-
-// The gate-side pin is released best effort once the commits are safe in the
-// clone. A release the gate refused leaves a ref the operator can find, so the
-// record has to keep it and every later refusal has to report it - the pin is
-// never deleted on a failure path, only reported honestly when its delete did
-// not happen.
-func TestRecoverReportsTheGatePinItCouldNotDelete(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	f.strandDetachedPreserved()
-	mustWrite(t, filepath.Join(f.local, "file.txt"), "uncommitted operator edit\n")
-
-	f.service.beforePreservedFetch = func() {
-		// A stale lock file on the ref is git's own refusal to touch it, and it
-		// is the portable one: every platform's `update-ref -d` creates the lock
-		// exclusively and fails when it already exists, where a read-only ref
-		// directory is honored on neither Windows nor a root-owned run. The pin
-		// is written before this hook, so only its delete can fail here.
-		mustWrite(t, filepath.Join(f.gate, "refs", "no-mistakes", "preserved", f.run.ID+".lock"), "")
-	}
-
-	state := f.service.Recover(f.ctx, false)
-	if state.Recovered || state.Safety != "blocked_recover_dirty" {
-		t.Fatalf("recover = %#v, want blocked_recover_dirty", state)
-	}
-	if f.gateRefMissing(f.gateStagingRef()) {
-		t.Fatalf("gate pin %s was deleted, so this run never reached the refused-delete path", f.gateStagingRef())
-	}
-	if strings.Contains(state.Error, "no files or refs were changed") {
-		t.Fatalf("refusal = %q while the gate pin %s still exists", state.Error, f.gateStagingRef())
-	}
-	if !strings.Contains(state.Error, f.gateStagingRef()+" in the local gate was written and could not be confirmed deleted") {
-		t.Fatalf("refusal = %q, want it to report the retained gate pin %s", state.Error, f.gateStagingRef())
-	}
-}
-
-// TestRecoverDoesNotClaimAPinTheGateRefused covers the failure shape where the
-// gate rejects the pin write itself: a directory/file conflict on the ref path
-// is the same lock refusal a stale .lock or a read-only gate produces. No ref
-// then reaches the preserved commit, so the refusal must not tell the operator
-// the commits stay pinned and reachable - that is the moment gate gc can drop
-// them and the operator most needs to be told to look.
-func TestRecoverDoesNotClaimAPinTheGateRefused(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	f.strandDetachedPreserved()
-	mustRun(t, f.gate, "update-ref", f.gateStagingRef()+"/blocked", f.submitted)
-
-	state := f.service.Recover(f.ctx, false)
-	if state.Recovered {
-		t.Fatalf("recover reported success despite a refused pin write: %#v", state)
-	}
-	if state.Safety != "blocked_recover_preserve_failed" {
-		t.Fatalf("safety = %q, want blocked_recover_preserve_failed: %#v", state.Safety, state)
-	}
-	if !f.gateRefMissing(f.gateStagingRef()) {
-		t.Fatalf("gate staging ref %s exists, so this run never reached the refused-write path", f.gateStagingRef())
-	}
-	if strings.Contains(state.Error, "deliberately retained") {
-		t.Fatalf("refusal %q claims the preserved commits are pinned, but %s was never written", state.Error, f.gateStagingRef())
-	}
-	if !strings.Contains(state.Error, "could not be pinned in the local gate") {
-		t.Fatalf("refusal = %q, want the pin-write failure wording", state.Error)
-	}
-	if !strings.Contains(state.Error, "reachable from no ref") {
-		t.Fatalf("refusal %q does not warn that the preserved commits are unreferenced in the gate", state.Error)
-	}
-}
-
-// TestRecoverKeepsStagingRefWhenTheAnchorDoesNotMatch is the second failure
-// shape: the fetch reports success but the anchor does not hold the preserved
-// head, so recovery refuses and the pin must be retained. Out-of-band movement
-// of the pin itself is what produces the mismatch here, which is the case that
-// makes the retention worth anything only if the retained pin is put back on
-// the preserved commit: keeping whatever the ref happened to hold would pin the
-// submitted head and protect none of the pipeline-authored work.
-func TestRecoverKeepsStagingRefWhenTheAnchorDoesNotMatch(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	f.strandDetachedPreserved()
-
-	f.service.beforePreservedFetch = func() {
-		mustRun(f.t, f.gate, "update-ref", f.gateStagingRef(), f.submitted)
-	}
-
-	state := f.service.Recover(f.ctx, false)
-	if state.Recovered {
-		t.Fatalf("mismatched anchor recover reported success: %#v", state)
-	}
-	if state.Safety != "blocked_recover_preserve_failed" {
-		t.Fatalf("safety = %q, want blocked_recover_preserve_failed: %#v", state.Safety, state)
-	}
-	if !strings.Contains(state.Error, "does not hold the preserved head") {
-		t.Fatalf("mismatch refusal = %q, want the anchored-ref mismatch wording", state.Error)
-	}
-	if !strings.Contains(state.Error, f.gateStagingRef()+" in the local gate was deliberately retained") {
-		// A pin kept on purpose is not a delete that failed: wording it as
-		// leftover staging tells the operator to clean up the only ref holding
-		// their pipeline-authored commits reachable.
-		t.Fatalf("refusal %q does not report the retained pin %s as retained", state.Error, f.gateStagingRef())
-	}
-	// The detached fetch writes the clone-side anchor too, so this refusal owes
-	// the operator the same evidence the branch-sourced one gives.
-	if !strings.Contains(state.Error, f.anchorRef()) {
-		t.Fatalf("refusal %q does not name the clone anchor %s the fetch wrote", state.Error, f.anchorRef())
-	}
-	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()); got != f.submitted {
-		t.Fatalf("clone anchor = %s, want the mismatched head %s the fetch delivered", got, f.submitted)
-	}
-	if f.gateRefMissing(f.gateStagingRef()) {
-		t.Fatalf("gate staging ref %s was deleted after a rejected anchor instead of being retained for the operator", f.gateStagingRef())
-	}
-	if got := mustRun(t, f.gate, "rev-parse", f.gateStagingRef()+"^{commit}"); got != f.preserved {
-		t.Fatalf("retained pin = %s, want preserved %s: a pin on any other commit protects nothing", got, f.preserved)
-	}
-}
-
-// TestRecoverReleasesAPinRetainedByAnEarlierFailure closes the only route by
-// which the pin can outlive the work it protects: once an earlier attempt has
-// left the anchor at the preserved head, every later recovery takes the
-// anchored fast path and never reaches the fetch that used to own the delete.
-// The successful recovery itself must therefore release the pin.
-func TestRecoverReleasesAPinRetainedByAnEarlierFailure(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	f.strandDetachedPreserved()
-	mustRun(t, f.gate, "update-ref", f.gateStagingRef(), f.preserved)
-	mustRun(t, f.local, "fetch", f.gate, f.gateStagingRef()+":"+f.anchorRef())
-
-	state := f.service.Recover(f.ctx, false)
-	if !state.Recovered || state.State != StateCustodyReturned {
-		t.Fatalf("recovery from an already-anchored preserved head = %#v", state)
-	}
-	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.preserved {
-		t.Fatalf("HEAD = %s, want preserved %s", got, f.preserved)
-	}
-	if !f.gateRefMissing(f.gateStagingRef()) {
-		t.Fatalf("gate pin %s survived a successful recovery and keeps pinning the preserved commit against gc", f.gateStagingRef())
 	}
 }
 
@@ -2443,110 +2344,5 @@ func TestRecoverKeepLocalNamesAGateRefItCouldNotDelete(t *testing.T) {
 	}
 	if f.custodyReturned() {
 		t.Fatal("racing recover stamped custody")
-	}
-}
-
-// TestRecoverAdoptBoundaryRefusalNamesTheAnchorsItWrote pins the adoption
-// pre-move boundary: it is reached after both anchors exist, so it may not
-// deny them either.
-func TestRecoverAdoptBoundaryRefusalNamesTheAnchorsItWrote(t *testing.T) {
-	t.Parallel()
-
-	f := newRebasedRecoverFixture(t, types.RunCancelled)
-	f.service.beforeRecoverBranchMove = func() {
-		mustRun(t, f.local, "checkout", "-b", "other-clean-branch", f.submitted)
-	}
-
-	state := f.service.Recover(f.ctx, false)
-	if state.Recovered || state.Changed || state.Safety != "blocked_recover_assumptions_changed" {
-		t.Fatalf("recover after boundary branch switch = %#v", state)
-	}
-	if !strings.Contains(state.Error, "no branch ref was moved") {
-		t.Fatalf("boundary refusal = %q, want it to state the branch was not moved", state.Error)
-	}
-	assertRefusalRecords(t, state.Error, f.anchorRef(), f.localAnchorRef())
-	if got := mustRun(t, f.local, "rev-parse", "refs/heads/feature/recover"); got != f.submitted {
-		t.Fatalf("feature branch = %s, want it untouched at %s", got, f.submitted)
-	}
-	if f.custodyReturned() {
-		t.Fatal("boundary refusal stamped custody")
-	}
-}
-
-// TestRecoverAdoptRefusesAnUnexplainedLocalAnchorWithoutDenyingThePreservedOne
-// pins the create-only local-anchor guard: an anchor at a commit this run did
-// not observe is unexplained and refuses, but the preserved anchor was already
-// fetched and must still be reported.
-func TestRecoverAdoptRefusesAnUnexplainedLocalAnchorWithoutDenyingThePreservedOne(t *testing.T) {
-	t.Parallel()
-
-	f := newRebasedRecoverFixture(t, types.RunCancelled)
-	mustRun(t, f.local, "update-ref", f.localAnchorRef(), f.base, "")
-
-	state := f.service.Recover(f.ctx, false)
-	if state.Recovered || state.Changed || state.Safety != "blocked_recover_preserve_failed" {
-		t.Fatalf("recover with an unexplained local anchor = %#v", state)
-	}
-	if !strings.Contains(state.Error, "could not be anchored") {
-		t.Fatalf("refusal = %q, want the anchoring-failure wording", state.Error)
-	}
-	assertRefusalRecords(t, state.Error, f.anchorRef())
-	if strings.Contains(state.Error, f.localAnchorRef()) {
-		t.Fatalf("refusal = %q claims it wrote %s, which it refused to write", state.Error, f.localAnchorRef())
-	}
-	if got := mustRun(t, f.local, "rev-parse", f.localAnchorRef()); got != f.base {
-		t.Fatalf("pre-existing local anchor = %s, want it left at %s", got, f.base)
-	}
-	if f.custodyReturned() {
-		t.Fatal("unexplained-anchor refusal stamped custody")
-	}
-}
-
-// TestRecoverAdoptRefusesWhenTheLocalAnchorCannotBeWritten covers the same
-// guard's write failure: a directory/file conflict on the ref path is the
-// refusal a stale .lock or a read-only clone produces.
-func TestRecoverAdoptRefusesWhenTheLocalAnchorCannotBeWritten(t *testing.T) {
-	t.Parallel()
-
-	f := newRebasedRecoverFixture(t, types.RunCancelled)
-	mustRun(t, f.local, "update-ref", f.localAnchorRef()+"/blocked", f.base)
-
-	state := f.service.Recover(f.ctx, false)
-	if state.Recovered || state.Changed || state.Safety != "blocked_recover_preserve_failed" {
-		t.Fatalf("recover with an unwritable local anchor = %#v", state)
-	}
-	assertRefusalRecords(t, state.Error, f.anchorRef())
-	if got := mustRun(t, f.local, "rev-parse", "refs/heads/feature/recover"); got != f.submitted {
-		t.Fatalf("feature branch = %s, want it untouched at %s", got, f.submitted)
-	}
-	if f.custodyReturned() {
-		t.Fatal("unwritable-anchor refusal stamped custody")
-	}
-}
-
-// TestRecoverRefusesWhenThePreservedAnchorCannotBeWritten is the first test to
-// reach the already-reachable-preserved anchoring path at all. Nothing has been
-// written when it fails, so this is the case that must keep the plain unchanged
-// claim - the record is what decides, not the wording of the refusal.
-func TestRecoverRefusesWhenThePreservedAnchorCannotBeWritten(t *testing.T) {
-	t.Parallel()
-
-	f := newRecoverFixture(t, types.RunCancelled)
-	mustRun(t, f.local, "fetch", f.gate, "refs/heads/feature/recover")
-	mustRun(t, f.local, "merge", "--ff-only", f.preserved)
-	mustRun(t, f.local, "update-ref", f.anchorRef()+"/blocked", f.submitted)
-
-	state := f.service.Recover(f.ctx, false)
-	if state.Recovered || state.Changed || state.Safety != "blocked_recover_preserve_failed" {
-		t.Fatalf("recover with an unwritable preserved anchor = %#v", state)
-	}
-	if !strings.Contains(state.Error, "could not be anchored locally") {
-		t.Fatalf("refusal = %q, want the local-anchoring failure wording", state.Error)
-	}
-	if !strings.Contains(state.Error, "no files or refs were changed") {
-		t.Fatalf("refusal = %q dropped the unchanged claim, which is true here: nothing was written", state.Error)
-	}
-	if f.custodyReturned() {
-		t.Fatal("failed anchoring stamped custody")
 	}
 }

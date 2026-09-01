@@ -146,7 +146,9 @@ Because that background monitor stays live, a PR that falls behind the default b
 hits a merge conflict after checks pass - commonly because another PR merged
 first - needs **no command from you**: leave it to the live monitor and
 never hand-rebase it yourself. When the CI monitor sees an actual conflict it
-**rebases onto the base, resolves it, and re-pushes the branch itself**; a PR
+**rebases onto the base, resolves it, revalidates from Review because
+rebasing cannot prove continuity with the reviewed head, and re-pushes the
+branch through Push**; a PR
 that is merely behind but still clean needs nothing either, since the platform
 merges it. The one
 exception is when that monitor is no longer running - the PR was closed, the run

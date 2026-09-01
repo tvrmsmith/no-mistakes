@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -23,14 +24,31 @@ type nativeAgentCommand struct {
 	pipesDone      chan struct{}
 }
 
+func writeNativeAgentStdin(stdin io.WriteCloser, prompt string) <-chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		_, writeErr := io.WriteString(stdin, prompt)
+		closeErr := stdin.Close()
+		errCh <- errors.Join(writeErr, closeErr)
+	}()
+	return errCh
+}
+
 type nativeAgentPipe struct {
 	file     *os.File
 	done     func()
 	doneOnce sync.Once
+	// activity, when set, is called for every non-empty read. It is the only
+	// evidence no-mistakes has that a native agent is still alive during the
+	// long tool-using stretches that produce no assistant prose.
+	activity func()
 }
 
 func (p *nativeAgentPipe) Read(b []byte) (int, error) {
 	n, err := p.file.Read(b)
+	if n > 0 && p.activity != nil {
+		p.activity()
+	}
 	if err != nil {
 		p.markDone()
 	}
@@ -47,7 +65,11 @@ func (p *nativeAgentPipe) markDone() {
 	p.doneOnce.Do(p.done)
 }
 
-func startNativeAgentCommand(cmd *exec.Cmd) (*nativeAgentCommand, error) {
+// startNativeAgentCommand starts cmd with dedicated stdout/stderr pipes.
+// activity, when non-nil, is invoked on every non-empty read from either pipe;
+// see LifecyclePhaseActivity for why subprocess byte liveness - not assistant
+// prose - is the signal that distinguishes a working agent from a wedged one.
+func startNativeAgentCommand(cmd *exec.Cmd, activity func()) (*nativeAgentCommand, error) {
 	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
@@ -77,8 +99,8 @@ func startNativeAgentCommand(cmd *exec.Cmd) (*nativeAgentCommand, error) {
 		remainingPipes: 2,
 		pipesDone:      make(chan struct{}),
 	}
-	started.stdout = &nativeAgentPipe{file: stdoutR, done: started.markPipeDone}
-	started.stderr = &nativeAgentPipe{file: stderrR, done: started.markPipeDone}
+	started.stdout = &nativeAgentPipe{file: stdoutR, done: started.markPipeDone, activity: activity}
+	started.stderr = &nativeAgentPipe{file: stderrR, done: started.markPipeDone, activity: activity}
 	go func() {
 		err := cmd.Wait()
 		started.terminate()

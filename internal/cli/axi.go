@@ -178,7 +178,7 @@ func runAxiHome(cmd *cobra.Command) (string, error) {
 	if alive, _ := daemon.IsRunning(env.p); alive {
 		daemonState = "running"
 	}
-	branch := currentBranchForRunResolve(cmd.Context())
+	branch, _ := currentBranchForRunResolve(cmd.Context())
 	branchDisplay := branch
 	if branchDisplay == "" {
 		branchDisplay = "unknown"

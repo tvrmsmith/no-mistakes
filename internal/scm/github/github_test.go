@@ -2,8 +2,11 @@ package github
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -98,6 +101,7 @@ func TestGetChecksPassesRepoFlag(t *testing.T) {
 	t.Parallel()
 
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
 		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
 			stdout: `[{"name":"build","state":"SUCCESS","bucket":"pass"}]` + "\n",
 		},
@@ -109,6 +113,701 @@ func TestGetChecksPassesRepoFlag(t *testing.T) {
 	}
 	if len(checks) != 1 || checks[0].Name != "build" {
 		t.Fatalf("checks = %+v, want single build check", checks)
+	}
+}
+
+// A failing gh must surface its stderr in the error: a broken gh (e.g. < v2.50
+// rejecting `pr checks --json`) is only diagnosable from the step log if the
+// provider message survives the error. See the #644 hardening intent.
+func TestGetChecksSurfacesGHErrorStderr(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+			stderr: "flag needs an argument: --json",
+			code:   1,
+		},
+	}), nil, "", "test/repo")
+
+	_, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err == nil {
+		t.Fatal("GetChecks() expected the gh failure to propagate")
+	}
+	if !strings.Contains(err.Error(), "flag needs an argument: --json") {
+		t.Fatalf("GetChecks() error = %v, want gh stderr in the error", err)
+	}
+}
+
+func TestGetChecksIncludesFailedWorkflowRunMissingFromPRRollup(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+			stdout: `[
+				{"name":"clippy","state":"SUCCESS","bucket":"pass"},
+				{"name":"request-owner-review","state":"SUCCESS","bucket":"pass"}
+			]` + "\n",
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":1,"workflow_runs":[
+				{"id":101,"name":"workflow-validation","display_title":"","status":"completed","conclusion":"failure","updated_at":"2026-07-30T12:34:56Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 3 {
+		t.Fatalf("GetChecks() returned %d checks, want 3: %+v", len(checks), checks)
+	}
+	got := checks[2]
+	if got.Name != "workflow-validation" || got.Bucket != scm.CheckBucketFail {
+		t.Fatalf("workflow run check = %+v, want workflow-validation/fail", got)
+	}
+	wantCompletedAt := time.Date(2026, 7, 30, 12, 34, 56, 0, time.UTC)
+	if !got.CompletedAt.Equal(wantCompletedAt) {
+		t.Fatalf("workflow run CompletedAt = %v, want %v", got.CompletedAt, wantCompletedAt)
+	}
+}
+
+func TestGetChecksIncludesFailedWorkflowRunWhenPRHasNoChecks(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+			stderr: "no checks reported on the 'feature' branch\n",
+			code:   1,
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":1,"workflow_runs":[
+				{"id":101,"name":"workflow-validation","display_title":"","status":"completed","conclusion":"failure","updated_at":"2026-07-30T12:34:56Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 1 {
+		t.Fatalf("GetChecks() returned %d checks, want 1: %+v", len(checks), checks)
+	}
+	if got := checks[0]; got.Name != "workflow-validation" || got.Bucket != scm.CheckBucketFail {
+		t.Fatalf("workflow run check = %+v, want workflow-validation/fail", got)
+	}
+}
+
+func TestGetChecksUsesLivePRHeadForWorkflowDiscovery(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "live-head\n"},
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+			stdout: `[{"name":"build","state":"SUCCESS","bucket":"pass"}]` + "\n",
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=live-head -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":0,"workflow_runs":[]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	pr := &scm.PR{Number: "123", HeadSHA: "stale-head"}
+	checks, err := host.GetChecks(context.Background(), pr)
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 1 || checks[0].Name != "build" {
+		t.Fatalf("checks = %+v, want live-head build rollup", checks)
+	}
+	if pr.HeadSHA != "live-head" {
+		t.Fatalf("PR HeadSHA = %q, want live-head", pr.HeadSHA)
+	}
+}
+
+func TestGetChecksBindsRollupAcrossABAHeadMovement(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "h1\n"},
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+			stdout: `[{"name":"h2-build","state":"SUCCESS","bucket":"pass"}]` + "\n",
+		},
+		githubCommitChecksCommand("", "test/repo", "h1"): {
+			stdout: githubCommitChecksResponse(`[{"__typename":"CheckRun","name":"h1-build","status":"COMPLETED","conclusion":"FAILURE"}]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=h1 -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":0,"workflow_runs":[]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "stale"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 1 || checks[0].Name != "h1-build" || checks[0].Bucket != scm.CheckBucketFail {
+		t.Fatalf("checks = %+v, want exact-H1 failed rollup", checks)
+	}
+}
+
+func TestGetChecksWorkflowCancellationKeepsRerunIdentity(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+			stdout: "[]\n",
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":1,"workflow_runs":[{"id":101,"name":"build","status":"completed","conclusion":"cancelled"}]}]` + "\n",
+		},
+		"gh run rerun 101 --repo test/repo": {},
+	}), nil, "", "test/repo")
+
+	pr := &scm.PR{Number: "123", HeadSHA: "deadbeef"}
+	checks, err := host.GetChecks(context.Background(), pr)
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 1 {
+		t.Fatalf("checks = %+v, want one cancelled workflow", checks)
+	}
+	check := checks[0]
+	if check.Bucket != scm.CheckBucketCancel || check.State != "CANCELLED" || check.Link != "https://github.com/test/repo/actions/runs/101" {
+		t.Fatalf("workflow check = %+v, want rerunnable cancelled run", check)
+	}
+	if err := host.RerunCheck(context.Background(), pr, check); err != nil {
+		t.Fatalf("RerunCheck() error = %v", err)
+	}
+}
+
+func TestGetChecksDoesNotDuplicateWorkflowRunsRepresentedByRollup(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+			stdout: `[{"name":"build","state":"CANCELLED","bucket":"cancel","link":"https://github.com/test/repo/actions/runs/101/job/201"}]` + "\n",
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":2,"workflow_runs":[
+				{"id":101,"name":"represented-workflow","status":"completed","conclusion":"cancelled"},
+				{"id":102,"name":"workflow-only","status":"completed","conclusion":"failure"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("checks = %+v, want rollup job plus unrepresented workflow", checks)
+	}
+	if checks[0].Name != "build" || checks[1].Name != "workflow-only" {
+		t.Fatalf("checks = %+v, want build and workflow-only", checks)
+	}
+}
+
+// The raw commit statusCheckRollup keeps every check run a commit ever had,
+// including a same-named run a later run has already superseded (e.g. a CI
+// monitor auto-fix push re-triggering the same gate check). Without a
+// latest-wins collapse the stale FAILURE stays visible forever even though a
+// later SUCCESS at the same head replaced it, which manufactures an
+// unrecoverable auto-fix loop. GetChecks must collapse to the newest
+// startedAt so the caller sees zero failing checks.
+func TestGetChecksCollapsesSupersededSameNameCheckToLatestAtOneHead(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"gate","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-08-26T08:25:50Z","completedAt":"2026-08-26T08:25:56Z","detailsUrl":"https://github.com/test/repo/actions/runs/101/job/201"},
+				{"__typename":"CheckRun","name":"gate","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-08-26T08:39:44Z","completedAt":"2026-08-26T08:39:50Z","detailsUrl":"https://github.com/test/repo/actions/runs/102/job/202"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":2,"workflow_runs":[
+				{"id":101,"workflow_id":1001,"name":"gate","status":"completed","conclusion":"failure","run_started_at":"2026-08-26T08:25:50Z"},
+				{"id":102,"workflow_id":1001,"name":"gate","status":"completed","conclusion":"success","run_started_at":"2026-08-26T08:39:44Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "stale"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 1 {
+		t.Fatalf("GetChecks() returned %d checks, want the superseded run collapsed away: %+v", len(checks), checks)
+	}
+	if got := checks[0]; got.Name != "gate" || got.Bucket != scm.CheckBucketPass {
+		t.Fatalf("checks[0] = %+v, want the latest SUCCESS run to win", got)
+	}
+	for _, c := range checks {
+		if c.Bucket == scm.CheckBucketFail {
+			t.Fatalf("checks = %+v, want zero failing checks after collapse", checks)
+		}
+	}
+}
+
+// Order matters: appendUnrepresentedWorkflowRuns dedupes the Actions-run
+// union against the checks slice by run ID. If collapseLatestByName ran
+// BEFORE that union, the superseded run's ID would drop out of the
+// "represented" set and the union would re-add the exact same stale run
+// under its own workflow run name - resurrecting the failure the collapse
+// was supposed to hide. This test pins the union-then-collapse order: both
+// the superseded and the winning run are independently visible to the
+// workflow-run API (as they would be on a real repo), and the union must
+// recognize both as already represented rather than re-adding either.
+func TestGetChecksCollapseOrderingDoesNotLetWorkflowRunUnionResurrectSupersededCheck(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"gate","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-08-26T08:25:50Z","completedAt":"2026-08-26T08:25:56Z","detailsUrl":"https://github.com/test/repo/actions/runs/101/job/201"},
+				{"__typename":"CheckRun","name":"gate","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-08-26T08:39:44Z","completedAt":"2026-08-26T08:39:50Z","detailsUrl":"https://github.com/test/repo/actions/runs/102/job/202"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":2,"workflow_runs":[
+				{"id":101,"workflow_id":1001,"name":"gate - synchronize - event 1 (run 101)","status":"completed","conclusion":"failure"},
+				{"id":102,"workflow_id":1001,"name":"gate - edited - event 2 (run 102)","status":"completed","conclusion":"success"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 1 {
+		t.Fatalf("GetChecks() returned %d checks, want the union to add nothing and the collapse to leave one: %+v", len(checks), checks)
+	}
+	if got := checks[0]; got.Name != "gate" || got.Bucket != scm.CheckBucketPass {
+		t.Fatalf("checks[0] = %+v, want the latest SUCCESS run to win with no resurrected failure", got)
+	}
+}
+
+func TestGetChecksPreservesIndependentSameNameWorkflows(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-08-26T08:39:44Z","completedAt":"2026-08-26T08:39:50Z","detailsUrl":"https://github.com/test/repo/actions/runs/102/job/202"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":2,"workflow_runs":[
+				{"id":102,"workflow_id":1002,"name":"build","status":"completed","conclusion":"success","run_started_at":"2026-08-26T08:39:44Z"},
+				{"id":103,"workflow_id":1003,"name":"build","status":"completed","conclusion":"failure","run_started_at":"2026-08-26T08:25:50Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("GetChecks() returned %d checks, want both independent same-name workflows: %+v", len(checks), checks)
+	}
+	buckets := map[scm.CheckBucket]int{}
+	for _, check := range checks {
+		buckets[check.Bucket]++
+	}
+	if buckets[scm.CheckBucketPass] != 1 || buckets[scm.CheckBucketFail] != 1 {
+		t.Fatalf("GetChecks() buckets = %v, want independent passing and failing workflows", buckets)
+	}
+}
+
+func TestGetChecksPreservesSameNameJobsWithinOneWorkflowRun(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-08-26T08:25:50Z","completedAt":"2026-08-26T08:25:56Z","detailsUrl":"https://github.com/test/repo/actions/runs/102/job/201"},
+				{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-08-26T08:39:44Z","completedAt":"2026-08-26T08:39:50Z","detailsUrl":"https://github.com/test/repo/actions/runs/102/job/202"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":1,"workflow_runs":[
+				{"id":102,"workflow_id":1001,"name":"build","status":"completed","conclusion":"failure","run_started_at":"2026-08-26T08:25:50Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("GetChecks() returned %d checks, want both same-name jobs from one workflow run: %+v", len(checks), checks)
+	}
+	buckets := map[scm.CheckBucket]int{}
+	for _, check := range checks {
+		buckets[check.Bucket]++
+	}
+	if buckets[scm.CheckBucketPass] != 1 || buckets[scm.CheckBucketFail] != 1 {
+		t.Fatalf("GetChecks() buckets = %v, want independent passing and failing jobs", buckets)
+	}
+}
+
+func TestGetChecksPreservesIndependentSameNameExternalCheckRuns(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-08-26T08:25:50Z","completedAt":"2026-08-26T08:25:56Z","detailsUrl":"https://ci-one.example.com/build/42"},
+				{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-08-26T08:39:44Z","completedAt":"2026-08-26T08:39:50Z","detailsUrl":"https://ci-two.example.com/build/99"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":0,"workflow_runs":[]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("GetChecks() returned %d checks, want both independent external checks: %+v", len(checks), checks)
+	}
+	buckets := map[scm.CheckBucket]int{}
+	for _, check := range checks {
+		buckets[check.Bucket]++
+	}
+	if buckets[scm.CheckBucketPass] != 1 || buckets[scm.CheckBucketFail] != 1 {
+		t.Fatalf("GetChecks() buckets = %v, want independent passing and failing external checks", buckets)
+	}
+}
+
+func TestGetChecksCollapseComparesNewestRunWithEverySameNameCandidate(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"gate","status":"QUEUED","conclusion":null,"startedAt":null,"completedAt":null,"detailsUrl":"https://checks.example.com/runs/pending"},
+				{"__typename":"CheckRun","name":"gate","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-08-26T08:25:50Z","completedAt":"2026-08-26T08:25:56Z","detailsUrl":"https://github.com/test/repo/actions/runs/101/job/201"},
+				{"__typename":"CheckRun","name":"gate","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-08-26T08:39:44Z","completedAt":"2026-08-26T08:39:50Z","detailsUrl":"https://github.com/test/repo/actions/runs/102/job/202"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":2,"workflow_runs":[
+				{"id":101,"workflow_id":1001,"name":"gate","status":"completed","conclusion":"failure","run_started_at":"2026-08-26T08:25:50Z"},
+				{"id":102,"workflow_id":1001,"name":"gate","status":"completed","conclusion":"success","run_started_at":"2026-08-26T08:39:44Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("GetChecks() returned %d checks, want unordered pending plus newest ordered run: %+v", len(checks), checks)
+	}
+	buckets := map[scm.CheckBucket]int{}
+	for _, check := range checks {
+		buckets[check.Bucket]++
+	}
+	if buckets[scm.CheckBucketPending] != 1 || buckets[scm.CheckBucketPass] != 1 || buckets[scm.CheckBucketFail] != 0 {
+		t.Fatalf("GetChecks() buckets = %v, want pending external check plus latest passing Actions run", buckets)
+	}
+}
+
+func TestGetChecksPreservesSameNameStatusContextAndCheckRun(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-08-26T08:39:44Z","completedAt":"2026-08-26T08:39:50Z","detailsUrl":"https://github.com/test/repo/actions/runs/102/job/202"},
+				{"__typename":"StatusContext","context":"build","state":"FAILURE","targetUrl":"https://ci.example.com/build/42"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":1,"workflow_runs":[
+				{"id":102,"name":"build","status":"completed","conclusion":"success","run_started_at":"2026-08-26T08:39:44Z","updated_at":"2026-08-26T08:39:50Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("GetChecks() returned %d checks, want both same-name records: %+v", len(checks), checks)
+	}
+	if checks[0].Kind != scm.CheckKindRun || checks[0].Bucket != scm.CheckBucketPass {
+		t.Fatalf("checks[0] = %+v, want passing check run", checks[0])
+	}
+	if checks[1].Kind != scm.CheckKindStatus || checks[1].Bucket != scm.CheckBucketFail {
+		t.Fatalf("checks[1] = %+v, want failing commit status", checks[1])
+	}
+}
+
+func TestGetChecksKeepsQueuedReplacementWithEqualStartTime(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"CI","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-08-26T08:25:50Z","completedAt":"2026-08-26T08:25:56Z","detailsUrl":"https://github.com/test/repo/actions/runs/101/job/201"},
+				{"__typename":"CheckRun","name":"CI","status":"QUEUED","conclusion":null,"startedAt":null,"completedAt":null,"detailsUrl":"https://github.com/test/repo/actions/runs/102/job/202"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":2,"workflow_runs":[
+				{"id":101,"workflow_id":1001,"name":"CI","status":"completed","conclusion":"failure","created_at":"2026-08-26T08:25:45Z","updated_at":"2026-08-26T08:25:56Z"},
+				{"id":102,"workflow_id":1001,"name":"CI","status":"queued","conclusion":null,"created_at":"2026-08-26T08:25:50Z","updated_at":"2026-08-26T08:25:50Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 1 {
+		t.Fatalf("GetChecks() returned %d checks, want one: %+v", len(checks), checks)
+	}
+	if got := checks[0]; got.Name != "CI" || got.Bucket != scm.CheckBucketPending {
+		t.Fatalf("checks[0] = %+v, want the queued replacement to supersede the old failure", got)
+	}
+	wantStartedAt := time.Date(2026, 8, 26, 8, 25, 50, 0, time.UTC)
+	if !checks[0].StartedAt.Equal(wantStartedAt) {
+		t.Fatalf("checks[0].StartedAt = %v, want workflow creation time %v", checks[0].StartedAt, wantStartedAt)
+	}
+}
+
+func TestGetChecksPreservesUnorderedExternalPendingReplacement(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+			stdout: githubCommitChecksResponse(`[
+				{"__typename":"CheckRun","name":"CI","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-08-26T08:25:50Z","completedAt":"2026-08-26T08:25:56Z","detailsUrl":"https://github.com/test/repo/actions/runs/101/job/201"},
+				{"__typename":"CheckRun","name":"CI","status":"QUEUED","conclusion":null,"startedAt":null,"completedAt":null,"detailsUrl":"https://checks.example.com/runs/replacement"}
+			]`),
+		},
+		"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[{"total_count":1,"workflow_runs":[
+				{"id":101,"name":"CI","status":"completed","conclusion":"failure","run_started_at":"2026-08-26T08:25:50Z","updated_at":"2026-08-26T08:25:56Z"}
+			]}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("GetChecks() returned %d checks, want both unordered records: %+v", len(checks), checks)
+	}
+	buckets := map[scm.CheckBucket]int{}
+	for _, check := range checks {
+		buckets[check.Bucket]++
+	}
+	if buckets[scm.CheckBucketFail] != 1 || buckets[scm.CheckBucketPending] != 1 {
+		t.Fatalf("GetChecks() buckets = %v, want one failure and one pending replacement", buckets)
+	}
+}
+
+func TestGetChecksUsesWorkflowRunStartTimeWhenCollapsingSameNameChecks(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		timestamp string
+	}{
+		{name: "run_started_at", timestamp: `"run_started_at":"2026-08-26T08:39:44Z"`},
+		{name: "created_at fallback", timestamp: `"created_at":"2026-08-26T08:39:44Z"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			host := New(githubTestCmdFactory(map[string]githubTestResponse{
+				"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+				githubCommitChecksCommand("", "test/repo", "deadbeef"): {
+					stdout: githubCommitChecksResponse(`[
+						{"__typename":"CheckRun","name":"CI","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-08-26T08:25:50Z","completedAt":"2026-08-26T08:25:56Z","detailsUrl":"https://github.com/test/repo/actions/runs/101/job/201"}
+					]`),
+				},
+				"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+					stdout: `[{"total_count":2,"workflow_runs":[
+						{"id":101,"workflow_id":1001,"name":"CI","status":"completed","conclusion":"success","run_started_at":"2026-08-26T08:25:50Z","updated_at":"2026-08-26T08:25:56Z"},
+						{"id":102,"workflow_id":1001,"name":"CI","status":"completed","conclusion":"failure",` + tc.timestamp + `,"updated_at":"2026-08-26T08:39:50Z"}
+					]}]` + "\n",
+				},
+			}), nil, "", "test/repo")
+
+			checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+			if err != nil {
+				t.Fatalf("GetChecks() error = %v", err)
+			}
+			if len(checks) != 1 {
+				t.Fatalf("GetChecks() returned %d checks, want one: %+v", len(checks), checks)
+			}
+			if got := checks[0]; got.Name != "CI" || got.Bucket != scm.CheckBucketFail {
+				t.Fatalf("checks[0] = %+v, want the newer failed workflow run to win", got)
+			}
+			wantStartedAt := time.Date(2026, 8, 26, 8, 39, 44, 0, time.UTC)
+			if !checks[0].StartedAt.Equal(wantStartedAt) {
+				t.Fatalf("checks[0].StartedAt = %v, want %v", checks[0].StartedAt, wantStartedAt)
+			}
+		})
+	}
+}
+
+func TestGetChecksDoesNotTrustUnrelatedWorkflowRunLinks(t *testing.T) {
+	t.Parallel()
+
+	for name, link := range map[string]string{
+		"third-party host": "https://ci.example.com/test/repo/actions/runs/101/job/201",
+		"wrong repository": "https://github.com/other/repo/actions/runs/101/job/201",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			host := New(githubTestCmdFactory(map[string]githubTestResponse{
+				"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+				"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+					stdout: `[{"name":"external","state":"SUCCESS","bucket":"pass","link":"` + link + `"}]` + "\n",
+				},
+				"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+					stdout: `[{"total_count":1,"workflow_runs":[{"id":101,"name":"failed-workflow","status":"completed","conclusion":"failure"}]}]` + "\n",
+				},
+			}), nil, "", "test/repo")
+
+			checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+			if err != nil {
+				t.Fatalf("GetChecks() error = %v", err)
+			}
+			if len(checks) != 2 || checks[1].Name != "failed-workflow" || checks[1].Bucket != scm.CheckBucketFail {
+				t.Fatalf("checks = %+v, want unrelated rollup plus failed workflow", checks)
+			}
+		})
+	}
+}
+
+func TestGetChecksIncludesWorkflowRunsFromEveryPage(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo ghe.example.com/test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		"gh pr checks 123 --repo ghe.example.com/test/repo --json name,state,bucket,completedAt,link": {
+			stdout: `[{"name":"clippy","state":"SUCCESS","bucket":"pass"}]` + "\n",
+		},
+		"gh api --hostname ghe.example.com --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+			stdout: `[
+				{"total_count":2,"workflow_runs":[{"id":101,"name":"first-page","status":"completed","conclusion":"success"}]},
+				{"total_count":2,"workflow_runs":[{"id":102,"name":"second-page-failure","status":"completed","conclusion":"failure"}]}
+			]` + "\n",
+		},
+	}), nil, "ghe.example.com", "ghe.example.com/test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 3 {
+		t.Fatalf("GetChecks() returned %d checks, want 3: %+v", len(checks), checks)
+	}
+	if got := checks[2]; got.Name != "second-page-failure" || got.Bucket != scm.CheckBucketFail {
+		t.Fatalf("last workflow run check = %+v, want second-page-failure/fail", got)
+	}
+}
+
+func TestGetChecksRejectsIncompleteWorkflowPagination(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		response   string
+		wantErrSub string
+	}{
+		{
+			name:       "truncated",
+			response:   `[{"total_count":2,"workflow_runs":[{"id":101,"name":"visible","status":"completed","conclusion":"success"}]}]`,
+			wantErrSub: "returned 1 unique runs, want 2",
+		},
+		{
+			name: "inconsistent totals",
+			response: `[
+				{"total_count":2,"workflow_runs":[{"id":101,"name":"first","status":"completed","conclusion":"success"}]},
+				{"total_count":3,"workflow_runs":[{"id":102,"name":"second","status":"completed","conclusion":"success"}]}
+			]`,
+			wantErrSub: "total_count is 3, want 2",
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			host := New(githubTestCmdFactory(map[string]githubTestResponse{
+				"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+				"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+					stdout: `[{"name":"clippy","state":"SUCCESS","bucket":"pass"}]` + "\n",
+				},
+				"gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp": {
+					stdout: tc.response + "\n",
+				},
+			}), nil, "", "test/repo")
+
+			_, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+			if err == nil || !strings.Contains(err.Error(), tc.wantErrSub) {
+				t.Fatalf("GetChecks() error = %v, want containing %q", err, tc.wantErrSub)
+			}
+		})
+	}
+}
+
+func TestGetPRContentReadsTitleAndBody(t *testing.T) {
+	t.Parallel()
+
+	body := "## Pipeline\n\n" + "Updates from no-mistakes\n"
+	encoded, err := json.Marshal(map[string]string{"title": "fix: restamp", "body": body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 42 --repo test/repo --json title,body": {stdout: string(encoded) + "\n"},
+	}), nil, "", "test/repo")
+
+	got, err := host.GetPRContent(context.Background(), &scm.PR{Number: "42"})
+	if err != nil {
+		t.Fatalf("GetPRContent() error = %v", err)
+	}
+	if got.Title != "fix: restamp" || got.Body != body {
+		t.Fatalf("GetPRContent() = %+v, want title and body from gh", got)
+	}
+}
+
+func TestGetPRContentFailsClosedWithoutIdentity(t *testing.T) {
+	t.Parallel()
+	host := New(githubTestCmdFactory(nil), nil, "", "test/repo")
+	if _, err := host.GetPRContent(context.Background(), &scm.PR{}); err == nil {
+		t.Fatal("GetPRContent() with no PR identity: expected error, got nil")
 	}
 }
 
@@ -173,6 +872,28 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	}
 	if updated != pr {
 		t.Fatalf("UpdatePR() = %+v, want original PR", updated)
+	}
+}
+
+func TestUpdatePROmitsTitleWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	var recorded [][]string
+	host := New(recordingCmdFactory("", &recorded), nil, "", "test/repo")
+	if _, err := host.UpdatePR(context.Background(), &scm.PR{Number: "42"}, scm.PRContent{
+		Body: "marker only",
+	}); err != nil {
+		t.Fatalf("UpdatePR() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("expected exactly one gh invocation, got %d: %v", len(recorded), recorded)
+	}
+	got := strings.Join(recorded[0], " ")
+	if strings.Contains(got, "--title") {
+		t.Fatalf("body-only UpdatePR must not pass --title, got %v", recorded[0])
+	}
+	if !strings.Contains(got, "--body-file") {
+		t.Fatalf("body-only UpdatePR must still pass --body-file, got %v", recorded[0])
 	}
 }
 
@@ -465,9 +1186,7 @@ func TestRerunCheckTargetsJobFromCheckLink(t *testing.T) {
 	}
 }
 
-// A link that names only the workflow run has exactly one thing to re-run: that
-// run's failed jobs. This is the ONLY shape allowed to widen past a single job.
-func TestRerunCheckFallsBackToFailedJobsOfRun(t *testing.T) {
+func TestRerunCheckTargetsWholeCancelledRun(t *testing.T) {
 	t.Parallel()
 
 	for name, link := range map[string]string{
@@ -491,7 +1210,7 @@ func TestRerunCheckFallsBackToFailedJobsOfRun(t *testing.T) {
 			if len(recorded) != 1 {
 				t.Fatalf("expected exactly one gh invocation, got %d: %v", len(recorded), recorded)
 			}
-			want := []string{"gh", "run", "rerun", "900", "--failed", "--repo", "test/repo"}
+			want := []string{"gh", "run", "rerun", "900", "--repo", "test/repo"}
 			if strings.Join(recorded[0], " ") != strings.Join(want, " ") {
 				t.Fatalf("rerun argv = %v, want %v", recorded[0], want)
 			}
@@ -512,6 +1231,8 @@ func TestRerunCheckFailsClosedWithoutAnActionsJob(t *testing.T) {
 
 	for name, link := range map[string]string{
 		"external dashboard":       "https://ci.example.com/builds/17",
+		"third-party Actions path": "https://ci.example.com/test/repo/actions/runs/900/job/901",
+		"wrong Actions repository": "https://github.com/other/repo/actions/runs/900/job/901",
 		"no link":                  "",
 		"non-numeric run":          "https://github.com/test/repo/actions/runs/latest",
 		"browser display number":   "https://github.com/test/repo/actions/runs/900/jobs/3",
@@ -584,12 +1305,67 @@ func TestFetchFailedCheckLogsSelectsMatchingRunForHeadSHA(t *testing.T) {
 	}
 }
 
+// A GitHub Actions action-download outage fails a job inside "Set up job",
+// before any repository step runs. PreRunFailures must flag exactly that job -
+// read structurally from the setup step's conclusion, never from log text - and
+// must never flag a job that cleared setup and failed a later (repository) step.
+// The two directions together are the masking-safety contract.
+func TestPreRunFailures_FlagsSetupFailureNotGenuine(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run view 1 --repo test/repo --json jobs": {
+			stdout: `{"jobs":[` +
+				`{"databaseId":2,"name":"build","conclusion":"failure","steps":[{"name":"Set up job","number":1,"conclusion":"failure"}]},` +
+				`{"databaseId":3,"name":"unit","conclusion":"failure","steps":[{"name":"Set up job","number":1,"conclusion":"success"},{"name":"Run tests","number":2,"conclusion":"failure"}]}` +
+				`]}` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	infra, err := host.PreRunFailures(context.Background(), []scm.Check{
+		{Name: "build", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/test/repo/actions/runs/1/job/2"},
+		{Name: "unit", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/test/repo/actions/runs/1/job/3"},
+	})
+	if err != nil {
+		t.Fatalf("PreRunFailures() error = %v", err)
+	}
+	if len(infra) != 2 {
+		t.Fatalf("PreRunFailures returned %d results, want 2 parallel to the checks", len(infra))
+	}
+	if !infra[0] {
+		t.Error("PreRunFailures did not flag the setup/action-download failure")
+	}
+	if infra[1] {
+		t.Error("PreRunFailures flagged a genuine test failure that cleared setup (masking)")
+	}
+}
+
+// A run the provider cannot report on must leave every check unflagged, so an
+// unreadable job stays a genuine failure rather than being masked.
+func TestPreRunFailures_FailsClosedOnUnreadableRun(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run view 9 --repo test/repo --json jobs": {stderr: "HTTP 404\n", code: 1},
+	}), nil, "", "test/repo")
+
+	infra, err := host.PreRunFailures(context.Background(), []scm.Check{
+		{Name: "build", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/test/repo/actions/runs/9/job/2"},
+	})
+	if err != nil {
+		t.Fatalf("PreRunFailures() error = %v", err)
+	}
+	if len(infra) != 1 || infra[0] {
+		t.Fatalf("PreRunFailures = %v, want nothing flagged when the run is unreadable", infra)
+	}
+}
+
 func TestFindPRFiltersByBaseBranch(t *testing.T) {
 	t.Parallel()
 
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh pr list --head feature/refactor --base release/1.0 --state open --json number,url": {
-			stdout: `[{"number":42,"url":"https://github.example.com/org/repo/pull/42"}]` + "\n",
+		"gh pr list --head feature/refactor --base release/1.0 --state open --json number,url,baseRefName": {
+			stdout: `[{"number":42,"url":"https://github.example.com/org/repo/pull/42","baseRefName":"release/1.0"}]` + "\n",
 		},
 	}), nil, "", "")
 
@@ -613,14 +1389,14 @@ func TestFindPRForkUsesBareHeadAndFiltersOwner(t *testing.T) {
 
 	branch := "feature/refactor"
 	host := NewWithFork(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh pr list --head fork-owner:" + branch + " --base main --repo parent/repo --state open --json number,url,headRefName,headRepositoryOwner": {
+		"gh pr list --head fork-owner:" + branch + " --base main --repo parent/repo --state open --json number,url,baseRefName,headRefName,headRepositoryOwner": {
 			stderr: `invalid argument: "--head" does not support "<owner>:<branch>"` + "\n",
 			code:   1,
 		},
-		"gh pr list --head " + branch + " --base main --repo parent/repo --state open --json number,url,headRefName,headRepositoryOwner": {
+		"gh pr list --head " + branch + " --base main --repo parent/repo --state open --json number,url,baseRefName,headRefName,headRepositoryOwner": {
 			stdout: `[` +
-				`{"number":40,"url":"https://github.com/parent/repo/pull/40","headRefName":"feature/refactor","headRepositoryOwner":{"login":"other-owner"}},` +
-				`{"number":42,"url":"https://github.com/parent/repo/pull/42","headRefName":"feature/refactor","headRepositoryOwner":{"login":"fork-owner"}}` +
+				`{"number":40,"url":"https://github.com/parent/repo/pull/40","baseRefName":"main","headRefName":"feature/refactor","headRepositoryOwner":{"login":"other-owner"}},` +
+				`{"number":42,"url":"https://github.com/parent/repo/pull/42","baseRefName":"main","headRefName":"feature/refactor","headRepositoryOwner":{"login":"fork-owner"}}` +
 				`]` + "\n",
 		},
 	}), nil, "", "parent/repo", "fork-owner/repo")
@@ -644,7 +1420,7 @@ func TestFindPRReturnsCLIError(t *testing.T) {
 	t.Parallel()
 
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh pr list --head feature/refactor --base main --state open --json number,url": {
+		"gh pr list --head feature/refactor --base main --state open --json number,url,baseRefName": {
 			stderr: "api unavailable\n",
 			code:   1,
 		},
@@ -659,6 +1435,103 @@ func TestFindPRReturnsCLIError(t *testing.T) {
 	}
 	if pr != nil {
 		t.Fatalf("FindPR() PR = %+v, want nil", pr)
+	}
+}
+
+func TestFindPRRejectsURLForDifferentRepository(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr list --head feature/refactor --base main --repo parent/repo --state open --json number,url,baseRefName": {
+			stdout: `[{"number":42,"url":"https://github.com/other/repo/pull/42","baseRefName":"main"}]` + "\n",
+		},
+	}), nil, "github.com", "parent/repo")
+
+	pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+	if err == nil {
+		t.Fatal("FindPR() error = nil, want repository mismatch error")
+	}
+	if !strings.Contains(err.Error(), "parse gh pr list") {
+		t.Fatalf("FindPR() error = %v, want parse context", err)
+	}
+	if pr != nil {
+		t.Fatalf("FindPR() PR = %+v, want nil", pr)
+	}
+}
+
+func TestFindPRReturnsJSONError(t *testing.T) {
+	t.Parallel()
+
+	const findPRListCommand = "gh pr list --head feature/refactor --base main --state open --json number,url,baseRefName"
+	valid := `{"number":42,"url":"https://github.example.com/org/repo/pull/42","baseRefName":"main"}`
+	for _, output := range []string{
+		"[{\n",
+		"null\n",
+		"[{}]\n",
+		"[" + valid + ",{}]\n",
+		`[{"number":42,"url":"https://github.example.com/org/repo/pull/43","baseRefName":"main"}]` + "\n",
+		`[{"number":-1,"url":"https://github.example.com/org/repo/pull/-1","baseRefName":"main"}]` + "\n",
+		`[{"number":0,"url":"https://github.example.com/org/repo/pull/42","baseRefName":"main"}]` + "\n",
+		`[{"number":42,"url":"42","baseRefName":"main"}]` + "\n",
+		`[{"number":42,"url":"https://github.example.com/org/repo/pull/42?view=files","baseRefName":"main"}]` + "\n",
+		`[{"number":42,"url":"https://github.example.com/org/repo/pull/42#discussion","baseRefName":"main"}]` + "\n",
+		`[{"number":42,"url":"https://github.example.com/org/repo/pull/%34%32","baseRefName":"main"}]` + "\n",
+	} {
+		host := New(githubTestCmdFactory(map[string]githubTestResponse{
+			findPRListCommand: {
+				stdout: output,
+			},
+		}), nil, "", "")
+
+		pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+		if err == nil {
+			t.Fatal("FindPR() error = nil, want JSON error")
+		}
+		if !strings.Contains(err.Error(), "parse gh pr list") {
+			t.Fatalf("FindPR() error = %v, want parse context", err)
+		}
+		if pr != nil {
+			t.Fatalf("FindPR() PR = %+v, want nil", pr)
+		}
+	}
+}
+
+func TestFindPRForkRejectsMissingHeadIdentity(t *testing.T) {
+	t.Parallel()
+
+	branch := "feature/refactor"
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{
+			name:   "missing head ref",
+			output: `[{"number":42,"url":"https://github.com/parent/repo/pull/42","headRepositoryOwner":{"login":"fork-owner"}}]`,
+		},
+		{
+			name:   "missing head owner",
+			output: `[{"number":42,"url":"https://github.com/parent/repo/pull/42","headRefName":"feature/refactor","headRepositoryOwner":null}]`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			host := NewWithFork(githubTestCmdFactory(map[string]githubTestResponse{
+				"gh pr list --head " + branch + " --base main --repo parent/repo --state open --json number,url,baseRefName,headRefName,headRepositoryOwner": {
+					stdout: tc.output + "\n",
+				},
+			}), nil, "", "parent/repo", "fork-owner/repo")
+
+			pr, err := host.FindPR(context.Background(), branch, "main")
+			if err == nil {
+				t.Fatal("FindPR() error = nil, want head identity error")
+			}
+			if !strings.Contains(err.Error(), "parse gh pr list") {
+				t.Fatalf("FindPR() error = %v, want parse context", err)
+			}
+			if pr != nil {
+				t.Fatalf("FindPR() PR = %+v, want nil", pr)
+			}
+		})
 	}
 }
 
@@ -693,6 +1566,125 @@ func TestAvailableFallsBackToUnscopedAuthWhenHostUnknown(t *testing.T) {
 	}
 }
 
+func TestAvailableReportsDeadlineExceededInsteadOfAuthFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh auth status": {},
+	}), func() bool { return true }, "", "")
+
+	err := host.Available(ctx)
+	if err == nil {
+		t.Fatal("Available() error = nil, want timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Available() error = %v, want context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Available() error = %v, want timed out message", err)
+	}
+	if strings.Contains(err.Error(), "not authenticated") {
+		t.Fatalf("Available() error = %v, must not report auth failure on timeout", err)
+	}
+}
+
+func TestAvailableReportsCancellationInsteadOfAuthFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh auth status": {},
+	}), func() bool { return true }, "", "")
+
+	err := host.Available(ctx)
+	if err == nil {
+		t.Fatal("Available() error = nil, want timeout error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Available() error = %v, want context.Canceled", err)
+	}
+	if !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("Available() error = %v, want interrupted message", err)
+	}
+	if strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Available() error = %v, must not report timeout on cancellation", err)
+	}
+	if strings.Contains(err.Error(), "not authenticated") {
+		t.Fatalf("Available() error = %v, must not report auth failure on cancellation", err)
+	}
+}
+
+func TestAvailableReportsMissingBinaryInsteadOfAuthFailure(t *testing.T) {
+	t.Parallel()
+
+	host := New(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "no-mistakes-missing-gh-binary")
+	}, func() bool { return true }, "", "")
+
+	err := host.Available(context.Background())
+	if err == nil {
+		t.Fatal("Available() error = nil, want missing-binary error")
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("Available() error = %v, want exec.ErrNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "not on PATH") {
+		t.Fatalf("Available() error = %v, want not on PATH message", err)
+	}
+	if strings.Contains(err.Error(), "not authenticated") {
+		t.Fatalf("Available() error = %v, must not report auth failure when gh is missing", err)
+	}
+}
+
+func TestAvailableReportsCommandFactoryMissingBinaryInsteadOfAuthFailure(t *testing.T) {
+	t.Parallel()
+
+	host := New(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestGitHubHelperProcess", "--")
+		cmd.Env = append(os.Environ(), "GITHUB_TEST_HELPER=1")
+		cmd.Err = &exec.Error{Name: name, Err: fs.ErrNotExist}
+		return cmd
+	}, func() bool { return true }, "", "")
+
+	err := host.Available(context.Background())
+	if err == nil {
+		t.Fatal("Available() error = nil, want missing-binary error")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Available() error = %v, want fs.ErrNotExist", err)
+	}
+	if !strings.Contains(err.Error(), "not on PATH") {
+		t.Fatalf("Available() error = %v, want not on PATH message", err)
+	}
+	if strings.Contains(err.Error(), "not authenticated") {
+		t.Fatalf("Available() error = %v, must not report auth failure when command factory marks gh missing", err)
+	}
+}
+
+func TestAvailableWrapsAuthFailureWithStderr(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh auth status": {stderr: "github.com\n  X Failed to log in\n", code: 1},
+	}), func() bool { return true }, "", "")
+
+	err := host.Available(context.Background())
+	if err == nil {
+		t.Fatal("Available() error = nil, want auth failure")
+	}
+	if !strings.Contains(err.Error(), "not authenticated") {
+		t.Fatalf("Available() error = %v, want not authenticated", err)
+	}
+	if !strings.Contains(err.Error(), "Failed to log in") {
+		t.Fatalf("Available() error = %v, want stderr detail", err)
+	}
+}
+
 type githubTestResponse struct {
 	stdout    string
 	stderr    string
@@ -704,6 +1696,15 @@ func githubTestCmdFactory(responses map[string]githubTestResponse) CmdFactory {
 	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		key := strings.TrimSpace(name + " " + strings.Join(args, " "))
 		response, ok := responses[key]
+		if !ok && strings.HasPrefix(key, "gh api ") && strings.Contains(key, " graphql ") {
+			for candidate, prResponse := range responses {
+				if strings.Contains(candidate, "gh pr checks ") {
+					response = normalizedChecksResponse(prResponse)
+					ok = true
+					break
+				}
+			}
+		}
 		if !ok {
 			response = githubTestResponse{stderr: "unexpected command: " + key, code: 1}
 		}
@@ -717,6 +1718,76 @@ func githubTestCmdFactory(responses map[string]githubTestResponse) CmdFactory {
 		)
 		return cmd
 	}
+}
+
+func githubCommitChecksCommand(host, repo, headSHA string) string {
+	parts := strings.Split(repo, "/")
+	args := []string{"gh", "api"}
+	if host != "" {
+		args = append(args, "--hostname", host)
+	}
+	args = append(args, "graphql", "-f", "query="+commitChecksQuery,
+		"-F", "owner="+parts[0], "-F", "name="+parts[1], "-F", "oid="+headSHA)
+	return strings.Join(args, " ")
+}
+
+func githubCommitChecksResponse(nodes string) string {
+	response := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"object": map[string]any{
+					"statusCheckRollup": map[string]any{
+						"contexts": map[string]any{
+							"nodes":    json.RawMessage(nodes),
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+						},
+					},
+				},
+			},
+		},
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return nodes
+	}
+	return string(encoded) + "\n"
+}
+
+func normalizedChecksResponse(response githubTestResponse) githubTestResponse {
+	if response.code != 0 && strings.Contains(response.stderr, "no checks reported") {
+		return githubTestResponse{stdout: githubCommitChecksResponse("[]")}
+	}
+	if response.code != 0 {
+		return response
+	}
+	var raw []struct {
+		Name        string `json:"name"`
+		State       string `json:"state"`
+		Bucket      string `json:"bucket"`
+		CompletedAt string `json:"completedAt"`
+		Link        string `json:"link"`
+	}
+	if err := json.Unmarshal([]byte(response.stdout), &raw); err != nil {
+		return githubTestResponse{stdout: response.stdout}
+	}
+	nodes := make([]map[string]string, 0, len(raw))
+	for _, check := range raw {
+		status := "COMPLETED"
+		conclusion := check.State
+		if check.Bucket == "pending" {
+			status = "IN_PROGRESS"
+			conclusion = ""
+		}
+		nodes = append(nodes, map[string]string{
+			"__typename": "CheckRun", "name": check.Name, "status": status,
+			"conclusion": conclusion, "completedAt": check.CompletedAt, "detailsUrl": check.Link,
+		})
+	}
+	encoded, err := json.Marshal(nodes)
+	if err != nil {
+		return githubTestResponse{stdout: response.stdout}
+	}
+	return githubTestResponse{stdout: githubCommitChecksResponse(string(encoded))}
 }
 
 func TestGitHubHelperProcess(t *testing.T) {
@@ -745,4 +1816,46 @@ func TestGitHubHelperProcess(t *testing.T) {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+func TestHost_GetReviewComments(t *testing.T) {
+	t.Parallel()
+
+	firstPage := `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+		{"isResolved":true,"comments":{"nodes":[{"databaseId":1,"body":"resolved","path":"pkg/resolved.go","line":4,"url":"https://ghe.example.com/org/repo/pull/7#discussion_r1","createdAt":"2026-08-27T12:00:00Z","author":{"login":"greptile-apps[bot]"}}]}},
+		{"isResolved":false,"comments":{"nodes":[{"databaseId":2,"body":"human","path":"pkg/human.go","line":8,"url":"https://ghe.example.com/org/repo/pull/7#discussion_r2","createdAt":"2026-08-27T12:01:00Z","author":{"login":"reviewer"}}]}},
+		{"isResolved":false,"comments":{"nodes":[{"databaseId":3,"body":"other bot","path":"pkg/other.go","line":9,"url":"https://ghe.example.com/org/repo/pull/7#discussion_r3","createdAt":"2026-08-27T12:02:00Z","author":{"login":"dependabot[bot]"}}]}},
+		{"isResolved":false,"comments":{"nodes":[{"databaseId":12345,"body":"Fix this null pointer","path":"pkg/foo.go","line":42,"url":"https://ghe.example.com/org/repo/pull/7#discussion_r12345","createdAt":"2026-08-27T12:03:00Z","author":{"login":"greptile-apps[bot]"}}]}}
+	],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}}}`
+	secondPage := `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+		{"isResolved":false,"comments":{"nodes":[{"databaseId":12346,"body":"Second page","path":"pkg/bar.go","line":null,"url":"https://ghe.example.com/org/repo/pull/7#discussion_r12346","createdAt":"2026-08-27T12:04:00Z","author":{"login":"greptile-apps"}}]}}
+	],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`
+	command := func(cursor string) string {
+		args := []string{"gh", "api", "--hostname", "ghe.example.com", "graphql", "-f", "query=" + reviewThreadsQuery,
+			"-F", "owner=org", "-F", "name=repo", "-F", "number=7"}
+		if cursor != "" {
+			args = append(args, "-F", "cursor="+cursor)
+		}
+		return strings.Join(args, " ")
+	}
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		command(""):         {stdout: firstPage},
+		command("cursor-1"): {stdout: secondPage},
+	}), nil, "ghe.example.com", "ghe.example.com/org/repo")
+
+	comments, err := host.GetReviewComments(context.Background(), &scm.PR{URL: "https://ghe.example.com/org/repo/pull/7"})
+	if err != nil {
+		t.Fatalf("GetReviewComments failed: %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 comments, got %d", len(comments))
+	}
+	c := comments[0]
+	if c.ID != "12345" || c.Author != "greptile-apps[bot]" || c.Path != "pkg/foo.go" || c.Line != 42 || c.Body != "Fix this null pointer" {
+		t.Fatalf("unexpected comment parsed: %#v", c)
+	}
+	if comments[1].ID != "12346" || comments[1].Line != 0 || comments[1].Author != "greptile-apps" {
+		t.Fatalf("unexpected paginated comment: %#v", comments[1])
+	}
 }
