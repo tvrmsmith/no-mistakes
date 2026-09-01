@@ -277,7 +277,7 @@ func stopCurrentDaemonBeforeManagedRestart(p *paths.Paths) error {
 		// A managed service definition can coexist with a detached daemon.
 		// Stopping the service is then a successful no-op, so shut down any
 		// daemon that is still answering before restarting the service.
-		if alive, _ := daemonHealthCheck(p); alive {
+		if daemonAnswering(p) {
 			detachedErr = stopDetachedDaemon(p)
 		}
 		if waitErr := waitForDaemonStop(p, instance); waitErr != nil {
@@ -294,7 +294,7 @@ func stopCurrentDaemonBeforeManagedRestart(p *paths.Paths) error {
 		}
 		return nil
 	}
-	if alive, _ := daemonHealthCheck(p); alive {
+	if daemonAnswering(p) {
 		if err := stopDetachedDaemon(p); err != nil {
 			return fmt.Errorf("stop existing daemon before managed restart: %w", err)
 		}
@@ -318,7 +318,7 @@ func stopManagedFallback(p *paths.Paths) error {
 		}
 		return nil
 	}
-	if alive, _ := daemonHealthCheck(p); alive {
+	if daemonAnswering(p) {
 		return fmt.Errorf("managed daemon is still running: %w", err)
 	}
 	return fmt.Errorf("stop managed daemon before detached fallback: %w", err)
@@ -625,6 +625,19 @@ func IsRunning(p *paths.Paths) (bool, error) {
 	return daemonHealthCheck(p)
 }
 
+// daemonAnswering reports whether a daemon is on the socket and responding,
+// INCLUDING one speaking a different protocol version. Every caller that is
+// about to shut a daemon down wants this rather than daemonHealthCheck, which
+// answers the narrower "is a COMPATIBLE daemon there": a skewed daemon is
+// still a live process holding the socket, and shutdown is version-exempt
+// precisely so any peer can end it. Reading the skew as absence skips the
+// shutdown request entirely and leaves the following wait-for-exit to time
+// out against the very daemon the exemption exists to kill.
+func daemonAnswering(p *paths.Paths) bool {
+	alive, err := daemonHealthCheck(p)
+	return alive || ipc.IsVersionMismatch(err)
+}
+
 func daemonIsRunningViaIPC(p *paths.Paths) (bool, error) {
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
@@ -658,7 +671,7 @@ func Stop(p *paths.Paths) error {
 	if managed, err := stopManagedService(p); managed {
 		var detachedErr error
 		if err != nil {
-			if alive, _ := daemonHealthCheck(p); alive {
+			if daemonAnswering(p) {
 				detachedErr = stopDetachedDaemon(p)
 			}
 		}

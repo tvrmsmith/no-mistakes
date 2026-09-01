@@ -1,12 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
 	"github.com/spf13/cobra"
 )
@@ -45,16 +46,9 @@ func newStatusCmd() *cobra.Command {
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  gate:"), p.RepoDir(repo.ID))
 
 				// Check daemon status.
-				alive, _ := daemon.IsRunning(p)
-				daemonState := "stopped"
-				if alive {
-					daemonState = "running"
-				}
-				if alive {
-					fmt.Fprintf(w, "  %s  %s %s\n", sDim.Render("daemon:"), sGreen.Render("●"), "running")
-				} else {
-					fmt.Fprintf(w, "  %s  %s %s\n", sDim.Render("daemon:"), sDim.Render("○"), "stopped")
-				}
+				alive, runningErr := daemonIsRunningFn(p)
+				daemonState, daemonText := daemonStatusRow(alive, runningErr)
+				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("daemon:"), daemonText)
 
 				// Check for active run.
 				activeRun, err := d.GetActiveRun(repo.ID, "")
@@ -83,6 +77,26 @@ func newStatusCmd() *cobra.Command {
 			})
 		},
 	}
+}
+
+// daemonStatusRow renders the daemon row and the state its fingerprint keys
+// on. A version-skewed daemon reads as RUNNING: daemon.IsRunning answers the
+// narrower "is a COMPATIBLE daemon there" and returns false with a mismatch
+// error, but that daemon holds the socket and answers, so reporting it stopped
+// hides a live process during exactly the window the handshake exists to make
+// legible. The skew is the actionable fact, so the row carries it and its
+// remedy instead of a bare "running". Any other read failure stays stopped:
+// only a mismatch proves something answered.
+func daemonStatusRow(alive bool, err error) (state, text string) {
+	var mismatch *ipc.VersionMismatchError
+	if errors.As(err, &mismatch) {
+		return "running", fmt.Sprintf("%s running - %s. %s",
+			sYellow.Render("●"), mismatch.Summary(), mismatch.Remedy())
+	}
+	if alive {
+		return "running", fmt.Sprintf("%s running", sGreen.Render("●"))
+	}
+	return "stopped", fmt.Sprintf("%s stopped", sDim.Render("○"))
 }
 
 func statusFingerprint(repoID, daemonState string, activeRun *db.Run) string {
