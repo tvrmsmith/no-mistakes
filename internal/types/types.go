@@ -26,6 +26,9 @@ const (
 	RunCancelReasonAbortedByUser  = "cancelled: aborted by user"
 	RunCancelReasonSuperseded     = "cancelled: superseded by new push"
 	RunCIMonitorInterruptedReason = "ci monitor interrupted by daemon restart; PR remains open"
+	// RunCIMonitorDrainedReason marks a CI monitor cut short by an operator drain
+	// rather than by a crash. Same terminal status, distinguishable provenance.
+	RunCIMonitorDrainedReason = "ci monitor interrupted by daemon drain; PR remains open"
 )
 
 // Terminal reports whether the run has reached a final state the daemon will

@@ -550,3 +550,103 @@ func TestExecutor_ConfiguredSkippedStepDoesNotExecuteAndContinues(t *testing.T) 
 		}
 	}
 }
+
+// TestExecutor_DrainedCIStepLandsSkippedNotFailed pins that a CI monitor cut
+// by a daemon drain lands its step_results row skipped, matching what
+// db.RecoverStaleRunsExcept already records for the equivalent crash-recovery
+// case, instead of failed.
+func TestExecutor_DrainedCIStepLandsSkippedNotFailed(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	ciStep := &adaptiveCallStep{
+		name: types.StepCI,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			// A real CI monitor is mid-poll when a drain cancels its context;
+			// simulate that by cancelling from inside Execute rather than
+			// before Execute is even called.
+			cancel(fmt.Errorf("%s", types.RunCIMonitorDrainedReason))
+			return nil, sctx.Ctx.Err()
+		},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{ciStep}, nil)
+	events := collectEvents(exec)
+
+	if err := exec.Execute(ctx, run, repo, workDir); err == nil {
+		t.Fatal("Execute() error = nil, want an error from the cut CI step")
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci *db.StepResult
+	for i := range steps {
+		if steps[i].StepName == types.StepCI {
+			ci = steps[i]
+		}
+	}
+	if ci == nil {
+		t.Fatal("no ci step row found")
+	}
+	if ci.Status != types.StepStatusSkipped {
+		t.Fatalf("ci step status = %s, want %s", ci.Status, types.StepStatusSkipped)
+	}
+	if ci.Error == nil || *ci.Error != types.RunCIMonitorDrainedReason {
+		t.Fatalf("ci step error = %v, want %q", ci.Error, types.RunCIMonitorDrainedReason)
+	}
+
+	event := events.find(ipc.EventStepCompleted, types.StepCI)
+	if event == nil || event.Status == nil || *event.Status != string(types.StepStatusSkipped) {
+		t.Fatalf("expected skipped step_completed event, got %+v", event)
+	}
+}
+
+// TestExecutor_CIStepFailingForOtherReasonStillFails pins the existing
+// behavior: a CI step's context cancelled for a reason other than a drain or
+// a restart-recovery interruption still lands failed, so the new skip branch
+// above cannot widen beyond those two causes.
+func TestExecutor_CIStepFailingForOtherReasonStillFails(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	ciStep := &adaptiveCallStep{
+		name: types.StepCI,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			cancel(fmt.Errorf("some unrelated cause"))
+			return nil, sctx.Ctx.Err()
+		},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{ciStep}, nil)
+	events := collectEvents(exec)
+
+	if err := exec.Execute(ctx, run, repo, workDir); err == nil {
+		t.Fatal("Execute() error = nil, want an error from the failed CI step")
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci *db.StepResult
+	for i := range steps {
+		if steps[i].StepName == types.StepCI {
+			ci = steps[i]
+		}
+	}
+	if ci == nil {
+		t.Fatal("no ci step row found")
+	}
+	if ci.Status != types.StepStatusFailed {
+		t.Fatalf("ci step status = %s, want %s", ci.Status, types.StepStatusFailed)
+	}
+
+	event := events.find(ipc.EventStepCompleted, types.StepCI)
+	if event == nil || event.Status == nil || *event.Status != string(types.StepStatusFailed) {
+		t.Fatalf("expected failed step_completed event, got %+v", event)
+	}
+}

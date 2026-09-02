@@ -176,8 +176,15 @@ type AdmitPushParams struct {
 // HealthParams has no fields but exists for consistency.
 type HealthParams struct{}
 
-// ShutdownParams has no fields but exists for consistency.
-type ShutdownParams struct{}
+// ShutdownParams requests daemon shutdown, optionally draining in-flight runs
+// first. Drain defaults to false, so a bare ShutdownParams{} means exactly
+// today's immediate-shutdown behavior - required because a mixed-version
+// CLI/daemon pair (an old CLI against a new daemon, or vice versa) is a real
+// state right after an upgrade and before both sides restart.
+type ShutdownParams struct {
+	Drain          bool  `json:"drain,omitempty"`
+	DrainTimeoutMS int64 `json:"drain_timeout_ms,omitempty"`
+}
 
 // --- Method results ---
 
@@ -237,9 +244,30 @@ type HealthResult struct {
 	Status string `json:"status"`
 }
 
-// ShutdownResult confirms shutdown was initiated.
+// ShutdownResult confirms shutdown was initiated. Drained, Finished, and
+// Interrupted are populated only when a drain actually ran (Drained==true);
+// they are omitted, not zero-valued, for a plain shutdown so an old CLI
+// reading a bare {"ok":true} sees nothing new.
 type ShutdownResult struct {
-	OK bool `json:"ok"`
+	OK          bool                  `json:"ok"`
+	Drained     bool                  `json:"drained,omitempty"`
+	Finished    []string              `json:"finished,omitempty"`
+	Interrupted []DrainInterruptedRun `json:"interrupted,omitempty"`
+}
+
+// DrainInterruptedReason names why a drain did not let a run finish.
+type DrainInterruptedReason string
+
+const (
+	DrainInterruptedCIMonitor DrainInterruptedReason = "ci_monitor"
+	DrainInterruptedDeadline  DrainInterruptedReason = "deadline"
+)
+
+// DrainInterruptedRun is one run a drain cut short.
+type DrainInterruptedRun struct {
+	RunID  string                 `json:"run_id"`
+	Branch string                 `json:"branch"`
+	Reason DrainInterruptedReason `json:"reason"`
 }
 
 // --- Wire types ---

@@ -1407,6 +1407,172 @@ func (m *RunManager) HandleRespondWithOverrides(runID string, step types.StepNam
 	return exec.RespondWithOverrides(step, action, findingIDs, instructions, addedFindings)
 }
 
+// DrainReport is what a drain did, for the operator and for the caller's exit code.
+//
+// Finished includes every run from both the ci and waited buckets whose done
+// channel closed before the deadline - a ci run that exits in time therefore
+// appears in both Finished and Interrupted, since Drain is what cut it short
+// even though it happened to finish promptly once cancelled.
+type DrainReport struct {
+	Waited      []string                  // run IDs the drain waited on (ci + waited buckets)
+	Finished    []string                  // of Waited, the ones that finished in time
+	Interrupted []ipc.DrainInterruptedRun // runs the drain did not let finish naturally
+}
+
+// isCIMonitorRun reports whether a run's only active step is the CI monitor:
+// a step_results row for types.StepCI in one of running/awaiting_approval/
+// fixing/fix_review, and no row for any OTHER step name in one of those
+// statuses. This mirrors the predicate db.RecoverStaleRunsExcept uses so
+// drain and crash recovery agree on what a CI monitor run is.
+func isCIMonitorRun(database *db.DB, runID string) bool {
+	steps, err := database.GetStepsByRun(runID)
+	if err != nil {
+		slog.Warn("drain: failed to read run steps for classification; treating as a normal in-flight run", "run_id", runID, "error", err)
+		return false
+	}
+	ciActive := false
+	for _, step := range steps {
+		switch step.Status {
+		case types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview:
+		default:
+			continue
+		}
+		if step.StepName != types.StepCI {
+			return false
+		}
+		ciActive = true
+	}
+	return ciActive
+}
+
+// drainWaitEntry is one run Drain is waiting on: its done channel, branch (for
+// reporting), and whether it was cut short as a CI monitor.
+type drainWaitEntry struct {
+	runID  string
+	branch string
+	done   chan struct{}
+	ci     bool
+}
+
+// Drain refuses new runs immediately, then waits out the in-flight runs it
+// can: it never waits on a run parked at an approval gate (an operator has to
+// drive that, not time), and it cuts a CI-monitor run short immediately
+// rather than waiting for a PR merge that could take arbitrarily long. It
+// returns once every run it decided to wait on has finished, ctx is
+// cancelled, or timeout elapses, whichever is first. Shutdown() is unaffected
+// and is still the caller's responsibility afterwards: Drain cancels only the
+// CI-monitor runs it classifies, nothing else.
+func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainReport {
+	// Set first, unconditionally, before any classification: there is no
+	// un-drain path, and startRun's shuttingDown check must see this
+	// immediately for every push that arrives after Drain begins.
+	m.shuttingDown.Store(true)
+
+	m.mu.Lock()
+	cancels := make(map[string]context.CancelCauseFunc, len(m.cancels))
+	dones := make(map[string]chan struct{}, len(m.dones))
+	for id, cancel := range m.cancels {
+		done, ok := m.dones[id]
+		if !ok {
+			// A run mid-deregistration between the two map writes; Shutdown
+			// (and the wg-based drain path it already uses) still covers it.
+			continue
+		}
+		cancels[id] = cancel
+		dones[id] = done
+	}
+	m.mu.Unlock()
+
+	report := DrainReport{}
+	var wait []drainWaitEntry
+
+	for id, done := range dones {
+		run, err := m.db.GetRun(id)
+		if err != nil {
+			// A DB hiccup must not cut real work short: wait it out, bounded
+			// by the deadline like any other in-flight run.
+			slog.Warn("drain: failed to read run; waiting on it rather than cutting it short", "run_id", id, "error", err)
+			wait = append(wait, drainWaitEntry{runID: id, done: done})
+			continue
+		}
+		if run == nil {
+			// Deregistered concurrently with this snapshot; nothing to wait
+			// on or report.
+			continue
+		}
+		if run.AwaitingAgentSince != nil {
+			// Parked at a gate: never waited on, never cancelled by Drain,
+			// never reported. Shutdown()'s later cancel is what ends it.
+			continue
+		}
+		if isCIMonitorRun(m.db, id) {
+			if cancel, ok := cancels[id]; ok {
+				cancel(fmt.Errorf("%s", types.RunCIMonitorDrainedReason))
+			}
+			report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
+				RunID:  id,
+				Branch: run.Branch,
+				Reason: ipc.DrainInterruptedCIMonitor,
+			})
+			wait = append(wait, drainWaitEntry{runID: id, branch: run.Branch, done: done, ci: true})
+			continue
+		}
+		wait = append(wait, drainWaitEntry{runID: id, branch: run.Branch, done: done})
+	}
+
+	for _, e := range wait {
+		report.Waited = append(report.Waited, e.runID)
+	}
+
+	// Fan every done channel into one funnel so the deadline/ctx race can be
+	// expressed as a single select, without reflect.Select over a dynamic set.
+	finishedCh := make(chan string, len(wait))
+	for _, e := range wait {
+		go func(e drainWaitEntry) {
+			<-e.done
+			finishedCh <- e.runID
+		}(e)
+	}
+
+	deadlineTimer := time.NewTimer(timeout)
+	defer deadlineTimer.Stop()
+
+	finished := make(map[string]bool, len(wait))
+	remaining := len(wait)
+waitLoop:
+	for remaining > 0 {
+		select {
+		case id := <-finishedCh:
+			finished[id] = true
+			remaining--
+		case <-deadlineTimer.C:
+			break waitLoop
+		case <-ctx.Done():
+			break waitLoop
+		}
+	}
+
+	for _, e := range wait {
+		if finished[e.runID] {
+			report.Finished = append(report.Finished, e.runID)
+			continue
+		}
+		if !e.ci {
+			// Drain does not cancel a waited run past the deadline; Shutdown()
+			// still will.
+			report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
+				RunID:  e.runID,
+				Branch: e.branch,
+				Reason: ipc.DrainInterruptedDeadline,
+			})
+		}
+		// A ci entry that missed the deadline already has its one Interrupted
+		// entry from classification above; it is not duplicated here.
+	}
+
+	return report
+}
+
 // Shutdown cancels all active runs. Called during daemon shutdown to prevent
 // orphaned goroutines from continuing agent calls and git operations.
 func (m *RunManager) Shutdown() {

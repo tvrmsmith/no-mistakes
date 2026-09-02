@@ -892,6 +892,23 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			redactedErr := safeurl.RedactText(err.Error())
 			fmt.Fprintf(logFile, "\nerror: %s\n", redactedErr)
 			touchLogActivity("error: "+redactedErr, true)
+			// A CI monitor cut short by an operator drain or a daemon-restart
+			// recovery is expected, not a failure: db.RecoverStaleRunsExcept
+			// already lands the equivalent crash-recovery row skipped rather
+			// than failed, and this keeps a live drain consistent with that.
+			// Any other cancellation (or plain step error) still fails.
+			if stepName == types.StepCI {
+				if cause := context.Cause(sctx.Ctx); cause != nil {
+					switch cause.Error() {
+					case types.RunCIMonitorDrainedReason, types.RunCIMonitorInterruptedReason:
+						if dbErr := e.db.SkipStep(sr.ID, cause.Error(), durationMS); dbErr != nil {
+							slog.Warn("failed to mark ci step as skipped in db", "step", stepName, "error", dbErr)
+						}
+						e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusSkipped), "", cause.Error(), &durationMS)
+						return false, "", fmt.Errorf("step %s failed: %s", stepName, redactedErr)
+					}
+				}
+			}
 			if dbErr := e.db.FailStep(sr.ID, redactedErr, durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
@@ -1444,8 +1461,11 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 		}
 	}
 	runStatus := types.RunFailed
-	if errMsg == types.RunCancelReasonAbortedByUser || errMsg == types.RunCancelReasonSuperseded {
+	switch errMsg {
+	case types.RunCancelReasonAbortedByUser, types.RunCancelReasonSuperseded:
 		runStatus = types.RunCancelled
+	case types.RunCIMonitorInterruptedReason, types.RunCIMonitorDrainedReason:
+		runStatus = types.RunCIMonitorInterrupted
 	}
 	verifiedHead, verified := e.reconcileTerminalRunHead(run)
 	var dbErr error

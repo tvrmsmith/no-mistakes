@@ -549,32 +549,125 @@ func daemonIsRunningViaIPC(p *paths.Paths) (bool, error) {
 	return result.Status == "ok", nil
 }
 
+// StopOptions configures a Stop request beyond today's plain shutdown.
+type StopOptions struct {
+	// Drain asks the daemon to refuse new runs, wait for in-flight ones to
+	// finish (cutting CI monitors immediately rather than waiting on them),
+	// then exit - instead of cancelling every run outright.
+	Drain bool
+	// DrainTimeout bounds the drain. Zero uses the daemon's own default
+	// (see defaultDrainTimeout in daemon.go).
+	DrainTimeout time.Duration
+}
+
+// StopOutcome reports what a drain-aware Stop actually did, mirroring
+// ipc.ShutdownResult's drain fields.
+type StopOutcome struct {
+	Drained     bool
+	Finished    []string
+	Interrupted []ipc.DrainInterruptedRun
+}
+
 // Stop sends a shutdown request to the running daemon and waits for it to exit.
 func Stop(p *paths.Paths) error {
+	_, err := StopWithOptions(p, StopOptions{})
+	return err
+}
+
+// StopWithOptions is Stop with drain support; see StopOptions.
+func StopWithOptions(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
 	instance := captureRunningDaemon(p)
 	if managed, err := stopManagedService(p); managed {
+		var outcome StopOutcome
 		var detachedErr error
+		if opts.Drain {
+			// The service manager's own stop has no drain semantics of its
+			// own - it just signals the process to exit - so ask the daemon
+			// to drain over IPC first. This blocks until the drain finishes
+			// and the daemon is already exiting on its own; the managed-stop
+			// call below still runs afterward, purely to confirm exit
+			// through the platform's normal path.
+			drained, drainErr := requestDrain(p, opts)
+			outcome = drained
+			if drainErr != nil {
+				detachedErr = drainErr
+			}
+		}
 		if err != nil {
 			if alive, _ := daemonHealthCheck(p); alive {
-				detachedErr = stopDetachedDaemon(p)
+				if stopErr := stopDetachedDaemon(p); stopErr != nil {
+					detachedErr = stopErr
+				}
 			}
 		}
-		if waitErr := waitForDaemonStop(p, instance); waitErr != nil {
+		waitTimeout := daemonStopTimeout()
+		if opts.Drain {
+			waitTimeout += drainTimeoutOrDefault(opts.DrainTimeout)
+		}
+		if waitErr := waitForDaemonStopBudget(p, instance, waitTimeout); waitErr != nil {
 			switch {
 			case err != nil && detachedErr != nil:
-				return fmt.Errorf("%w; detached shutdown: %v; wait for exit: %v", err, detachedErr, waitErr)
+				return outcome, fmt.Errorf("%w; detached shutdown: %v; wait for exit: %v", err, detachedErr, waitErr)
 			case err != nil:
-				return fmt.Errorf("%w; wait for exit: %v", err, waitErr)
+				return outcome, fmt.Errorf("%w; wait for exit: %v", err, waitErr)
+			case detachedErr != nil:
+				return outcome, fmt.Errorf("detached shutdown: %w; wait for exit: %v", detachedErr, waitErr)
 			default:
-				return waitErr
+				return outcome, waitErr
 			}
 		}
-		return nil
+		return outcome, nil
 	}
-	return stopDetachedDaemon(p)
+	return stopDetachedDaemonWithOptions(p, opts)
+}
+
+// requestDrain asks the running daemon to drain over its own dedicated
+// connection and returns the resulting outcome. It exists for the managed
+// service path in StopWithOptions, which needs the drain RPC to run and
+// complete before the service manager's own (drain-unaware) stop touches the
+// process.
+func requestDrain(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
+	client, err := daemonDial(p.Socket())
+	if err != nil {
+		return StopOutcome{}, fmt.Errorf("dial daemon: %w", err)
+	}
+	result, callErr := sendShutdownRequest(client, StopOptions{Drain: true, DrainTimeout: opts.DrainTimeout})
+	_ = client.Close()
+	if callErr != nil {
+		return StopOutcome{}, fmt.Errorf("drain request: %w", callErr)
+	}
+	return StopOutcome{Drained: result.Drained, Finished: result.Finished, Interrupted: result.Interrupted}, nil
+}
+
+// sendShutdownRequest issues the shutdown/drain RPC over an already-dialed
+// connection. A drain's call budget must cover the drain deadline itself
+// plus the existing post-drain shutdown grace (daemonStopTimeout) and some
+// slack, or ipc.Client.Call's 30s default cuts a real drain off long before
+// the daemon side even finishes waiting.
+func sendShutdownRequest(client *ipc.Client, opts StopOptions) (ipc.ShutdownResult, error) {
+	var result ipc.ShutdownResult
+	if !opts.Drain {
+		return result, client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &result)
+	}
+	timeout := drainTimeoutOrDefault(opts.DrainTimeout)
+	params := &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: timeout.Milliseconds()}
+	callTimeout := timeout + daemonStopTimeout() + 30*time.Second
+	return result, client.CallWithTimeout(ipc.MethodShutdown, params, &result, callTimeout)
+}
+
+func drainTimeoutOrDefault(d time.Duration) time.Duration {
+	if d <= 0 {
+		return defaultDrainTimeout
+	}
+	return d
 }
 
 func stopDetachedDaemon(p *paths.Paths) error {
+	_, err := stopDetachedDaemonWithOptions(p, StopOptions{})
+	return err
+}
+
+func stopDetachedDaemonWithOptions(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
 	// Identify the process we are about to shut down before asking it to
 	// exit: the daemon removes its own PID file during teardown, so after
 	// the shutdown request there is no longer a way to name the instance
@@ -585,20 +678,19 @@ func stopDetachedDaemon(p *paths.Paths) error {
 	if err != nil {
 		stale, staleErr := staleDaemonArtifacts(p)
 		if staleErr != nil {
-			return staleErr
+			return StopOutcome{}, staleErr
 		}
 		if stale {
 			cleanupDaemonArtifacts(p)
-			return nil
+			return StopOutcome{}, nil
 		}
 		if killErr := stopDetachedDaemonByPID(p); killErr != nil {
-			return fmt.Errorf("dial daemon: %w; pid fallback: %v", err, killErr)
+			return StopOutcome{}, fmt.Errorf("dial daemon: %w; pid fallback: %v", err, killErr)
 		}
-		return nil
+		return StopOutcome{}, nil
 	}
 
-	var result ipc.ShutdownResult
-	callErr := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &result)
+	result, callErr := sendShutdownRequest(client, opts)
 	// Hand the connection back before waiting on the exit it gates. The
 	// daemon's accept loop drains in-flight connection handlers before it
 	// finishes shutting down, so a stopper that kept its client open while
@@ -607,9 +699,18 @@ func stopDetachedDaemon(p *paths.Paths) error {
 	// not return (and so not run a deferred close) until the daemon exits.
 	_ = client.Close()
 	if callErr != nil {
-		return fmt.Errorf("shutdown request: %w", callErr)
+		return StopOutcome{}, fmt.Errorf("shutdown request: %w", callErr)
 	}
-	return waitForDaemonStop(p, instance)
+
+	outcome := StopOutcome{Drained: result.Drained, Finished: result.Finished, Interrupted: result.Interrupted}
+	waitTimeout := daemonStopTimeout()
+	if opts.Drain {
+		waitTimeout += drainTimeoutOrDefault(opts.DrainTimeout)
+	}
+	if waitErr := waitForDaemonStopBudget(p, instance, waitTimeout); waitErr != nil {
+		return outcome, waitErr
+	}
+	return outcome, nil
 }
 
 // daemonInstance names the exact daemon process a stop is responsible for.
@@ -805,7 +906,14 @@ func daemonSocketAcceptingConnections(path string) (bool, error) {
 // exited before readiness with status 1. Waiting for the captured instance to
 // exit is what makes "daemon stopped" mean the daemon's resources are free.
 func waitForDaemonStop(p *paths.Paths, instance daemonInstance) error {
-	deadline := time.Now().Add(daemonStopTimeout())
+	return waitForDaemonStopBudget(p, instance, daemonStopTimeout())
+}
+
+// waitForDaemonStopBudget is waitForDaemonStop with a caller-selected budget,
+// so a drain-aware Stop can extend the wait by the drain timeout on top of
+// the usual graceful-shutdown grace.
+func waitForDaemonStopBudget(p *paths.Paths, instance daemonInstance, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		alive, err := daemonHealthCheck(p)
 		if err == nil && !alive {

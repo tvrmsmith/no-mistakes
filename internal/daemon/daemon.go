@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
@@ -1027,6 +1028,11 @@ func migrateGateConfig(ctx context.Context, bareDir string) error {
 	return nil
 }
 
+// defaultDrainTimeout bounds a drain request that omits DrainTimeoutMS (or
+// sends a non-positive value), so a caller can't accidentally block a shutdown
+// forever by forgetting the field.
+const defaultDrainTimeout = 10 * time.Minute
+
 func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func()) {
 	classify := func(ctx context.Context, cwd string, markerPresent, skipManagedGit bool) (gatecontext.Result, error) {
 		return (gatecontext.Inspector{DB: d, Paths: mgr.paths}).Inspect(ctx, gatecontext.Request{
@@ -1052,12 +1058,58 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		return &ipc.HealthResult{Status: "ok"}, nil
 	})
 
-	srv.Handle(ipc.MethodShutdown, func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
+	var draining atomic.Bool
+	srv.Handle(ipc.MethodShutdown, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		if err := refuseNested(ctx, false); err != nil {
 			return nil, err
 		}
+		var p ipc.ShutdownParams
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("invalid params: %w", err)
+			}
+		}
+		if !p.Drain {
+			go shutdown()
+			return &ipc.ShutdownResult{OK: true}, nil
+		}
+		if !draining.CompareAndSwap(false, true) {
+			// A drain is already running on another connection; starting a
+			// second one would double-cut the same in-flight runs.
+			return &ipc.ShutdownResult{OK: true, Drained: false}, nil
+		}
+		defer draining.Store(false)
+		timeout := time.Duration(p.DrainTimeoutMS) * time.Millisecond
+		if p.DrainTimeoutMS <= 0 {
+			timeout = defaultDrainTimeout
+		}
+		// Drain runs synchronously on this handler goroutine so its report
+		// reaches the caller in this same RPC response, with no second RPC or
+		// DB read needed to learn what got interrupted. That's safe here:
+		// ipc/server.go gives every connection its own goroutine and doesn't
+		// close s.done until Close() is called, so blocking this one doesn't
+		// stall the listener or any other connection (see the concurrent
+		// MethodHealth test alongside this handler's tests).
+		//
+		// ctx is this connection's own context, which the server cancels the
+		// moment Close() runs - including when a SIGTERM (or any other
+		// shutdown() caller) fires concurrently. Drain's wait loop already
+		// selects on ctx.Done(), so a signal aborts an in-flight drain outright
+		// rather than waiting out its deadline; that's intentional, not a bug
+		// to fix here. What the drain hadn't finished by then is left for
+		// mgr.Shutdown() below to cancel, same as always, and since
+		// CancelCauseFunc keeps only the first cause, a run the drain meant to
+		// classify as a cut CI monitor can land as a plain shutdown-cancelled
+		// failure instead - an accepted, best-effort tradeoff of a signal
+		// racing a drain.
+		report := mgr.Drain(ctx, timeout)
 		go shutdown()
-		return &ipc.ShutdownResult{OK: true}, nil
+		return &ipc.ShutdownResult{
+			OK:          true,
+			Drained:     true,
+			Finished:    report.Finished,
+			Interrupted: report.Interrupted,
+		}, nil
 	})
 
 	srv.Handle(ipc.MethodGetRun, func(_ context.Context, params json.RawMessage) (interface{}, error) {
