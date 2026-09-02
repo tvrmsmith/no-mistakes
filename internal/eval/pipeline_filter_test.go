@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -188,6 +189,52 @@ func TestInspectSetsForPipelineNarrowsTheFiguresAndKeepsTheWholeBreakdown(t *tes
 	}
 	if !reflect.DeepEqual(all.Pipelines, wantPipelines) {
 		t.Fatalf("filtered all.Pipelines = %#v, want the unfiltered breakdown %#v", all.Pipelines, wantPipelines)
+	}
+	wantScored := []PipelineCountRow{{PipelineVersion: PipelineCheapGatesFirst, Cases: 1, GoldCases: 1}}
+	if !reflect.DeepEqual(all.ScoredPipelines, wantScored) {
+		t.Fatalf("filtered all.ScoredPipelines = %#v, want only the scored layout %#v", all.ScoredPipelines, wantScored)
+	}
+}
+
+// The self-score caveat has to describe the population the score folded, not
+// the whole set. A filter that leaves one layout makes the score comparable,
+// even though the breakdown beside it still lists both layouts.
+func TestInspectSetsForPipelineScopesTheScoredBreakdownToTheFilter(t *testing.T) {
+	store := openEvalStore(t)
+	for i := 1; i <= 20; i++ {
+		id := "review-early-" + strconv.Itoa(i)
+		writeSyntheticCase(t, store, syntheticCaseSpec{
+			id: id, fingerprint: "repo-early-" + strconv.Itoa(i), capturedAt: int64(i), changedLines: 10,
+			pipelineVersion: PipelineReviewEarly,
+			gold:            []FindingGold{{ID: id, Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: id, Severity: "error", Action: "auto-fix"}},
+			roundFindings:   findingsJSON(findingSpec{ID: id, Severity: "error", File: "main.go", Line: 1, Description: id, Action: "auto-fix"}),
+		})
+	}
+	for i := 1; i <= 10; i++ {
+		id := "cheap-gates-first-" + strconv.Itoa(i)
+		writeSyntheticCase(t, store, syntheticCaseSpec{
+			id: id, fingerprint: "repo-late-" + strconv.Itoa(i), capturedAt: int64(100 + i), changedLines: 10,
+			pipelineVersion: PipelineCheapGatesFirst,
+			gold:            []FindingGold{{ID: id, Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: id, Severity: "error", Action: "auto-fix"}},
+			roundFindings:   findingsJSON(findingSpec{ID: id, Severity: "error", File: "main.go", Line: 1, Description: id, Action: "auto-fix"}),
+		})
+	}
+
+	summaries, err := InspectSetsForPipeline(store, PipelineReviewEarly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diversified SetSummary
+	for _, summary := range summaries {
+		if summary.Name == "diversified" {
+			diversified = summary
+		}
+	}
+	if len(diversified.Pipelines) != 2 {
+		t.Fatalf("diversified.Pipelines = %#v, want both layouts in the breakdown", diversified.Pipelines)
+	}
+	if len(diversified.ScoredPipelines) != 1 || diversified.ScoredPipelines[0].PipelineVersion != PipelineReviewEarly {
+		t.Fatalf("diversified.ScoredPipelines = %#v, want only the filtered layout", diversified.ScoredPipelines)
 	}
 }
 

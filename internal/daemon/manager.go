@@ -1678,9 +1678,9 @@ func (m *RunManager) autoCaptureEvalCase(ctx context.Context, cfg *config.Config
 	ctx, cancel := context.WithTimeout(ctx, evalAutoCaptureTimeout)
 	defer cancel()
 
-	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, cfg.Eval.MaxCases)
+	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, cfg.Eval.MaxCases, cfg.Eval.DiversifiedSize)
 	if result.PinWarning != "" {
-		slog.Warn("eval retention ran without diversified pin protection", "run_id", runID, "reason", result.PinWarning)
+		slog.Warn("eval retention skipped: diversified pins unavailable", "run_id", runID, "reason", result.PinWarning)
 	}
 	switch {
 	case err != nil:

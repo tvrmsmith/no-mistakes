@@ -90,6 +90,14 @@ func TestMain(m *testing.M) {
 	}
 	_ = os.Setenv("NM_HOME", root)
 	_ = os.Setenv("HOME", home)
+	// The fixtures here clone, commit, and push for real, so an ambient
+	// ~/.gitconfig (commit.gpgsign against a locked signing agent, core.hooksPath,
+	// gpg.format) or a harness-injected GIT_CONFIG_* decides whether a fixture
+	// commit succeeds. A test that needs injected config re-sets it with
+	// t.Setenv. internal/eval/main_test.go isolates the same way.
+	_ = os.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	_ = os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	_ = os.Unsetenv("GIT_CONFIG_COUNT")
 	_ = os.Setenv("NO_MISTAKES_TELEMETRY", "off")
 	_ = os.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
 

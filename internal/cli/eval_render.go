@@ -27,6 +27,13 @@ const (
 // recorded reviews against their own gold. The other sets are a compact
 // footnote. Everything shown comes from InspectSets, which reads only local
 // registry rows and captured files - no replay, agent, or network.
+// pipelineLayoutSpanWarning is the one wording both score boxes use when the
+// population they folded into a single number spans more than one pipeline
+// layout. Two copies of the sentence would drift on the first reword.
+func pipelineLayoutSpanWarning(layouts int) string {
+	return sYellow.Render(fmt.Sprintf("    ⚠ spans %d pipeline layouts: not comparable as one score", layouts))
+}
+
 func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 	byName := map[string]eval.SetSummary{}
 	for _, summary := range summaries {
@@ -57,13 +64,13 @@ func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 		lines = append(lines, "    unlabeled / pending (no finding-level gold yet)")
 	} else {
 		lines = append(lines, evalScoreLines(diversified.SelfScore)...)
-		// The self-score folds the whole set into one number. When the set holds
-		// more than one pipeline layout that number spans two populations whose
-		// reviews saw different trees, so it has to be read as a mix rather than
-		// as a movement in review quality. The layout counts below say how the
-		// set splits; this says the headline cannot be compared across it.
-		if len(diversified.Pipelines) > 1 {
-			lines = append(lines, sYellow.Render(fmt.Sprintf("    ⚠ spans %d pipeline layouts: not comparable as one score", len(diversified.Pipelines))))
+		// The self-score folds the SCORED cases into one number, so the caveat
+		// reads ScoredPipelines rather than the unfiltered Pipelines below.
+		// Under `eval sets --pipeline X` the breakdown still shows both layouts
+		// while the score covers one of them, and warning there would flag a
+		// score the filter has already made comparable.
+		if layouts := len(diversified.ScoredPipelines); layouts > 1 {
+			lines = append(lines, pipelineLayoutSpanWarning(layouts))
 		}
 	}
 	if len(diversified.Composition) > 0 {
@@ -266,7 +273,7 @@ func renderEvalRunSummary(session eval.Session, evaluations []eval.Evaluation, c
 		// two pipeline layouts are two populations whose reviews saw different
 		// trees. Narrowing with --pipeline gets a score over one of them.
 		if layouts := eval.PipelineLayoutsInEvaluations(evaluations); layouts > 1 {
-			lines = append(lines, sYellow.Render(fmt.Sprintf("    ⚠ spans %d pipeline layouts: not comparable as one score", layouts)))
+			lines = append(lines, pipelineLayoutSpanWarning(layouts))
 		}
 	}
 	lines = append(lines, "")

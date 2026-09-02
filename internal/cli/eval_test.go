@@ -788,6 +788,11 @@ func TestEvalSetsSelfScoreWarnsWhenTheSetSpansTwoPipelineLayouts(t *testing.T) {
 			{PipelineVersion: eval.PipelineReviewEarly, Cases: 1, GoldCases: 1},
 			{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 1, GoldCases: 1},
 		},
+		// Unfiltered, so the scored population is the whole set.
+		ScoredPipelines: []eval.PipelineCountRow{
+			{PipelineVersion: eval.PipelineReviewEarly, Cases: 1, GoldCases: 1},
+			{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 1, GoldCases: 1},
+		},
 	}})
 	if !strings.Contains(out, "not comparable") {
 		t.Fatalf("sets output = %q, want the self-score to be marked not comparable across layouts", out)
@@ -804,6 +809,9 @@ func TestEvalSetsSelfScoreCarriesNoCaveatForASingleLayout(t *testing.T) {
 		GoldCases: 2,
 		SelfScore: eval.EvaluationSummary{Labeled: 2},
 		Pipelines: []eval.PipelineCountRow{
+			{PipelineVersion: eval.PipelineReviewEarly, Cases: 2, GoldCases: 2},
+		},
+		ScoredPipelines: []eval.PipelineCountRow{
 			{PipelineVersion: eval.PipelineReviewEarly, Cases: 2, GoldCases: 2},
 		},
 	}})
@@ -830,6 +838,36 @@ func TestEvalRunSummaryWarnsWhenTheReplaysSpanTwoPipelineLayouts(t *testing.T) {
 	single := renderEvalRunSummary(session, evaluations[:1], 1)
 	if strings.Contains(single, "not comparable") {
 		t.Fatalf("run summary = %q, want no comparability caveat for a single layout", single)
+	}
+}
+
+// Under `eval sets --pipeline review-early` over a mixed corpus the self-score
+// covers one layout and is comparable, while the breakdown still lists both so
+// an operator can see what the filter left out. The caveat follows the scored
+// population, so it stays silent.
+func TestEvalSetsDashboardKeepsTheCaveatSilentForAFilteredSingleLayoutScore(t *testing.T) {
+	both := []eval.PipelineCountRow{
+		{PipelineVersion: eval.PipelineReviewEarly, Cases: 20, GoldCases: 20},
+		{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 10, GoldCases: 10},
+	}
+	filtered := eval.SetSummary{
+		Name: "diversified", Cases: 20, GoldCases: 20, TruePositive: 20, Cap: 32, PinCount: 30,
+		SelfScore:       eval.EvaluationSummary{Total: 20, Labeled: 20, TruePositive: 20},
+		Pipelines:       both,
+		ScoredPipelines: []eval.PipelineCountRow{{PipelineVersion: eval.PipelineReviewEarly, Cases: 20, GoldCases: 20}},
+	}
+	out := renderEvalSetsDashboard([]eval.SetSummary{filtered})
+	if strings.Contains(out, "not comparable") {
+		t.Fatalf("sets dashboard = %q, want no caveat when the filter left one layout in the score", out)
+	}
+	if !strings.Contains(out, string(eval.PipelineCheapGatesFirst)) {
+		t.Fatalf("sets dashboard = %q, want the unfiltered breakdown to still list both layouts", out)
+	}
+
+	unfiltered := filtered
+	unfiltered.ScoredPipelines = both
+	if !strings.Contains(renderEvalSetsDashboard([]eval.SetSummary{unfiltered}), "not comparable") {
+		t.Fatal("sets dashboard printed no caveat for a score that really does span two layouts")
 	}
 }
 

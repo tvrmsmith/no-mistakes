@@ -246,6 +246,11 @@ type SetSummary struct {
 	// before running a filtered report. It is independent of any pipeline
 	// filter InspectSetsForPipeline was called with.
 	Pipelines []PipelineCountRow
+	// ScoredPipelines buckets the FILTERED cases, which are the ones SelfScore
+	// actually folds into one number. A filter that leaves a single layout
+	// makes that score comparable even though Pipelines still lists two, so
+	// the not-comparable caveat reads this rather than Pipelines.
+	ScoredPipelines []PipelineCountRow
 }
 
 // PipelineCountRow is one pipeline-layout bucket of a case set.
@@ -279,12 +284,15 @@ func InspectSets(store *Store) ([]SetSummary, error) {
 // InspectSets is this with no filter (PipelineAny).
 func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary, error) {
 	sets := []string{"all", "labeled", "diversified", "tune"}
-	all, err := store.ListCasesForPipeline("all", version)
+	// Resolving a set re-reads every case directory off disk, so "all" is
+	// resolved once here, unfiltered, and both the labeled count and the loop's
+	// own "all" iteration narrow that same slice in memory.
+	allResolved, err := store.ListCasesForPipeline("all", PipelineAny)
 	if err != nil {
 		return nil, err
 	}
 	labeledCount := 0
-	for _, c := range all {
+	for _, c := range filterCasesByPipeline(allResolved, version) {
 		if c.Labels.HasGold() {
 			labeledCount++
 		}
@@ -299,12 +307,23 @@ func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary
 		// layout breakdown has to describe the whole set (that is what makes it
 		// useful before choosing a filter), while every other field describes
 		// the filtered view.
-		resolved, err := store.ListCasesForPipeline(name, PipelineAny)
-		if err != nil {
-			return nil, err
+		resolved := allResolved
+		if name != "all" {
+			r, err := store.ListCasesForPipeline(name, PipelineAny)
+			if err != nil {
+				return nil, err
+			}
+			resolved = r
 		}
 		cases := filterCasesByPipeline(resolved, version)
-		summary := SetSummary{Name: name, Cases: len(cases), Cap: store.diversifiedSize, SelfScore: SelfScoreRecordedReviews(cases), Pipelines: pipelineCountRows(resolved)}
+		summary := SetSummary{
+			Name:            name,
+			Cases:           len(cases),
+			Cap:             store.diversifiedSize,
+			SelfScore:       SelfScoreRecordedReviews(cases),
+			Pipelines:       pipelineCountRows(resolved),
+			ScoredPipelines: pipelineCountRows(cases),
+		}
 		if name == "diversified" {
 			if n, err := store.pinCount(); err == nil {
 				summary.PinCount = n

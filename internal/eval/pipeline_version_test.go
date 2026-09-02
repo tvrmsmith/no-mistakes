@@ -109,7 +109,9 @@ func TestPipelineVersionFromSteps_ReviewWithNoCheapGateIsPreReorder(t *testing.T
 // No review row at all is the one case with no evidence either way, so the
 // build's own step order is the only thing left to read.
 func TestPipelineVersionFromSteps_NoReviewRowFallsBackToTheBuildsOwnOrder(t *testing.T) {
-	want := CurrentPipelineVersion()
+	// Pinned to a concrete value rather than derived from the function under
+	// test, so the sibling reorder landing forces a deliberate edit here.
+	want := PipelineReviewEarly
 	steps := []*db.StepResult{
 		stepAt(types.StepIntent, 1),
 		stepAt(types.StepRebase, 2),
@@ -126,14 +128,21 @@ func TestPipelineVersionFromSteps_NoReviewRowFallsBackToTheBuildsOwnOrder(t *tes
 	}
 }
 
-func TestCurrentPipelineVersionAgreesWithTheStepRuleAppliedToAllSteps(t *testing.T) {
-	all := types.AllSteps()
-	steps := make([]*db.StepResult, 0, len(all))
-	for i, name := range all {
-		steps = append(steps, stepAt(name, i+1))
+// types.StepName.Order() returns 0 for any name its switch does not know, and a
+// sibling change adds the "format" and "metrics" gates. An unrecorded order must
+// not read as "ran before review" and flip a still-review-early run.
+func TestPipelineVersionFromSteps_CheapGateWithNoRecordedOrderIsNotEvidence(t *testing.T) {
+	steps := []*db.StepResult{
+		stepNamed("format", 0),
+		stepNamed("metrics", 0),
+		stepAt(types.StepReview, 3),
 	}
-	if got, want := PipelineVersionFromSteps(steps), CurrentPipelineVersion(); got != want {
-		t.Fatalf("PipelineVersionFromSteps(AllSteps) = %q, want %q (CurrentPipelineVersion)", got, want)
+	if got := PipelineVersionFromSteps(steps); got != PipelineReviewEarly {
+		t.Fatalf("PipelineVersionFromSteps() = %q, want %q for gates with no recorded order", got, PipelineReviewEarly)
+	}
+	withRealGate := append(steps, stepAt(types.StepTest, 1))
+	if got := PipelineVersionFromSteps(withRealGate); got != PipelineCheapGatesFirst {
+		t.Fatalf("PipelineVersionFromSteps() = %q, want %q when a gate does record an earlier order", got, PipelineCheapGatesFirst)
 	}
 }
 

@@ -72,6 +72,14 @@ func pipelineVersionFromOrderedSteps(steps []orderedStep, fallback PipelineVersi
 		if !cheapGateNames[s.name] {
 			continue
 		}
+		// An order of 0 or less is no recorded position at all, which is what
+		// types.StepName.Order() returns for a name its switch does not know.
+		// Reading that as "ran before review" would stamp a still-review-early
+		// run cheap-gates-first, so it counts as no evidence rather than as
+		// evidence of the new layout.
+		if s.order <= 0 {
+			continue
+		}
 		haveCheapGate = true
 		// A gate sharing review's order proves nothing about which ran first,
 		// so it counts as unresolved and lands on the conservative side with
@@ -80,10 +88,7 @@ func pipelineVersionFromOrderedSteps(steps []orderedStep, fallback PipelineVersi
 			anyGateAfterReview = true
 		}
 	}
-	if !haveCheapGate {
-		return PipelineReviewEarly
-	}
-	if anyGateAfterReview {
+	if !haveCheapGate || anyGateAfterReview {
 		return PipelineReviewEarly
 	}
 	return PipelineCheapGatesFirst
