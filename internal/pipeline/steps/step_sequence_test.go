@@ -9,8 +9,10 @@ import (
 
 // TestAllStepsMatchesTypesAllSteps pins the sequence the daemon executes
 // (steps.AllSteps) against the sequence types.AllSteps orders and persists. A
-// step in only one list would otherwise get Order() == 0, which
-// db.ResetStepsFrom turns into a reset from the top of the pipeline.
+// step present only in steps.AllSteps would otherwise get Order() == 0, which
+// db.ResetStepsFrom turns into a reset from the top of the pipeline; one
+// present only in types.AllSteps gets a valid order and a TUI row but never
+// runs.
 func TestAllStepsMatchesTypesAllSteps(t *testing.T) {
 	t.Setenv("NM_DEMO", "")
 

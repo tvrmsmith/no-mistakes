@@ -99,9 +99,10 @@ func (s StepName) Value() (driver.Value, error) {
 
 // allSteps owns step order within this package: AllSteps and StepName.Order
 // both read from it. It does not own the sequence the daemon executes, which is
-// a separate literal in steps.AllSteps() (internal/pipeline/steps/common.go)
-// that nothing asserts against this slice, so a new step added only here gets an
-// order and a TUI row but never runs. Moving a step shifts the values Order()
+// a separate literal in steps.AllSteps() (internal/pipeline/steps/common.go);
+// TestAllStepsMatchesTypesAllSteps
+// (internal/pipeline/steps/step_sequence_test.go) pins the two lists equal, so
+// a new step means editing both. Moving a step shifts the values Order()
 // persists into step_results.step_order, which internal/db orders and compares
 // numerically against rows already written.
 var allSteps = []StepName{StepIntent, StepRebase, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
