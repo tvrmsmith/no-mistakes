@@ -10,6 +10,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// evalPipelineFlagUsage is shared verbatim across eval run, eval sets, and
+// eval report: the three commands filter the same tag the same way, and a
+// wording mismatch between them would read as three different flags.
+const evalPipelineFlagUsage = "limit to one pipeline layout: review-early, cheap-gates-first, or any (default any)"
+
 // newEvalCmd deliberately does not call trackCommand. Eval cases and candidate
 // results are local code data, so this command surface has no remote telemetry
 // event and does not use the daemon.
@@ -160,12 +165,17 @@ func newEvalRunCmd() *cobra.Command {
 	var cases string
 	var candidateRaw string
 	var repeats int
+	var pipelineRaw string
 	cmd := &cobra.Command{
 		Use:   "run --cases <all|labeled|diversified|tune> --candidate <agent,model=...[,effort=...]>",
 		Short: "Replay captured review passes and score findings against gold",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			candidate, err := eval.ParseCandidate(candidateRaw)
+			if err != nil {
+				return err
+			}
+			pipeline, err := eval.ParsePipelineVersion(pipelineRaw)
 			if err != nil {
 				return err
 			}
@@ -180,6 +190,7 @@ func newEvalRunCmd() *cobra.Command {
 				Set:       cases,
 				Candidate: candidate,
 				Repeats:   repeats,
+				Pipeline:  pipeline,
 				OnPlan: func(session eval.Session, planned []eval.Case) {
 					caseCount = len(planned)
 					fmt.Fprintf(out, "replaying %d case(s) x %d repeat(s) with %s on %s (cohort %s)\n\n",
@@ -203,6 +214,7 @@ func newEvalRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cases, "cases", "", "case set: all, labeled (finding-level gold), diversified (official gold-only holdout), or tune")
 	cmd.Flags().StringVar(&candidateRaw, "candidate", "", eval.CandidateUsage())
 	cmd.Flags().IntVar(&repeats, "repeats", 3, "replays per case (minimum 1)")
+	cmd.Flags().StringVar(&pipelineRaw, "pipeline", "", evalPipelineFlagUsage)
 	_ = cmd.MarkFlagRequired("cases")
 	_ = cmd.MarkFlagRequired("candidate")
 	return cmd
@@ -210,11 +222,16 @@ func newEvalRunCmd() *cobra.Command {
 
 func newEvalSetsCmd() *cobra.Command {
 	var refresh bool
+	var pipelineRaw string
 	cmd := &cobra.Command{
 		Use:   "sets",
 		Short: "Inspect local case-set size, finding-level gold, and composition",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, err := eval.ParsePipelineVersion(pipelineRaw)
+			if err != nil {
+				return err
+			}
 			_, store, err := openEvalStore()
 			if err != nil {
 				return err
@@ -225,7 +242,7 @@ func newEvalSetsCmd() *cobra.Command {
 					return err
 				}
 			}
-			summaries, err := eval.InspectSets(store)
+			summaries, err := eval.InspectSetsForPipeline(store, pipeline)
 			if err != nil {
 				return err
 			}
@@ -234,21 +251,27 @@ func newEvalSetsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh-diversified", false, "rebuild the official diversified pin set from current gold")
+	cmd.Flags().StringVar(&pipelineRaw, "pipeline", "", evalPipelineFlagUsage)
 	return cmd
 }
 
 func newEvalReportCmd() *cobra.Command {
-	return &cobra.Command{
+	var pipelineRaw string
+	cmd := &cobra.Command{
 		Use:   "report",
 		Short: "Report local true-positive / false-negative scores, tokens, and cost",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, err := eval.ParsePipelineVersion(pipelineRaw)
+			if err != nil {
+				return err
+			}
 			_, store, err := openEvalStore()
 			if err != nil {
 				return err
 			}
 			defer store.Close()
-			reports, err := eval.Report(store)
+			reports, err := eval.ReportForPipeline(store, pipeline)
 			if err != nil {
 				return err
 			}
@@ -256,6 +279,8 @@ func newEvalReportCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&pipelineRaw, "pipeline", "", evalPipelineFlagUsage)
+	return cmd
 }
 
 func newEvalRelabelCmd() *cobra.Command {

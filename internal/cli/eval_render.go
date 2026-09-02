@@ -60,6 +60,13 @@ func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 		lines = append(lines, "  Composition")
 		lines = append(lines, compositionLines(diversified.Composition)...)
 	}
+	if len(diversified.Pipelines) > 1 {
+		lines = append(lines, "")
+		lines = append(lines, "  Pipeline layouts")
+		for _, row := range diversified.Pipelines {
+			lines = append(lines, fmt.Sprintf("  %4d  %s · %d gold", row.Cases, row.PipelineVersion, row.GoldCases))
+		}
+	}
 
 	lines = append(lines, "")
 	lines = append(lines, "  Other sets")

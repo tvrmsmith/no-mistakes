@@ -72,6 +72,16 @@ If a PR merges after the first capture, already-captured cases are relabeled. Th
 
 A case with no finding-level gold is unlabeled / pending, never a pass. True-negative also stays unlabeled because the current capture evidence cannot establish that a finding is invalid without the shipped-unfixed or adjudication paths above.
 
+## Pipeline layout tag
+
+Every case records the pipeline layout its review pass ran under, as `pipeline_version` in the case manifest. The two values today are `review-early` (Review ran before the cheap gates) and `cheap-gates-first` (Review certifies after Format, Lint, Test, and Metrics).
+
+The tag comes from the run's own recorded step order, not from the version of no-mistakes doing the capturing. Capturing an old run long after the pipeline changed still tags it correctly. A case captured before the tag existed reads as `review-early`. Nothing on disk is rewritten and no gold label is touched.
+
+`eval report` groups every candidate's scores by the tag, so the two populations never merge into one headline. `--pipeline` narrows `eval run`, `eval sets`, and `eval report` to one layout; the default is `any`, which shows every layout.
+
+This exists because, after the reorder, Review sees a tree four gates already cleared. A share of the older gold-labelled findings can no longer occur, so scoring the two populations together would read as a review-quality regression that is really a scope change.
+
 ## Disk use and retention
 
 Cases from the same repository share one local Git object pool under `<NM_HOME>/eval/pools/`. The first case from a repository stores its history once; every later case adds only the objects its own commits introduced, which is normally a few kilobytes.
@@ -92,7 +102,7 @@ The command renders a dashboard headlined by the **diversified holdout** - the o
 
 The headline includes an instant **self-score**: the recorded source reviews of the diversified set scored against their own gold with the same matcher a replayed candidate faces. It is computed from the already-captured case files - no replay, agent invocation, or network - and is the baseline a candidate has to beat. Recall, precision bounds, and F1 follow the report's semantics, including withholding F1 when no false-positive gold exists.
 
-`eval sets` is safe to re-run: inspecting the sets materializes the diversified pins, and a second read returns the same summaries without repinning anything.
+`eval sets` is safe to re-run: inspecting the sets materializes the diversified pins, and a second read returns the same summaries without repinning anything. `--pipeline review-early`, `--pipeline cheap-gates-first`, or `--pipeline any` (the default) narrows every set summary to one pipeline layout; see [Pipeline layout tag](#pipeline-layout-tag).
 
 Four logical sets are available to replay:
 
@@ -131,7 +141,7 @@ Matching is a documented cascade of strengths: the same finding ID, the same fil
 
 The report prints recall, precision bounds (adjudicated vs pending-as-FP), and F1 as the headline metric **only when false-positive gold exists** so precision is real. Otherwise F1 is withheld rather than reported as recall-in-disguise.
 
-`--repeats` defaults to `3` and must be at least `1`. Candidates must use an agent whose model no-mistakes can actually pin. ACP targets such as `cursor` and `acp:<target>` are pinned through `acpx --model`, but they cannot take `effort`; `rovodev` and `antigravity` expose no mechanism at all and are rejected outright. `opencode` needs the `provider/model` form. The per-harness mapping table lives in [`agent_config`](/no-mistakes/reference/global-config/#agent_config).
+`--repeats` defaults to `3` and must be at least `1`. `--pipeline review-early`, `--pipeline cheap-gates-first`, or `--pipeline any` (the default) narrows the replayed cases to one pipeline layout; see [Pipeline layout tag](#pipeline-layout-tag). Candidates must use an agent whose model no-mistakes can actually pin. ACP targets such as `cursor` and `acp:<target>` are pinned through `acpx --model`, but they cannot take `effort`; `rovodev` and `antigravity` expose no mechanism at all and are rejected outright. `opencode` needs the `provider/model` form. The per-harness mapping table lives in [`agent_config`](/no-mistakes/reference/global-config/#agent_config).
 
 The replay never inherits this machine's own harness pins: capture strips `agent`, `agent_args_override`, and `agent_config` from the configuration it freezes, so the candidate is the only thing that decides what the harness runs as.
 
@@ -145,7 +155,7 @@ The command streams one scored progress line per replay as it completes, then re
 no-mistakes eval report
 ```
 
-The report groups local replays by candidate and cohort. A cohort pins the selected case IDs and repeat count, so frontier comparisons only compare candidates run over the same corpus and repeat plan. It shows:
+The report groups local replays by candidate, pipeline layout, and cohort. A cohort pins the selected case IDs and repeat count, so frontier comparisons only compare candidates run over the same corpus and repeat plan. `--pipeline review-early`, `--pipeline cheap-gates-first`, or `--pipeline any` (the default) narrows the report to one pipeline layout; see [Pipeline layout tag](#pipeline-layout-tag). It shows:
 
 - finding-level true-positive, false-negative, false-positive, and pending counts
 - recall over gold issues, or unlabeled / pending when a case has no finding-level gold
