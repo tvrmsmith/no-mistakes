@@ -152,6 +152,70 @@ func TestRunObjectRendersAwaitingAgent(t *testing.T) {
 	}
 }
 
+func TestRunObjectRendersRestartCount(t *testing.T) {
+	// A run that never restarted renders no restarts field at all.
+	rv := runView{
+		ID:      "run-1",
+		Branch:  "feature/x",
+		Status:  string(types.RunRunning),
+		HeadSHA: "abcdef1234567890",
+	}
+	if out := axiDoc(runObjectField(rv)); strings.Contains(out, "restarts:") {
+		t.Errorf("zero restart count should not render restarts in:\n%s", out)
+	}
+
+	// Below the soft cap renders the plain count.
+	rv.RestartCount = 3
+	out := axiDoc(runObjectField(rv))
+	if !strings.Contains(out, "restarts: 3\n") {
+		t.Errorf("run object missing restarts count in:\n%s", out)
+	}
+
+	// Exactly at the soft cap is still plain, not annotated.
+	rv.RestartCount = 5
+	out = axiDoc(runObjectField(rv))
+	if !strings.Contains(out, "restarts: 5\n") {
+		t.Errorf("run object at soft cap should render plain count in:\n%s", out)
+	}
+
+	// Strictly above the soft cap gets the exceeded annotation.
+	rv.RestartCount = 6
+	out = axiDoc(runObjectField(rv))
+	if !strings.Contains(out, "restarts: 6 (soft cap 5 exceeded)\n") {
+		t.Errorf("run object above soft cap missing exceeded annotation in:\n%s", out)
+	}
+
+	// The field renders regardless of run terminality: restart count is
+	// history, not a live signal like awaiting_agent.
+	rv.Status = string(types.RunCompleted)
+	out = axiDoc(runObjectField(rv))
+	if !strings.Contains(out, "restarts: 6 (soft cap 5 exceeded)\n") {
+		t.Errorf("restarts should render on a terminal run too in:\n%s", out)
+	}
+
+	// restarts appears after awaiting_agent and before head when all three
+	// are present.
+	restore := nowUnix
+	nowUnix = func() int64 { return 1_000_000 }
+	defer func() { nowUnix = restore }()
+	parkedSince := int64(1_000_000 - 10)
+	rv2 := runView{
+		ID:                 "run-2",
+		Branch:             "feature/y",
+		Status:             string(types.RunRunning),
+		HeadSHA:            "abcdef1234567890",
+		AwaitingAgentSince: &parkedSince,
+		RestartCount:       2,
+	}
+	out = axiDoc(runObjectField(rv2))
+	awaitingIdx := strings.Index(out, "awaiting_agent:")
+	restartsIdx := strings.Index(out, "restarts:")
+	headIdx := strings.Index(out, "head:")
+	if awaitingIdx < 0 || restartsIdx < 0 || headIdx < 0 || !(awaitingIdx < restartsIdx && restartsIdx < headIdx) {
+		t.Errorf("restarts should render after awaiting_agent and before head in:\n%s", out)
+	}
+}
+
 func TestRunObjectRendersActiveStepDiagnostics(t *testing.T) {
 	restore := nowUnix
 	nowUnix = func() int64 { return 1_000_000 }
