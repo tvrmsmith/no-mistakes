@@ -70,6 +70,21 @@ func TestPipelineVersionFromSteps_AGateStillAfterReviewIsPreReorder(t *testing.T
 	}
 }
 
+// A gate recorded at review's own step order proves nothing about which of the
+// two ran first, so the tag must not claim the cheap gates went first.
+func TestPipelineVersionFromSteps_AGateTiedWithReviewIsPreReorder(t *testing.T) {
+	steps := []*db.StepResult{
+		stepAt(types.StepIntent, 1),
+		stepAt(types.StepRebase, 2),
+		stepNamed("format", 3),
+		stepAt(types.StepLint, 4),
+		stepAt(types.StepReview, 4),
+	}
+	if got := PipelineVersionFromSteps(steps); got != PipelineReviewEarly {
+		t.Fatalf("PipelineVersionFromSteps() = %q, want %q", got, PipelineReviewEarly)
+	}
+}
+
 func TestPipelineVersionFromSteps_NoCheapGateRanFallsBackToTheBuildsOwnOrder(t *testing.T) {
 	steps := []*db.StepResult{
 		stepAt(types.StepIntent, 1),

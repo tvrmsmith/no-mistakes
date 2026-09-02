@@ -69,7 +69,10 @@ func pipelineVersionFromOrderedSteps(steps []orderedStep, fallback PipelineVersi
 			continue
 		}
 		haveCheapGate = true
-		if s.order > reviewOrder {
+		// A gate sharing review's order proves nothing about which ran first,
+		// so it counts as unresolved and lands on the conservative side with
+		// the gates that plainly follow review.
+		if s.order >= reviewOrder {
 			anyGateAfterReview = true
 		}
 	}
