@@ -37,9 +37,12 @@ func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 	var lines []string
 	lines = append(lines, "")
 	lines = append(lines, "  Diversified holdout (official gold-only set)")
-	capDetail := fmt.Sprintf("pins %d · cap %d", diversified.PinCount, diversified.Cap)
+	// The pin count is corpus-wide and says so: under `eval sets --pipeline X`
+	// the Cases figure beside it is one layout's share of those same pins, and
+	// an unlabeled "pins 32" next to "Cases 3" reads as pins having been lost.
+	capDetail := fmt.Sprintf("pins %d corpus-wide · cap %d", diversified.PinCount, diversified.Cap)
 	if diversified.Cap == 0 {
-		capDetail = fmt.Sprintf("pins %d · cap none (one gold case per stratum)", diversified.PinCount)
+		capDetail = fmt.Sprintf("pins %d corpus-wide · cap none (one gold case per stratum)", diversified.PinCount)
 	}
 	lines = append(lines, metricStatsLine("Cases", strconv.Itoa(diversified.Cases), capDetail))
 	goldFindings := diversified.TruePositive + diversified.FalseNegative + diversified.FalsePositive
@@ -258,6 +261,13 @@ func renderEvalRunSummary(session eval.Session, evaluations []eval.Evaluation, c
 		lines = append(lines, "  unlabeled / pending (no finding-level gold in this set yet)")
 	} else {
 		lines = append(lines, evalScoreLines(s)...)
+		// The same caveat the eval sets self-score carries, for the same
+		// reason: this box folds every replay into one score, and replays of
+		// two pipeline layouts are two populations whose reviews saw different
+		// trees. Narrowing with --pipeline gets a score over one of them.
+		if layouts := eval.PipelineLayoutsInEvaluations(evaluations); layouts > 1 {
+			lines = append(lines, sYellow.Render(fmt.Sprintf("    ⚠ spans %d pipeline layouts: not comparable as one score", layouts)))
+		}
 	}
 	lines = append(lines, "")
 	if s.Total > 0 && s.TokensReported == s.Total {

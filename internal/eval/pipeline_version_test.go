@@ -85,7 +85,12 @@ func TestPipelineVersionFromSteps_AGateTiedWithReviewIsPreReorder(t *testing.T) 
 	}
 }
 
-func TestPipelineVersionFromSteps_NoCheapGateRanFallsBackToTheBuildsOwnOrder(t *testing.T) {
+// A run that recorded review but no cheap gate is partial evidence, not none:
+// a review-only step set (a demo pipeline, a --skip of every gate, an
+// eval-miss ingest) is a genuinely pre-reorder pass, and consulting the
+// capturing binary would stamp it cheap-gates-first once the reorder lands and
+// contaminate the very baseline the tag protects.
+func TestPipelineVersionFromSteps_ReviewWithNoCheapGateIsPreReorder(t *testing.T) {
 	steps := []*db.StepResult{
 		stepAt(types.StepIntent, 1),
 		stepAt(types.StepRebase, 2),
@@ -93,7 +98,23 @@ func TestPipelineVersionFromSteps_NoCheapGateRanFallsBackToTheBuildsOwnOrder(t *
 		stepAt(types.StepDocument, 4),
 		stepAt(types.StepPush, 5),
 	}
+	if got := PipelineVersionFromSteps(steps); got != PipelineReviewEarly {
+		t.Fatalf("PipelineVersionFromSteps() = %q, want %q", got, PipelineReviewEarly)
+	}
+	if got := PipelineVersionFromSteps([]*db.StepResult{stepAt(types.StepReview, 1)}); got != PipelineReviewEarly {
+		t.Fatalf("PipelineVersionFromSteps(review only) = %q, want %q", got, PipelineReviewEarly)
+	}
+}
+
+// No review row at all is the one case with no evidence either way, so the
+// build's own step order is the only thing left to read.
+func TestPipelineVersionFromSteps_NoReviewRowFallsBackToTheBuildsOwnOrder(t *testing.T) {
 	want := CurrentPipelineVersion()
+	steps := []*db.StepResult{
+		stepAt(types.StepIntent, 1),
+		stepAt(types.StepRebase, 2),
+		stepAt(types.StepTest, 3),
+	}
 	if got := PipelineVersionFromSteps(steps); got != want {
 		t.Fatalf("PipelineVersionFromSteps() = %q, want %q", got, want)
 	}
@@ -137,7 +158,10 @@ func TestParsePipelineVersion(t *testing.T) {
 				t.Fatalf("ParsePipelineVersion(%q) = %q, nil, want error", tc.raw, got)
 			}
 			msg := err.Error()
-			for _, want := range []string{`unknown pipeline version "v2"`, "review-early", "cheap-gates-first"} {
+			// "any" is an accepted value and the default, so an error that
+			// lists only the two layouts tells a user with a typo that a valid
+			// value does not exist.
+			for _, want := range []string{`unknown pipeline version "v2"`, "review-early", "cheap-gates-first", "any"} {
 				if !strings.Contains(msg, want) {
 					t.Fatalf("ParsePipelineVersion(%q) error = %q, want substring %q", tc.raw, msg, want)
 				}

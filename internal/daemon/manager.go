@@ -1679,6 +1679,9 @@ func (m *RunManager) autoCaptureEvalCase(ctx context.Context, cfg *config.Config
 	defer cancel()
 
 	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, cfg.Eval.MaxCases)
+	if result.PinWarning != "" {
+		slog.Warn("eval retention ran without diversified pin protection", "run_id", runID, "reason", result.PinWarning)
+	}
 	switch {
 	case err != nil:
 		slog.Warn("failed to collect eval case", "run_id", runID, "error", err)

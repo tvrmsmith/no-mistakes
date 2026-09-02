@@ -603,7 +603,10 @@ func setupEvalCLIFixtureNamed(t *testing.T, ctx context.Context, root, name, fin
 // current order.
 func forceStepOrder(t *testing.T, p *paths.Paths, stepID string, order int) {
 	t.Helper()
-	raw, err := sql.Open("sqlite", p.DB())
+	// The live *db.DB handle is still open on this WAL database, so this second
+	// writer needs the same busy timeout db.Open uses or a concurrent
+	// checkpoint returns SQLITE_BUSY immediately and fails the test spuriously.
+	raw, err := sql.Open("sqlite", p.DB()+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,10 +623,7 @@ func forceStepOrder(t *testing.T, p *paths.Paths, stepID string, order int) {
 func setupEvalCLIFixtureTaggedCheapGatesFirst(t *testing.T, ctx context.Context, root, name, findings string) evalCLIFixture {
 	t.Helper()
 	fixture := setupEvalCLIFixtureNamed(t, ctx, root, name, findings)
-	p, err := paths.New()
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := paths.WithRoot(root)
 	for _, name := range []types.StepName{"format", types.StepLint, types.StepTest} {
 		step, err := fixture.db.InsertStepResult(fixture.run.ID, name)
 		if err != nil {
@@ -809,6 +809,27 @@ func TestEvalSetsSelfScoreCarriesNoCaveatForASingleLayout(t *testing.T) {
 	}})
 	if strings.Contains(out, "not comparable") {
 		t.Fatalf("sets output = %q, want no comparability caveat for a single layout", out)
+	}
+}
+
+// eval run is the surface an operator watches while paying for the replays, and
+// its score box folds every replay into one number the same way the sets
+// self-score does, so an unfiltered run over a mixed corpus has to carry the
+// same caveat.
+func TestEvalRunSummaryWarnsWhenTheReplaysSpanTwoPipelineLayouts(t *testing.T) {
+	session := eval.Session{Candidate: "claude,model=test", Set: "all", Cohort: "cohort", Repeats: 1}
+	evaluations := []eval.Evaluation{
+		{CaseID: "a", Status: "completed", HasFindingGold: true, GoldCount: 1, TruePositive: 1, PipelineVersion: eval.PipelineReviewEarly},
+		{CaseID: "b", Status: "completed", HasFindingGold: true, GoldCount: 1, TruePositive: 1, PipelineVersion: eval.PipelineCheapGatesFirst},
+	}
+	out := renderEvalRunSummary(session, evaluations, 2)
+	if !strings.Contains(out, "not comparable") || !strings.Contains(out, "2 pipeline layouts") {
+		t.Fatalf("run summary = %q, want the mixed-layout caveat naming how many layouts the session spans", out)
+	}
+
+	single := renderEvalRunSummary(session, evaluations[:1], 1)
+	if strings.Contains(single, "not comparable") {
+		t.Fatalf("run summary = %q, want no comparability caveat for a single layout", single)
 	}
 }
 

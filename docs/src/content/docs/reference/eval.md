@@ -76,11 +76,11 @@ A case with no finding-level gold is unlabeled / pending, never a pass. True-neg
 
 Every case records the pipeline layout its review pass ran under, as `pipeline_version` in the case manifest. The two values today are `review-early` (Review ran before the cheap gates) and `cheap-gates-first` (Review certifies after Format, Lint, Test, and Metrics).
 
-The tag comes from the run's own recorded step order, not from the version of no-mistakes doing the capturing. Capturing an old run long after the pipeline changed still tags it correctly. A case captured before the tag existed reads as `review-early`. Nothing on disk is rewritten and no gold label is touched.
+The tag comes from the run's own recorded step order, not from the version of no-mistakes doing the capturing. Capturing an old run long after the pipeline changed still tags it correctly. A run that recorded a Review step but no cheap gate at all is `review-early` too: partial evidence resolves to the pre-reorder layout rather than to whatever the capturing build happens to run. Only a run with no recorded Review step falls back to the capturing build's own step order. A case captured before the tag existed reads as `review-early`. Nothing on disk is rewritten and no gold label is touched.
 
 `eval report` groups every candidate's scores by the tag, so the two populations never merge into one headline. `--pipeline` narrows `eval run`, `eval sets`, and `eval report` to one layout; the default is `any`, which shows every layout.
 
-The `eval sets` self-score is a single number over the whole set, so when a set holds both layouts the dashboard marks that score as not comparable and lists how the set splits. Narrow with `--pipeline` to get a score over one population.
+The `eval sets` self-score is a single number over the whole set, so when a set holds both layouts the dashboard marks that score as not comparable and lists how the set splits. The `eval run` score box folds a session's replays the same way and carries the same mark when the session spans both layouts. Narrow with `--pipeline` to get a score over one population.
 
 This exists because, after the reorder, Review sees a tree four gates already cleared. A share of the older gold-labelled findings can no longer occur, so scoring the two populations together would read as a review-quality regression that is really a scope change.
 
@@ -88,7 +88,7 @@ This exists because, after the reorder, Review sees a tree four gates already cl
 
 Cases from the same repository share one local Git object pool under `<NM_HOME>/eval/pools/`. The first case from a repository stores its history once; every later case adds only the objects its own commits introduced, which is normally a few kilobytes.
 
-`eval.max_cases` (default 200) is the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. Three kinds of case are never dropped: one with a replay in progress, one that already has recorded candidate replays (an eval report's cohort pins the case IDs it compared, so reclaiming one would invalidate a comparison you already paid for), and one pinned into the diversified holdout. The holdout is protected because eviction is oldest-first: after a pipeline reorder the corpus fills with newly tagged cases while the earlier population only ages, so an unprotected cap would delete the exact baseline the [pipeline layout tag](#pipeline-layout-tag) exists to keep comparable. Protected cases can therefore keep the corpus above the target. Set it to `0` to keep every case.
+`eval.max_cases` (default 200) is the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. Three kinds of case are never dropped: one with a replay in progress, one that already has recorded candidate replays (an eval report's cohort pins the case IDs it compared, so reclaiming one would invalidate a comparison you already paid for), and one pinned into the diversified holdout. The holdout is protected because eviction is oldest-first: after a pipeline reorder the corpus fills with newly tagged cases while the earlier population only ages, so an unprotected cap would delete the exact baseline the [pipeline layout tag](#pipeline-layout-tag) exists to keep comparable. Automatic collection materializes the holdout pins itself before enforcing the cap, so the protection holds on a machine where nobody has ever run `eval sets`. Protected cases can therefore keep the corpus above the target. Set it to `0` to keep every case.
 
 Because the objects live in the pool rather than inside each case, a case directory is not a portable archive: copying it elsewhere does not carry the code it replays.
 
@@ -104,7 +104,7 @@ The command renders a dashboard headlined by the **diversified holdout** - the o
 
 The headline includes an instant **self-score**: the recorded source reviews of the diversified set scored against their own gold with the same matcher a replayed candidate faces. It is computed from the already-captured case files - no replay, agent invocation, or network - and is the baseline a candidate has to beat. Recall, precision bounds, and F1 follow the report's semantics, including withholding F1 when no false-positive gold exists.
 
-`eval sets` is safe to re-run: inspecting the sets materializes the diversified pins, and a second read returns the same summaries without repinning anything. `--pipeline review-early`, `--pipeline cheap-gates-first`, or `--pipeline any` (the default) narrows every set summary to one pipeline layout; see [Pipeline layout tag](#pipeline-layout-tag).
+`eval sets` is safe to re-run: inspecting the sets materializes the diversified pins, and a second read returns the same summaries without repinning anything. `--pipeline review-early`, `--pipeline cheap-gates-first`, or `--pipeline any` (the default) narrows every set summary to one pipeline layout; see [Pipeline layout tag](#pipeline-layout-tag). Two figures stay whole under a filter: the headline pin count, labelled corpus-wide because that is what the cap governs, and the layout breakdown, which is what you read to choose a filter in the first place.
 
 Four logical sets are available to replay:
 

@@ -232,11 +232,15 @@ type SetSummary struct {
 	FalsePositive  int
 	Unlabeled      int
 	QueuedFindings int
-	PinCount       int
-	Cap            int
-	Warning        string
-	Composition    []CompositionRow
-	SelfScore      EvaluationSummary
+	// PinCount is the corpus-wide size of the diversified pin set, which is
+	// what the cap governs. It is deliberately not narrowed by a pipeline
+	// filter, so a filtered Cases beside it is a subset of these pins rather
+	// than a contradiction; the renderer labels it corpus-wide for that reason.
+	PinCount    int
+	Cap         int
+	Warning     string
+	Composition []CompositionRow
+	SelfScore   EvaluationSummary
 	// Pipelines buckets this set's cases by their own PipelineVersion tag, so
 	// an operator can see how much of a set exists under each pipeline layout
 	// before running a filtered report. It is independent of any pipeline
@@ -291,11 +295,16 @@ func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary
 	}
 	result := make([]SetSummary, 0, len(sets))
 	for _, name := range sets {
-		cases, err := store.ListCasesForPipeline(name, version)
+		// The set is resolved once unfiltered and narrowed in memory: the
+		// layout breakdown has to describe the whole set (that is what makes it
+		// useful before choosing a filter), while every other field describes
+		// the filtered view.
+		resolved, err := store.ListCasesForPipeline(name, PipelineAny)
 		if err != nil {
 			return nil, err
 		}
-		summary := SetSummary{Name: name, Cases: len(cases), Cap: store.diversifiedSize, SelfScore: SelfScoreRecordedReviews(cases), Pipelines: pipelineCountRows(cases)}
+		cases := filterCasesByPipeline(resolved, version)
+		summary := SetSummary{Name: name, Cases: len(cases), Cap: store.diversifiedSize, SelfScore: SelfScoreRecordedReviews(cases), Pipelines: pipelineCountRows(resolved)}
 		if name == "diversified" {
 			if n, err := store.pinCount(); err == nil {
 				summary.PinCount = n
@@ -356,6 +365,18 @@ func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary
 		result = append(result, summary)
 	}
 	return result, nil
+}
+
+// PipelineLayoutsInEvaluations counts the distinct pipeline layouts a slice of
+// evaluations spans, reading an untagged evaluation as pre-reorder. Any summary
+// that folds those evaluations into one score is comparable only when the count
+// is one.
+func PipelineLayoutsInEvaluations(evaluations []Evaluation) int {
+	seen := map[PipelineVersion]bool{}
+	for _, evaluation := range evaluations {
+		seen[normalizePipelineVersion(evaluation.PipelineVersion)] = true
+	}
+	return len(seen)
 }
 
 // pipelineCountRows buckets cases by their own PipelineVersion tag, sorted by

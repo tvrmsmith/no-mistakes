@@ -17,10 +17,16 @@ type AutoCaptureResult struct {
 	Pruned   int
 	Skipped  bool
 	Reason   string
+	// PinWarning reports a diversified pin materialization that did not happen
+	// before the prune. It is a warning rather than an error because the prune
+	// is still worth running: an unpinned corpus stays bounded, it just loses
+	// the holdout protection for this pass.
+	PinWarning string
 }
 
-// AutoCapture freezes one finished run's review passes into the local corpus
-// and then enforces the retention cap.
+// AutoCapture freezes one finished run's review passes into the local corpus,
+// materializes the diversified pins the retention cap has to protect, and then
+// enforces that cap.
 //
 // It is the single entry point for collection that nobody asked for by hand, so
 // it deliberately keeps the same Capture the CLI uses rather than a looser
@@ -49,6 +55,12 @@ func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID str
 		return AutoCaptureResult{}, err
 	}
 	result := AutoCaptureResult{Captured: len(cases)}
+	// Prune protects diversified-pinned cases, and this is the only collection
+	// path a machine that never runs `eval sets` by hand takes, so the pins are
+	// materialized here before the cap is enforced.
+	if pinErr := store.ensureDiversifiedPinsForRetention(maxCases); pinErr != nil {
+		result.PinWarning = pinErr.Error()
+	}
 	pruned, err := store.Prune(ctx, maxCases)
 	result.Pruned = pruned
 	if err != nil {

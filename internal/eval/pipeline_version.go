@@ -44,11 +44,15 @@ type orderedStep struct {
 	order int
 }
 
-// pipelineVersionFromOrderedSteps is that shared rule: absent a review step or
-// a cheap gate among steps, the caller-supplied fallback applies; otherwise a
-// cheap gate still ordered after review means review ran early (conservative:
-// a gate still follows review), and every cheap gate ordered before review
-// means the cheap gates ran first.
+// pipelineVersionFromOrderedSteps is that shared rule: absent a review step
+// the caller-supplied fallback applies, because the steps carry no evidence at
+// all; otherwise a cheap gate still ordered after review means review ran early
+// (conservative: a gate still follows review), and every cheap gate ordered
+// before review means the cheap gates ran first. A run that recorded review but
+// no cheap gate is partial evidence rather than none, so it resolves the
+// conservative way too, to the pre-reorder layout: a review-only step set
+// (a demo pipeline, a --skip of every gate, an eval-miss ingest) must never be
+// stamped with whatever layout the capturing binary happens to build.
 func pipelineVersionFromOrderedSteps(steps []orderedStep, fallback PipelineVersion) PipelineVersion {
 	reviewOrder := 0
 	haveReview := false
@@ -77,7 +81,7 @@ func pipelineVersionFromOrderedSteps(steps []orderedStep, fallback PipelineVersi
 		}
 	}
 	if !haveCheapGate {
-		return fallback
+		return PipelineReviewEarly
 	}
 	if anyGateAfterReview {
 		return PipelineReviewEarly
@@ -86,8 +90,9 @@ func pipelineVersionFromOrderedSteps(steps []orderedStep, fallback PipelineVersi
 }
 
 // PipelineVersionFromSteps derives the tag from the run's OWN recorded step
-// rows, never from the running binary's step list. It never errors and never
-// panics on a nil or empty slice.
+// rows. The running binary's step list is consulted only for a run that
+// recorded no review step at all, which carries no evidence either way. It
+// never errors and never panics on a nil or empty slice.
 func PipelineVersionFromSteps(steps []*db.StepResult) PipelineVersion {
 	ordered := make([]orderedStep, 0, len(steps))
 	for _, step := range steps {
@@ -101,7 +106,7 @@ func PipelineVersionFromSteps(steps []*db.StepResult) PipelineVersion {
 
 // CurrentPipelineVersion is the fallback only, derived from types.AllSteps().
 // It applies pipelineVersionFromOrderedSteps to the build's own step list, so
-// it is used only when a run's recorded rows give no evidence either way.
+// it is used only when a run recorded no review step at all.
 func CurrentPipelineVersion() PipelineVersion {
 	all := types.AllSteps()
 	ordered := make([]orderedStep, 0, len(all))
@@ -127,7 +132,7 @@ func ParsePipelineVersion(raw string) (PipelineVersion, error) {
 	case string(PipelineCheapGatesFirst):
 		return PipelineCheapGatesFirst, nil
 	default:
-		return "", fmt.Errorf("unknown pipeline version %q (use %s or %s)", raw, PipelineReviewEarly, PipelineCheapGatesFirst)
+		return "", fmt.Errorf("unknown pipeline version %q (use %s, %s, or any)", raw, PipelineReviewEarly, PipelineCheapGatesFirst)
 	}
 }
 

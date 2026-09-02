@@ -278,8 +278,15 @@ func (s *Store) ListCasesForPipeline(set string, version PipelineVersion) ([]Cas
 	if err != nil {
 		return nil, err
 	}
+	return filterCasesByPipeline(cases, version), nil
+}
+
+// filterCasesByPipeline is that view, shared with the callers that already hold
+// a resolved set and must narrow it without re-resolving (and so without
+// touching the pins). PipelineAny returns the input untouched.
+func filterCasesByPipeline(cases []Case, version PipelineVersion) []Case {
 	if version == PipelineAny {
-		return cases, nil
+		return cases
 	}
 	out := make([]Case, 0, len(cases))
 	for _, c := range cases {
@@ -287,7 +294,32 @@ func (s *Store) ListCasesForPipeline(set string, version PipelineVersion) ([]Cas
 			out = append(out, c)
 		}
 	}
-	return out, nil
+	return out
+}
+
+// ensureDiversifiedPinsForRetention materializes the diversified pin set so
+// Prune's pin protection has pins to protect. Prune skips diversified-pinned
+// cases, but only ListCases("diversified"|"tune") and RefreshDiversified ever
+// write that table, so a machine that only collects automatically would reach
+// the cap with an empty pin table and evict the pre-reorder baseline the tag
+// exists to keep. The work is bounded to the pass that can actually evict
+// something: no cap, or a corpus still inside it, materializes nothing.
+func (s *Store) ensureDiversifiedPinsForRetention(maxCases int) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("eval registry is closed")
+	}
+	if maxCases <= 0 {
+		return nil
+	}
+	var total int
+	if err := s.db.QueryRow(`SELECT count(*) FROM cases`).Scan(&total); err != nil {
+		return fmt.Errorf("count eval cases: %w", err)
+	}
+	if total <= maxCases {
+		return nil
+	}
+	_, err := s.ListCases("diversified")
+	return err
 }
 
 // RefreshDiversified rebuilds the official pin set from current gold.

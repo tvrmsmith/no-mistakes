@@ -18,10 +18,9 @@ import (
 
 func TestListCasesForPipelineNarrowsToOneLayout(t *testing.T) {
 	store := openEvalStore(t)
-	a := writeSyntheticCase(t, store, syntheticCaseSpec{id: "a", fingerprint: "repo-a", capturedAt: 1, changedLines: 10, pipelineVersion: PipelineReviewEarly})
-	b := writeSyntheticCase(t, store, syntheticCaseSpec{id: "b", fingerprint: "repo-a", capturedAt: 2, changedLines: 10, pipelineVersion: PipelineReviewEarly})
-	c := writeSyntheticCase(t, store, syntheticCaseSpec{id: "c", fingerprint: "repo-a", capturedAt: 3, changedLines: 10, pipelineVersion: PipelineCheapGatesFirst})
-	_, _, _ = a, b, c
+	writeSyntheticCase(t, store, syntheticCaseSpec{id: "a", fingerprint: "repo-a", capturedAt: 1, changedLines: 10, pipelineVersion: PipelineReviewEarly})
+	writeSyntheticCase(t, store, syntheticCaseSpec{id: "b", fingerprint: "repo-a", capturedAt: 2, changedLines: 10, pipelineVersion: PipelineReviewEarly})
+	writeSyntheticCase(t, store, syntheticCaseSpec{id: "c", fingerprint: "repo-a", capturedAt: 3, changedLines: 10, pipelineVersion: PipelineCheapGatesFirst})
 
 	reviewEarly, err := store.ListCasesForPipeline("all", PipelineReviewEarly)
 	if err != nil {
@@ -117,6 +116,78 @@ func TestListCasesForPipelineKeepsAnUnknownTagOutOfANarrowedSet(t *testing.T) {
 	}
 	if got := caseIDs(any); !reflect.DeepEqual(got, []string{"future"}) {
 		t.Fatalf("ListCasesForPipeline(any) = %v, want the unrecognized tag included", got)
+	}
+}
+
+// The positive side of the replay filter: a filtered plan must reserve exactly
+// the tagged cases, not merely fail loudly when none match.
+func TestPrepareReplayPlansOnlyTheTaggedCases(t *testing.T) {
+	store := openEvalStore(t)
+	writeSyntheticCase(t, store, syntheticCaseSpec{id: "review-early-1", fingerprint: "repo-a", capturedAt: 1, changedLines: 10, pipelineVersion: PipelineReviewEarly})
+	writeSyntheticCase(t, store, syntheticCaseSpec{id: "cheap-gates-first-1", fingerprint: "repo-a", capturedAt: 2, changedLines: 10, pipelineVersion: PipelineCheapGatesFirst})
+	writeSyntheticCase(t, store, syntheticCaseSpec{id: "review-early-2", fingerprint: "repo-b", capturedAt: 3, changedLines: 10, pipelineVersion: PipelineReviewEarly})
+	writeSyntheticCase(t, store, syntheticCaseSpec{id: "cheap-gates-first-2", fingerprint: "repo-b", capturedAt: 4, changedLines: 10, pipelineVersion: PipelineCheapGatesFirst})
+
+	planned, session, err := store.prepareReplay(context.Background(), ReplayOptions{
+		Set:       "all",
+		Candidate: Candidate{Agent: types.AgentClaude, Model: "test"},
+		Repeats:   1,
+		Pipeline:  PipelineCheapGatesFirst,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"cheap-gates-first-1", "cheap-gates-first-2"}
+	if got := caseIDs(planned); !reflect.DeepEqual(got, want) {
+		t.Fatalf("prepareReplay(cheap-gates-first) planned %v, want exactly %v", got, want)
+	}
+	if !reflect.DeepEqual(session.CaseIDs, want) {
+		t.Fatalf("session.CaseIDs = %v, want exactly %v", session.CaseIDs, want)
+	}
+}
+
+// A filtered `eval sets` narrows every per-set figure to the requested layout,
+// but the layout breakdown itself stays whole: it is what an operator reads to
+// decide which layout is worth a filtered report at all.
+func TestInspectSetsForPipelineNarrowsTheFiguresAndKeepsTheWholeBreakdown(t *testing.T) {
+	store := openEvalStore(t)
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: "review-early-gold", fingerprint: "repo-a", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            []FindingGold{{ID: "g1", Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: "g1", Severity: "error", Action: "auto-fix"}},
+		roundFindings:   findingsJSON(findingSpec{ID: "g1", Severity: "error", File: "main.go", Line: 1, Description: "g1", Action: "auto-fix"}),
+	})
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: "cheap-gates-first-gold", fingerprint: "repo-b", capturedAt: 2, changedLines: 10,
+		pipelineVersion: PipelineCheapGatesFirst,
+		gold:            []FindingGold{{ID: "g2", Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: "g2", Severity: "warning", Action: "auto-fix"}},
+		// The recorded review missed this one, so the filtered self-score can
+		// only be right if it scored this case alone.
+		roundFindings: findingsJSON(),
+	})
+
+	summaries, err := InspectSetsForPipeline(store, PipelineCheapGatesFirst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all SetSummary
+	for _, summary := range summaries {
+		if summary.Name == "all" {
+			all = summary
+		}
+	}
+	if all.Cases != 1 || all.GoldCases != 1 {
+		t.Fatalf("filtered all summary = %d case(s), %d gold, want 1 and 1", all.Cases, all.GoldCases)
+	}
+	if all.SelfScore.TruePositive != 0 || all.SelfScore.FalseNegative != 1 {
+		t.Fatalf("filtered self-score = TP %d / FN %d, want the cheap-gates-first case alone (TP 0 / FN 1)", all.SelfScore.TruePositive, all.SelfScore.FalseNegative)
+	}
+	wantPipelines := []PipelineCountRow{
+		{PipelineVersion: PipelineCheapGatesFirst, Cases: 1, GoldCases: 1},
+		{PipelineVersion: PipelineReviewEarly, Cases: 1, GoldCases: 1},
+	}
+	if !reflect.DeepEqual(all.Pipelines, wantPipelines) {
+		t.Fatalf("filtered all.Pipelines = %#v, want the unfiltered breakdown %#v", all.Pipelines, wantPipelines)
 	}
 }
 
