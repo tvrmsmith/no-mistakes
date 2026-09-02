@@ -96,35 +96,30 @@ func (s StepName) Value() (driver.Value, error) {
 	return string(s), nil
 }
 
-// StepOrder returns the fixed execution order for a step (1-indexed).
-func (s StepName) Order() int {
-	switch s {
-	case StepIntent:
-		return 1
-	case StepRebase:
-		return 2
-	case StepReview:
-		return 3
-	case StepTest:
-		return 4
-	case StepDocument:
-		return 5
-	case StepLint:
-		return 6
-	case StepPush:
-		return 7
-	case StepPR:
-		return 8
-	case StepCI:
-		return 9
-	default:
-		return 0
+// allSteps is the single owner of pipeline step order. Both AllSteps and
+// StepName.Order read from it, so adding or moving a step is one edit here.
+var allSteps = []StepName{StepIntent, StepRebase, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
+
+// stepOrders maps each step to its 1-indexed position in allSteps.
+var stepOrders = func() map[StepName]int {
+	orders := make(map[StepName]int, len(allSteps))
+	for i, step := range allSteps {
+		orders[step] = i + 1
 	}
+	return orders
+}()
+
+// Order returns the fixed execution order for a step (1-indexed), derived from
+// its position in AllSteps. An unknown step returns 0.
+func (s StepName) Order() int {
+	return stepOrders[s]
 }
 
 // AllSteps returns all pipeline steps in execution order.
 func AllSteps() []StepName {
-	return []StepName{StepIntent, StepRebase, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
+	out := make([]StepName, len(allSteps))
+	copy(out, allSteps)
+	return out
 }
 
 // StepStatus represents the lifecycle state of a pipeline step.

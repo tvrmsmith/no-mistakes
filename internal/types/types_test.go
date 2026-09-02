@@ -58,6 +58,31 @@ func TestStepNameOrder(t *testing.T) {
 	}
 }
 
+// TestStepNameOrderAgreesWithAllSteps pins the property that collapsed the two
+// sources of truth: Order() is position in AllSteps(), for every step, and
+// nothing outside that slice has an order.
+func TestStepNameOrderAgreesWithAllSteps(t *testing.T) {
+	for i, step := range AllSteps() {
+		want := i + 1
+		if got := step.Order(); got != want {
+			t.Errorf("%q.Order() = %d, want %d from its position in AllSteps()", step, got, want)
+		}
+	}
+	for _, step := range []StepName{"", "unknown", "babysit"} {
+		if got := step.Order(); got != 0 {
+			t.Errorf("%q.Order() = %d, want 0 for a step outside AllSteps()", step, got)
+		}
+	}
+}
+
+func TestAllStepsReturnsACopy(t *testing.T) {
+	steps := AllSteps()
+	steps[0] = "mutated"
+	if AllSteps()[0] != StepIntent {
+		t.Fatalf("AllSteps()[0] = %q, want %q; AllSteps must return a copy", AllSteps()[0], StepIntent)
+	}
+}
+
 func TestStepNameUnmarshalJSON_LegacyBabysit(t *testing.T) {
 	var step StepName
 	if err := json.Unmarshal([]byte(`"babysit"`), &step); err != nil {
