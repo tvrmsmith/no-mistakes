@@ -433,15 +433,21 @@ func drainStopOptions(drain bool, drainTimeout time.Duration, timeoutSet, force 
 // deadline cut is worded as work that was forcibly stopped.
 //
 // It reports on outcome.Drained, what the daemon did, never on the --drain
-// flag, what the operator asked for. Those differ in two real states: a new
-// CLI against an old daemon, which ignores ShutdownParams and cancels every
-// run outright, and a second concurrent stop --drain, which loses the
-// daemon's single-drain guard. Both come back Drained: false with empty
-// lists, and reporting them as a clean drain of zero runs would claim the
-// opposite of what happened.
+// flag, what the operator asked for. Those differ in three real states: no
+// daemon was running (nothing to drain, reported as such), a new CLI against
+// an old daemon, which ignores ShutdownParams and cancels every run outright,
+// and a second concurrent stop --drain, which loses the daemon's single-drain
+// guard. All come back Drained: false with empty lists, and reporting them as
+// a clean drain of zero runs would claim the opposite of what happened - but
+// they are not the same event, so each gets its own line rather than one
+// blanket claim that runs were cancelled.
 func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
+	if outcome.NoDaemon {
+		fmt.Fprintf(w, "  %s no daemon was running; nothing to drain\n", sDim.Render("-"))
+		return
+	}
 	if !outcome.Drained {
-		fmt.Fprintf(w, "  %s the daemon did not drain; in-flight runs were cancelled outright\n", sYellow.Render("!"))
+		fmt.Fprintf(w, "  %s the daemon did not drain; any in-flight runs were cancelled outright\n", sYellow.Render("!"))
 		return
 	}
 	fmt.Fprintf(w, "  %s %d run(s) finished before the daemon stopped\n", sGreen.Render("✓"), len(outcome.Finished))
@@ -451,6 +457,8 @@ func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
 			fmt.Fprintf(w, "  %s %s (%s): CI monitor cut by drain, PR remains open and CI is still running\n", sDim.Render("-"), run.RunID, run.Branch)
 		case ipc.DrainInterruptedDeadline:
 			fmt.Fprintf(w, "  %s %s (%s): forcibly stopped at the drain deadline\n", sDim.Render("-"), run.RunID, run.Branch)
+		case ipc.DrainInterruptedShutdown:
+			fmt.Fprintf(w, "  %s %s (%s): drain ended early by daemon shutdown, run stopped mid-flight\n", sDim.Render("-"), run.RunID, run.Branch)
 		default:
 			fmt.Fprintf(w, "  %s %s (%s): interrupted by drain (%s)\n", sDim.Render("-"), run.RunID, run.Branch, run.Reason)
 		}
@@ -461,21 +469,29 @@ func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
 // it: the daemon never drained at all (an old daemon that ignores
 // ShutdownParams, or a drain already in progress), and a run the drain
 // forcibly stopped at its deadline. A ci_monitor interruption alone is the
-// drain's designed behavior and exits 0.
+// drain's designed behavior and exits 0, and so is finding no daemon at all:
+// stopping an already-stopped daemon succeeds without --drain, and adding
+// --drain must not turn that same no-op into a failure.
 func drainOutcomeError(outcome daemon.StopOutcome) error {
+	if outcome.NoDaemon {
+		return nil
+	}
 	if !outcome.Drained {
 		return fmt.Errorf("the daemon did not drain: it is running a version without drain support, or another drain is already in progress")
 	}
 	var ids []string
 	for _, run := range outcome.Interrupted {
-		if run.Reason == ipc.DrainInterruptedDeadline {
+		// Both reasons mean a run the drain meant to let finish did not:
+		// the deadline expired, or the daemon shut down underneath the drain.
+		// A ci_monitor cut is the designed behavior and is excluded.
+		if run.Reason == ipc.DrainInterruptedDeadline || run.Reason == ipc.DrainInterruptedShutdown {
 			ids = append(ids, run.RunID)
 		}
 	}
 	if len(ids) == 0 {
 		return nil
 	}
-	return fmt.Errorf("drain deadline forcibly stopped %d run(s): %s", len(ids), strings.Join(ids, ", "))
+	return fmt.Errorf("the drain stopped %d run(s) before they finished: %s", len(ids), strings.Join(ids, ", "))
 }
 
 // lifecycleGuardMode maps the stop/restart flags onto the guard's mode. An
@@ -522,7 +538,12 @@ func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr io.Writer, action st
 		fmt.Fprint(stderr, lifecycle.RunList(runs))
 		return nil
 	case lifecycleGuardDrain:
-		fmt.Fprintf(stderr, "%s will wait on %d active pipeline runs before stopping the daemon\n", action, len(runs))
+		// Deliberately not "will wait on N runs": the drain does not wait on
+		// all of them. A run parked at a gate cannot finish without an
+		// operator, so the drain leaves it to be preserved and resumed, and a
+		// run monitoring CI is cut rather than waited out. This list is what
+		// is active, not a promise about each entry.
+		fmt.Fprintf(stderr, "%s will let in-flight work finish before stopping the daemon; %d active pipeline runs (gate-parked runs are preserved for resume, CI monitors are cut)\n", action, len(runs))
 		fmt.Fprint(stderr, lifecycle.RunList(runs))
 		return nil
 	default:

@@ -294,6 +294,47 @@ func TestDaemonStopDrainGuardDoesNotRefuse(t *testing.T) {
 	if !strings.Contains(out, "2 active pipeline runs") {
 		t.Fatalf("drain output should mention the number of active runs, got %q", out)
 	}
+	// The guard must not promise to wait on all of them. A parked run is
+	// released and a CI monitor is cut, so "will wait on 2 active pipeline
+	// runs" tells the operator to expect something the drain will not do.
+	if strings.Contains(out, "will wait on") {
+		t.Fatalf("drain guard must not promise to wait on every active run, got %q", out)
+	}
+}
+
+// TestDaemonStopDrainEndedByShutdownExitsNonZeroWithoutBlamingTheDeadline
+// covers the reason a drain reports when the daemon's own shutdown ends it: a
+// signal, or a concurrent stop. It still exits nonzero (a run was stopped
+// mid-flight), but pointing the operator at the deadline would send them to
+// raise --drain-timeout for a problem raising it cannot fix.
+func TestDaemonStopDrainEndedByShutdownExitsNonZeroWithoutBlamingTheDeadline(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	prevStop := daemonStopFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		return daemon.StopOutcome{
+			Drained: true,
+			Interrupted: []ipc.DrainInterruptedRun{
+				{RunID: "run-9", Branch: "feature-y", Reason: ipc.DrainInterruptedShutdown},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { daemonStopFn = prevStop })
+
+	out, err := executeCmd("daemon", "stop", "--drain")
+	if err == nil {
+		t.Fatalf("a run stopped before it finished should exit nonzero, got output %q", out)
+	}
+	if !strings.Contains(err.Error(), "run-9") {
+		t.Fatalf("error should name the run that did not finish, got %v", err)
+	}
+	if strings.Contains(out, "deadline") || strings.Contains(err.Error(), "deadline") {
+		t.Fatalf("a shutdown-ended drain must not be reported as a deadline cut, got output %q and error %v", out, err)
+	}
+	if !strings.Contains(out, "shutdown") {
+		t.Fatalf("output should say the drain ended by daemon shutdown, got %q", out)
+	}
 }
 
 func TestDaemonStopCIMonitorInterruptionExitsZero(t *testing.T) {
@@ -438,6 +479,33 @@ func TestDaemonStopDrainReportsWhenTheDaemonDidNotDrain(t *testing.T) {
 	}
 	if strings.Contains(out, "0 run(s) finished") {
 		t.Fatalf("output must not claim a clean drain, got %q", out)
+	}
+}
+
+// TestDaemonStopDrainWithNoDaemonRunningExitsZero separates "there was nothing
+// to drain" from "the drain failed". Stopping an already-stopped daemon is a
+// success without --drain, and adding --drain must not turn that same no-op
+// into a nonzero exit - a stop script that always passes --drain would then
+// fail on its second run.
+func TestDaemonStopDrainWithNoDaemonRunningExitsZero(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	prevStop := daemonStopFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		return daemon.StopOutcome{NoDaemon: true}, nil
+	}
+	t.Cleanup(func() { daemonStopFn = prevStop })
+
+	out, err := executeCmd("daemon", "stop", "--drain")
+	if err != nil {
+		t.Fatalf("daemon stop --drain with no daemon running should succeed, got %v (output %q)", err, out)
+	}
+	if !strings.Contains(out, "no daemon was running") {
+		t.Fatalf("output should say there was no daemon to drain, got %q", out)
+	}
+	if strings.Contains(out, "cancelled outright") {
+		t.Fatalf("output must not claim runs were cancelled when there was no daemon, got %q", out)
 	}
 }
 

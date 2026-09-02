@@ -59,24 +59,41 @@ func registerFakeRun(t *testing.T, m *RunManager, database *db.DB, repo *db.Repo
 // executor does on gate entry.
 func parkRunAwaitingAgent(t *testing.T, database *db.DB, run *db.Run) {
 	t.Helper()
+	if err := parkRunAwaitingAgentErr(database, run); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// parkRunAwaitingAgentErr is parkRunAwaitingAgent for callers that are not the
+// test goroutine. t.Fatal from a spawned goroutine is undefined behavior (it
+// calls runtime.Goexit on the wrong goroutine, so the test never fails and can
+// hang instead), and the mid-drain reclassification tests park from a
+// goroutine by construction.
+func parkRunAwaitingAgentErr(database *db.DB, run *db.Run) error {
 	sr, err := database.InsertStepResult(run.ID, types.StepReview)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	findings := "[]"
-	if err := database.ParkStepForApproval(run.ID, sr.ID, types.StepStatusAwaitingApproval, 0, &findings); err != nil {
-		t.Fatal(err)
-	}
+	return database.ParkStepForApproval(run.ID, sr.ID, types.StepStatusAwaitingApproval, 0, &findings)
 }
 
 // markCIMonitorActive gives a run a single active CI step and a PR URL, the
 // shape Drain (and db.RecoverStaleRunsExcept) classify as a CI monitor run.
 func markCIMonitorActive(t *testing.T, database *db.DB, run *db.Run) {
 	t.Helper()
-	markCIStepActive(t, database, run)
-	if err := database.UpdateRunPRURL(run.ID, "https://github.com/user/project/pull/7"); err != nil {
+	if err := markCIMonitorActiveErr(database, run); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// markCIMonitorActiveErr is markCIMonitorActive off the test goroutine; see
+// parkRunAwaitingAgentErr for why the error is returned rather than fataled.
+func markCIMonitorActiveErr(database *db.DB, run *db.Run) error {
+	if err := markCIStepActiveErr(database, run); err != nil {
+		return err
+	}
+	return database.UpdateRunPRURL(run.ID, "https://github.com/user/project/pull/7")
 }
 
 // markCIStepActive gives a run an active CI step and nothing else. Without a
@@ -84,13 +101,17 @@ func markCIMonitorActive(t *testing.T, database *db.DB, run *db.Run) {
 // its forge host, which Drain must NOT treat as a CI monitor.
 func markCIStepActive(t *testing.T, database *db.DB, run *db.Run) {
 	t.Helper()
+	if err := markCIStepActiveErr(database, run); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func markCIStepActiveErr(database *db.DB, run *db.Run) error {
 	sr, err := database.InsertStepResult(run.ID, types.StepCI)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
-	if err := database.StartStepWithAutoFixLimit(sr.ID, 0); err != nil {
-		t.Fatal(err)
-	}
+	return database.StartStepWithAutoFixLimit(sr.ID, 0)
 }
 
 func containsRunID(ids []string, id string) bool {
@@ -122,7 +143,7 @@ func TestDrain_RefusesNewRunsImmediately(t *testing.T) {
 		t.Fatalf("Waited = %v, want empty (no runs registered)", report.Waited)
 	}
 
-	_, err := m.startRun(context.Background(), repo, "main", "deadbeef", "cafef00d", "push", nil, "")
+	_, err := m.startRun(context.Background(), repo, "main", "deadbeef", "cafef00d", "push", nil, "", "")
 	if err == nil {
 		t.Fatal("startRun after Drain: got nil error, want refusal")
 	}
@@ -342,6 +363,40 @@ func TestDrain_CutCIMonitorIsNotCountedAsFinished(t *testing.T) {
 	}
 }
 
+// TestDrain_ParkedCIGateWinsOverCIMonitorClassification pins the precedence
+// between the two exemptions when a run satisfies both: it has an open PR and
+// an active CI step, AND it is parked awaiting an operator. Parked wins. A
+// parked run is not monitoring anything, so there is nothing to cut; cancelling
+// it with the CI-monitor cause would fail a run that the clean-stop path
+// otherwise preserves and resumes with its PR re-checked on the next start.
+func TestDrain_ParkedCIGateWinsOverCIMonitorClassification(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, ctx, _ := registerFakeRun(t, m, database, repo, "feature")
+	// done is never closed: a parked run's goroutine blocks until an operator
+	// responds, so a drain that waits on this one waits forever.
+	markCIMonitorActive(t, database, run)
+	parkRunAwaitingAgent(t, database, run)
+
+	start := time.Now()
+	report := m.Drain(context.Background(), 10*time.Second)
+
+	if elapsed := time.Since(start); elapsed >= 5*time.Second {
+		t.Fatalf("Drain took %v, want it to skip the parked run immediately", elapsed)
+	}
+	if context.Cause(ctx) != nil {
+		t.Fatalf("cancel cause = %v, want nil: a parked run is never cancelled by Drain, even one at a CI gate", context.Cause(ctx))
+	}
+	if len(report.Interrupted) != 0 {
+		t.Fatalf("Interrupted = %v, want empty: a parked CI gate is preserved for resume, not reported as a cut monitor", report.Interrupted)
+	}
+	if containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want it to exclude the parked run %s", report.Waited, run.ID)
+	}
+	if containsRunID(report.Finished, run.ID) {
+		t.Fatalf("Finished = %v, want it to exclude the parked run %s", report.Finished, run.ID)
+	}
+}
+
 // TestDrain_RunFinishingAtTheDeadlineIsNotReportedInterrupted covers the race
 // between a run's done channel closing and the deadline firing. select picks
 // uniformly among ready cases, so without a post-loop sweep of the funnel a
@@ -374,15 +429,19 @@ func TestDrain_RunThatParksMidDrainIsReleased(t *testing.T) {
 	m, database, repo := newDrainTestManager(t)
 	run, ctx, _ := registerFakeRun(t, m, database, repo, "feature")
 	// done is never closed: the run parks and stays parked.
+	parkErr := make(chan error, 1)
 	go func() {
 		time.Sleep(40 * time.Millisecond)
-		parkRunAwaitingAgent(t, database, run)
+		parkErr <- parkRunAwaitingAgentErr(database, run)
 	}()
 
 	start := time.Now()
 	report := m.Drain(context.Background(), 10*time.Second)
 	elapsed := time.Since(start)
 
+	if err := <-parkErr; err != nil {
+		t.Fatalf("park run mid-drain: %v", err)
+	}
 	if elapsed >= 5*time.Second {
 		t.Fatalf("Drain took %v, want it released once the run parked rather than waiting out the deadline", elapsed)
 	}
@@ -404,9 +463,14 @@ func TestDrain_RunThatReachesCIMidDrainIsCut(t *testing.T) {
 	shortenDrainReclassify(t, 20*time.Millisecond)
 	m, database, repo := newDrainTestManager(t)
 	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	markErr := make(chan error, 1)
 	go func() {
 		time.Sleep(40 * time.Millisecond)
-		markCIMonitorActive(t, database, run)
+		if err := markCIMonitorActiveErr(database, run); err != nil {
+			markErr <- err
+			return
+		}
+		markErr <- nil
 		<-ctx.Done()
 		close(done)
 	}()
@@ -415,6 +479,9 @@ func TestDrain_RunThatReachesCIMidDrainIsCut(t *testing.T) {
 	report := m.Drain(context.Background(), 10*time.Second)
 	elapsed := time.Since(start)
 
+	if err := <-markErr; err != nil {
+		t.Fatalf("mark run as a CI monitor mid-drain: %v", err)
+	}
 	if elapsed >= 5*time.Second {
 		t.Fatalf("Drain took %v, want the CI monitor cut once it was reclassified", elapsed)
 	}
@@ -456,8 +523,11 @@ func TestDrain_CancelledContextAbortsTheWait(t *testing.T) {
 	if containsRunID(report.Finished, run.ID) {
 		t.Fatalf("Finished = %v, want it to exclude the still-running %s", report.Finished, run.ID)
 	}
+	// The reason must be shutdown, not deadline: the 60s deadline never fired,
+	// and telling the operator it did points them at --drain-timeout for a
+	// problem raising it cannot fix.
 	entry, ok := findInterrupted(report.Interrupted, run.ID)
-	if !ok || entry.Reason != ipc.DrainInterruptedDeadline {
-		t.Fatalf("Interrupted = %v, want one %s entry for %s", report.Interrupted, ipc.DrainInterruptedDeadline, run.ID)
+	if !ok || entry.Reason != ipc.DrainInterruptedShutdown {
+		t.Fatalf("Interrupted = %v, want one %s entry for %s", report.Interrupted, ipc.DrainInterruptedShutdown, run.ID)
 	}
 }

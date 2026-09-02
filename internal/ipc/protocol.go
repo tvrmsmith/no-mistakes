@@ -181,9 +181,18 @@ type HealthParams struct{}
 // today's immediate-shutdown behavior - required because a mixed-version
 // CLI/daemon pair (an old CLI against a new daemon, or vice versa) is a real
 // state right after an upgrade and before both sides restart.
+//
+// DrainOnly drains without then exiting the process, and is what the managed
+// service path (launchd KeepAlive, systemd Restart=always) needs: there the
+// supervisor performs the exit itself a moment later, so a daemon that exits
+// on its own the instant the drain finishes gets respawned into the window
+// before the supervisor's own stop lands, and that fresh daemon happily starts
+// new runs. DrainOnly leaves the refuse-new-runs latch set and the process
+// alive for the supervisor to stop. It is ignored unless Drain is set.
 type ShutdownParams struct {
 	Drain          bool  `json:"drain,omitempty"`
 	DrainTimeoutMS int64 `json:"drain_timeout_ms,omitempty"`
+	DrainOnly      bool  `json:"drain_only,omitempty"`
 }
 
 // --- Method results ---
@@ -261,6 +270,12 @@ type DrainInterruptedReason string
 const (
 	DrainInterruptedCIMonitor DrainInterruptedReason = "ci_monitor"
 	DrainInterruptedDeadline  DrainInterruptedReason = "deadline"
+	// DrainInterruptedShutdown is a drain the daemon's own shutdown ended
+	// before the deadline - a signal, or a concurrent stop. It is distinct
+	// from deadline because the operator's remedy differs: a deadline says
+	// raise --drain-timeout, a shutdown says something else stopped the
+	// daemon underneath the drain.
+	DrainInterruptedShutdown DrainInterruptedReason = "shutdown"
 )
 
 // DrainInterruptedRun is one run a drain cut short.

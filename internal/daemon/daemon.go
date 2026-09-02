@@ -1103,7 +1103,14 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		// failure instead - an accepted, best-effort tradeoff of a signal
 		// racing a drain.
 		report := mgr.Drain(ctx, timeout)
-		go shutdown()
+		// DrainOnly leaves the process alive with mgr's refuse-new-runs latch
+		// still set. Under launchd KeepAlive / systemd Restart=always, exiting
+		// here would be respawned into the gap before the supervisor's own stop
+		// arrives, and that replacement daemon would accept new runs; the
+		// supervisor performs the exit instead.
+		if !p.DrainOnly {
+			go shutdown()
+		}
 		return &ipc.ShutdownResult{
 			OK:          true,
 			Drained:     true,

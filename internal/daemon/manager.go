@@ -1558,6 +1558,9 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 	// Counting either event twice would end the wait early.
 	released := make(map[string]bool, len(entries))
 	remaining := len(entries)
+	// unfinishedReason labels the runs still in flight when the wait loop ends.
+	// The deadline is the default; a cancelled ctx overrides it below.
+	unfinishedReason := ipc.DrainInterruptedDeadline
 	release := func(id string) {
 		if released[id] {
 			return
@@ -1595,6 +1598,11 @@ waitLoop:
 		case <-deadlineTimer.C:
 			break waitLoop
 		case <-ctx.Done():
+			// The daemon is shutting down underneath the drain (a signal, or a
+			// concurrent stop). The runs left over were not cut by the
+			// deadline, and telling the operator they were would point them at
+			// --drain-timeout for a problem raising it cannot fix.
+			unfinishedReason = ipc.DrainInterruptedShutdown
 			break waitLoop
 		}
 	}
@@ -1629,12 +1637,12 @@ waitLoop:
 			continue
 		}
 		if !e.ci {
-			// Drain does not cancel a waited run past the deadline; Shutdown()
-			// still will.
+			// Drain does not cancel a waited run itself once the wait ends;
+			// Shutdown() still will.
 			report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
 				RunID:  id,
 				Branch: e.branch,
-				Reason: ipc.DrainInterruptedDeadline,
+				Reason: unfinishedReason,
 			})
 		}
 		// A ci entry that missed the deadline already has its one Interrupted

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -131,6 +132,39 @@ func TestShutdown_DrainCutsCIMonitorAndReportsIt(t *testing.T) {
 	if entry.RunID != pushResult.RunID || entry.Reason != ipc.DrainInterruptedCIMonitor {
 		t.Fatalf("Interrupted[0] = %+v, want run %s reason %s", entry, pushResult.RunID, ipc.DrainInterruptedCIMonitor)
 	}
+
+	// What the wire says the drain did must match what the run's own row says
+	// happened to it. A cut CI monitor is ci_monitor_interrupted, not failed:
+	// the PR is still open and the operator is told so, and a `failed` row
+	// here would show up in axi and the TUI as work that broke.
+	waitForRunStatus(t, d, pushResult.RunID, types.RunCIMonitorInterrupted)
+}
+
+// waitForRunStatus polls a run's terminal status. The drain reports the run as
+// cut the moment its goroutine exits; the terminal row is written on that same
+// unwind, so a direct read can race it.
+func waitForRunStatus(t *testing.T, d *db.DB, runID string, want types.RunStatus) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var last types.RunStatus
+	for time.Now().Before(deadline) {
+		run, err := d.GetRun(runID)
+		if err != nil {
+			t.Fatalf("get run %s: %v", runID, err)
+		}
+		if run == nil {
+			t.Fatalf("run %s not found", runID)
+		}
+		last = run.Status
+		if last == want {
+			if run.Error == nil || *run.Error != types.RunCIMonitorDrainedReason {
+				t.Fatalf("run %s error = %v, want %q", runID, run.Error, types.RunCIMonitorDrainedReason)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("run %s status = %s, want %s", runID, last, want)
 }
 
 // TestShutdown_DrainReportsDeadlineCutForNonCIRun covers scenario 4: a
@@ -523,10 +557,26 @@ func TestStopWithOptions_ManagedServiceDrainsBeforeSignalling(t *testing.T) {
 	start := time.Now()
 	var launchctlAfter time.Duration
 	var launchctlRan bool
+	var daemonAliveAtStop bool
 	serviceCommandRunner = func(string, ...string) ([]byte, error) {
 		if !launchctlRan {
 			launchctlRan = true
 			launchctlAfter = time.Since(start)
+			// The daemon must still be reachable for this stop to be what
+			// ends it. TestShutdown_DrainOnlyDrainsWithoutExiting is the
+			// regression for the DrainOnly flag itself; this only checks that
+			// the composed managed path did not hand the service manager an
+			// already-dead daemon.
+			if probe, dialErr := ipc.Dial(p.Socket()); dialErr == nil {
+				var health ipc.HealthResult
+				daemonAliveAtStop = probe.Call(ipc.MethodHealth, &ipc.HealthParams{}, &health) == nil
+				// Stand in for what launchctl bootout would do: actually stop
+				// the daemon. Without this the in-process daemon under test
+				// outlives StopWithOptions, which unlinks its socket on the
+				// way out and leaves nothing able to shut it down.
+				_ = probe.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &ipc.ShutdownResult{})
+				probe.Close()
+			}
 		}
 		return nil, nil
 	}
@@ -542,11 +592,71 @@ func TestStopWithOptions_ManagedServiceDrainsBeforeSignalling(t *testing.T) {
 	if !outcome.Drained {
 		t.Fatalf("outcome = %+v, want Drained: the drain must reach the daemon before the service manager signals it", outcome)
 	}
+	if !daemonAliveAtStop {
+		t.Fatal("the daemon had already exited when the service manager was told to stop it; the pre-drain must be drain-only so the supervisor owns the exit")
+	}
 	if launchctlAfter < drainTimeout {
 		t.Fatalf("the service manager was signalled %v in, before the %v drain finished", launchctlAfter, drainTimeout)
 	}
 	if _, ok := findInterruptedWire(outcome.Interrupted, pushResult.RunID); !ok {
 		t.Fatalf("Interrupted = %v, want the never-finishing run reported", outcome.Interrupted)
+	}
+}
+
+// TestShutdown_DrainOnlyDrainsWithoutExiting covers the managed-service path's
+// requirement. Under launchd KeepAlive or systemd Restart=always, a daemon that
+// exits the instant its drain finishes is respawned into the window before the
+// service manager's own stop lands, and that replacement daemon accepts new
+// runs - the exact thing the drain was asked to prevent. DrainOnly drains,
+// keeps the refuse-new-runs latch set, and leaves the exit to the supervisor.
+func TestShutdown_DrainOnlyDrainsWithoutExiting(t *testing.T) {
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+		return []pipeline.Step{&mockSlowStep{name: types.StepReview}}
+	})
+	_, headSHA := setupTestGitRepo(t, p, d, "drain-only-repo")
+
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatalf("dial daemon: %v", err)
+	}
+	defer client.Close()
+
+	var result ipc.ShutdownResult
+	if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 2000, DrainOnly: true}, &result); err != nil {
+		t.Fatalf("drain-only shutdown: %v", err)
+	}
+	if !result.OK || !result.Drained {
+		t.Fatalf("result = %+v, want OK and Drained", result)
+	}
+
+	// Still accepting NEW connections: the supervisor, not the daemon, owns
+	// the exit. This has to be a fresh dial, not another call on the
+	// connection above - a shutting-down daemon serves its already-open
+	// connections to completion while its listener is gone, so reusing this
+	// one would pass against the very bug the test exists for. Sleep first to
+	// give a self-exiting daemon time to actually go away.
+	time.Sleep(500 * time.Millisecond)
+	fresh, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatalf("dial after drain-only: %v; want the daemon still listening for its service manager to stop", err)
+	}
+	defer fresh.Close()
+	var health ipc.HealthResult
+	if err := fresh.Call(ipc.MethodHealth, &ipc.HealthParams{}, &health); err != nil {
+		t.Fatalf("health after drain-only: %v; want the daemon still running", err)
+	}
+
+	// Still refusing work: a drained daemon that kept serving must not accept
+	// a push in the meantime.
+	var pushResult ipc.PushReceivedResult
+	err = fresh.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate: p.RepoDir("drain-only-repo"),
+		Ref:  "refs/heads/main",
+		Old:  "0000000000000000000000000000000000000000",
+		New:  headSHA,
+	}, &pushResult)
+	if err == nil {
+		t.Fatalf("push after drain-only was accepted as run %s, want it refused", pushResult.RunID)
 	}
 }
 
