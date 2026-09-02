@@ -144,6 +144,16 @@ var transientNeedles = []struct {
 	{"temporary failure in name resolution", "dns temporary failure"},
 	{"tls handshake", "tls handshake failure"},
 	{"unexpected eof", "unexpected eof"},
+	// The claude CLI's own prose for a network failure. It never surfaces the
+	// underlying net error or a status code, so these are the only strings
+	// available; matched apostrophe-free ("Can't", "Couldn't") so a change of
+	// quoting style cannot silently un-retry them. Settings load is a startup
+	// reach at the gateway, before the turn does any work. "Cloud gateway
+	// session expired" is deliberately NOT here: that one needs a human to run
+	// /login, and it is a terminal needle below.
+	{"reach the api server", "claude api unreachable"},
+	{"load settings from cloud gateway", "claude gateway unreachable"},
+	{"connection lost mid-response", "connection lost mid-response"},
 	{"stream idle timeout", "stream idle timeout"},
 	{"no chunks received", "stream idle timeout"},
 	{"response stalled mid-stream", "stream stalled mid-stream"},
@@ -172,6 +182,10 @@ var terminalNeedles = []struct {
 	{"quota_exceeded", "quota exceeded"},
 	{"quota exhausted", "quota exhausted"},
 	{"quota_exhausted", "quota exhausted"},
+	// Reads as a gateway failure and sits one word away from the transient
+	// settings-load needle, but only a human running /login clears it, so every
+	// retry is a full agent budget spent to fail the same way.
+	{"cloud gateway session expired", "cloud gateway session expired"},
 }
 
 // classifyTransient reports whether an error message looks like a transient

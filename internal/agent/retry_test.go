@@ -90,6 +90,24 @@ func TestClassifyTransient_Positive(t *testing.T) {
 			errMsg:  `antigravity reported error: invalid tool call error (invalid_args)`,
 			wantSub: "tool call",
 		},
+		// The claude CLI reports a network failure only as prose, with no
+		// status code and no wrapped net error, so these exact strings are the
+		// whole signal. Verbatim from failed runs.
+		{
+			name:    "claude api unreachable",
+			errMsg:  "claude exited: exit status 1: API Error: Can't reach the API server — check your internet connection",
+			wantSub: "unreachable",
+		},
+		{
+			name:    "claude gateway settings load",
+			errMsg:  "claude exited: exit status 1: Couldn't load settings from Cloud gateway https://claude-gw.example.cloud. Check your network connection, or run `claude auth login`",
+			wantSub: "unreachable",
+		},
+		{
+			name:    "connection lost mid-response",
+			errMsg:  `claude exited: exit status 1: API Error: Connection lost mid-response. The response above may be incomplete.`,
+			wantSub: "connection lost",
+		},
 	}
 
 	for _, tc := range cases {
@@ -137,6 +155,13 @@ func TestClassifyTransient_Negative(t *testing.T) {
 		{
 			name:   "quota exhausted",
 			errMsg: `provider error: quota_exhausted`,
+		},
+		// Reads like the transient gateway needle and is one word away from it,
+		// but only a human running /login clears it, so a retry spends a whole
+		// agent budget to fail identically.
+		{
+			name:   "cloud gateway session expired needs a human",
+			errMsg: "claude exited: exit status 1: API Error: Cloud gateway session expired — run /login to reconnect.",
 		},
 	}
 
