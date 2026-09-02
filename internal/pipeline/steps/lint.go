@@ -16,6 +16,10 @@ type LintStep struct{}
 func (s *LintStep) Name() types.StepName { return types.StepLint }
 
 func (s *LintStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}

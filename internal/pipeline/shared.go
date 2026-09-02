@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // HousekeepingLintResult is the lint assessment produced by the combined
@@ -88,6 +89,10 @@ type RunShared struct {
 	testDiscoveryFingerprint string
 	// testScopeFaults counts under-selection faults noticed so far this run.
 	testScopeFaults int
+	// restartTrees remembers, per step, the tree its last restart-triggering
+	// commit produced, so a later round of that step committing an identical
+	// tree is recognised as churn rather than progress.
+	restartTrees map[types.StepName]string
 }
 
 // NewRunShared returns the run-scoped results holder a fresh run starts with.
@@ -205,6 +210,34 @@ func (s *RunShared) NoteTestScopeFault() int {
 	s.testScopeFaults++
 	s.persistTestDiscoveryLocked()
 	return s.testScopeFaults
+}
+
+// LastRestartTree returns the tree a step's previous restart-triggering commit
+// produced, or "" when that step has not restarted the run yet.
+func (s *RunShared) LastRestartTree(step types.StepName) string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.restartTrees[step]
+}
+
+// SetLastRestartTree records the tree a step's restart-triggering commit
+// produced, so a later round of the same step that commits an identical tree
+// is recognised as churn rather than progress. Unlike the housekeeping stash
+// this is not consume-once: the comparison must survive every later round of
+// the run.
+func (s *RunShared) SetLastRestartTree(step types.StepName, tree string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restartTrees == nil {
+		s.restartTrees = make(map[types.StepName]string)
+	}
+	s.restartTrees[step] = tree
 }
 
 // SetHousekeepingLint records the combined pass's lint assessment for the

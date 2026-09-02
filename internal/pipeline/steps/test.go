@@ -23,6 +23,10 @@ type TestStep struct{}
 func (s *TestStep) Name() types.StepName { return types.StepTest }
 
 func (s *TestStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+func (s *TestStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}

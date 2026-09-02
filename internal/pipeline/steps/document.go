@@ -86,6 +86,10 @@ var housekeepingFindingsSchema = json.RawMessage(`{
 }`)
 
 func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+func (s *DocumentStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}

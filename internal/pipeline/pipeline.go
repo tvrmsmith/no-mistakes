@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
@@ -36,6 +37,11 @@ var ErrRecoveryEvidenceUnavailable = errors.New("recovery evidence unavailable")
 func evidenceUnavailable(cause error) error {
 	return fmt.Errorf("%w: %w", ErrRecoveryEvidenceUnavailable, cause)
 }
+
+// RestartBoundary is the step a restart re-enters validation at: the first
+// step of the validation region. Review today; issues #7/#8 move it to Format
+// once that step exists.
+const RestartBoundary types.StepName = types.StepReview
 
 // StepContext provides shared resources to pipeline steps during execution.
 type StepContext struct {
@@ -107,6 +113,22 @@ type StepContext struct {
 	// OnPRMerged is a best-effort hook after a merged PR state is persisted.
 	// Eval uses it to relabel auto-fix/shipped-unfixed gold; nil is a no-op.
 	OnPRMerged func(ctx context.Context, runID string)
+	// agentInvocations counts the agent turns run through this context. It is
+	// read and written with sync/atomic free functions on the field address
+	// rather than an atomic.Int64 so StepContext stays copyable and go vet's
+	// copylocks check stays quiet.
+	agentInvocations int64
+}
+
+// AgentInvocations returns how many agent turns have run through this step
+// context. Commit attribution reads it as a snapshot taken around one round:
+// a commit made in a round that ran an agent is agent-authored, otherwise a
+// deterministic tool produced it.
+func (sctx *StepContext) AgentInvocations() int64 {
+	if sctx == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&sctx.agentInvocations)
 }
 
 // RunAgentSession executes one turn of a durable review-loop role session,

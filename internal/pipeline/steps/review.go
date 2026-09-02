@@ -178,6 +178,10 @@ type ReviewStep struct{}
 func (s *ReviewStep) Name() types.StepName { return types.StepReview }
 
 func (s *ReviewStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+func (s *ReviewStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	ctx := sctx.Ctx
 	var cancel context.CancelFunc
 	var timeout time.Duration
