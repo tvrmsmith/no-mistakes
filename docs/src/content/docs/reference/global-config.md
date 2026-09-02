@@ -656,7 +656,11 @@ Most of a review's cost is the per-aspect sub-agents the review skill spawns, an
 
 Spec conformance stays in every narrowed round: it is the axis that checks the change against the author's stated intent, which matters most after several fix rounds.
 
-Rounds count per run, not per branch. A new push starts a new run, so its first review is a full sweep again even on a branch an earlier run already reviewed several times; that run instead gets the earlier run's findings as branch history, which tells the reviewer what was already decided.
+Rounds count per branch, not per run. A new run on a branch earlier runs already reviewed picks up where their round count left off, because the reason a rereview buys less than the first sweep is the review history the branch has accumulated, not which run is carrying it. Without this a run that dies mid-review (an agent timeout, a network blip, a daemon crash) would hand the next push a fresh full sweep of ground already covered, which is the common case rather than the rare one.
+
+The count never resets, so later commits on the branch are reviewed at the narrowed breadth it has already reached. Resetting on new work is indistinguishable from the crash case this exists to fix: a mid-review run's own fix commits advance the branch head too. Push work that needs a fresh full sweep to a new branch, or raise `narrow_after_round`.
+
+The reviewer separately receives the earlier run's findings as branch history, which tells it what was already decided.
 
 Set it to `0` to keep every round a full sweep. A negative value is treated as `0`.
 

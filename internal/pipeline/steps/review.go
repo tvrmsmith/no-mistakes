@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -131,12 +132,44 @@ func skillBaseName(name string) string {
 	return strings.TrimSpace(name)
 }
 
-// reviewRoundFor is the 1-indexed number of the review turn about to run. The
-// executor inserts a round record only after the step returns, so the current
-// turn is one past the recorded history. An unreadable history reads as no
-// history and falls back to round 1, which keeps the full sweep.
+// reviewRoundFor is the 1-indexed number of the review turn about to run within
+// the current run. The executor inserts a round record only after the step
+// returns, so the current turn is one past the recorded history. An unreadable
+// history reads as no history and falls back to round 1, which keeps the full
+// sweep.
 func reviewRoundFor(rounds []*db.StepRound) int {
 	return len(rounds) + 1
+}
+
+// reviewBreadthRoundFor is the round number the breadth ramp spends, counting
+// the whole BRANCH rather than the current run.
+//
+// The ramp exists because a rereview of an already-reviewed change buys less
+// than the first sweep, and that is a property of the branch's accumulated
+// review history, not of which run happens to be carrying it. A run that dies
+// mid-review takes its step_results row with it, so a per-run count restarts at
+// one and pays for another full adversarial sweep of a branch several rounds
+// deep. Observed on one branch: twelve review rounds across ten runs, never
+// more than three in any single run, so the narrowed tiers were never reached
+// at all.
+//
+// The count deliberately never resets. Later commits on the branch are reviewed
+// under the narrowed breadth the branch has already earned, because the
+// alternative - resetting on new work - is what a mid-review crash looks like
+// from here, and the crash is the case this exists to fix. An unreadable count
+// falls back to the current run's own rounds, which errs toward the full sweep.
+func reviewBreadthRoundFor(sctx *pipeline.StepContext, rounds []*db.StepRound) int {
+	round := reviewRoundFor(rounds)
+	if sctx == nil || sctx.DB == nil || sctx.Run == nil {
+		return round
+	}
+	earlier, err := sctx.DB.CountEarlierBranchStepRounds(sctx.Run.RepoID, sctx.Run.Branch, types.StepReview, sctx.Run.ID)
+	if err != nil {
+		slog.Warn("failed to count earlier branch review rounds; narrowing on this run's rounds alone",
+			"run_id", sctx.Run.ID, "branch", sctx.Run.Branch, "error", err)
+		return round
+	}
+	return round + earlier
 }
 
 // ReviewStep reviews the diff for bugs, security issues, and doc gaps.
@@ -342,8 +375,10 @@ Previous review findings to address:
 
 	// A rereview costs the same per-aspect sub-agent fan-out as the first
 	// review, so later rounds narrow both what runs and what is worth
-	// reporting. Round one is always the full adversarial sweep.
-	breadth := reviewBreadthForRound(reviewRoundFor(rounds), sctx.Config.Review.NarrowAfterRound)
+	// reporting. Round one is always the full adversarial sweep. The ramp
+	// counts the branch, not the run, so a crash-restarted review does not pay
+	// for a fresh full sweep of ground the branch already covered.
+	breadth := reviewBreadthForRound(reviewBreadthRoundFor(sctx, rounds), sctx.Config.Review.NarrowAfterRound)
 
 	// The action vocabulary below classifies by remedy as well as by topic: a
 	// finding whose smallest honest remedy would extend the change (durable

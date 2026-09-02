@@ -111,6 +111,90 @@ func TestPreviousBranchStepHistorySkipsRunsWithoutRecordedFindings(t *testing.T)
 	}
 }
 
+// The breadth ramp spends this count, and the case it exists for is a run that
+// died mid-review: its rounds must keep counting for the branch even though its
+// step_results row is no longer the current one.
+func TestCountEarlierBranchStepRoundsSumsEveryEarlierRunOnTheBranch(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/branch-round-count", "https://example.com/repo.git", "main")
+
+	insertRunWithReviewRounds(t, d, repo.ID, "feature", "crashed", 3)
+	insertRunWithReviewRounds(t, d, repo.ID, "feature", "crashed-again", 2)
+	current := insertRunWithReviewRounds(t, d, repo.ID, "feature", "current", 1)
+
+	count, err := d.CountEarlierBranchStepRounds(repo.ID, "feature", types.StepReview, current)
+	if err != nil {
+		t.Fatalf("count earlier branch step rounds: %v", err)
+	}
+	if count != 5 {
+		t.Errorf("count = %d, want 5 (the earlier runs' rounds, excluding the caller's own)", count)
+	}
+}
+
+// A round that came back clean still paid for a full review pass, which is the
+// cost the ramp is throttling, so it must count like any other.
+func TestCountEarlierBranchStepRoundsCountsRoundsWithoutFindings(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/branch-round-count-barren", "https://example.com/repo.git", "main")
+
+	barren, _ := d.InsertRun(repo.ID, "feature", "head-barren", "base")
+	barrenStep, _ := d.InsertStepResult(barren.ID, types.StepReview)
+	if _, err := d.InsertStepRound(barrenStep.ID, 1, "initial", nil, nil, 5); err != nil {
+		t.Fatalf("insert barren round: %v", err)
+	}
+	current, _ := d.InsertRun(repo.ID, "feature", "head-current", "base")
+
+	count, err := d.CountEarlierBranchStepRounds(repo.ID, "feature", types.StepReview, current.ID)
+	if err != nil {
+		t.Fatalf("count earlier branch step rounds: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
+func TestCountEarlierBranchStepRoundsIgnoresOtherBranchesReposAndSteps(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/branch-round-count-scope", "https://example.com/repo.git", "main")
+	other, _ := d.InsertRepo("/tmp/branch-round-count-other", "https://example.com/other.git", "main")
+
+	insertRunWithReviewRounds(t, d, repo.ID, "other-branch", "wrong-branch", 4)
+	insertRunWithReviewRounds(t, d, other.ID, "feature", "wrong-repo", 4)
+
+	wrongStep, _ := d.InsertRun(repo.ID, "feature", "head-lint", "base")
+	lint, _ := d.InsertStepResult(wrongStep.ID, types.StepLint)
+	if _, err := d.InsertStepRound(lint.ID, 1, "initial", nil, nil, 5); err != nil {
+		t.Fatalf("insert lint round: %v", err)
+	}
+
+	current, _ := d.InsertRun(repo.ID, "feature", "head-current", "base")
+	count, err := d.CountEarlierBranchStepRounds(repo.ID, "feature", types.StepReview, current.ID)
+	if err != nil {
+		t.Fatalf("count earlier branch step rounds: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}
+
+func insertRunWithReviewRounds(t *testing.T, d *DB, repoID, branch, head string, rounds int) string {
+	t.Helper()
+	run, err := d.InsertRun(repoID, branch, "head-"+head, "base")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	step, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatalf("insert step result: %v", err)
+	}
+	for i := 1; i <= rounds; i++ {
+		if _, err := d.InsertStepRound(step.ID, i, "initial", nil, nil, 10); err != nil {
+			t.Fatalf("insert round %d: %v", i, err)
+		}
+	}
+	return run.ID
+}
+
 func insertRunWithReviewFindings(t *testing.T, d *DB, repoID, branch, findingsJSON string) string {
 	t.Helper()
 	run, err := d.InsertRun(repoID, branch, "head-"+findingsJSON[:8], "base")

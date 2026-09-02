@@ -211,6 +211,121 @@ func TestReviewStep_NarrowsThePromptOnceRoundsPassTheThreshold(t *testing.T) {
 	})
 }
 
+// A run that dies mid-review (agent timeout, network blip, daemon crash) leaves
+// its rounds behind under a step_results row the next push never reaches, so a
+// per-run count restarts at one and buys another full adversarial sweep of a
+// branch already several rounds deep. The ramp counts the branch instead.
+func TestReviewStep_NarrowsOnRoundsEarlierRunsOnTheBranchAlreadySpent(t *testing.T) {
+	t.Parallel()
+
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	findingsJSON, _ := json.Marshal(Findings{Summary: "clean"})
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			return &agent.Result{Output: findingsJSON}, nil
+		},
+	}
+
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config.Review.NarrowAfterRound = 2
+
+	// An earlier run on the same branch that spent four review rounds and then
+	// died without completing.
+	crashed, err := sctx.DB.InsertRun(sctx.Repo.ID, sctx.Run.Branch, "earlier-head", baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashedStep, err := sctx.DB.InsertStepResult(crashed.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 4; i++ {
+		if _, err := sctx.DB.InsertStepRound(crashedStep.ID, i, "initial", nil, nil, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The current run is on its very first round.
+	sr, err := sctx.DB.InsertStepResult(sctx.Run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx.StepResultID = sr.ID
+
+	if _, err := (&ReviewStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.calls) != 1 {
+		t.Fatalf("expected 1 review call, got %d", len(ag.calls))
+	}
+
+	// Four earlier rounds plus this one is round five, past double the
+	// threshold, so the branch has earned the error-only tier.
+	prompt := ag.calls[0].Prompt
+	if strings.Contains(prompt, "(Skill tool, no arguments)") {
+		t.Errorf("a fresh run on an already-reviewed branch paid for another full sweep:\n%s", prompt)
+	}
+	for _, aspect := range minimalReviewAspects {
+		if !strings.Contains(prompt, aspect) {
+			t.Errorf("prompt missing narrowed aspect %q:\n%s", aspect, prompt)
+		}
+	}
+	if !strings.Contains(prompt, `Report only "error" findings`) {
+		t.Errorf("prompt missing the error floor the branch's round count has earned:\n%s", prompt)
+	}
+}
+
+// The count is scoped to the branch, so an unrelated branch's review history
+// must never narrow this one's first sweep.
+func TestReviewStep_AnotherBranchesRoundsDoNotNarrowThisReview(t *testing.T) {
+	t.Parallel()
+
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	findingsJSON, _ := json.Marshal(Findings{Summary: "clean"})
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			return &agent.Result{Output: findingsJSON}, nil
+		},
+	}
+
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config.Review.NarrowAfterRound = 2
+
+	other, err := sctx.DB.InsertRun(sctx.Repo.ID, "refs/heads/unrelated", "other-head", baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherStep, err := sctx.DB.InsertStepResult(other.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 6; i++ {
+		if _, err := sctx.DB.InsertStepRound(otherStep.ID, i, "initial", nil, nil, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sr, err := sctx.DB.InsertStepResult(sctx.Run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx.StepResultID = sr.ID
+
+	if _, err := (&ReviewStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.calls) != 1 {
+		t.Fatalf("expected 1 review call, got %d", len(ag.calls))
+	}
+	if !strings.Contains(ag.calls[0].Prompt, "(Skill tool, no arguments)") {
+		t.Errorf("another branch's rounds narrowed this branch's first review:\n%s", ag.calls[0].Prompt)
+	}
+}
+
 // A namespaced skill name (plugin or directory-scoped install) still satisfies
 // the mandate; anything else does not, and an adapter that reports no skill use
 // at all is unobservable rather than a violation.
