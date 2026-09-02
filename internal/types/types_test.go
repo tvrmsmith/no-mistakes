@@ -80,8 +80,12 @@ func TestAllStepsReturnsACopy(t *testing.T) {
 	if len(a) == 0 || len(b) == 0 {
 		t.Fatalf("AllSteps() returned an empty slice")
 	}
-	if &a[0] == &b[0] {
-		t.Fatalf("AllSteps() results alias each other; AllSteps must return a copy, not the shared package slice")
+	a[0] = StepName("mutated")
+	if b[0] != StepIntent {
+		t.Errorf("mutating one AllSteps() result changed another: b[0] = %q, want %q", b[0], StepIntent)
+	}
+	if got := AllSteps()[0]; got != StepIntent {
+		t.Errorf("mutating an AllSteps() result changed a later call: got %q, want %q", got, StepIntent)
 	}
 }
 
