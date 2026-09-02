@@ -23,6 +23,7 @@ var (
 	daemonStartFn     = daemon.Start
 	daemonStopFn      = daemon.StopWithOptions
 	daemonIsRunningFn = daemon.IsRunning
+	daemonIsDrainedFn = daemon.IsDrained
 )
 
 // defaultDrainTimeout is the CLI-side default for `--drain-timeout`, applied
@@ -538,8 +539,9 @@ const (
 	lifecycleGuardNormal daemonLifecycleGuardMode = iota
 	// lifecycleGuardForce proceeds, loudly warning that active runs may fail.
 	lifecycleGuardForce
-	// lifecycleGuardDrain proceeds quietly: the daemon will wait for these
-	// runs to finish rather than cutting them off.
+	// lifecycleGuardDrain proceeds quietly: the daemon refuses new runs and
+	// lets in-flight work finish, preserving gate-parked runs and cutting CI
+	// monitors.
 	lifecycleGuardDrain
 )
 
@@ -586,10 +588,19 @@ func newDaemonStatusCmd() *cobra.Command {
 				}
 				if alive {
 					pid, _ := daemon.ReadPID(p)
+					suffix := ""
 					if pid > 0 {
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running %s\n", sGreen.Render("●"), sDim.Render(fmt.Sprintf("(pid %d)", pid)))
+						suffix = " " + sDim.Render(fmt.Sprintf("(pid %d)", pid))
+					}
+					// A drained daemon answers health but starts nothing. Say
+					// so: otherwise the only symptom an operator sees is every
+					// push being refused by a daemon this command called
+					// running.
+					if drained, _ := daemonIsDrainedFn(p); drained {
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon drained, not accepting new runs%s\n", sYellow.Render("●"), suffix)
+						fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", sDim.Render("run `no-mistakes daemon restart` to accept runs again"))
 					} else {
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running\n", sGreen.Render("●"))
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running%s\n", sGreen.Render("●"), suffix)
 					}
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon not running\n", sDim.Render("○"))

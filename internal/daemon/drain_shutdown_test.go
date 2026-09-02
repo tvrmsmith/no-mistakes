@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -345,13 +346,15 @@ func TestShutdown_DrainDoesNotStarveOtherRPCs(t *testing.T) {
 
 // waitForDrainInFlight blocks until a drain is running inside the daemon's
 // shutdown handler, the positive signal a test needs before it can race
-// something against that drain. The daemon answers a second drain request with
-// Drained:false while one is already in flight, and it does so without
-// shutting anything down, so a probe is a safe way to observe the latch.
-// DrainOnly with a minimal deadline keeps the probe harmless in the one case
-// where it wins the race and becomes the drain itself: it returns immediately,
-// releases the latch, and the next probe reports the real drain.
-func waitForDrainInFlight(t *testing.T, socket string) {
+// something against that drain. It reads that state instead of provoking it:
+// Drain sets the refuse-new-runs latch as its very first act, before it
+// classifies anything, and the health check reports the latch. A probe that
+// sent a drain request of its own could win the handler's
+// draining.CompareAndSwap against a real drain already on the wire, which
+// would answer the real drain with Drained:false and end it on the spot, so
+// the observation must stay read-only. drainDone reports a drain that already
+// returned, which is a failure rather than something to wait out.
+func waitForDrainInFlight(t *testing.T, socket string, drainDone <-chan error) {
 	t.Helper()
 	client, err := ipc.Dial(socket)
 	if err != nil {
@@ -360,11 +363,16 @@ func waitForDrainInFlight(t *testing.T, socket string) {
 	defer client.Close()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		var result ipc.ShutdownResult
-		if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 1, DrainOnly: true}, &result); err != nil {
-			t.Fatalf("drain probe: %v", err)
+		select {
+		case err := <-drainDone:
+			t.Fatalf("the drain returned (err=%v) before it was ever observed in flight", err)
+		default:
 		}
-		if !result.Drained {
+		var health ipc.HealthResult
+		if err := client.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &health, 5*time.Second); err != nil {
+			t.Fatalf("health probe: %v", err)
+		}
+		if health.Drained {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -435,7 +443,7 @@ func TestShutdown_ShutdownConcurrentWithDrainEndsItPromptly(t *testing.T) {
 		drainDone <- err
 	}()
 
-	waitForDrainInFlight(t, p.Socket())
+	waitForDrainInFlight(t, p.Socket(), drainDone)
 
 	// The signal-equivalent: a bare shutdown request on a third connection,
 	// funneling through the same doShutdown as a real SIGTERM would.
@@ -738,6 +746,13 @@ func TestShutdown_DrainOnlyDrainsWithoutExiting(t *testing.T) {
 	if err := fresh.Call(ipc.MethodHealth, &ipc.HealthParams{}, &health); err != nil {
 		t.Fatalf("health after drain-only: %v; want the daemon still running", err)
 	}
+	// Alive and drained are different states, and only the health answer can
+	// tell them apart. Without it, a supervisor that never performed the exit
+	// leaves an operator with a daemon that `daemon status` calls running and
+	// that refuses every push.
+	if !health.Drained {
+		t.Fatalf("health = %+v, want Drained: a daemon left alive by drain_only accepts nothing", health)
+	}
 
 	// Still refusing work: a drained daemon that kept serving must not accept
 	// a push in the meantime.
@@ -750,6 +765,12 @@ func TestShutdown_DrainOnlyDrainsWithoutExiting(t *testing.T) {
 	}, &pushResult)
 	if err == nil {
 		t.Fatalf("push after drain-only was accepted as run %s, want it refused", pushResult.RunID)
+	}
+	// The refusal is the one message an operator in this state actually sees,
+	// so it has to name the way out. "daemon is shutting down" describes a
+	// daemon that is about to be gone, which this one is not.
+	if !strings.Contains(err.Error(), "daemon restart") {
+		t.Fatalf("push refusal = %v, want it to name `no-mistakes daemon restart` as the recovery", err)
 	}
 }
 

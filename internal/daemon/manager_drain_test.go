@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,6 +148,12 @@ func TestDrain_RefusesNewRunsImmediately(t *testing.T) {
 	_, err := m.startRun(context.Background(), repo, "main", "deadbeef", "cafef00d", "push", nil, "", "")
 	if err == nil {
 		t.Fatal("startRun after Drain: got nil error, want refusal")
+	}
+	// The reason matters, not just the failure: this manager's repo has no
+	// gate bare repo, so a startRun that got past the latch would fail at the
+	// fetch anyway, and both failures mark the row terminal.
+	if !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("startRun after Drain: err = %v, want the drain latch refusal", err)
 	}
 	run, dbErr := database.GetActiveRun(repo.ID, "main")
 	if dbErr != nil {
@@ -879,5 +886,144 @@ func TestDrain_CancelledContextAbortsTheWait(t *testing.T) {
 	entry, ok := findInterrupted(report.Interrupted, run.ID)
 	if !ok || entry.Reason != ipc.DrainInterruptedShutdown {
 		t.Fatalf("Interrupted = %v, want one %s entry for %s", report.Interrupted, ipc.DrainInterruptedShutdown, run.ID)
+	}
+}
+
+// withDrainBeforeReportHook installs fn in the window between Drain's wait
+// loop and the report it builds, and removes it afterwards.
+func withDrainBeforeReportHook(t *testing.T, fn func()) {
+	t.Helper()
+	prev := drainBeforeReportHook
+	drainBeforeReportHook = fn
+	t.Cleanup(func() { drainBeforeReportHook = prev })
+}
+
+// TestDrain_RunWithAnotherActiveStepBesidesCIIsNotCut pins the half of the CI
+// classification that protects real work: a run whose CI step row is running
+// alongside another running step is not sitting in a CI monitor, it is doing
+// something the drain must wait out. Cutting it would cancel that work and
+// then tell the operator its PR is merely waiting on CI.
+func TestDrain_RunWithAnotherActiveStepBesidesCIIsNotCut(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	markCIMonitorActive(t, database, run)
+	pushRow, err := database.InsertStepResult(run.ID, types.StepPush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.StartStepWithAutoFixLimit(pushRow.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		close(done)
+	}()
+
+	report := m.Drain(context.Background(), 5*time.Second)
+
+	if context.Cause(ctx) != nil {
+		t.Fatalf("cancel cause = %v, want nil: a run with another running step is not a CI monitor", context.Cause(ctx))
+	}
+	if len(report.Interrupted) != 0 {
+		t.Fatalf("Interrupted = %v, want empty", report.Interrupted)
+	}
+	if !containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want it to include %s", report.Waited, run.ID)
+	}
+	if !containsRunID(report.Finished, run.ID) {
+		t.Fatalf("Finished = %v, want it to include %s", report.Finished, run.ID)
+	}
+}
+
+// TestDrain_ExemptRunThatFinishesIsReportedFinished covers the run that was
+// parked when the drain started, whose gate an operator answered mid-drain,
+// and which then completed. An exempt entry is released from the wait, so the
+// wait can end without ever reading its finish off the funnel; reporting it as
+// interrupted would tell the operator a successful run was stopped mid-flight
+// and exit nonzero over it.
+//
+// The hook places the finish in the only window that produces that state, the
+// gap between the wait ending and the report being built.
+func TestDrain_ExemptRunThatFinishesIsReportedFinished(t *testing.T) {
+	shortenDrainReclassify(t, time.Hour)
+	m, database, repo := newDrainTestManager(t)
+	parked, parkedCtx, parkedDone := registerFakeRun(t, m, database, repo, "parked")
+	parkRunAwaitingAgent(t, database, parked)
+	working, _, workingDone := registerFakeRun(t, m, database, repo, "working")
+
+	withDrainBeforeReportHook(t, func() {
+		if err := database.CompleteRunAwaitingAgent(parked.ID, 0); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := database.UpdateRunStatus(parked.ID, types.RunCompleted); err != nil {
+			t.Error(err)
+			return
+		}
+		close(parkedDone)
+	})
+	close(workingDone)
+
+	report := m.Drain(context.Background(), 5*time.Second)
+
+	if context.Cause(parkedCtx) != nil {
+		t.Fatalf("cancel cause = %v, want nil: the drain never cancels a run it merely stopped waiting on", context.Cause(parkedCtx))
+	}
+	if entry, ok := findInterrupted(report.Interrupted, parked.ID); ok {
+		t.Fatalf("Interrupted = %v, want no entry for the run that finished (reason %q)", report.Interrupted, entry.Reason)
+	}
+	if !containsRunID(report.Finished, parked.ID) {
+		t.Fatalf("Finished = %v, want it to include the resumed run %s", report.Finished, parked.ID)
+	}
+	if !containsRunID(report.Finished, working.ID) {
+		t.Fatalf("Finished = %v, want it to include %s", report.Finished, working.ID)
+	}
+}
+
+// TestShutdown_PreservedRunThatLeavesItsGateIsCancelled covers the run an
+// operator answers while the shutdown is already running. The IPC server still
+// accepts `axi respond` at that point (daemon.go stops runs before it closes
+// the server), so a preserved run can start executing real git and agent work
+// that nothing is waiting for, and the process would exit on top of it.
+//
+// The two control runs turn that race into a schedule: registerFakeRun's done
+// channels are unbuffered, so a send on one completes exactly when the
+// shutdown's wait receives it. The first send proves the preserve decision is
+// already made, and the gate is answered before the second send releases the
+// wait.
+func TestShutdown_PreservedRunThatLeavesItsGateIsCancelled(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	parked, parkedCtx, _ := registerFakeRun(t, m, database, repo, "parked")
+	if err := database.UpdateRunStatus(parked.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	parkRunAwaitingAgent(t, database, parked)
+
+	// Shutdown waits on its cancelled runs in sorted run-ID order.
+	firstRun, _, firstDone := registerFakeRun(t, m, database, repo, "control-a")
+	secondRun, _, secondDone := registerFakeRun(t, m, database, repo, "control-b")
+	if firstRun.ID > secondRun.ID {
+		firstDone, secondDone = secondDone, firstDone
+	}
+
+	unparked := make(chan error, 1)
+	go func() {
+		firstDone <- struct{}{}
+		unparked <- database.CompleteRunAwaitingAgent(parked.ID, 0)
+		secondDone <- struct{}{}
+	}()
+
+	m.Shutdown()
+
+	select {
+	case err := <-unparked:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("the gate was never answered; the control runs did not sequence the shutdown")
+	}
+	if context.Cause(parkedCtx) == nil {
+		t.Fatal("a preserved run that left its gate during shutdown was not cancelled, so it kept working while the process exited")
 	}
 }

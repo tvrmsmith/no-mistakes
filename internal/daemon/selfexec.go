@@ -525,6 +525,23 @@ func IsRunning(p *paths.Paths) (bool, error) {
 	return daemonHealthCheck(p)
 }
 
+// IsDrained reports whether a live daemon has stopped accepting new runs. A
+// daemon that cannot be reached is not drained, it is gone, so every dial or
+// call failure answers false.
+func IsDrained(p *paths.Paths) (bool, error) {
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		return false, err
+	}
+	defer client.Close()
+
+	var result ipc.HealthResult
+	if err := client.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &result, ipc.DefaultDialTimeout); err != nil {
+		return false, err
+	}
+	return result.Drained, nil
+}
+
 func daemonIsRunningViaIPC(p *paths.Paths) (bool, error) {
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
@@ -708,8 +725,7 @@ func sendShutdownRequest(client *ipc.Client, opts StopOptions) (ipc.ShutdownResu
 	}
 	timeout := drainTimeoutOrDefault(opts.DrainTimeout)
 	params := &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: timeout.Milliseconds(), DrainOnly: opts.DrainOnly}
-	callTimeout := timeout + daemonStopTimeout() + 30*time.Second
-	return result, client.CallWithTimeout(ipc.MethodShutdown, params, &result, callTimeout)
+	return result, client.CallWithTimeout(ipc.MethodShutdown, params, &result, drainCallTimeout(opts.DrainTimeout))
 }
 
 func drainTimeoutOrDefault(d time.Duration) time.Duration {
@@ -717,6 +733,20 @@ func drainTimeoutOrDefault(d time.Duration) time.Duration {
 		return defaultDrainTimeout
 	}
 	return d
+}
+
+// drainCallTimeout budgets the shutdown RPC for a drain. It must exceed the
+// drain deadline the daemon is asked to honor plus the post-drain shutdown
+// grace, and it must exceed ipc.DefaultCallTimeout, or the client hangs up on
+// a daemon that is still draining exactly as instructed.
+func drainCallTimeout(d time.Duration) time.Duration {
+	return drainTimeoutOrDefault(d) + daemonStopTimeout() + 30*time.Second
+}
+
+// drainStopWaitTimeout budgets the wait for the daemon process to disappear
+// after a drain, which cannot start before the drain deadline itself expires.
+func drainStopWaitTimeout(d time.Duration) time.Duration {
+	return daemonStopTimeout() + drainTimeoutOrDefault(d)
 }
 
 func stopDetachedDaemon(p *paths.Paths) error {
@@ -768,7 +798,7 @@ func stopDetachedDaemonWithOptions(p *paths.Paths, opts StopOptions) (StopOutcom
 	outcome := StopOutcome{Drained: result.Drained, Finished: result.Finished, Interrupted: result.Interrupted}
 	waitTimeout := daemonStopTimeout()
 	if opts.Drain {
-		waitTimeout += drainTimeoutOrDefault(opts.DrainTimeout)
+		waitTimeout = drainStopWaitTimeout(opts.DrainTimeout)
 	}
 	if waitErr := waitForDaemonStopBudget(p, instance, waitTimeout); waitErr != nil {
 		return outcome, waitErr

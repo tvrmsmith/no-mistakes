@@ -710,3 +710,77 @@ func TestDrainLifecycleInvocationIsDistinguishableInTheCLILog(t *testing.T) {
 		t.Fatalf("cli.log should record the drain, got %q", log)
 	}
 }
+
+// TestDaemonStatusReportsADrainedDaemon covers the state a managed-service
+// drain can leave behind: the drain finished, the daemon deliberately stayed
+// alive for its service manager to stop, and that stop never landed. The
+// process answers health, so "daemon running" is true and useless; every push
+// is refused and nothing in the status said why.
+func TestDaemonStatusReportsADrainedDaemon(t *testing.T) {
+	t.Setenv("NM_HOME", t.TempDir())
+
+	tests := []struct {
+		name    string
+		drained bool
+		want    string
+		absent  string
+	}{
+		{
+			name:    "a working daemon",
+			drained: false,
+			want:    "daemon running",
+			absent:  "drained",
+		},
+		{
+			name:    "a drained daemon",
+			drained: true,
+			want:    "daemon drained, not accepting new runs",
+			absent:  "daemon running",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prevRunning, prevDrained := daemonIsRunningFn, daemonIsDrainedFn
+			daemonIsRunningFn = func(*paths.Paths) (bool, error) { return true, nil }
+			daemonIsDrainedFn = func(*paths.Paths) (bool, error) { return tc.drained, nil }
+			t.Cleanup(func() {
+				daemonIsRunningFn = prevRunning
+				daemonIsDrainedFn = prevDrained
+			})
+
+			out, err := executeCmd("daemon", "status")
+			if err != nil {
+				t.Fatalf("daemon status failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Fatalf("daemon status output = %q, want it to say %q", out, tc.want)
+			}
+			if strings.Contains(out, tc.absent) {
+				t.Fatalf("daemon status output = %q, want it to omit %q", out, tc.absent)
+			}
+		})
+	}
+}
+
+// TestDaemonStatusOnADrainedDaemonNamesTheRecovery keeps the status line
+// actionable: the only way out of the drained-and-alive state is a restart.
+func TestDaemonStatusOnADrainedDaemonNamesTheRecovery(t *testing.T) {
+	t.Setenv("NM_HOME", t.TempDir())
+
+	prevRunning, prevDrained := daemonIsRunningFn, daemonIsDrainedFn
+	daemonIsRunningFn = func(*paths.Paths) (bool, error) { return true, nil }
+	daemonIsDrainedFn = func(*paths.Paths) (bool, error) { return true, nil }
+	t.Cleanup(func() {
+		daemonIsRunningFn = prevRunning
+		daemonIsDrainedFn = prevDrained
+	})
+
+	out, err := executeCmd("daemon", "status")
+	if err != nil {
+		t.Fatalf("daemon status failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "daemon restart") {
+		t.Fatalf("daemon status output = %q, want it to name the restart that recovers a drained daemon", out)
+	}
+}

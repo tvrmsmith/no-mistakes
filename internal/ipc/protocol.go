@@ -248,9 +248,14 @@ type AdmitPushResult struct {
 	Context GateContextResult `json:"context"`
 }
 
-// HealthResult confirms the daemon is alive.
+// HealthResult confirms the daemon is alive. Drained says it is alive but no
+// longer accepting runs, either because a stop is in progress or because a
+// drain_only request left it running for a service manager that has not yet
+// stopped it. Omitted for a healthy daemon so an old CLI reading a bare
+// {"status":"ok"} sees nothing new.
 type HealthResult struct {
-	Status string `json:"status"`
+	Status  string `json:"status"`
+	Drained bool   `json:"drained,omitempty"`
 }
 
 // ShutdownResult confirms shutdown was initiated. Drained, Finished, and

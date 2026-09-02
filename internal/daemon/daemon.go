@@ -1055,7 +1055,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 	}
 
 	srv.Handle(ipc.MethodHealth, func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		return &ipc.HealthResult{Status: "ok"}, nil
+		return &ipc.HealthResult{Status: "ok", Drained: mgr.RefusingNewRuns()}, nil
 	})
 
 	var draining atomic.Bool
@@ -1114,7 +1114,10 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		// here would be respawned into the gap before the supervisor's own stop
 		// arrives, and that replacement daemon would accept new runs; the
 		// supervisor performs the exit instead.
-		if !p.DrainOnly {
+		if p.DrainOnly {
+			mgr.MarkDrainedAlive()
+			slog.Warn("drain finished and this daemon is still running with new runs refused; its service manager owns the exit, and if that never lands, `no-mistakes daemon restart` recovers it")
+		} else {
 			go shutdown()
 		}
 		return &ipc.ShutdownResult{

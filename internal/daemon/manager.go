@@ -48,6 +48,12 @@ type RunManager struct {
 	dones        map[string]chan struct{}           // runID → closed when goroutine exits
 	wg           sync.WaitGroup                     // tracks background run goroutines
 	shuttingDown atomic.Bool                        // prevents new runs during shutdown
+	// drainedAlive marks the managed-service outcome where a drain_only
+	// request left the latch set and the process running, waiting for its
+	// supervisor to perform the exit. If that exit never lands the daemon
+	// refuses every push forever, so this is what lets `daemon status` and
+	// the refusal message name the state and its recovery command.
+	drainedAlive atomic.Bool
 	// shutdownCh is closed by Shutdown BEFORE it cancels a single run, so a
 	// Drain running concurrently learns the daemon is going away rather than
 	// watching the runs shutdown just killed close their done channels and
@@ -897,7 +903,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 
 	if m.shuttingDown.Load() {
 		trackStartFailure("daemon_shutdown")
-		return "", fmt.Errorf("daemon is shutting down")
+		return "", m.refuseNewRunError()
 	}
 
 	// Serialize per repo+branch to prevent two concurrent pushes from both
@@ -1169,10 +1175,11 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	// Track executor.
 	done := make(chan struct{})
 	if !m.registerActiveRun(run.ID, executor, cancel, done) {
-		cancel(fmt.Errorf("daemon is shutting down"))
-		m.db.UpdateRunError(run.ID, "daemon is shutting down")
+		refusal := m.refuseNewRunError()
+		cancel(refusal)
+		m.db.UpdateRunError(run.ID, refusal.Error())
 		trackStartFailure("daemon_shutdown")
-		return "", fmt.Errorf("daemon is shutting down")
+		return "", refusal
 	}
 
 	// Background goroutine now owns worktree cleanup.
@@ -1438,6 +1445,13 @@ type DrainReport struct {
 // it rather than sleeping out a real interval.
 var drainReclassifyInterval = 5 * time.Second
 
+// drainBeforeReportHook runs between Drain's wait loop and the report it
+// builds from what that loop observed. Nil outside tests. The gap between
+// those two is a real window a run can finish in, and it is the only place a
+// test can put one, so pinning what the report then says about that run needs
+// a seam here.
+var drainBeforeReportHook func()
+
 // isCIMonitorRun reports whether a run is parked in its CI monitor: it has a
 // PR URL, a running step_results row for types.StepCI, and no running row for
 // any OTHER step name. The PR URL matters: the CI step row is already running
@@ -1622,6 +1636,10 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 	// and telling the operator otherwise points them at --drain-timeout for a
 	// problem raising it cannot fix.
 	unfinishedReason := ipc.DrainInterruptedShutdown
+	// endedByShutdown is the authority for "the daemon stopped underneath this
+	// wait", which unfinishedReason cannot answer on its own because its
+	// initial value is already the shutdown reason.
+	endedByShutdown := false
 	release := func(id string) {
 		if released[id] {
 			return
@@ -1651,6 +1669,7 @@ waitLoop:
 		select {
 		case <-m.shutdownCh:
 			unfinishedReason = ipc.DrainInterruptedShutdown
+			endedByShutdown = true
 			break waitLoop
 		default:
 		}
@@ -1660,6 +1679,7 @@ waitLoop:
 			// racing a signal or a concurrent stop reports the runs it was
 			// waiting on as stopped mid-flight rather than as finished.
 			unfinishedReason = ipc.DrainInterruptedShutdown
+			endedByShutdown = true
 			break waitLoop
 		case id := <-finishedCh:
 			release(id)
@@ -1704,22 +1724,30 @@ waitLoop:
 			// deadline, and telling the operator they were would point them at
 			// --drain-timeout for a problem raising it cannot fix.
 			unfinishedReason = ipc.DrainInterruptedShutdown
+			endedByShutdown = true
 			break waitLoop
 		}
+	}
+
+	if drainBeforeReportHook != nil {
+		drainBeforeReportHook()
 	}
 
 	waited := report.Waited[:0]
 	for _, id := range order {
 		e := entries[id]
-		if !finished[id] && unfinishedReason == ipc.DrainInterruptedDeadline {
-			// A run whose done channel closed in the same instant the
-			// deadline fired really did finish. select picks uniformly among
-			// ready cases, and the funnel goroutine may not have delivered
-			// yet either, so the channel itself is the authority here rather
-			// than what the wait loop happened to observe.
+		if !finished[id] && !endedByShutdown {
+			// A run whose done channel closed without the wait loop crediting
+			// it really did finish. select picks uniformly among ready cases,
+			// and the funnel goroutine may not have delivered yet either, so
+			// the channel itself is the authority here rather than what the
+			// wait loop happened to observe. An exempt entry is the other
+			// route to an uncredited close: its finishedCh message is never
+			// consumed, because the wait it was released from can end without
+			// ever reading it.
 			//
-			// Only on the deadline path. When the daemon's own shutdown ended
-			// the wait, a done channel closing right afterwards is shutdown
+			// Skipped only when the daemon's own shutdown ended the wait,
+			// where a done channel closing right afterwards is shutdown
 			// killing the run, and crediting that as finished is exactly the
 			// claim the shutdown reason exists to avoid.
 			select {
@@ -1809,11 +1837,22 @@ func (m *RunManager) Shutdown() {
 	}
 	m.mu.Unlock()
 
+	// Sorted rather than map order so a shutdown handles the same runs in the
+	// same sequence every time, in the logs and in the wait below.
+	ids := make([]string, 0, len(cancels))
+	for id := range cancels {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
 	cancelled := make([]chan struct{}, 0, len(cancels))
+	preservedIDs := make([]string, 0, len(cancels))
 	preserved := 0
-	for id, cancel := range cancels {
+	for _, id := range ids {
+		cancel := cancels[id]
 		if m.runParkedAtGate(id) {
 			preserved++
+			preservedIDs = append(preservedIDs, id)
 			slog.Info("preserving gate-parked run for resume on the next start", "run_id", id)
 			continue
 		}
@@ -1844,6 +1883,71 @@ func (m *RunManager) Shutdown() {
 	case <-time.After(30 * time.Second):
 		slog.Warn("timed out waiting for runs to finish during shutdown")
 	}
+
+	m.cancelUnparkedPreservedRuns(preservedIDs, cancels, dones)
+}
+
+// cancelUnparkedPreservedRuns catches a run that left its gate after Shutdown
+// decided to preserve it. The IPC server is still answering `axi respond`
+// while Shutdown runs (daemon.go calls mgr.Shutdown before srv.Close), so an
+// answer landing in that window unblocks waitForApproval and the executor
+// resumes real git and agent work on a run nothing is waiting for. Preserving
+// a parked run is the point; letting one run on unsupervised into process exit
+// is not, so anything no longer parked here is cancelled like any other run.
+func (m *RunManager) cancelUnparkedPreservedRuns(preservedIDs []string, cancels map[string]context.CancelCauseFunc, dones map[string]chan struct{}) {
+	late := make([]chan struct{}, 0, len(preservedIDs))
+	for _, id := range preservedIDs {
+		if m.runParkedAtGate(id) {
+			continue
+		}
+		cancel, ok := cancels[id]
+		if !ok {
+			continue
+		}
+		cancel(fmt.Errorf("daemon shutting down"))
+		slog.Info("cancelled a preserved run that left its gate during shutdown", "run_id", id)
+		if ch, ok := dones[id]; ok {
+			late = append(late, ch)
+		}
+	}
+	if len(late) == 0 {
+		return
+	}
+	lateDone := make(chan struct{})
+	go func() {
+		for _, ch := range late {
+			<-ch
+		}
+		close(lateDone)
+	}()
+	select {
+	case <-lateDone:
+	case <-time.After(30 * time.Second):
+		slog.Warn("timed out waiting for late-unparked runs to finish during shutdown")
+	}
+}
+
+// MarkDrainedAlive records that a drain_only request finished and deliberately
+// left this process running with its refuse-new-runs latch set.
+func (m *RunManager) MarkDrainedAlive() {
+	m.drainedAlive.Store(true)
+}
+
+// RefusingNewRuns reports whether the daemon has stopped accepting runs, which
+// a health check surfaces so an operator can tell a drained daemon apart from
+// a working one.
+func (m *RunManager) RefusingNewRuns() bool {
+	return m.shuttingDown.Load()
+}
+
+// refuseNewRunError explains why a push was turned away. A drained-and-alive
+// daemon is the one case an operator has to act on, so it names the recovery
+// command instead of the generic shutdown wording.
+func (m *RunManager) refuseNewRunError() error {
+	if m.drainedAlive.Load() {
+		return fmt.Errorf("daemon was drained and is no longer accepting runs; its service manager did not stop it, so run `no-mistakes daemon restart` to recover")
+	}
+	return fmt.Errorf("daemon is shutting down")
 }
 
 // signalShutdown announces that the daemon is going away, before any run is
