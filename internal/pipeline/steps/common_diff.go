@@ -2,6 +2,7 @@ package steps
 
 import (
 	"context"
+	"fmt"
 	"path"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,24 @@ func matchIgnorePattern(file, pattern string) bool {
 	// Full path match
 	matched, _ := path.Match(pattern, file)
 	return matched
+}
+
+// changedPathsSince returns the changed-file set a step should act on: the
+// paths changed since baseSHA alone in fix mode (the fix commit stacked on
+// top of an already-diffed head), or the paths changed between baseSHA and
+// headSHA otherwise. Mirrors the changed-file read at review.go:158-168.
+func changedPathsSince(ctx context.Context, workDir, baseSHA, headSHA string, fixing bool) ([]string, error) {
+	args := []string{"diff", "--name-only", "-z", "--no-renames"}
+	if fixing {
+		args = append(args, baseSHA)
+	} else {
+		args = append(args, baseSHA+".."+headSHA)
+	}
+	changedFiles, err := git.Run(ctx, workDir, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get changed files: %w", err)
+	}
+	return changedPathList(changedFiles), nil
 }
 
 // changedPathList splits a NUL-delimited `git diff --name-only -z` payload,

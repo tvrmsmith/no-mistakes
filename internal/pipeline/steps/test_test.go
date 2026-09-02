@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -17,11 +18,50 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
+// oneRepositoryUnitLayout answers the discovery pass with a single unit whose
+// command does nothing, so a test that cares only about the evidence pass gets
+// past discovery without asserting anything about it.
+const oneRepositoryUnitLayout = `{"units":[{"name":"repository","path":".","command":"true"}],"selected":["repository"]}`
+
+// isDiscoveryCall reports whether an agent invocation is the discovery pass.
+// It keys on the schema rather than on prompt text so a prompt rewrite does
+// not silently turn these tests into discovery tests.
+func isDiscoveryCall(opts agent.RunOpts) bool {
+	return bytes.Equal(opts.JSONSchema, testDiscoverySchema)
+}
+
+// answerDiscoveryThen serves the discovery pass a one-unit layout and every
+// later pass the given structured output.
+func answerDiscoveryThen(output string) func(context.Context, agent.RunOpts) (*agent.Result, error) {
+	return func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if isDiscoveryCall(opts) {
+			return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
+		}
+		return &agent.Result{Output: json.RawMessage(output)}, nil
+	}
+}
+
+// evidencePrompt returns the prompt of the evidence pass, which follows
+// discovery whenever the repository configured no unit layout.
+func evidencePrompt(t *testing.T, ag *mockAgent) string {
+	t.Helper()
+	for _, call := range ag.calls {
+		if !isDiscoveryCall(call) {
+			return call.Prompt
+		}
+	}
+	t.Fatalf("agent was never called for evidence, calls = %d", len(ag.calls))
+	return ""
+}
+
 func TestTestStep_HangingEvidenceAgentFailsRunAfterTimeout(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{
 		name: "hanging-evidence-agent",
-		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if isDiscoveryCall(opts) {
+				return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
+			}
 			<-ctx.Done()
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["ok"],"testing_summary":"ok"}`)}, nil
 		},
@@ -62,7 +102,10 @@ func TestTestStep_EvidenceAgentCallIsDeadlineBounded(t *testing.T) {
 	var sawDeadline bool
 	ag := &mockAgent{
 		name: "test",
-		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if isDiscoveryCall(opts) {
+				return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
+			}
 			_, sawDeadline = ctx.Deadline()
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["ok"],"testing_summary":"ok"}`)}, nil
 		},
@@ -396,10 +439,8 @@ func TestTestStep_EvidenceDirectoryIsAlwaysOutsideTheWorktree(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["manual evidence check"],"testing_summary":"checked evidence"}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[],"summary":"","tested":["manual evidence check"],"testing_summary":"checked evidence"}`),
 	}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Show users a success screen after checkout"
@@ -409,7 +450,7 @@ func TestTestStep_EvidenceDirectoryIsAlwaysOutsideTheWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 	wantDir := sctx.EvidenceDir
 	if !strings.Contains(prompt, "Write new evidence files into this evidence directory, never into the worktree: "+wantDir) {
 		t.Fatalf("expected evidence guidance to point outside the worktree, got:\n%s", prompt)
@@ -424,10 +465,8 @@ func TestTestStep_PublishedEvidenceGuidanceNamesTheEvidenceBranch(t *testing.T) 
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["manual evidence check"],"testing_summary":"checked evidence"}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[],"summary":"","tested":["manual evidence check"],"testing_summary":"checked evidence"}`),
 	}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Show users a success screen after checkout"
@@ -438,7 +477,7 @@ func TestTestStep_PublishedEvidenceGuidanceNamesTheEvidenceBranch(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 	wantDir := sctx.EvidenceDir
 	if !strings.Contains(prompt, "published to the repository's team/ci/evidence branch automatically and linked from the PR: "+wantDir) {
 		t.Fatalf("expected evidence-branch publishing guidance, got:\n%s", prompt)
@@ -457,10 +496,8 @@ func TestTestStep_InitialAgent_TargetedValidationContract(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["go test ./internal/cli -run TestDoctor -count=1"],"testing_summary":"targeted check passed"}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[],"summary":"","tested":["go test ./internal/cli -run TestDoctor -count=1"],"testing_summary":"targeted check passed"}`),
 	}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Keep doctor checks green for CLI users"
@@ -468,10 +505,11 @@ func TestTestStep_InitialAgent_TargetedValidationContract(t *testing.T) {
 	if _, err := (&TestStep{}).Execute(sctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(ag.calls) != 1 {
-		t.Fatalf("expected 1 evidence agent call, got %d", len(ag.calls))
+	// One discovery pass, then one evidence pass.
+	if len(ag.calls) != 2 {
+		t.Fatalf("expected a discovery call and 1 evidence agent call, got %d", len(ag.calls))
 	}
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 
 	assertTestQualityRulePrompt(t, prompt)
 	for _, want := range []string{
@@ -589,10 +627,8 @@ func TestTestStep_InitialAgent_NoTargetedEvidenceRequiresHonestFinding(t *testin
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"warning","description":"no targeted test can prove the intent","action":"ask-user"}],"summary":"missing evidence","tested":["manual review of changed packages"],"testing_summary":"could not produce targeted evidence"}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[{"severity":"warning","description":"no targeted test can prove the intent","action":"ask-user"}],"summary":"missing evidence","tested":["manual review of changed packages"],"testing_summary":"could not produce targeted evidence"}`),
 	}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Prove the checkout success screen works end-to-end"
@@ -604,7 +640,7 @@ func TestTestStep_InitialAgent_NoTargetedEvidenceRequiresHonestFinding(t *testin
 	if !outcome.NeedsApproval {
 		t.Fatal("expected missing targeted evidence to require approval")
 	}
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 	for _, want := range []string{
 		"Never treat \"do not run everything\" as permission to run nothing",
 		"write or improve a focused test",

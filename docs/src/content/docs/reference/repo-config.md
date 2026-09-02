@@ -240,6 +240,8 @@ When set, the test step runs this exact command first as the baseline and checks
 When empty, the agent detects and runs the smallest relevant tests itself (and is instructed never to run the complete repository suite).
 When user intent is available, the agent may still run after a successful baseline command to gather evidence-oriented validation, still under the same targeted-validation contract.
 
+`commands.test` collapses the whole repository into one implicit test unit. For a monorepo with several independently testable services, see [`test.units`](#testunits), which lets the test step select and run only the units a change touches.
+
 ### commands.lint
 
 Explicit lint command. Run via the platform shell - `sh -c` on POSIX, `cmd.exe /c` on Windows.
@@ -523,6 +525,31 @@ Fields not set here inherit from global config and then the built-in defaults.
 | `intent.disabled_readers` | `string[]` | Adds to globally disabled readers |
 
 Valid `disabled_readers` values are `claude`, `codex`, `opencode`, `rovodev`, `pi`, and `copilot`.
+
+### test.units
+
+Declare the repository's independently testable units, so the test step selects and runs only the units a change touches instead of inferring the layout itself.
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `test.units[].name` | `string` | Required |
+| `test.units[].path` | `string` | `.` |
+| `test.units[].command` | `string` | Required |
+
+Each unit is a service, package, or the repository itself. `path` is the repository-relative directory the unit owns; a changed file under `path` belongs to that unit. `path` defaults to `.`, meaning the unit owns the whole repository.
+
+`command` runs verbatim via the platform shell, exactly like `commands.test`, and should cover the unit, integration, and service-isolation test tiers for that unit. End-to-end tests stay in CI; do not put them in a unit command.
+
+The command receives two environment variables so it can scope itself the same way discovery did:
+
+| Variable | Value |
+| --- | --- |
+| `NO_MISTAKES_BASE_SHA` | The base commit the run is validating against |
+| `NO_MISTAKES_CHANGED_FILES` | The changed paths, one per line |
+
+`command` runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so the whole `test.units` list is honored only from the trusted default-branch copy of this file unless the repository opts in via `allow_repo_commands: true` - see [`allow_repo_commands`](#allow_repo_commands). A contributor's pushed branch cannot inject shell by naming a new unit or repointing an existing one's command.
+
+When `test.units` is empty, `commands.test` (or, failing that, an agent inference pass) decides what runs; see [`commands.test`](#commandstest).
 
 ### test.evidence
 

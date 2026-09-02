@@ -571,3 +571,140 @@ func TestMerge_CarriesDisableProjectSettings(t *testing.T) {
 		t.Error("Merge must leave DisableProjectSettings false by default")
 	}
 }
+
+func TestEffectiveRepoConfig_TestUnitsTrustedOnly(t *testing.T) {
+	pushed := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "pushed", Path: ".", Command: "echo pwned"},
+	}}}
+	trusted := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "trusted", Path: "services/api", Command: "make -C services/api test"},
+	}}}
+
+	effective := EffectiveRepoConfig(pushed, trusted, false)
+	if len(effective.Test.Units) != 1 {
+		t.Fatalf("Test.Units = %v, want exactly one unit", effective.Test.Units)
+	}
+	if effective.Test.Units[0].Name != "trusted" {
+		t.Errorf("Test.Units[0].Name = %q, want %q", effective.Test.Units[0].Name, "trusted")
+	}
+	if effective.Test.Units[0].Command != "make -C services/api test" {
+		t.Errorf("Test.Units[0].Command = %q, want the trusted command", effective.Test.Units[0].Command)
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsOptInUsesPushedValue(t *testing.T) {
+	pushed := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "pushed", Path: ".", Command: "echo pwned"},
+	}}}
+	trusted := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "trusted", Path: "services/api", Command: "make -C services/api test"},
+	}}}
+
+	effective := EffectiveRepoConfig(pushed, trusted, true)
+	if len(effective.Test.Units) != 1 {
+		t.Fatalf("Test.Units = %v, want exactly one unit", effective.Test.Units)
+	}
+	if effective.Test.Units[0].Name != "pushed" {
+		t.Errorf("Test.Units[0].Name = %q, want %q", effective.Test.Units[0].Name, "pushed")
+	}
+	if effective.Test.Units[0].Command != "echo pwned" {
+		t.Errorf("Test.Units[0].Command = %q, want the pushed command", effective.Test.Units[0].Command)
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsNoTrustedCopyIsDropped(t *testing.T) {
+	pushed := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "pushed", Path: ".", Command: "echo pwned"},
+	}}}
+
+	effective := EffectiveRepoConfig(pushed, nil, false)
+	if len(effective.Test.Units) != 0 {
+		t.Fatalf("Test.Units = %v, want empty without a trusted copy", effective.Test.Units)
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsOptInWithNoTrustedCopyUsesPushedValue(t *testing.T) {
+	pushed := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "pushed", Path: ".", Command: "echo pwned"},
+	}}}
+
+	effective := EffectiveRepoConfig(pushed, nil, true)
+	if len(effective.Test.Units) != 1 {
+		t.Fatalf("Test.Units = %v, want exactly one unit", effective.Test.Units)
+	}
+	if effective.Test.Units[0].Name != "pushed" {
+		t.Errorf("Test.Units[0].Name = %q, want %q", effective.Test.Units[0].Name, "pushed")
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsDoesNotAliasTrustedSlice(t *testing.T) {
+	trusted := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "trusted", Path: "services/api", Command: "make -C services/api test"},
+	}}}
+
+	effective := EffectiveRepoConfig(&RepoConfig{}, trusted, false)
+	effective.Test.Units[0].Command = "rm -rf /"
+
+	if trusted.Test.Units[0].Command != "make -C services/api test" {
+		t.Fatalf("trusted.Test.Units[0].Command = %q, want unchanged by mutating the effective copy", trusted.Test.Units[0].Command)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectMissingName(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"\"\n      command: \"go test ./...\"\n"))
+	want := "test.units[0].name is required"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectMissingCommand(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      command: \"\"\n"))
+	want := `test.units[0].command is required (unit "api")`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectAbsolutePath(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      path: \"/etc\"\n      command: \"go test ./...\"\n"))
+	want := `test.units[0].path must be repository-relative, got "/etc"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectEscapingPath(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      path: \"../secrets\"\n      command: \"go test ./...\"\n"))
+	want := `test.units[0].path must stay inside the repository, got "../secrets"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectDuplicateName(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      command: \"go test ./...\"\n    - name: \"api\"\n      command: \"go test ./...\"\n"))
+	want := `test.units has duplicate unit name "api"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestApplyTestOverrides_UnitsDefaultPathToDot(t *testing.T) {
+	dst := testDefaults()
+	src := &TestRaw{Units: []TestUnit{
+		{Name: "root", Path: "", Command: "go test ./..."},
+		{Name: "api", Path: " services/api ", Command: "make test"},
+	}}
+	applyTestOverrides(&dst, src)
+
+	if len(dst.Units) != 2 {
+		t.Fatalf("Units = %v, want 2 entries", dst.Units)
+	}
+	if dst.Units[0].Path != "." {
+		t.Errorf("Units[0].Path = %q, want %q", dst.Units[0].Path, ".")
+	}
+	if dst.Units[1].Path != "services/api" {
+		t.Errorf("Units[1].Path = %q, want trimmed %q", dst.Units[1].Path, "services/api")
+	}
+}

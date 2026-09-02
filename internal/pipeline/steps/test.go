@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
@@ -95,39 +96,155 @@ Previous test findings to address:
 		fixSummary = summary
 	}
 
-	testCmd := sctx.Config.Commands.Test
-	tested := []string{}
-	if testCmd != "" {
-		sctx.Log(fmt.Sprintf("running tests: %s", testCmd))
-		output, exitCode, err := runStepShellCommand(sctx, testCmd)
-		if err != nil {
-			return nil, fmt.Errorf("run test command: %w", err)
+	changed, err := changedPathsSince(ctx, sctx.WorkDir, baseSHA, sctx.Run.HeadSHA, sctx.Fixing)
+	if err != nil {
+		return nil, err
+	}
+
+	discovery, err := discoverTestUnits(sctx, baseSHA, changed)
+	if err != nil {
+		// A discovery failure parks rather than returning a Go error: a
+		// returned error would fail the run outright, while the acceptance
+		// criterion here is that an unreadable or invalid layout parks for a
+		// maintainer to fix the configuration or the inferred command.
+		//
+		// The exception is a failure to reach the discovery agent at all
+		// (budget expiry, transport error). Parking there would hold the run
+		// at a gate on an agent that never answered, so it fails the run like
+		// every other agent invocation in this step.
+		var resultErr discoveryResultError
+		if !errors.As(err, &resultErr) {
+			return nil, err
 		}
-		tested = append(tested, testCmd)
+		description := fmt.Sprintf("test unit discovery failed: %v", err)
+		sctx.Log(description)
+		findings := Findings{Items: []Finding{{
+			Severity:    types.FindingSeverityError,
+			Action:      types.ActionAskUser,
+			Description: description,
+		}}}
+		findingsJSON, _ := json.Marshal(findings)
+		return &pipeline.StepOutcome{
+			NeedsApproval: true,
+			AutoFixable:   false,
+			Findings:      string(findingsJSON),
+			FixSummary:    fixSummary,
+		}, nil
+	}
 
+	multiUnit := len(discovery.Units) > 1
+	tested := []string{}
+	ran := map[string]bool{}
+
+	sctx.Log(fmt.Sprintf("selected test units (%s): %s", discovery.Source, strings.Join(discovery.Selected, ", ")))
+	for _, name := range discovery.Selected {
+		unit := findTestUnit(discovery.Units, name)
+		sctx.Log(fmt.Sprintf("unit %s: %s", unit.Name, unit.Command))
+	}
+	if len(discovery.Selected) == 0 {
+		sctx.Log("no test units selected for the changed files")
+	}
+
+	// runUnit runs one unit's command exactly once per attempt, tracked by
+	// name in ran so the under-selection expansion below can never re-run a
+	// unit the first pass already covered. It returns a non-nil outcome only
+	// on a failing exit code; a nil outcome with a nil error means the caller
+	// should keep going.
+	runUnit := func(unit config.TestUnit) (*pipeline.StepOutcome, error) {
+		if ran[unit.Name] {
+			return nil, nil
+		}
+		ran[unit.Name] = true
+		env := []string{
+			envTestBaseSHA + "=" + baseSHA,
+			envTestChangedFiles + "=" + strings.Join(changed, "\n"),
+		}
+		output, exitCode, runErr := runStepShellCommandEnv(sctx, unit.Command, env)
+		if runErr != nil {
+			return nil, fmt.Errorf("run test command: %w", runErr)
+		}
+		tested = append(tested, unit.Command)
+		if exitCode == 0 {
+			return nil, nil
+		}
+		description := fmt.Sprintf("tests failed with exit code %d", exitCode)
+		if multiUnit {
+			description = fmt.Sprintf("unit %s: tests failed with exit code %d", unit.Name, exitCode)
+		}
 		projectedOutput := logConfiguredCommandOutput(sctx, output, types.StepTest)
+		findings := Findings{
+			Items: []Finding{{
+				Severity:    types.FindingSeverityError,
+				Description: description,
+			}},
+			Summary: projectedOutput,
+			Tested:  tested,
+		}
+		findingsJSON, _ := json.Marshal(findings)
+		return &pipeline.StepOutcome{
+			NeedsApproval: true,
+			AutoFixable:   true,
+			Findings:      string(findingsJSON),
+			ExitCode:      exitCode,
+			FixSummary:    fixSummary,
+		}, nil
+	}
 
-		if exitCode != 0 {
-			findings := Findings{
-				Items: []Finding{{
-					Severity:    "error",
-					Description: fmt.Sprintf("tests failed with exit code %d", exitCode),
-				}},
-				Summary: projectedOutput,
-				Tested:  tested,
-			}
-			findingsJSON, _ := json.Marshal(findings)
-			return &pipeline.StepOutcome{
-				NeedsApproval: true,
-				AutoFixable:   true,
-				Findings:      string(findingsJSON),
-				ExitCode:      exitCode,
-				FixSummary:    fixSummary,
-			}, nil
+	for _, name := range discovery.Selected {
+		unit := findTestUnit(discovery.Units, name)
+		if outcome, runErr := runUnit(unit); outcome != nil || runErr != nil {
+			return outcome, runErr
 		}
 	}
 
-	useEvidenceAgent := testCmd == "" || cleanedUserIntent(sctx) != ""
+	if missing := underSelectedUnits(discovery.Units, changed, discovery.Selected); len(missing) > 0 {
+		missingNames := make([]string, len(missing))
+		for i, u := range missing {
+			missingNames[i] = u.Name
+		}
+		count := sctx.Shared.NoteTestScopeFault()
+		if count >= 2 {
+			// A second scope fault in the same run means discovery itself is
+			// unreliable, not merely incomplete this once: expanding again
+			// would keep papering over a systematic miss, so this parks for
+			// a maintainer instead of running the missing units.
+			sctx.Log("second test scope fault in this run, parking")
+			findings := Findings{Items: []Finding{{
+				Severity:    types.FindingSeverityError,
+				Action:      types.ActionAskUser,
+				Description: fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")),
+			}}}
+			findingsJSON, _ := json.Marshal(findings)
+			return &pipeline.StepOutcome{
+				NeedsApproval: true,
+				AutoFixable:   false,
+				Findings:      string(findingsJSON),
+				FixSummary:    fixSummary,
+			}, nil
+		}
+
+		sctx.Log(fmt.Sprintf("test scope fault: original selection %s", strings.Join(discovery.Selected, ", ")))
+		sctx.Log(fmt.Sprintf("expanding selection with %s", strings.Join(missingNames, ", ")))
+
+		expanded := discovery
+		expanded.Selected = append(append([]string{}, discovery.Selected...), missingNames...)
+		sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), expanded)
+		discovery = expanded
+
+		for _, unit := range missing {
+			if outcome, runErr := runUnit(unit); outcome != nil || runErr != nil {
+				return outcome, runErr
+			}
+		}
+	}
+
+	// An agent-inferred layout does not replace evidence gathering. A
+	// repository that configured neither test.units nor commands.test got a
+	// full evidence pass before this step split, and discovery answering "here
+	// is a command" says nothing about whether the change's intent is visibly
+	// satisfied. A configured layout stays as it was: evidence only when the
+	// run carries user intent.
+	useEvidenceAgent := len(discovery.Selected) == 0 || discovery.Source == "agent" || cleanedUserIntent(sctx) != ""
 	if useEvidenceAgent {
 		evidenceDir := testEvidenceDir(sctx)
 		if evidenceDir == "" {
@@ -136,7 +253,7 @@ Previous test findings to address:
 		if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create test evidence dir: %w", err)
 		}
-		if testCmd == "" {
+		if len(discovery.Selected) == 0 {
 			sctx.Log("no test command configured, asking agent to run tests...")
 		} else {
 			sctx.Log("user intent available, asking agent to gather test evidence...")
@@ -147,8 +264,12 @@ Previous test findings to address:
 			evidenceGuidance = fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; they are published to the repository's %s branch automatically and linked from the PR: %s", sctx.Config.Test.Evidence.Branch, evidenceDir)
 		}
 		configuredTestCommand := ""
-		if testCmd != "" {
-			configuredTestCommand = fmt.Sprintf("\nConfigured test command already ran successfully as baseline: `%s`\n", testCmd)
+		if len(tested) > 0 {
+			quoted := make([]string, len(tested))
+			for i, cmd := range tested {
+				quoted[i] = "`" + cmd + "`"
+			}
+			configuredTestCommand = fmt.Sprintf("\nConfigured test command already ran successfully as baseline: %s\n", strings.Join(quoted, ", "))
 		}
 		evidenceCtx, cancelEvidence, evidenceTimeout := testAgentContext(sctx)
 		result, err := sctx.RunAgentContext(evidenceCtx, agent.RunOpts{
@@ -286,6 +407,19 @@ func testAgentContext(sctx *pipeline.StepContext) (context.Context, context.Canc
 	}
 	ctx, cancel := context.WithTimeoutCause(sctx.Ctx, timeout, errTestAgentTimeout)
 	return ctx, cancel, timeout
+}
+
+// findTestUnit returns the unit named name from units, or a zero-value unit
+// if no such unit is present. Discovery validates every selected name against
+// its own layout (see validateDiscovery), so a miss here would mean a caller
+// looked up a name discovery never vouched for.
+func findTestUnit(units []config.TestUnit, name string) config.TestUnit {
+	for _, unit := range units {
+		if unit.Name == name {
+			return unit
+		}
+	}
+	return config.TestUnit{Name: name}
 }
 
 var errTestAgentTimeout = errors.New("test agent timeout")
