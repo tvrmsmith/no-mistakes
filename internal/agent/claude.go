@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/kunchenguid/no-mistakes/internal/claudetrust"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
@@ -22,6 +24,13 @@ const claudeMaxRetries = 3
 
 // errNoStructuredOutput is returned when Claude succeeds but omits structured output.
 var errNoStructuredOutput = errors.New("claude returned no structured output")
+
+// errClaudeWorkspaceUntrusted marks a run aborted because Claude Code has not
+// been through its interactive trust dialog for the gate repo path and the
+// category of permission entries it discarded still costs the run under the
+// launched flags: see scanClaudeStderr and claudetrust.Warning.BitesUnderBypass
+// for which categories that is.
+var errClaudeWorkspaceUntrusted = errors.New("claude workspace not trusted, project-scoped permission entries were discarded")
 
 const claudeScannerMaxTokenSize = 256 * 1024 * 1024
 
@@ -156,6 +165,96 @@ func withClaudeStreamDetail(msg string, stream *claudeStream) string {
 	return msg
 }
 
+// scanClaudeStderr reads claude's stderr to completion, accumulating it into
+// buf exactly like the plain io.ReadAll it replaced, but watches each line
+// for Claude Code's untrusted-workspace warning. That warning means Claude
+// Code discarded a category of the target repo's project-scoped permission
+// entries (permissions.allow, permissions.ask, permissions.deny, or
+// permissions.additionalDirectories from .claude/settings.json). Whether
+// that costs the run depends on how claude was launched: bypass reports
+// whether this invocation carries --dangerously-skip-permissions, and under
+// bypass permission checking itself is off, so a dropped allow/ask/deny
+// entry changes nothing about whether a tool call proceeds -
+// permissions.additionalDirectories is the one category that still shrinks
+// what the agent can read (see claudetrust.Warning.BitesUnderBypass).
+//
+// A warning that bites tears the process down immediately (closePipes then
+// terminate) instead of waiting for it to exit or stall out its own
+// deadline: closing the pipes first, before the SIGTERM grace poll inside
+// terminate() can block, stops the parse loop from continuing to consume
+// output during that wait. Closing stdout also makes the parse loop's
+// scanner return an os.ErrClosed error, which lands in the existing
+// parse-error branch. A warning that does not bite is recorded in report
+// instead: runOnce emits it through opts.OnChunk once, after stderrWG.Wait(),
+// on the same goroutine as every other OnChunk call, so the dropped category
+// is never invisible on the run log but the process is left running. This is
+// the regression this file exists to fix, since aborting the
+// permissions.allow fixture in run 01M1FAF1H15SSVAHRHKDEY6BBG (see
+// ~/.no-mistakes/logs/01M1FAF1H15SSVAHRHKDEY6BBG/review.log line 292) was
+// never the actual cause of that run's timeout.
+//
+// buf, abort, and report are guarded by mu because they are written here and
+// read from runOnce after stderrWG.Wait().
+func scanClaudeStderr(started *nativeAgentCommand, mu *sync.Mutex, buf *[]byte, abort *error, report *string, bypass bool) {
+	scanner := bufio.NewScanner(started.stderr)
+	scanner.Buffer(make([]byte, 0, 64*1024), claudeScannerMaxTokenSize)
+	var acc bytes.Buffer
+	for scanner.Scan() {
+		line := scanner.Text()
+		acc.WriteString(line)
+		acc.WriteByte('\n')
+		warning, ok := claudetrust.ParseUntrustedWorkspaceStderr(line)
+		if !ok {
+			continue
+		}
+		configPath, _ := claudetrust.ConfigPath()
+		remedy := claudetrust.Remedy(warning.Workspace, configPath)
+		if !bypass || warning.BitesUnderBypass() {
+			abortErr := fmt.Errorf("%w: %s", errClaudeWorkspaceUntrusted, remedy)
+			mu.Lock()
+			if *abort == nil {
+				*abort = abortErr
+			}
+			mu.Unlock()
+			started.closePipes()
+			started.terminate()
+			continue
+		}
+		category := warning.Category
+		if category == "" {
+			category = "a permission setting"
+		}
+		mu.Lock()
+		if *report == "" {
+			*report = fmt.Sprintf("claude workspace not trusted, %s was discarded (inert under the launched permission bypass): %s", category, remedy)
+		}
+		mu.Unlock()
+	}
+	mu.Lock()
+	*buf = acc.Bytes()
+	mu.Unlock()
+}
+
+// claudeTrustAbort reads the abort recorded by scanClaudeStderr. Callers only
+// read this after stderrWG.Wait() has returned.
+func claudeTrustAbort(mu *sync.Mutex, abort *error) error {
+	mu.Lock()
+	defer mu.Unlock()
+	return *abort
+}
+
+// claudeReportTrustWarning emits a non-biting untrusted-workspace warning
+// recorded by scanClaudeStderr through onChunk, once, on the caller's
+// goroutine. Callers only read this after stderrWG.Wait() has returned.
+func claudeReportTrustWarning(mu *sync.Mutex, report *string, onChunk func(string)) {
+	mu.Lock()
+	msg := *report
+	mu.Unlock()
+	if msg != "" && onChunk != nil {
+		onChunk(msg)
+	}
+}
+
 // claudeAgent spawns the claude CLI for each invocation.
 type claudeAgent struct {
 	bin       string
@@ -215,6 +314,9 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 
 	var stderrBuf []byte
 	var stderrWG sync.WaitGroup
+	var trustMu sync.Mutex
+	var trustAbort error
+	var trustReport string
 	started, err := startNativeAgentCommand(cmd, nativeAgentActivityObserver(opts, "claude"))
 	if err != nil {
 		return nil, fmt.Errorf("claude start: %w", err)
@@ -223,10 +325,11 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	pid := started.pid()
 	emitAgentStarted(opts, "claude", pid)
 
+	bypass := claudeArgsHaveBypass(args)
 	stderrWG.Add(1)
 	go func() {
 		defer stderrWG.Done()
-		stderrBuf, _ = io.ReadAll(started.stderr)
+		scanClaudeStderr(started, &trustMu, &stderrBuf, &trustAbort, &trustReport, bypass)
 	}()
 
 	var usage TokenUsage
@@ -235,6 +338,11 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	if err := parseClaudeEvents(ctx, started.stdout, stream.tee(opts.OnChunk), &usage, &result); err != nil {
 		err = started.waitAfterParseError(err)
 		stderrWG.Wait()
+		claudeReportTrustWarning(&trustMu, &trustReport, opts.OnChunk)
+		if abortErr := claudeTrustAbort(&trustMu, &trustAbort); abortErr != nil {
+			emitAgentExited(opts, "claude", pid, abortErr)
+			return nil, abortErr
+		}
 		// Reading the event stream fails on cancellation, a read error, or an
 		// event past the scanner's token limit - never on a stream that simply
 		// stops, which bufio hands back as a final token. Whatever the cause,
@@ -250,6 +358,19 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 
 	waitErr := started.wait()
 	stderrWG.Wait()
+	claudeReportTrustWarning(&trustMu, &trustReport, opts.OnChunk)
+	// The untrusted-workspace abort, when scanClaudeStderr recorded one, takes
+	// priority over every outcome below - the wait error, a missing result, and
+	// even a successful finalize - since none of those explain why the run
+	// actually died: a category of permission entries that still bites under
+	// the launched flags was discarded, and reporting anything else here would
+	// hide the one line of stderr that tells the operator how to fix it. A
+	// warning that does not bite never reaches trustAbort at all; it was
+	// already reported through opts.OnChunk and the run continues normally.
+	if abortErr := claudeTrustAbort(&trustMu, &trustAbort); abortErr != nil {
+		emitAgentExited(opts, "claude", pid, abortErr)
+		return nil, abortErr
+	}
 	if waitErr != nil {
 		retErr := claudeExitError(waitErr, stderrBuf, &stream)
 		emitAgentExited(opts, "claude", pid, retErr)
@@ -351,6 +472,21 @@ func (a *claudeAgent) buildArgs(schema json.RawMessage, resumeID string) []strin
 		args = append(args, "--dangerously-skip-permissions")
 	}
 	return args
+}
+
+// claudeArgsHaveBypass reports whether the fully-built claude args launch with
+// --dangerously-skip-permissions, which turns off permission checking
+// entirely and makes a dropped permissions.allow/ask/deny entry inert. This
+// checks the args actually passed to exec.CommandContext, not just buildArgs'
+// own default branch, since an operator can pin the flag themselves via
+// extraArgs.
+func claudeArgsHaveBypass(args []string) bool {
+	for _, arg := range args {
+		if arg == "--dangerously-skip-permissions" {
+			return true
+		}
+	}
+	return false
 }
 
 // claudeUserSetSettingSources reports whether extraArgs pin --setting-sources at

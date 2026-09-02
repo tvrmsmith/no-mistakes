@@ -731,6 +731,26 @@ func newClaudeStdinHelperAgent(t *testing.T) *claudeAgent {
 	}
 }
 
+// newClaudeStdinHelperAgentPinningPermissionMode is newClaudeStdinHelperAgent
+// with an operator-pinned --permission-mode appended after the "--" that
+// separates go test's own flags from the args the real claude CLI would see.
+// claudeUserSetPermissionMode scans the whole extraArgs slice for the flag
+// regardless of position, so buildArgs skips its default
+// --dangerously-skip-permissions exactly as it would for a real operator
+// override, which is the condition under test.
+func newClaudeStdinHelperAgentPinningPermissionMode(t *testing.T) *claudeAgent {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("current test executable: %v", err)
+	}
+	return &claudeAgent{
+		bin:                    exe,
+		extraArgs:              []string{"-test.run=^TestClaudeStdinHelper$", "--", "--permission-mode", "acceptEdits"},
+		disableProjectSettings: true,
+	}
+}
+
 func TestClaudeStdinHelper(t *testing.T) {
 	mode := os.Getenv("NM_CLAUDE_STDIN_HELPER")
 	if mode == "" {
@@ -784,6 +804,38 @@ func TestClaudeStdinHelper(t *testing.T) {
 		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"API Error: Stream idle timeout - no chunks received"}]}}`+"\n")
 		_, _ = io.WriteString(os.Stdout, `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"helper-session"}`+"\n")
 		return
+	case "untrusted-then-hang":
+		// permissions.additionalDirectories fixture: the one category that still
+		// costs the run under --dangerously-skip-permissions (bypass grants
+		// approval, not extra read roots), so this must abort even under the
+		// default agent. The helper then hangs far longer than any test should
+		// tolerate, so the test only passes if the adapter aborts on the stderr
+		// line instead of waiting for the process.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		time.Sleep(60 * time.Second)
+	case "untrusted-with-result":
+		// The additionalDirectories fixture (bites even under bypass) arrives
+		// alongside a complete, valid, successful result event: the abort must
+		// still win over a result that otherwise parsed cleanly.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		emitClaudeHelperResult()
+		return
+	case "untrusted-allow-with-result":
+		// permissions.allow fixture: under --dangerously-skip-permissions this
+		// category is inert (permission checking itself is off), so an unpatched
+		// adapter that aborted unconditionally on the warning would regress a
+		// working run. Alongside a successful result, this proves both directions:
+		// under bypass the run must complete normally with the warning reported
+		// through OnChunk, and with a pinned, non-bypassing permission mode the
+		// same fixture must still abort.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceFixture)
+		emitClaudeHelperResult()
+		return
+	case "unrelated-stderr-fail":
+		// Ordinary stderr noise unrelated to workspace trust: the existing
+		// "claude exited: ...: <stderr>" behavior must be unchanged.
+		_, _ = io.WriteString(os.Stderr, "warning: some unrelated deprecation notice\n")
+		os.Exit(1)
 	case "no-result":
 		// A claude that reports a diagnostic on the stream and then exits 0
 		// without ever emitting a result event: nothing failed at the process
