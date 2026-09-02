@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -451,6 +452,65 @@ func TestDaemonStopPlainIsUnchanged(t *testing.T) {
 	}
 	if !strings.Contains(out, "daemon stopped") {
 		t.Fatalf("plain daemon stop should print the usual success line, got %q", out)
+	}
+}
+
+// TestDaemonStopDrainReportsOutcomeEvenWhenTheStopErrors pins that a drain
+// report is not thrown away by a later failure. selfexec returns a populated
+// outcome alongside an error on purpose (a drain that ran in full, then a
+// wait-for-exit timeout), and printing only the error hides which run was
+// interrupted and that a PR was left open.
+func TestDaemonStopDrainReportsOutcomeEvenWhenTheStopErrors(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	prevStop := daemonStopFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		return daemon.StopOutcome{
+			Drained: true,
+			Interrupted: []ipc.DrainInterruptedRun{
+				{RunID: "run-7", Branch: "feature-w", Reason: ipc.DrainInterruptedCIMonitor},
+			},
+		}, fmt.Errorf("wait for exit: daemon still running")
+	}
+	t.Cleanup(func() { daemonStopFn = prevStop })
+
+	out, err := executeCmd("daemon", "stop", "--drain")
+	if err == nil {
+		t.Fatalf("daemon stop --drain should surface the stop failure, got output %q", out)
+	}
+	if !strings.Contains(out, "run-7") {
+		t.Fatalf("output should still report the drain, got %q", out)
+	}
+}
+
+// TestDaemonRestartDrainReportsOutcomeEvenWhenTheStopErrors is the restart half.
+func TestDaemonRestartDrainReportsOutcomeEvenWhenTheStopErrors(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	prevStop := daemonStopFn
+	prevStart := daemonStartFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		return daemon.StopOutcome{
+			Drained: true,
+			Interrupted: []ipc.DrainInterruptedRun{
+				{RunID: "run-8", Branch: "feature-v", Reason: ipc.DrainInterruptedDeadline},
+			},
+		}, fmt.Errorf("wait for exit: daemon still running")
+	}
+	daemonStartFn = func(*paths.Paths) error { return nil }
+	t.Cleanup(func() {
+		daemonStopFn = prevStop
+		daemonStartFn = prevStart
+	})
+
+	out, err := executeCmd("daemon", "restart", "--drain")
+	if err == nil {
+		t.Fatalf("daemon restart --drain should surface the stop failure, got output %q", out)
+	}
+	if !strings.Contains(out, "run-8") {
+		t.Fatalf("output should still report the drain, got %q", out)
 	}
 }
 

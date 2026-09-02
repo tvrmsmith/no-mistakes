@@ -61,7 +61,7 @@ If the daemon executable path cannot be determined, the update aborts before rep
 
 `no-mistakes daemon stop` and `no-mistakes daemon restart` apply the same guard: if pending or running pipeline runs exist, each refuses by default and lists the active runs, and each takes its own `--force` to proceed anyway.
 Both commands also take `--drain` as an alternative to `--force`: instead of cutting active runs off, the daemon refuses new runs, lets in-flight runs finish, then stops. With `--drain` the guard does not refuse and does not treat active runs as a problem; it lists what is currently active and proceeds. That list is not a promise to wait on every entry, since the two classifications below take runs out of the wait. `--drain` and `--force` cannot be combined, since they say opposite things about what should happen to those runs.
-A run parked at a gate (`axi respond` waiting on you) is never waited on: it is preserved and resumed after the next daemon start, the same as it is today without `--drain`. A run actively monitoring CI for an already-open PR is cut immediately rather than waited on, since a drain that blocked on CI could run indefinitely; the PR is left open and CI keeps running, so this is expected behavior, not a failure. `daemon stop --drain` reports that run's ID and branch and says the PR remains open, and exits `0`. A cut CI monitor is not counted among the runs that finished.
+A run parked at a gate (`axi respond` waiting on you) is never waited on: stopping the daemon leaves it alone, so it stays parked in the database and the next daemon start resumes it, the same as it is today without `--drain`. A run actively monitoring CI for an already-open PR is cut immediately rather than waited on, since a drain that blocked on CI could run indefinitely; the PR is left open and CI keeps running, so this is expected behavior, not a failure. A CI step partway through an auto-fix repair is not that case: an agent is working, so the run is waited on like any other and bounded by the deadline below. `daemon stop --drain` reports that run's ID and branch and says the PR remains open, and exits `0`. A cut CI monitor is not counted among the runs that finished.
 Parked wins over CI monitoring: a run parked at a CI gate is preserved and resumed, not cut, because it is not actively monitoring anything and the recovery path can re-check its PR on the next start.
 Both classifications are rechecked while the drain waits, so a run that parks at a gate or reaches its CI monitor after the drain starts is released or cut just as one that was already there.
 The drain itself is bounded by `--drain-timeout` (a Go duration, default `10m`; must be positive, and rejected without `--drain` rather than silently ignored). Any run still active when that deadline passes is forcibly stopped, exactly as an undrained stop would have stopped it. `daemon stop --drain` reports each such run and returns a nonzero exit naming them; `daemon restart --drain` still restarts the daemon afterward and only then returns that error.
@@ -159,6 +159,6 @@ validation-step containment rule.
 
 Without `--drain`:
 
-1. Cancels all active runs
-2. Waits up to 30 seconds for goroutines to finish
+1. Cancels all active runs, except those parked at a gate, which stay parked so the next start resumes them
+2. Waits up to 30 seconds for the cancelled runs' goroutines to finish
 3. Removes the PID file and socket

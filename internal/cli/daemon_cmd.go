@@ -340,6 +340,13 @@ func newDaemonStopCmd() *cobra.Command {
 				}
 				outcome, err := daemonStopFn(p, opts)
 				if err != nil {
+					// The drain can have run in full and still be joined with a
+					// later failure (a wait-for-exit timeout, say). Report what
+					// it did before the error, or the operator never learns
+					// which run was interrupted or that a PR was left open.
+					if opts.Drain {
+						printDrainOutcome(cmd.OutOrStdout(), outcome)
+					}
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
@@ -383,6 +390,11 @@ func newDaemonRestartCmd() *cobra.Command {
 				}
 				outcome, err := daemonStopFn(p, opts)
 				if err != nil {
+					// Same as stop: a populated outcome rides alongside the
+					// error, and discarding it hides what the drain did.
+					if opts.Drain {
+						printDrainOutcome(cmd.OutOrStdout(), outcome)
+					}
 					return fmt.Errorf("stop daemon: %w", err)
 				}
 				if opts.Drain {
@@ -433,21 +445,23 @@ func drainStopOptions(drain bool, drainTimeout time.Duration, timeoutSet, force 
 // deadline cut is worded as work that was forcibly stopped.
 //
 // It reports on outcome.Drained, what the daemon did, never on the --drain
-// flag, what the operator asked for. Those differ in three real states: no
+// flag, what the operator asked for. Those differ in four real states: no
 // daemon was running (nothing to drain, reported as such), a new CLI against
 // an old daemon, which ignores ShutdownParams and cancels every run outright,
-// and a second concurrent stop --drain, which loses the daemon's single-drain
-// guard. All come back Drained: false with empty lists, and reporting them as
-// a clean drain of zero runs would claim the opposite of what happened - but
-// they are not the same event, so each gets its own line rather than one
-// blanket claim that runs were cancelled.
+// a second concurrent stop --drain, which loses the daemon's single-drain
+// guard and cancels nothing, and a live daemon whose socket was unreachable,
+// which is stopped by PID. The last three come back Drained: false with empty
+// lists. Reporting them as a clean drain of zero runs would claim the
+// opposite of what happened, but they did not do the same thing to the runs
+// either, so the line says only that no drain was reported rather than
+// asserting a fate for work it cannot see.
 func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
 	if outcome.NoDaemon {
 		fmt.Fprintf(w, "  %s no daemon was running; nothing to drain\n", sDim.Render("-"))
 		return
 	}
 	if !outcome.Drained {
-		fmt.Fprintf(w, "  %s the daemon did not drain; any in-flight runs were cancelled outright\n", sYellow.Render("!"))
+		fmt.Fprintf(w, "  %s the daemon did not report a drain; in-flight runs may not have been allowed to finish\n", sYellow.Render("!"))
 		return
 	}
 	fmt.Fprintf(w, "  %s %d run(s) finished before the daemon stopped\n", sGreen.Render("✓"), len(outcome.Finished))
@@ -466,9 +480,8 @@ func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
 }
 
 // drainOutcomeError is the nonzero case a drain introduces. Two states earn
-// it: the daemon never drained at all (an old daemon that ignores
-// ShutdownParams, or a drain already in progress), and a run the drain
-// forcibly stopped at its deadline. A ci_monitor interruption alone is the
+// it: the daemon never drained at all (see printDrainOutcome for the ways
+// that happens), and a run the drain forcibly stopped at its deadline. A ci_monitor interruption alone is the
 // drain's designed behavior and exits 0, and so is finding no daemon at all:
 // stopping an already-stopped daemon succeeds without --drain, and adding
 // --drain must not turn that same no-op into a failure.
@@ -477,7 +490,7 @@ func drainOutcomeError(outcome daemon.StopOutcome) error {
 		return nil
 	}
 	if !outcome.Drained {
-		return fmt.Errorf("the daemon did not drain: it is running a version without drain support, or another drain is already in progress")
+		return fmt.Errorf("the daemon did not drain: it may be running a version without drain support, another drain may already be in progress, or its socket may have been unreachable")
 	}
 	var ids []string
 	for _, run := range outcome.Interrupted {

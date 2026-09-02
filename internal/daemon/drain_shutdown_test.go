@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -259,50 +260,99 @@ func TestShutdown_DrainDoesNotStarveOtherRPCs(t *testing.T) {
 	}
 	defer drainClient.Close()
 
-	drainDone := make(chan error, 1)
-	go func() {
-		var result ipc.ShutdownResult
-		drainDone <- drainClient.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 3000}, &result)
-	}()
-
-	// Give the drain time to start blocking on the still-running review step.
-	time.Sleep(200 * time.Millisecond)
-
 	healthClient, err := ipc.Dial(p.Socket())
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
 	defer healthClient.Close()
 
-	var health ipc.HealthResult
-	if err := healthClient.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &health, time.Second); err != nil {
-		t.Fatalf("health call during drain: %v", err)
-	}
-	if health.Status != "ok" {
-		t.Fatalf("health.Status = %q, want ok", health.Status)
-	}
+	// The drain blocks its handler for its whole 2s deadline on a run that
+	// never finishes. Health is probed continuously across that window and
+	// each response is timestamped, so the proof is an overlap in time rather
+	// than a sleep guessing when the drain reached the handler: if the server
+	// serialized handlers, every probe would only answer after the drain
+	// returned.
+	const drainWindow = 2 * time.Second
+	drainStart := time.Now()
+	drainDone := make(chan error, 1)
+	go func() {
+		var result ipc.ShutdownResult
+		drainDone <- drainClient.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: drainWindow.Milliseconds()}, &result)
+	}()
+
+	probeStop := make(chan struct{})
+	type probe struct{ at time.Time }
+	probes := make(chan probe, 256)
+	probeErr := make(chan error, 1)
+	go func() {
+		defer close(probes)
+		// A probe failing after the drain returned is the daemon shutting
+		// down, which is expected; only a failure while the drain still holds
+		// its handler is the starvation this test is about.
+		fail := func(err error) {
+			select {
+			case <-probeStop:
+			default:
+				probeErr <- err
+			}
+		}
+		for {
+			select {
+			case <-probeStop:
+				return
+			default:
+			}
+			var health ipc.HealthResult
+			if err := healthClient.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &health, 5*time.Second); err != nil {
+				fail(err)
+				return
+			}
+			if health.Status != "ok" {
+				fail(fmt.Errorf("health.Status = %q, want ok", health.Status))
+				return
+			}
+			probes <- probe{at: time.Now()}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
 
 	select {
 	case err := <-drainDone:
 		if err != nil {
 			t.Fatalf("drain: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case err := <-probeErr:
+		t.Fatalf("health call during drain: %v", err)
+	case <-time.After(30 * time.Second):
 		t.Fatal("drain never completed")
+	}
+	drainReturned := time.Now()
+	close(probeStop)
+
+	if drainElapsed := drainReturned.Sub(drainStart); drainElapsed < drainWindow {
+		t.Fatalf("the drain returned after %v, before its %v deadline; it never blocked, so this proves nothing about starvation", drainElapsed, drainWindow)
+	}
+	during := 0
+	for pr := range probes {
+		if pr.at.After(drainStart) && pr.at.Before(drainReturned) {
+			during++
+		}
+	}
+	if during < 3 {
+		t.Fatalf("%d health responses landed while the drain held its handler, want at least 3", during)
 	}
 }
 
 // TestShutdown_ShutdownConcurrentWithDrainEndsItPromptly covers scenario 6: a
 // shutdown arriving mid-drain (what a SIGTERM becomes) ends the drain rather
-// than leaving it to sit out its deadline, and the drain still answers its
-// caller.
+// than leaving it to sit out its deadline, the drain still answers its caller,
+// and it reports the run the shutdown killed as stopped mid-flight rather than
+// as finished work.
 //
-// It does NOT exercise Drain's ctx-cancellation branch, and the name and
-// comment must not claim otherwise. doShutdown runs mgr.Shutdown() before
-// srv.Close(), and mgr.Shutdown() cancels every run and waits: the blocked
-// run's goroutine exits, its done channel closes, and Drain returns through
-// its normal funnel case before the connection context is ever cancelled.
-// TestDrain_CancelledContextAbortsTheWait covers the ctx branch directly.
+// It reaches Drain through mgr.Shutdown's own signal, not the connection
+// context: doShutdown runs mgr.Shutdown() before srv.Close(), so by the time
+// ctx is cancelled the runs are already gone. TestDrain_CancelledContextAborts
+// TheWait covers the ctx branch directly.
 //
 // A real OS signal is also out of reach here: startTestDaemonWithSteps runs
 // the daemon's RunWithOptions loop as a goroutine inside the test process, so
@@ -385,14 +435,23 @@ func TestShutdown_ShutdownConcurrentWithDrainEndsItPromptly(t *testing.T) {
 	if elapsed := time.Since(drainStart); elapsed >= 10*time.Second {
 		t.Fatalf("drain took %v, want it aborted promptly rather than waiting out its 60s deadline", elapsed)
 	}
-	// The drain still answers its caller, and says it drained. It reports the
-	// run as finished, which is what it observed: mgr.Shutdown cancelled the
-	// run and its goroutine exited normally. Drain distinguishes only the
-	// cuts it makes itself; a concurrent shutdown is the operator overriding
-	// the drain, and the daemon exits either way.
+	// The drain still answers its caller, and says it drained. The run it was
+	// waiting on is reported as stopped by the shutdown: mgr.Shutdown killed
+	// it mid-step, so counting it among the runs that finished before the
+	// daemon stopped would tell the operator the opposite of what happened,
+	// and exit 0 over it.
 	result := <-drainResult
 	if !result.Drained {
 		t.Fatalf("result = %+v, want Drained", result)
+	}
+	for _, id := range result.Finished {
+		if id == pushResult.RunID {
+			t.Fatalf("Finished = %v, want it to exclude run %s that the shutdown killed", result.Finished, pushResult.RunID)
+		}
+	}
+	entry, ok := findInterruptedWire(result.Interrupted, pushResult.RunID)
+	if !ok || entry.Reason != ipc.DrainInterruptedShutdown {
+		t.Fatalf("Interrupted = %v, want a %s entry for %s", result.Interrupted, ipc.DrainInterruptedShutdown, pushResult.RunID)
 	}
 }
 
@@ -462,25 +521,35 @@ func TestShutdown_ConcurrentDrainsOnlyOneDrains(t *testing.T) {
 	}
 
 	// Each drain needs its own connection: the handler blocks for the whole
-	// drain, and one connection serves its requests in sequence.
+	// drain, and one connection serves its requests in sequence. Both are
+	// dialed before either call goes out, so the losing drain cannot arrive
+	// after the winner already tore the daemon down and fail on the dial
+	// instead of on the single-drain guard. Both are DrainOnly for the same
+	// reason: a plain drain triggers a shutdown the moment it finishes.
 	results := make(chan ipc.ShutdownResult, 2)
 	errs := make(chan error, 2)
+	clients := make([]*ipc.Client, 0, 2)
 	for i := 0; i < 2; i++ {
-		go func() {
-			client, dialErr := ipc.Dial(p.Socket())
-			if dialErr != nil {
-				errs <- dialErr
-				return
-			}
-			defer client.Close()
+		client, dialErr := ipc.Dial(p.Socket())
+		if dialErr != nil {
+			t.Fatalf("dial daemon: %v", dialErr)
+		}
+		defer client.Close()
+		clients = append(clients, client)
+	}
+	launch := make(chan struct{})
+	for _, client := range clients {
+		go func(client *ipc.Client) {
+			<-launch
 			var result ipc.ShutdownResult
-			if callErr := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 1000}, &result); callErr != nil {
+			if callErr := client.CallWithTimeout(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 3000, DrainOnly: true}, &result, 30*time.Second); callErr != nil {
 				errs <- callErr
 				return
 			}
 			results <- result
-		}()
+		}(client)
 	}
+	close(launch)
 
 	drained := 0
 	for i := 0; i < 2; i++ {

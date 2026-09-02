@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -404,16 +405,176 @@ func TestDrain_ParkedCIGateWinsOverCIMonitorClassification(t *testing.T) {
 // exits nonzero over it.
 func TestDrain_RunFinishingAtTheDeadlineIsNotReportedInterrupted(t *testing.T) {
 	m, database, repo := newDrainTestManager(t)
-	run, _, done := registerFakeRun(t, m, database, repo, "feature")
 
-	// Close done and let the funnel goroutine deliver, then drain with an
-	// already-expired deadline so the timer case is ready alongside it.
-	close(done)
-	time.Sleep(50 * time.Millisecond)
-	report := m.Drain(context.Background(), time.Nanosecond)
+	// One pass is not evidence: with the deadline already expired, the timer
+	// case and the funnel case are both ready and select picks uniformly, so a
+	// build with no post-loop sweep passes about half the time. Repeating the
+	// race drives the chance of a false pass to nothing.
+	const attempts = 30
+	for i := 0; i < attempts; i++ {
+		run, _, done := registerFakeRun(t, m, database, repo, fmt.Sprintf("feature-%d", i))
+		close(done)
 
-	if _, ok := findInterrupted(report.Interrupted, run.ID); ok {
-		t.Fatalf("Interrupted = %v, want empty: run %s finished before the deadline", report.Interrupted, run.ID)
+		report := m.Drain(context.Background(), time.Nanosecond)
+
+		if _, ok := findInterrupted(report.Interrupted, run.ID); ok {
+			t.Fatalf("attempt %d: Interrupted = %v, want empty: run %s finished before the deadline", i, report.Interrupted, run.ID)
+		}
+		if !containsRunID(report.Finished, run.ID) {
+			t.Fatalf("attempt %d: Finished = %v, want it to contain %s", i, report.Finished, run.ID)
+		}
+
+		m.mu.Lock()
+		delete(m.cancels, run.ID)
+		delete(m.dones, run.ID)
+		m.mu.Unlock()
+		if err := database.UpdateRunStatus(run.ID, types.RunCompleted); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestDrain_ShutdownSignalReportsRunsAsStoppedNotFinished pins the race the
+// shutdown signal exists for. Shutdown() cancels every run and the cancelled
+// runs' done channels then close, so a drain that learned about the shutdown
+// only from the runs it was waiting on would report work the shutdown killed
+// as "finished before the daemon stopped" and exit 0 over it.
+func TestDrain_ShutdownSignalReportsRunsAsStoppedNotFinished(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	go func() {
+		// A cancelled run unwinds (terminal row, head reconciliation) before
+		// its goroutine exits; the delay stands in for that work.
+		<-ctx.Done()
+		time.Sleep(50 * time.Millisecond)
+		close(done)
+	}()
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		m.Shutdown()
+	}()
+
+	start := time.Now()
+	report := m.Drain(context.Background(), 60*time.Second)
+
+	if elapsed := time.Since(start); elapsed >= 10*time.Second {
+		t.Fatalf("Drain took %v, want it ended by the shutdown rather than the 60s deadline", elapsed)
+	}
+	if containsRunID(report.Finished, run.ID) {
+		t.Fatalf("Finished = %v, want it to exclude %s: the shutdown killed it mid-flight", report.Finished, run.ID)
+	}
+	entry, ok := findInterrupted(report.Interrupted, run.ID)
+	if !ok || entry.Reason != ipc.DrainInterruptedShutdown {
+		t.Fatalf("Interrupted = %v, want one %s entry for %s", report.Interrupted, ipc.DrainInterruptedShutdown, run.ID)
+	}
+}
+
+// TestShutdown_GateParkedRunIsPreservedForResume pins the premise the parked
+// carve-out rests on: a drain leaves a parked run to the clean-stop path, and
+// that path has to actually preserve it. Cancelling it makes its executor fail
+// the step and the run and clear awaiting_agent_since, which rules the run out
+// of the next start's recoverableParkedRuns/prepareRecoveredRun path.
+func TestShutdown_GateParkedRunIsPreservedForResume(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	parked, parkedCtx, _ := registerFakeRun(t, m, database, repo, "parked")
+	if err := database.UpdateRunStatus(parked.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	parkRunAwaitingAgent(t, database, parked)
+	working, workingCtx, workingDone := registerFakeRun(t, m, database, repo, "working")
+	go func() {
+		<-workingCtx.Done()
+		close(workingDone)
+	}()
+
+	m.Shutdown()
+
+	if cause := context.Cause(parkedCtx); cause != nil {
+		t.Fatalf("cancel cause for the parked run = %v, want nil: cancelling it destroys the row the next start resumes", cause)
+	}
+	if context.Cause(workingCtx) == nil {
+		t.Fatalf("run %s was not cancelled by Shutdown; only gate-parked runs are preserved", working.ID)
+	}
+
+	row, err := database.GetRun(parked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The two conditions prepareRecoveredRun requires of a run it resumes.
+	if row.Status != types.RunRunning {
+		t.Fatalf("parked run status = %s, want %s so the next start can resume it", row.Status, types.RunRunning)
+	}
+	if row.AwaitingAgentSince == nil {
+		t.Fatal("parked run lost awaiting_agent_since; the next start would not resume it")
+	}
+}
+
+// TestDrain_ExemptRunThatUnparksIsWaitedOnAgain covers the other half of the
+// park reclassification. Exemption is not a latch: a run that parks and then
+// unparks inside the drain window is real work again, and leaving it exempt
+// puts a run the stop is about to kill in none of Waited, Finished, or
+// Interrupted.
+func TestDrain_ExemptRunThatUnparksIsWaitedOnAgain(t *testing.T) {
+	shortenDrainReclassify(t, 20*time.Millisecond)
+	m, database, repo := newDrainTestManager(t)
+	// A second run that never finishes keeps the wait alive past the park, so
+	// the reclassify ticker gets to observe both transitions.
+	registerFakeRun(t, m, database, repo, "holder")
+	run, _, _ := registerFakeRun(t, m, database, repo, "feature")
+
+	gateErr := make(chan error, 1)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		if err := parkRunAwaitingAgentErr(database, run); err != nil {
+			gateErr <- err
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+		// The operator answered: the run is working again.
+		gateErr <- database.CompleteRunAwaitingAgent(run.ID, 100)
+	}()
+
+	report := m.Drain(context.Background(), 500*time.Millisecond)
+
+	if err := <-gateErr; err != nil {
+		t.Fatalf("park then unpark the run: %v", err)
+	}
+	if !containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want the unparked run %s back in the wait", report.Waited, run.ID)
+	}
+	if _, ok := findInterrupted(report.Interrupted, run.ID); !ok {
+		t.Fatalf("Interrupted = %v, want an entry for the unparked run %s that never finished", report.Interrupted, run.ID)
+	}
+}
+
+// TestDrain_CIStepMidAutoFixRepairIsWaitedOnNotCut pins the narrower active-
+// status set. A CI step in fixing has a live auto-fix agent partway through a
+// repair; cutting it throws that work away, so it is waited on like any other
+// in-flight run and bounded by the deadline instead.
+func TestDrain_CIStepMidAutoFixRepairIsWaitedOnNotCut(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	markCIMonitorActive(t, database, run)
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatus(steps[0].ID, types.StepStatusFixing); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		close(done)
+	}()
+
+	report := m.Drain(context.Background(), 5*time.Second)
+
+	if cause := context.Cause(ctx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil: a CI auto-fix repair is waited on, not cut", cause)
+	}
+	if len(report.Interrupted) != 0 {
+		t.Fatalf("Interrupted = %v, want empty", report.Interrupted)
 	}
 	if !containsRunID(report.Finished, run.ID) {
 		t.Fatalf("Finished = %v, want it to contain %s", report.Finished, run.ID)

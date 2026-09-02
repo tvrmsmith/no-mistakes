@@ -366,6 +366,47 @@ func TestFailStep(t *testing.T) {
 	}
 }
 
+// TestSkipStep pins FailStep's counterpart for a step whose cancellation the
+// pipeline classifies as expected (a CI monitor cut by a drain). The row has
+// to read as a finished-and-skipped step, not as a step still in flight: an
+// agent pid left behind names a process that is gone, and a missing
+// completed_at leaves the step looking active in axi and the TUI.
+func TestSkipStep(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
+	step, _ := d.InsertStepResult(run.ID, types.StepCI)
+	pid := 4242
+	if err := d.SetStepAgentActivity(step.ID, "watching checks", &pid); err != nil {
+		t.Fatalf("set agent activity: %v", err)
+	}
+
+	const reason = "ci monitor interrupted by daemon drain; PR remains open"
+	if err := d.SkipStep(step.ID, reason, 2500); err != nil {
+		t.Fatalf("skip step: %v", err)
+	}
+
+	got, _ := d.GetStepResult(step.ID)
+	if got.Status != types.StepStatusSkipped {
+		t.Errorf("status = %q, want %q", got.Status, types.StepStatusSkipped)
+	}
+	if got.Error == nil || *got.Error != reason {
+		t.Errorf("error = %v, want %q", got.Error, reason)
+	}
+	if got.DurationMS == nil || *got.DurationMS != 2500 {
+		t.Errorf("duration_ms = %v, want 2500", got.DurationMS)
+	}
+	if got.CompletedAt == nil {
+		t.Error("completed_at = nil, want the step recorded as finished")
+	}
+	if got.AgentPID != nil {
+		t.Errorf("agent_pid = %v, want nil: the agent is gone", got.AgentPID)
+	}
+	if got.LastActivity == nil || *got.LastActivity != "step skipped: "+reason {
+		t.Errorf("last_activity = %v, want the skip reason", got.LastActivity)
+	}
+}
+
 func TestSetStepFindings(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")

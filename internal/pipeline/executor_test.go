@@ -604,6 +604,53 @@ func TestExecutor_DrainedCIStepLandsSkippedNotFailed(t *testing.T) {
 	}
 }
 
+// TestExecutor_DrainedNonCIStepStillFails pins the other half of the skip
+// branch's guard: the drain cause is expected only for a CI monitor, which
+// leaves a live PR behind on purpose. Any other step cut by the same cause
+// lost real work, and recording it as an intentional skip would hide that.
+func TestExecutor_DrainedNonCIStepStillFails(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	reviewStep := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			cancel(fmt.Errorf("%s", types.RunCIMonitorDrainedReason))
+			return nil, sctx.Ctx.Err()
+		},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{reviewStep}, nil)
+	events := collectEvents(exec)
+
+	if err := exec.Execute(ctx, run, repo, workDir); err == nil {
+		t.Fatal("Execute() error = nil, want an error from the cut review step")
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var review *db.StepResult
+	for i := range steps {
+		if steps[i].StepName == types.StepReview {
+			review = steps[i]
+		}
+	}
+	if review == nil {
+		t.Fatal("no review step row found")
+	}
+	if review.Status != types.StepStatusFailed {
+		t.Fatalf("review step status = %s, want %s", review.Status, types.StepStatusFailed)
+	}
+
+	event := events.find(ipc.EventStepCompleted, types.StepReview)
+	if event == nil || event.Status == nil || *event.Status != string(types.StepStatusFailed) {
+		t.Fatalf("expected failed step_completed event, got %+v", event)
+	}
+}
+
 // TestExecutor_CIStepFailingForOtherReasonStillFails pins the existing
 // behavior: a CI step's context cancelled for a reason other than a drain or
 // a restart-recovery interruption still lands failed, so the new skip branch

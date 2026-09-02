@@ -1092,11 +1092,15 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		// MethodHealth test alongside this handler's tests).
 		//
 		// ctx is this connection's own context, which the server cancels the
-		// moment Close() runs - including when a SIGTERM (or any other
-		// shutdown() caller) fires concurrently. Drain's wait loop already
-		// selects on ctx.Done(), so a signal aborts an in-flight drain outright
-		// rather than waiting out its deadline; that's intentional, not a bug
-		// to fix here. What the drain hadn't finished by then is left for
+		// moment Close() runs. That is late: doShutdown runs mgr.Shutdown()
+		// first, so by then the runs the drain was waiting on have already
+		// been cancelled. mgr.Shutdown's own signal, closed before it cancels
+		// anything, is what Drain's wait loop reacts to, so a signal aborts an
+		// in-flight drain outright rather than waiting out its deadline and
+		// reports those runs as stopped mid-flight rather than as finished;
+		// that's intentional, not a bug to fix here. ctx.Done() remains as the
+		// backstop for a caller that simply hangs up. What the drain hadn't
+		// finished by then is left for
 		// mgr.Shutdown() below to cancel, same as always, and since
 		// CancelCauseFunc keeps only the first cause, a run the drain meant to
 		// classify as a cut CI monitor can land as a plain shutdown-cancelled
