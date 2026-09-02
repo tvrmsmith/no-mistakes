@@ -212,7 +212,7 @@ func TestDaemonStopDrainTimeoutReachesDaemon(t *testing.T) {
 	prevStop := daemonStopFn
 	daemonStopFn = func(_ *paths.Paths, opts daemon.StopOptions) (daemon.StopOutcome, error) {
 		gotOpts = opts
-		return daemon.StopOutcome{}, nil
+		return daemon.StopOutcome{Drained: true}, nil
 	}
 	t.Cleanup(func() { daemonStopFn = prevStop })
 
@@ -232,7 +232,7 @@ func TestDaemonStopDrainDefaultTimeoutIsTenMinutes(t *testing.T) {
 	prevStop := daemonStopFn
 	daemonStopFn = func(_ *paths.Paths, opts daemon.StopOptions) (daemon.StopOutcome, error) {
 		gotOpts = opts
-		return daemon.StopOutcome{}, nil
+		return daemon.StopOutcome{Drained: true}, nil
 	}
 	t.Cleanup(func() { daemonStopFn = prevStop })
 
@@ -274,7 +274,7 @@ func TestDaemonStopDrainGuardDoesNotRefuse(t *testing.T) {
 	prevStop := daemonStopFn
 	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
 		stopCalled = true
-		return daemon.StopOutcome{}, nil
+		return daemon.StopOutcome{Drained: true}, nil
 	}
 	t.Cleanup(func() { daemonStopFn = prevStop })
 
@@ -410,5 +410,172 @@ func TestDaemonStopPlainIsUnchanged(t *testing.T) {
 	}
 	if !strings.Contains(out, "daemon stopped") {
 		t.Fatalf("plain daemon stop should print the usual success line, got %q", out)
+	}
+}
+
+// TestDaemonStopDrainReportsWhenTheDaemonDidNotDrain pins that the CLI gates
+// on what the daemon did (outcome.Drained), not on what the operator asked
+// for (--drain). A new CLI against a pre-drain daemon, and the loser of two
+// concurrent drains, both come back Drained:false after every run was
+// cancelled outright; reporting either as a clean drain of zero runs claims
+// the opposite of what happened.
+func TestDaemonStopDrainReportsWhenTheDaemonDidNotDrain(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	prevStop := daemonStopFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		return daemon.StopOutcome{Drained: false}, nil
+	}
+	t.Cleanup(func() { daemonStopFn = prevStop })
+
+	out, err := executeCmd("daemon", "stop", "--drain")
+	if err == nil {
+		t.Fatalf("daemon stop --drain should fail when the daemon did not drain, got output %q", out)
+	}
+	if !strings.Contains(err.Error(), "did not drain") {
+		t.Fatalf("error should say the daemon did not drain, got %v", err)
+	}
+	if strings.Contains(out, "0 run(s) finished") {
+		t.Fatalf("output must not claim a clean drain, got %q", out)
+	}
+}
+
+// TestDaemonRestartDrainReportsWhenTheDaemonDidNotDrain is the restart half:
+// the daemon still restarts (the operator asked for a restart), but the exit
+// status stays honest.
+func TestDaemonRestartDrainReportsWhenTheDaemonDidNotDrain(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	started := false
+	prevStop := daemonStopFn
+	prevStart := daemonStartFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		return daemon.StopOutcome{Drained: false}, nil
+	}
+	daemonStartFn = func(*paths.Paths) error { started = true; return nil }
+	t.Cleanup(func() {
+		daemonStopFn = prevStop
+		daemonStartFn = prevStart
+	})
+
+	out, err := executeCmd("daemon", "restart", "--drain")
+	if err == nil {
+		t.Fatalf("daemon restart --drain should fail when the daemon did not drain, got output %q", out)
+	}
+	if !started {
+		t.Fatal("daemon restart --drain should still restart the daemon")
+	}
+	if !strings.Contains(out, "daemon restarted") {
+		t.Fatalf("output should confirm the restart, got %q", out)
+	}
+}
+
+// TestDaemonRestartDrainWithForceIsRejected covers the restart side of the
+// flag validation. Restart wires drainStopOptions independently of stop, so a
+// divergence there would otherwise go unnoticed.
+func TestDaemonRestartDrainWithForceIsRejected(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	stopCalled := false
+	prevStop := daemonStopFn
+	prevStart := daemonStartFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		stopCalled = true
+		return daemon.StopOutcome{Drained: true}, nil
+	}
+	daemonStartFn = func(*paths.Paths) error { return nil }
+	t.Cleanup(func() {
+		daemonStopFn = prevStop
+		daemonStartFn = prevStart
+	})
+
+	out, err := executeCmd("daemon", "restart", "--drain", "--force")
+	if err == nil {
+		t.Fatal("daemon restart --drain --force should be rejected")
+	}
+	if !strings.Contains(err.Error(), "--drain") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("rejection should name both flags, got %v", err)
+	}
+	if stopCalled {
+		t.Fatalf("daemonStopFn should not be called, output %q", out)
+	}
+}
+
+// TestDaemonStopDrainTimeoutWithoutDrainIsRejected pins that a timeout the
+// command would silently drop is refused instead of accepted and ignored.
+func TestDaemonStopDrainTimeoutWithoutDrainIsRejected(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	stopCalled := false
+	prevStop := daemonStopFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		stopCalled = true
+		return daemon.StopOutcome{}, nil
+	}
+	t.Cleanup(func() { daemonStopFn = prevStop })
+
+	_, err := executeCmd("daemon", "stop", "--drain-timeout", "30s")
+	if err == nil {
+		t.Fatal("--drain-timeout without --drain should be rejected")
+	}
+	if !strings.Contains(err.Error(), "--drain") {
+		t.Fatalf("rejection should point at --drain, got %v", err)
+	}
+	if stopCalled {
+		t.Fatal("daemonStopFn should not be called")
+	}
+}
+
+// TestDaemonLifecycleRefusalOffersDrain pins that the guard's refusal names
+// the non-destructive alternative, not only --force.
+func TestDaemonLifecycleRefusalOffersDrain(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+	createLifecycleGuardRuns(t, paths.WithRoot(nmHome))
+
+	prevStop := daemonStopFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		return daemon.StopOutcome{}, nil
+	}
+	t.Cleanup(func() { daemonStopFn = prevStop })
+
+	_, err := executeCmd("daemon", "stop")
+	if err == nil {
+		t.Fatal("daemon stop should refuse while active runs exist")
+	}
+	if !strings.Contains(err.Error(), "--drain") {
+		t.Fatalf("refusal should offer --drain, got %v", err)
+	}
+}
+
+// TestDrainLifecycleInvocationIsDistinguishableInTheCLILog pins the forensic
+// record. A drain cuts CI monitors short, forcibly stops anything past its
+// deadline, and passes the active-runs guard a bare stop would have refused,
+// so its audit line must not read identically to an ordinary stop.
+func TestDrainLifecycleInvocationIsDistinguishableInTheCLILog(t *testing.T) {
+	nmHome := t.TempDir()
+	t.Setenv("NM_HOME", nmHome)
+
+	prevStop := daemonStopFn
+	daemonStopFn = func(*paths.Paths, daemon.StopOptions) (daemon.StopOutcome, error) {
+		return daemon.StopOutcome{Drained: true}, nil
+	}
+	t.Cleanup(func() { daemonStopFn = prevStop })
+
+	if out, err := executeCmd("daemon", "stop", "--drain"); err != nil {
+		t.Fatalf("daemon stop --drain failed: %v\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(filepath.Join(nmHome, "logs", "cli.log"))
+	if err != nil {
+		t.Fatalf("read cli.log: %v", err)
+	}
+	log := string(data)
+	if !strings.Contains(log, "command=daemon.stop") || !strings.Contains(log, "drain=true") {
+		t.Fatalf("cli.log should record the drain, got %q", log)
 	}
 }

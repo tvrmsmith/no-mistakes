@@ -577,22 +577,23 @@ func Stop(p *paths.Paths) error {
 // StopWithOptions is Stop with drain support; see StopOptions.
 func StopWithOptions(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
 	instance := captureRunningDaemon(p)
+
+	// On the managed-service path the drain RPC must go out BEFORE anything
+	// signals the process. A service manager's stop (launchctl bootout,
+	// systemctl --user stop, schtasks /end) carries no drain semantics of its
+	// own and waits the daemon out, so a drain issued afterwards would only
+	// dial a dead socket - a silent no-op on the default install. The
+	// detached path below does not pre-drain: it carries the drain on its own
+	// shutdown request instead, and draining twice would start a second drain.
+	var outcome StopOutcome
+	var drainErr error
+	preDrain := opts.Drain && managedServiceInstalled(p)
+	if preDrain {
+		outcome, drainErr = requestDrain(p, opts)
+	}
+
 	if managed, err := stopManagedService(p); managed {
-		var outcome StopOutcome
 		var detachedErr error
-		if opts.Drain {
-			// The service manager's own stop has no drain semantics of its
-			// own - it just signals the process to exit - so ask the daemon
-			// to drain over IPC first. This blocks until the drain finishes
-			// and the daemon is already exiting on its own; the managed-stop
-			// call below still runs afterward, purely to confirm exit
-			// through the platform's normal path.
-			drained, drainErr := requestDrain(p, opts)
-			outcome = drained
-			if drainErr != nil {
-				detachedErr = drainErr
-			}
-		}
 		if err != nil {
 			if alive, _ := daemonHealthCheck(p); alive {
 				if stopErr := stopDetachedDaemon(p); stopErr != nil {
@@ -600,25 +601,47 @@ func StopWithOptions(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
 				}
 			}
 		}
-		waitTimeout := daemonStopTimeout()
-		if opts.Drain {
-			waitTimeout += drainTimeoutOrDefault(opts.DrainTimeout)
-		}
-		if waitErr := waitForDaemonStopBudget(p, instance, waitTimeout); waitErr != nil {
-			switch {
-			case err != nil && detachedErr != nil:
-				return outcome, fmt.Errorf("%w; detached shutdown: %v; wait for exit: %v", err, detachedErr, waitErr)
-			case err != nil:
-				return outcome, fmt.Errorf("%w; wait for exit: %v", err, waitErr)
-			case detachedErr != nil:
-				return outcome, fmt.Errorf("detached shutdown: %w; wait for exit: %v", detachedErr, waitErr)
-			default:
-				return outcome, waitErr
-			}
-		}
-		return outcome, nil
+		waitErr := waitForDaemonStopBudget(p, instance, daemonStopTimeout())
+		return outcome, joinStopErrors(drainErr, err, detachedErr, waitErr)
 	}
-	return stopDetachedDaemonWithOptions(p, opts)
+
+	if preDrain {
+		// Managed service detected before the drain but gone by the time we
+		// tried to stop it. The daemon has already drained; finish through
+		// the detached path without repeating the drain.
+		_, err := stopDetachedDaemonWithOptions(p, StopOptions{})
+		return outcome, joinStopErrors(drainErr, err, nil, nil)
+	}
+
+	detachedOutcome, err := stopDetachedDaemonWithOptions(p, opts)
+	return detachedOutcome, err
+}
+
+// joinStopErrors folds the independent failure modes of a stop into one error.
+//
+// A managed-stop or fallback-shutdown error is forgiven when the daemon exited
+// anyway (waitErr == nil): the command achieved what it was asked to do. A
+// drain error never is. A drain that never reached the daemon must not be
+// swallowed just because the process exited, and on the managed path that is
+// precisely when waitErr is nil, since the service manager stopped it outright.
+func joinStopErrors(drainErr, managedErr, detachedErr, waitErr error) error {
+	var parts []string
+	if drainErr != nil {
+		parts = append(parts, fmt.Sprintf("drain request: %v", drainErr))
+	}
+	if waitErr != nil {
+		if managedErr != nil {
+			parts = append(parts, managedErr.Error())
+		}
+		if detachedErr != nil {
+			parts = append(parts, fmt.Sprintf("detached shutdown: %v", detachedErr))
+		}
+		parts = append(parts, fmt.Sprintf("wait for exit: %v", waitErr))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(parts, "; "))
 }
 
 // requestDrain asks the running daemon to drain over its own dedicated

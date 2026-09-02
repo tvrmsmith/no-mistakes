@@ -905,7 +905,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 							slog.Warn("failed to mark ci step as skipped in db", "step", stepName, "error", dbErr)
 						}
 						e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusSkipped), "", cause.Error(), &durationMS)
-						return false, "", fmt.Errorf("step %s failed: %s", stepName, redactedErr)
+						// Worded as skipped, matching the row just written:
+						// the manager logs this error verbatim, and "failed"
+						// there would contradict the DB and the operator's
+						// own drain report. The step's real error is already
+						// in the step log above.
+						return false, "", fmt.Errorf("step %s skipped: %s", stepName, cause.Error())
 					}
 				}
 			}

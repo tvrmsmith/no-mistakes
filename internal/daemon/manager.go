@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1409,25 +1410,38 @@ func (m *RunManager) HandleRespondWithOverrides(runID string, step types.StepNam
 
 // DrainReport is what a drain did, for the operator and for the caller's exit code.
 //
-// Finished includes every run from both the ci and waited buckets whose done
-// channel closed before the deadline - a ci run that exits in time therefore
-// appears in both Finished and Interrupted, since Drain is what cut it short
-// even though it happened to finish promptly once cancelled.
+// Finished counts only runs that completed their own work: a CI monitor the
+// drain cut short is reported under Interrupted and deliberately left out of
+// Finished, even when its goroutine exits promptly once cancelled, so the
+// operator's "N run(s) finished" line never counts work the drain ended.
 type DrainReport struct {
-	Waited      []string                  // run IDs the drain waited on (ci + waited buckets)
-	Finished    []string                  // of Waited, the ones that finished in time
+	Waited      []string                  // run IDs the drain was still waiting on at the end
+	Finished    []string                  // of Waited, the ones that completed their own work in time
 	Interrupted []ipc.DrainInterruptedRun // runs the drain did not let finish naturally
 }
 
-// isCIMonitorRun reports whether a run's only active step is the CI monitor:
-// a step_results row for types.StepCI in one of running/awaiting_approval/
-// fixing/fix_review, and no row for any OTHER step name in one of those
-// statuses. This mirrors the predicate db.RecoverStaleRunsExcept uses so
-// drain and crash recovery agree on what a CI monitor run is.
-func isCIMonitorRun(database *db.DB, runID string) bool {
-	steps, err := database.GetStepsByRun(runID)
+// drainReclassifyInterval is how often Drain re-reads the runs it is still
+// waiting on. Classification cannot be one-shot: a waited run can park at a
+// gate or reach the CI monitor after the drain begins, and either one would
+// otherwise hold the drain to its full deadline. A var so tests can shorten
+// it rather than sleeping out a real interval.
+var drainReclassifyInterval = 5 * time.Second
+
+// isCIMonitorRun reports whether a run is parked in its CI monitor: it has a
+// PR URL, a step_results row for types.StepCI in one of running/
+// awaiting_approval/fixing/fix_review, and no row for any OTHER step name in
+// one of those statuses. This mirrors the predicate db.RecoverStaleRunsExcept
+// uses, including its pr_url condition, so drain and crash recovery agree on
+// what a CI monitor run is. The PR URL matters: the CI step row is already
+// running while the step builds its host and before it bails out with "no PR
+// URL found", and cutting a run there would report a PR that does not exist.
+func isCIMonitorRun(database *db.DB, run *db.Run) bool {
+	if run.PRURL == nil || strings.TrimSpace(*run.PRURL) == "" {
+		return false
+	}
+	steps, err := database.GetStepsByRun(run.ID)
 	if err != nil {
-		slog.Warn("drain: failed to read run steps for classification; treating as a normal in-flight run", "run_id", runID, "error", err)
+		slog.Warn("drain: failed to read run steps for classification; treating as a normal in-flight run", "run_id", run.ID, "error", err)
 		return false
 	}
 	ciActive := false
@@ -1446,12 +1460,14 @@ func isCIMonitorRun(database *db.DB, runID string) bool {
 }
 
 // drainWaitEntry is one run Drain is waiting on: its done channel, branch (for
-// reporting), and whether it was cut short as a CI monitor.
+// reporting), whether it was cut short as a CI monitor, and whether it has
+// since parked at a gate and been released from the wait.
 type drainWaitEntry struct {
 	runID  string
 	branch string
 	done   chan struct{}
 	ci     bool
+	exempt bool
 }
 
 // Drain refuses new runs immediately, then waits out the in-flight runs it
@@ -1474,8 +1490,10 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 	for id, cancel := range m.cancels {
 		done, ok := m.dones[id]
 		if !ok {
-			// A run mid-deregistration between the two map writes; Shutdown
-			// (and the wg-based drain path it already uses) still covers it.
+			// Both maps are written under this same lock at every
+			// registration and deregistration site, so this is an invariant
+			// assertion rather than a state that occurs. Skipping is the safe
+			// reading: Shutdown() still cancels the run either way.
 			continue
 		}
 		cancels[id] = cancel
@@ -1484,7 +1502,8 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 	m.mu.Unlock()
 
 	report := DrainReport{}
-	var wait []drainWaitEntry
+	entries := make(map[string]*drainWaitEntry, len(dones))
+	order := make([]string, 0, len(dones))
 
 	for id, done := range dones {
 		run, err := m.db.GetRun(id)
@@ -1492,7 +1511,8 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 			// A DB hiccup must not cut real work short: wait it out, bounded
 			// by the deadline like any other in-flight run.
 			slog.Warn("drain: failed to read run; waiting on it rather than cutting it short", "run_id", id, "error", err)
-			wait = append(wait, drainWaitEntry{runID: id, done: done})
+			entries[id] = &drainWaitEntry{runID: id, done: done}
+			order = append(order, id)
 			continue
 		}
 		if run == nil {
@@ -1505,30 +1525,23 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 			// never reported. Shutdown()'s later cancel is what ends it.
 			continue
 		}
-		if isCIMonitorRun(m.db, id) {
-			if cancel, ok := cancels[id]; ok {
-				cancel(fmt.Errorf("%s", types.RunCIMonitorDrainedReason))
-			}
-			report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
-				RunID:  id,
-				Branch: run.Branch,
-				Reason: ipc.DrainInterruptedCIMonitor,
-			})
-			wait = append(wait, drainWaitEntry{runID: id, branch: run.Branch, done: done, ci: true})
-			continue
+		entry := &drainWaitEntry{runID: id, branch: run.Branch, done: done}
+		if isCIMonitorRun(m.db, run) {
+			m.cutDrainedCIMonitor(entry, cancels, &report)
 		}
-		wait = append(wait, drainWaitEntry{runID: id, branch: run.Branch, done: done})
+		entries[id] = entry
+		order = append(order, id)
 	}
-
-	for _, e := range wait {
-		report.Waited = append(report.Waited, e.runID)
+	sort.Strings(order)
+	for _, id := range order {
+		report.Waited = append(report.Waited, id)
 	}
 
 	// Fan every done channel into one funnel so the deadline/ctx race can be
 	// expressed as a single select, without reflect.Select over a dynamic set.
-	finishedCh := make(chan string, len(wait))
-	for _, e := range wait {
-		go func(e drainWaitEntry) {
+	finishedCh := make(chan string, len(entries))
+	for _, e := range entries {
+		go func(e *drainWaitEntry) {
 			<-e.done
 			finishedCh <- e.runID
 		}(e)
@@ -1536,15 +1549,49 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 
 	deadlineTimer := time.NewTimer(timeout)
 	defer deadlineTimer.Stop()
+	reclassify := time.NewTicker(drainReclassifyInterval)
+	defer reclassify.Stop()
 
-	finished := make(map[string]bool, len(wait))
-	remaining := len(wait)
+	finished := make(map[string]bool, len(entries))
+	// released is separate from finished: an entry exempted mid-drain leaves
+	// the wait immediately, and its done channel may still close afterwards.
+	// Counting either event twice would end the wait early.
+	released := make(map[string]bool, len(entries))
+	remaining := len(entries)
+	release := func(id string) {
+		if released[id] {
+			return
+		}
+		released[id] = true
+		remaining--
+	}
 waitLoop:
 	for remaining > 0 {
 		select {
 		case id := <-finishedCh:
+			release(id)
 			finished[id] = true
-			remaining--
+		case <-reclassify.C:
+			// A run can park at a gate or enter its CI monitor after the
+			// drain begins; neither can be allowed to hold the deadline.
+			for _, id := range order {
+				e := entries[id]
+				if finished[id] || e.exempt || e.ci {
+					continue
+				}
+				run, err := m.db.GetRun(id)
+				if err != nil || run == nil {
+					continue
+				}
+				if run.AwaitingAgentSince != nil {
+					e.exempt = true
+					release(id)
+					continue
+				}
+				if isCIMonitorRun(m.db, run) {
+					m.cutDrainedCIMonitor(e, cancels, &report)
+				}
+			}
 		case <-deadlineTimer.C:
 			break waitLoop
 		case <-ctx.Done():
@@ -1552,16 +1599,40 @@ waitLoop:
 		}
 	}
 
-	for _, e := range wait {
-		if finished[e.runID] {
-			report.Finished = append(report.Finished, e.runID)
+	waited := report.Waited[:0]
+	for _, id := range order {
+		e := entries[id]
+		if !finished[id] {
+			// A run whose done channel closed in the same instant the
+			// deadline fired really did finish. select picks uniformly among
+			// ready cases, and the funnel goroutine may not have delivered
+			// yet either, so the channel itself is the authority here rather
+			// than what the wait loop happened to observe.
+			select {
+			case <-e.done:
+				finished[id] = true
+			default:
+			}
+		}
+		if e.exempt {
+			// Parked mid-drain: released from the wait and, like a run parked
+			// before it began, left for Shutdown()'s preserve-and-resume path.
+			continue
+		}
+		waited = append(waited, id)
+		if finished[id] {
+			if !e.ci {
+				report.Finished = append(report.Finished, id)
+			}
+			// A cut CI monitor is reported under Interrupted only. It exited
+			// because Drain cancelled it, not because its work completed.
 			continue
 		}
 		if !e.ci {
 			// Drain does not cancel a waited run past the deadline; Shutdown()
 			// still will.
 			report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
-				RunID:  e.runID,
+				RunID:  id,
 				Branch: e.branch,
 				Reason: ipc.DrainInterruptedDeadline,
 			})
@@ -1569,8 +1640,28 @@ waitLoop:
 		// A ci entry that missed the deadline already has its one Interrupted
 		// entry from classification above; it is not duplicated here.
 	}
+	report.Waited = waited
 
 	return report
+}
+
+// cutDrainedCIMonitor cancels one CI-monitor run with the drain's own cause
+// and records it as interrupted. Classification runs both at drain start and
+// on the reclassify ticker, so this is the single place that marks an entry
+// cut, keeping one Interrupted row per run.
+func (m *RunManager) cutDrainedCIMonitor(e *drainWaitEntry, cancels map[string]context.CancelCauseFunc, report *DrainReport) {
+	if e.ci {
+		return
+	}
+	e.ci = true
+	if cancel, ok := cancels[e.runID]; ok {
+		cancel(fmt.Errorf("%s", types.RunCIMonitorDrainedReason))
+	}
+	report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
+		RunID:  e.runID,
+		Branch: e.branch,
+		Reason: ipc.DrainInterruptedCIMonitor,
+	})
 }
 
 // Shutdown cancels all active runs. Called during daemon shutdown to prevent
