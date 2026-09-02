@@ -60,6 +60,10 @@ type Executor struct {
 	shared   *RunShared
 	workDir  string
 
+	// restartFindings holds each restarting step's last verdict until the
+	// restart brings the run back to that step. Created per Execute.
+	restartFindings map[types.StepName]string
+
 	mu          sync.Mutex
 	approvalCh  chan approvalResponse // buffered channel for approval responses
 	waiting     bool                  // true when blocked on approval
@@ -236,6 +240,9 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 		if err != nil {
 			return e.failRun(run, repo, fmt.Errorf("restore step %s execution state: %w", step.Name(), err), ctx)
 		}
+		// A restart re-entry is context, not a fix round, so state.fixing stays
+		// false and only the findings carry over.
+		state.previousFindings = e.takeRestartFindings(step.Name())
 		skipRemaining, restartFrom, err := e.executeStep(ctx, step, sr, run, repo, workDir, logDir, state)
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
@@ -252,7 +259,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 			break
 		}
 		if restartFrom != "" {
-			restartIndex, err := e.prepareRestart(run.ID, restartFrom, i)
+			restartIndex, err := e.prepareRestart(run, restartFrom, i)
 			if err != nil {
 				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", step.Name(), restartFrom), ctx)
 			}
@@ -277,15 +284,64 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 	return 0, fmt.Errorf("step %s is not in the pipeline", name)
 }
 
-func (e *Executor) prepareRestart(runID string, name types.StepName, currentIndex int) (int, error) {
+// prepareRestart rewinds the run to a boundary step and revokes the authority
+// the pre-restart passes had accumulated.
+//
+// Every write here is fail-closed. Warning and continuing would resume a run
+// whose review approval still covers a head the re-review has not reached, and
+// push accepts a certified ancestor, so the uncertified tree would ship.
+//
+// Termination is deliberately uncapped. ResetStepsFrom leaves step_rounds
+// intact, so a re-entered step recounts the auto-fix rounds it already spent
+// and its per-step budget never refills, and the no-progress tree guard in
+// runValidationStep stops a step that commits the same tree twice. A step whose
+// agent produces genuinely different output every round is still unbounded;
+// restart_count and the soft-cap warning make that visible instead of silent.
+func (e *Executor) prepareRestart(run *db.Run, name types.StepName, currentIndex int) (int, error) {
 	index, err := e.stepIndex(name)
 	if err != nil || index >= currentIndex {
 		return 0, fmt.Errorf("invalid restart boundary")
 	}
-	if err := e.db.ResetStepsFrom(runID, e.steps[index].Name().Order()); err != nil {
+	if err := e.db.ResetStepsFrom(run.ID, e.steps[index].Name().Order()); err != nil {
 		return 0, err
 	}
+	// Passing the run's current head leaves the head alone and NULLs the
+	// approval in the same statement, reusing the one owner of "revoke review
+	// authority" rather than adding a second, non-atomic way to do it.
+	if err := e.db.UpdateRunHeadSHAForRevalidation(run.ID, run.HeadSHA); err != nil {
+		return 0, err
+	}
+	run.ReviewApprovedHeadSHA = nil
+	if err := e.db.IncrementRunRestartCount(run.ID); err != nil {
+		return 0, err
+	}
+	run.RestartCount++
+	if run.RestartCount > db.RestartSoftCap {
+		slog.Warn("run has restarted more often than the soft cap",
+			"run", run.ID, "restart_count", run.RestartCount, "soft_cap", db.RestartSoftCap)
+	}
 	return index, nil
+}
+
+// stashRestartFindings holds a restarting step's findings until the restart
+// brings the run back to that step. Keyed by step name, so a restart carries
+// context only into the step that produced it.
+func (e *Executor) stashRestartFindings(name types.StepName, findings string) {
+	if e.restartFindings == nil || findings == "" {
+		return
+	}
+	e.restartFindings[name] = findings
+}
+
+// takeRestartFindings consumes the stash once. A step that runs again for any
+// other reason must not silently inherit a verdict from a previous re-entry.
+func (e *Executor) takeRestartFindings(name types.StepName) string {
+	if e.restartFindings == nil {
+		return ""
+	}
+	findings := e.restartFindings[name]
+	delete(e.restartFindings, name)
+	return findings
 }
 
 // initializeRunScopes creates the run-scoped session and shared-result holders
@@ -296,6 +352,7 @@ func (e *Executor) prepareRestart(runID string, name types.StepName, currentInde
 func (e *Executor) initializeRunScopes(runID string, recovered bool) {
 	sessionsEnabled := e.config != nil && e.config.SessionReuse && e.agent != nil
 	e.sessions = NewRunSessions(e.db, runID, e.agent, sessionsEnabled)
+	e.restartFindings = make(map[types.StepName]string)
 	var store RunSharedStore
 	if e.db != nil {
 		store = e.db
@@ -548,7 +605,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			return e.skipRecoveredRemainder(run, repo, gate.index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run.ID, restartFrom, gate.index)
+			restartIndex, indexErr := e.prepareRestart(run, restartFrom, gate.index)
 			if indexErr != nil {
 				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", gate.step.Name(), restartFrom), ctx)
 			}
@@ -660,6 +717,7 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		if stateErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("restore step %s execution state: %w", e.steps[index].Name(), stateErr), ctx)
 		}
+		state.previousFindings = e.takeRestartFindings(e.steps[index].Name())
 		skipRemaining, restartFrom, err := e.executeStep(ctx, e.steps[index], result, run, repo, workDir, logDir, state)
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
@@ -668,7 +726,7 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 			return e.skipRecoveredRemainder(run, repo, index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run.ID, restartFrom, index)
+			restartIndex, indexErr := e.prepareRestart(run, restartFrom, index)
 			if indexErr != nil {
 				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", e.steps[index].Name(), restartFrom), ctx)
 			}
@@ -1040,6 +1098,22 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			e.emitRunEvent(ipc.EventRunUpdated, run, repo)
 		}
 
+		// A restart outranks everything left in this round. The step's verdict
+		// describes a tree the restart is about to send back through validation,
+		// so an auto-fix round would repair findings that are already stale and
+		// an approval park would ask a human to rule on them. This break also
+		// deliberately skips outcome.SkipRemaining and outcome.Skipped; no step
+		// sets either alongside RestartFrom, and restart wins if one ever does.
+		// CI's own restart path is unaffected: it reports NeedsApproval false, so
+		// breaking here reaches the same place it always did, and the CI
+		// roundTrigger special case above still runs first.
+		if restartFrom != "" {
+			// Stash this round's findings so the step sees them again when the
+			// restart brings the run back to it, rather than re-deriving them.
+			e.stashRestartFindings(stepName, outcome.Findings)
+			break
+		}
+
 		// Check if auto-fix should be attempted. Only findings whose action is
 		// "auto-fix" and whose severity meets auto_fix.min_severity qualify.
 		// This runs before the NeedsApproval check so a qualifying finding is
@@ -1230,7 +1304,12 @@ done:
 	// actually completes. Parked outcomes stay in the loop above, failures
 	// return earlier, and skipped reviews deliberately leave the binding empty.
 	// Completion and authority replacement are one DB transaction.
-	if stepName == types.StepReview && status == types.StepStatusCompleted && reviewApprovedHeadSHA != "" {
+	//
+	// A review round that asked for a restart completes as an ordinary step and
+	// certifies nothing: it has already declared the head unfinished, so
+	// publishing authority over it would let push ship a tree the re-review has
+	// not seen.
+	if stepName == types.StepReview && status == types.StepStatusCompleted && reviewApprovedHeadSHA != "" && restartFrom == "" {
 		if err := e.db.CompleteReviewStep(sr.ID, run.ID, reviewApprovedHeadSHA, finalExitCode, durationMS, logPath); err != nil {
 			return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 		}
