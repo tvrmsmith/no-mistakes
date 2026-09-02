@@ -343,6 +343,35 @@ func TestShutdown_DrainDoesNotStarveOtherRPCs(t *testing.T) {
 	}
 }
 
+// waitForDrainInFlight blocks until a drain is running inside the daemon's
+// shutdown handler, the positive signal a test needs before it can race
+// something against that drain. The daemon answers a second drain request with
+// Drained:false while one is already in flight, and it does so without
+// shutting anything down, so a probe is a safe way to observe the latch.
+// DrainOnly with a minimal deadline keeps the probe harmless in the one case
+// where it wins the race and becomes the drain itself: it returns immediately,
+// releases the latch, and the next probe reports the real drain.
+func waitForDrainInFlight(t *testing.T, socket string) {
+	t.Helper()
+	client, err := ipc.Dial(socket)
+	if err != nil {
+		t.Fatalf("dial daemon: %v", err)
+	}
+	defer client.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var result ipc.ShutdownResult
+		if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 1, DrainOnly: true}, &result); err != nil {
+			t.Fatalf("drain probe: %v", err)
+		}
+		if !result.Drained {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no drain was in flight after 10s")
+}
+
 // TestShutdown_ShutdownConcurrentWithDrainEndsItPromptly covers scenario 6: a
 // shutdown arriving mid-drain (what a SIGTERM becomes) ends the drain rather
 // than leaving it to sit out its deadline, the drain still answers its caller,
@@ -406,12 +435,7 @@ func TestShutdown_ShutdownConcurrentWithDrainEndsItPromptly(t *testing.T) {
 		drainDone <- err
 	}()
 
-	// Give the drain time to start blocking on the still-running review step.
-	// A second probing drain call can't be used to confirm this the way
-	// TestShutdown_DrainDoesNotStarveOtherRPCs confirms health responsiveness:
-	// a drain request always triggers a real shutdown afterward (see the
-	// handler comment), so a probe would itself shut the daemon down.
-	time.Sleep(200 * time.Millisecond)
+	waitForDrainInFlight(t, p.Socket())
 
 	// The signal-equivalent: a bare shutdown request on a third connection,
 	// funneling through the same doShutdown as a real SIGTERM would.

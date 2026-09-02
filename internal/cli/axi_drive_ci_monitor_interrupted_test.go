@@ -67,3 +67,40 @@ func TestRenderDriveResult_CIMonitorInterrupted(t *testing.T) {
 		t.Errorf("interrupted CI monitor output leaked ordinary gate-fix guidance:\n%s", rendered)
 	}
 }
+
+// TestRenderDriveResult_CIMonitorDrained is the same terminal status reached by
+// the other route, an operator draining the daemon. Nothing restarted, so
+// telling the driving agent that something did states a cause that did not
+// happen.
+func TestRenderDriveResult_CIMonitorDrained(t *testing.T) {
+	prURL := "https://github.com/user/repo/pull/375"
+	reason := types.RunCIMonitorDrainedReason
+	run := &ipc.RunInfo{
+		ID:      "run-2",
+		Branch:  "feature/drain",
+		Status:  types.RunCIMonitorInterrupted,
+		HeadSHA: "abcdef1234567890",
+		Error:   &reason,
+		PRURL:   &prURL,
+		Steps: []ipc.StepResultInfo{
+			{StepName: types.StepPR, Status: types.StepStatusCompleted},
+			{StepName: types.StepCI, Status: types.StepStatusSkipped},
+		},
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	if err := renderDriveResult(cmd, run, false); err != nil {
+		t.Fatalf("renderDriveResult returned unexpected error: %v", err)
+	}
+
+	rendered := out.String()
+	if strings.Contains(rendered, "restarted") {
+		t.Errorf("a drained CI monitor must not be reported as a restart:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "An operator drained the daemon while it monitored CI; the PR remains open and was not marked failed.") {
+		t.Errorf("rendered drive output does not name the drain as the cause:\n%s", rendered)
+	}
+}

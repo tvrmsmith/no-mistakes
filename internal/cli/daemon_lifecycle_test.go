@@ -564,6 +564,9 @@ func TestDaemonStopDrainWithNoDaemonRunningExitsZero(t *testing.T) {
 	if !strings.Contains(out, "no daemon was running") {
 		t.Fatalf("output should say there was no daemon to drain, got %q", out)
 	}
+	if strings.Contains(out, "daemon stopped") {
+		t.Fatalf("output must not also claim a daemon was stopped, got %q", out)
+	}
 	if strings.Contains(out, "cancelled outright") {
 		t.Fatalf("output must not claim runs were cancelled when there was no daemon, got %q", out)
 	}

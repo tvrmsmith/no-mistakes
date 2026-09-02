@@ -349,9 +349,14 @@ func newDaemonStopCmd() *cobra.Command {
 					}
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
 				if !opts.Drain {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
 					return nil
+				}
+				if !outcome.NoDaemon {
+					// With nothing running, printDrainOutcome's own line says
+					// so; claiming a daemon stopped as well contradicts it.
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
 				}
 				printDrainOutcome(cmd.OutOrStdout(), outcome)
 				return drainOutcomeError(outcome)
@@ -446,7 +451,8 @@ func drainStopOptions(drain bool, drainTimeout time.Duration, timeoutSet, force 
 //
 // It reports on outcome.Drained, what the daemon did, never on the --drain
 // flag, what the operator asked for. Those differ in four real states: no
-// daemon was running (nothing to drain, reported as such), a new CLI against
+// daemon was running (the only line printed, since the stop had nothing to
+// stop either), a new CLI against
 // an old daemon, which ignores ShutdownParams and cancels every run outright,
 // a second concurrent stop --drain, which loses the daemon's single-drain
 // guard and cancels nothing, and a live daemon whose socket was unreachable,
@@ -457,7 +463,7 @@ func drainStopOptions(drain bool, drainTimeout time.Duration, timeoutSet, force 
 // asserting a fate for work it cannot see.
 func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
 	if outcome.NoDaemon {
-		fmt.Fprintf(w, "  %s no daemon was running; nothing to drain\n", sDim.Render("-"))
+		fmt.Fprintf(w, "  %s no daemon was running\n", sGreen.Render("✓"))
 		return
 	}
 	if !outcome.Drained {

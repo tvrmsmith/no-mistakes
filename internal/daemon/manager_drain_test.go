@@ -516,35 +516,224 @@ func TestShutdown_GateParkedRunIsPreservedForResume(t *testing.T) {
 // puts a run the stop is about to kill in none of Waited, Finished, or
 // Interrupted.
 func TestDrain_ExemptRunThatUnparksIsWaitedOnAgain(t *testing.T) {
-	shortenDrainReclassify(t, 20*time.Millisecond)
+	const tick = 10 * time.Millisecond
+	shortenDrainReclassify(t, tick)
 	m, database, repo := newDrainTestManager(t)
-	// A second run that never finishes keeps the wait alive past the park, so
-	// the reclassify ticker gets to observe both transitions.
-	registerFakeRun(t, m, database, repo, "holder")
+	// The second run finishes shortly after the unpark. That is what makes the
+	// re-admission observable: while the unparked run stays exempt, this
+	// completion drops the wait to zero remaining and the drain returns right
+	// there, long before its deadline.
+	_, _, otherDone := registerFakeRun(t, m, database, repo, "other")
 	run, _, _ := registerFakeRun(t, m, database, repo, "feature")
 
+	const deadline = 3 * time.Second
+	// Each step waits many reclassify ticks, so the drain has ample room to
+	// observe the transition before the next one lands. This is margin, not
+	// synchronization: a missed tick fails the test rather than passing it.
+	const settle = 20 * tick
 	gateErr := make(chan error, 1)
 	go func() {
-		time.Sleep(30 * time.Millisecond)
 		if err := parkRunAwaitingAgentErr(database, run); err != nil {
 			gateErr <- err
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(settle)
 		// The operator answered: the run is working again.
-		gateErr <- database.CompleteRunAwaitingAgent(run.ID, 100)
+		if err := database.CompleteRunAwaitingAgent(run.ID, 100); err != nil {
+			gateErr <- err
+			return
+		}
+		time.Sleep(settle)
+		close(otherDone)
+		gateErr <- nil
 	}()
 
-	report := m.Drain(context.Background(), 500*time.Millisecond)
+	start := time.Now()
+	report := m.Drain(context.Background(), deadline)
+	elapsed := time.Since(start)
 
 	if err := <-gateErr; err != nil {
 		t.Fatalf("park then unpark the run: %v", err)
 	}
+	if elapsed < deadline {
+		t.Fatalf("Drain returned after %v, want it to keep waiting on the unparked run until the %v deadline", elapsed, deadline)
+	}
 	if !containsRunID(report.Waited, run.ID) {
 		t.Fatalf("Waited = %v, want the unparked run %s back in the wait", report.Waited, run.ID)
 	}
-	if _, ok := findInterrupted(report.Interrupted, run.ID); !ok {
-		t.Fatalf("Interrupted = %v, want an entry for the unparked run %s that never finished", report.Interrupted, run.ID)
+	entry, ok := findInterrupted(report.Interrupted, run.ID)
+	if !ok || entry.Reason != ipc.DrainInterruptedDeadline {
+		t.Fatalf("Interrupted = %v, want a %s entry for the unparked run %s", report.Interrupted, ipc.DrainInterruptedDeadline, run.ID)
+	}
+}
+
+// TestDrain_InitiallyParkedRunThatUnparksIsWaitedOn is the same rule for a run
+// that was already parked when the drain began. Such a run is exempt from the
+// first classification, but the operator can answer its gate a second later,
+// and a resumed run that the stop is about to kill must not be absent from
+// Waited, Finished, and Interrupted alike.
+func TestDrain_InitiallyParkedRunThatUnparksIsWaitedOn(t *testing.T) {
+	const tick = 10 * time.Millisecond
+	shortenDrainReclassify(t, tick)
+	m, database, repo := newDrainTestManager(t)
+	run, ctx, _ := registerFakeRun(t, m, database, repo, "feature")
+	parkRunAwaitingAgent(t, database, run)
+	// As in the mid-drain case, this run's completion is what makes the
+	// re-admission observable: while the resumed run stays exempt, it drops
+	// the wait to zero remaining and the drain returns right there.
+	_, _, otherDone := registerFakeRun(t, m, database, repo, "other")
+
+	const deadline = 2 * time.Second
+	unparkErr := make(chan error, 1)
+	go func() {
+		// Margin for the drain to classify the already-parked run as exempt
+		// before the operator answers its gate; that is the state this test is
+		// about.
+		time.Sleep(10 * tick)
+		if err := database.CompleteRunAwaitingAgent(run.ID, 100); err != nil {
+			unparkErr <- err
+			return
+		}
+		time.Sleep(20 * tick)
+		close(otherDone)
+		unparkErr <- nil
+	}()
+
+	start := time.Now()
+	report := m.Drain(context.Background(), deadline)
+	elapsed := time.Since(start)
+
+	if err := <-unparkErr; err != nil {
+		t.Fatalf("unpark the run: %v", err)
+	}
+	if elapsed < deadline {
+		t.Fatalf("Drain returned after %v, want it to wait on the resumed run until the %v deadline", elapsed, deadline)
+	}
+	if !containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want the resumed run %s in the wait", report.Waited, run.ID)
+	}
+	entry, ok := findInterrupted(report.Interrupted, run.ID)
+	if !ok || entry.Reason != ipc.DrainInterruptedDeadline {
+		t.Fatalf("Interrupted = %v, want a %s entry for the resumed run %s", report.Interrupted, ipc.DrainInterruptedDeadline, run.ID)
+	}
+	if context.Cause(ctx) != nil {
+		t.Fatalf("cancel cause = %v, want nil: Drain never cancels a run it waited on", context.Cause(ctx))
+	}
+}
+
+// TestDrain_WaitEndingWithoutTheDeadlineDoesNotBlameTheDeadline pins the
+// reason on the third way out of the wait: every run it was still waiting on
+// finished, while a run it had released is working again. No deadline fired
+// there, and claiming one sends the operator to raise --drain-timeout for a
+// problem raising it cannot fix.
+func TestDrain_WaitEndingWithoutTheDeadlineDoesNotBlameTheDeadline(t *testing.T) {
+	// No tick fires during this drain, so the released run is still released
+	// when the last waited run finishes and the wait runs out of work.
+	shortenDrainReclassify(t, time.Hour)
+	m, database, repo := newDrainTestManager(t)
+	parked, _, _ := registerFakeRun(t, m, database, repo, "parked")
+	parkRunAwaitingAgent(t, database, parked)
+	_, _, workingDone := registerFakeRun(t, m, database, repo, "working")
+
+	unparkErr := make(chan error, 1)
+	go func() {
+		// Margin for the drain to classify the parked run as exempt first. Too
+		// short and the drain waits the unparked run out to its 30s deadline
+		// instead, which the elapsed check below fails on.
+		time.Sleep(100 * time.Millisecond)
+		// The operator answers the gate, then the other run finishes and the
+		// wait has nothing left to wait on.
+		err := database.CompleteRunAwaitingAgent(parked.ID, 100)
+		unparkErr <- err
+		close(workingDone)
+	}()
+
+	start := time.Now()
+	report := m.Drain(context.Background(), 30*time.Second)
+	elapsed := time.Since(start)
+
+	if err := <-unparkErr; err != nil {
+		t.Fatalf("unpark the run: %v", err)
+	}
+	if elapsed >= 10*time.Second {
+		t.Fatalf("Drain took %v, want it to return once nothing was left to wait on", elapsed)
+	}
+	entry, ok := findInterrupted(report.Interrupted, parked.ID)
+	if !ok {
+		t.Fatalf("Interrupted = %v, want an entry for the resumed run %s", report.Interrupted, parked.ID)
+	}
+	if entry.Reason != ipc.DrainInterruptedShutdown {
+		t.Fatalf("Interrupted entry reason = %s, want %s: the %v deadline never fired", entry.Reason, ipc.DrainInterruptedShutdown, 30*time.Second)
+	}
+}
+
+// TestDrain_JustApprovedCIGateIsNotCutAsAMonitor pins the exclusion of
+// awaiting_approval from the CI-monitor status set. CompleteRunAwaitingAgent
+// clears awaiting_agent_since the moment the operator answers, while the CI
+// step row stays awaiting_approval until the approval is applied. Classifying
+// that window as an idle monitor cuts a run one step from finishing and throws
+// away the answer the operator just gave.
+func TestDrain_JustApprovedCIGateIsNotCutAsAMonitor(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	sr, err := database.InsertStepResult(run.ID, types.StepCI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := "[]"
+	if err := database.ParkStepForApproval(run.ID, sr.ID, types.StepStatusAwaitingApproval, 0, &findings); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateRunPRURL(run.ID, "https://github.com/user/project/pull/7"); err != nil {
+		t.Fatal(err)
+	}
+	// The operator answered: the gate signal is cleared, the step row is not.
+	if err := database.CompleteRunAwaitingAgent(run.ID, 100); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		close(done)
+	}()
+
+	report := m.Drain(context.Background(), 5*time.Second)
+
+	if cause := context.Cause(ctx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil: an approval being applied is live work, not an idle CI monitor", cause)
+	}
+	if len(report.Interrupted) != 0 {
+		t.Fatalf("Interrupted = %v, want empty", report.Interrupted)
+	}
+	if !containsRunID(report.Finished, run.ID) {
+		t.Fatalf("Finished = %v, want it to contain %s", report.Finished, run.ID)
+	}
+}
+
+// TestStartRun_RegisteringAfterTheDrainSnapshotIsRefused pins the window
+// between startRun's own shuttingDown check and its registration into
+// m.cancels/m.dones: minutes of fetching and worktree setup sit in between, so
+// a run admitted just before a drain begins would otherwise register after the
+// drain snapshotted the active set, be waited on and reported by nobody, and
+// then be killed outright by the stop.
+func TestStartRun_RegisteringAfterTheDrainSnapshotIsRefused(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, err := database.InsertRun(repo.ID, "feature", "deadbeef", "cafef00d")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.Drain(context.Background(), time.Millisecond)
+
+	registered := m.registerActiveRun(run.ID, nil, func(error) {}, make(chan struct{}))
+	if registered {
+		t.Fatal("a run registering after the drain snapshot was accepted; the drain neither waited on it nor reported it")
+	}
+	m.mu.Lock()
+	_, hasCancel := m.cancels[run.ID]
+	_, hasDone := m.dones[run.ID]
+	m.mu.Unlock()
+	if hasCancel || hasDone {
+		t.Fatal("a refused run was still registered in the active-run maps")
 	}
 }
 

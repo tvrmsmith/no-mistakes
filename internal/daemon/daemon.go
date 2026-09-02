@@ -890,8 +890,8 @@ func removeOrphanWorktree(ctx context.Context, wt orphanWorktree) {
 // "no matching run" directory is never one whose insert simply hasn't landed
 // yet - it is safe to remove immediately.
 //
-// A run marked RunCIMonitorInterrupted (the daemon restarted while monitoring
-// CI for an already-open PR, issue #361) is terminal and would otherwise leak
+// A run marked RunCIMonitorInterrupted (the daemon restarted or was drained
+// while monitoring CI for an already-open PR, issue #361) is terminal and would otherwise leak
 // its checkout on every future restart. Such a worktree is reclaimed like any
 // other terminal-run leftover EXCEPT when it may hold unpushed work: a CI
 // auto-fix commits locally before pushing (see steps/ci_fix.go), so a crash in
@@ -1098,9 +1098,11 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		// anything, is what Drain's wait loop reacts to, so a signal aborts an
 		// in-flight drain outright rather than waiting out its deadline and
 		// reports those runs as stopped mid-flight rather than as finished;
-		// that's intentional, not a bug to fix here. ctx.Done() remains as the
-		// backstop for a caller that simply hangs up. What the drain hadn't
-		// finished by then is left for
+		// that's intentional, not a bug to fix here. A caller that hangs up
+		// mid-drain is NOT observed: ipc/server.go detects a closed peer only
+		// on the stream path, and this connection's scanner loop is blocked
+		// inside this handler, so such a drain runs to its own deadline.
+		// What the drain hadn't finished by then is left for
 		// mgr.Shutdown() below to cancel, same as always, and since
 		// CancelCauseFunc keeps only the first cause, a run the drain meant to
 		// classify as a cut CI monitor can land as a plain shutdown-cancelled

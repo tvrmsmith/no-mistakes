@@ -689,7 +689,9 @@ func requestDrain(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
 	result, callErr := sendShutdownRequest(client, StopOptions{Drain: true, DrainTimeout: opts.DrainTimeout, DrainOnly: true})
 	_ = client.Close()
 	if callErr != nil {
-		return StopOutcome{}, fmt.Errorf("drain request: %w", callErr)
+		// Returned bare: joinStopErrors runs every drain failure through
+		// drainRequestError, which owns the label.
+		return StopOutcome{}, callErr
 	}
 	return StopOutcome{Drained: result.Drained, Finished: result.Finished, Interrupted: result.Interrupted}, nil
 }
