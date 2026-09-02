@@ -239,6 +239,7 @@ func Capture(ctx context.Context, store *Store, p *paths.Paths, database *db.DB,
 			Branch: run.Branch, DefaultBranch: repo.DefaultBranch, BaseSHA: replayBaseSHA,
 			HeadSHA: run.HeadSHA, StartingHeadSHA: startingSHA, ReviewedHeadSHA: reviewedSHA, TrustedConfigSHA: trustedSHA,
 			ChangedFiles: changedFiles, ChangedLines: changedLines,
+			PipelineVersion: PipelineVersionFromSteps(steps),
 		}
 		if run.Intent != nil {
 			manifest.Intent = *run.Intent

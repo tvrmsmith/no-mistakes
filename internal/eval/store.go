@@ -595,6 +595,7 @@ func loadCase(dir string) (Case, error) {
 	if manifest.Version != manifestVersion {
 		return Case{}, fmt.Errorf("unsupported case manifest version %d (captured by an older no-mistakes whose case format is no longer readable; remove the eval directory to start a fresh corpus, which now refills itself)", manifest.Version)
 	}
+	manifest.PipelineVersion = normalizePipelineVersion(manifest.PipelineVersion)
 	var labels Labels
 	if err := readJSON(filepath.Join(dir, "labels.json"), &labels); err != nil {
 		return Case{}, err

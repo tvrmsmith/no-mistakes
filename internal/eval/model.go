@@ -174,6 +174,11 @@ type Manifest struct {
 	BuildSHA         string `json:"no_mistakes_build_sha,omitempty"`
 	ChangedFiles     int    `json:"changed_files"`
 	ChangedLines     int    `json:"changed_lines"`
+	// PipelineVersion tags the pipeline layout this case was collected under
+	// (see PipelineVersionFromSteps). An absent value reads as pre-reorder
+	// (see normalizePipelineVersion): every case captured before this field
+	// existed was captured under that layout.
+	PipelineVersion PipelineVersion `json:"pipeline_version,omitempty"`
 }
 
 // Decision records the human gate evidence available for the exported review

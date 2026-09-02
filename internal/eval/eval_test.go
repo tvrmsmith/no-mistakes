@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -908,6 +909,137 @@ func TestParseCandidatePinsACPModelThroughAcpx(t *testing.T) {
 		}
 		if candidate.Model != "gpt-5" {
 			t.Fatalf("candidate = %#v", candidate)
+		}
+	}
+}
+
+func manifestPipelineVersion(t *testing.T, dir string) string {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(mustReadFile(t, filepath.Join(dir, "manifest.json"))), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := decoded["pipeline_version"].(string)
+	return v
+}
+
+// forceStepOrder overwrites a recorded step's step_order directly in the
+// sqlite file. It exists only so a test can build a run whose recorded rows
+// reflect a pipeline layout (cheap gates before review) that types.StepName's
+// fixed Order() does not produce yet, without reaching into internal/db (out
+// of scope for this change) to add a setter no production code needs.
+func forceStepOrder(t *testing.T, p *paths.Paths, stepID string, order int) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`UPDATE step_results SET step_order = ? WHERE id = ?`, order, stepID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCaptureTagsTheCaseWithThePipelineTheRunRecorded(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("review before the cheap gates", func(t *testing.T) {
+		p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+		defer sourceDB.Close()
+		// The review step setupCapturedRun records is already ordered before
+		// a test step under today's fixed types.StepName.Order(), so no order
+		// override is needed to prove "review ran early".
+		if _, err := sourceDB.InsertStepResult(run.ID, types.StepTest); err != nil {
+			t.Fatal(err)
+		}
+		store, err := Open(filepath.Join(p.Root(), "eval"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		cases, err := Capture(ctx, store, p, sourceDB, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cases) != 1 {
+			t.Fatalf("captured %d cases, want 1", len(cases))
+		}
+		if got := manifestPipelineVersion(t, cases[0].Dir); got != string(PipelineReviewEarly) {
+			t.Fatalf(`manifest pipeline_version = %q, want "review-early"`, got)
+		}
+	})
+
+	t.Run("cheap gates before review, proving the tag comes from the run not today's binary", func(t *testing.T) {
+		p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
+		defer sourceDB.Close()
+		for _, name := range []types.StepName{"format", types.StepLint, types.StepTest} {
+			step, err := sourceDB.InsertStepResult(run.ID, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			forceStepOrder(t, p, step.ID, 1)
+		}
+		forceStepOrder(t, p, reviewRound.StepResultID, 10)
+
+		store, err := Open(filepath.Join(p.Root(), "eval"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		cases, err := Capture(ctx, store, p, sourceDB, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cases) != 1 {
+			t.Fatalf("captured %d cases, want 1", len(cases))
+		}
+		if got := manifestPipelineVersion(t, cases[0].Dir); got != string(PipelineCheapGatesFirst) {
+			t.Fatalf(`manifest pipeline_version = %q, want "cheap-gates-first"`, got)
+		}
+	})
+}
+
+func TestRelabelPreservesTheCapturedPipelineTag(t *testing.T) {
+	ctx := context.Background()
+	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+	defer sourceDB.Close()
+	if _, err := sourceDB.InsertStepResult(run.ID, types.StepTest); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(filepath.Join(p.Root(), "eval"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	captured, err := Capture(ctx, store, p, sourceDB, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("captured %d cases, want 1", len(captured))
+	}
+	tagBefore := manifestPipelineVersion(t, captured[0].Dir)
+	if tagBefore != string(PipelineReviewEarly) {
+		t.Fatalf(`manifest pipeline_version = %q, want "review-early"`, tagBefore)
+	}
+	findingsBefore := captured[0].Labels.Findings
+
+	relabeled, err := RelabelRun(ctx, store, p, sourceDB, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relabeled) != 1 {
+		t.Fatalf("relabeled %d cases, want 1", len(relabeled))
+	}
+	if got := manifestPipelineVersion(t, relabeled[0].Dir); got != tagBefore {
+		t.Fatalf("manifest pipeline_version after relabel = %q, want unchanged %q", got, tagBefore)
+	}
+	if len(relabeled[0].Labels.Findings) != len(findingsBefore) {
+		t.Fatalf("relabel changed gold finding count: before %d, after %d", len(findingsBefore), len(relabeled[0].Labels.Findings))
+	}
+	for i, before := range findingsBefore {
+		if relabeled[0].Labels.Findings[i] != before {
+			t.Fatalf("relabel changed gold finding %d: before %#v, after %#v", i, before, relabeled[0].Labels.Findings[i])
 		}
 	}
 }
