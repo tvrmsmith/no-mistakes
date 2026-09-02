@@ -303,6 +303,11 @@ type Evaluation struct {
 	TokensReported    bool   `json:"tokens_reported"`
 	DurationMS        int64  `json:"duration_ms"`
 	Model             string `json:"model,omitempty"`
+	// PipelineVersion is the case's own tag (see Case.PipelineVersion), copied
+	// onto the evaluation so a report can group by it without rejoining the
+	// case. An evaluation recorded before this field existed reads as
+	// PipelineReviewEarly via normalizePipelineVersion.
+	PipelineVersion PipelineVersion `json:"pipeline_version,omitempty"`
 }
 
 // EvaluationSummary aggregates finding-level scores. A case with no gold is

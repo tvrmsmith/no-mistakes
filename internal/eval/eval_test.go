@@ -152,6 +152,10 @@ func TestCapturePinsConfigurationFromSourceReview(t *testing.T) {
 	mustGit(t, ctx, p.Root(), "clone", gateDir, workDir)
 	mustGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustGit(t, ctx, workDir, "config", "user.name", "Eval Test")
+	// The fixture must not depend on the developer's own commit-signing setup:
+	// a global commit.gpgsign with a locked agent failed every capture test here
+	// with "failed to write commit object" after a ~50s agent timeout.
+	mustGit(t, ctx, workDir, "config", "commit.gpgsign", "false")
 	mustGit(t, ctx, workDir, "checkout", "main")
 	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("ignore_patterns: ['advanced-only']\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1083,6 +1087,10 @@ func setupCapturedRunWithHistoryAndFindings(t *testing.T, ctx context.Context, p
 	mustGit(t, ctx, root, "clone", gateDir, workDir)
 	mustGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustGit(t, ctx, workDir, "config", "user.name", "Eval Test")
+	// The fixture must not depend on the developer's own commit-signing setup:
+	// a global commit.gpgsign with a locked agent failed every capture test here
+	// with "failed to write commit object" after a ~50s agent timeout.
+	mustGit(t, ctx, workDir, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("review:\n  path_instructions:\n    - path: '*.go'\n      instructions: review error paths\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

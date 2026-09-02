@@ -10,13 +10,14 @@ import (
 )
 
 type syntheticCaseSpec struct {
-	id            string
-	fingerprint   string
-	capturedAt    int64
-	changedLines  int
-	changedFiles  []string
-	gold          []FindingGold
-	roundFindings string
+	id              string
+	fingerprint     string
+	capturedAt      int64
+	changedLines    int
+	changedFiles    []string
+	gold            []FindingGold
+	roundFindings   string
+	pipelineVersion PipelineVersion
 }
 
 func TestListCasesDiversified_GoldOnlyEmptyWarns(t *testing.T) {
@@ -463,6 +464,7 @@ func writeSyntheticCase(t *testing.T, store *Store, spec syntheticCaseSpec) Case
 			DefaultBranch:   "main",
 			ChangedFiles:    len(changedFiles),
 			ChangedLines:    spec.changedLines,
+			PipelineVersion: spec.pipelineVersion,
 		},
 		Labels:   Labels{Version: labelsVersion, Findings: spec.gold},
 		Decision: Decision{Action: "unknown"},

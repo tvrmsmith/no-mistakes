@@ -34,8 +34,11 @@ type ReplayOptions struct {
 	Set       string
 	Candidate Candidate
 	Repeats   int
-	OnPlan    func(session Session, cases []Case)
-	OnResult  func(evaluation Evaluation, completed, total int)
+	// Pipeline narrows the case set to one pipeline layout tag (see
+	// PipelineVersion). PipelineAny, the zero value, runs every case in Set.
+	Pipeline PipelineVersion
+	OnPlan   func(session Session, cases []Case)
+	OnResult func(evaluation Evaluation, completed, total int)
 }
 
 // Session records the immutable local plan used for one replay batch.
@@ -114,11 +117,14 @@ func (s *Store) prepareReplay(ctx context.Context, opts ReplayOptions) ([]Case, 
 	}
 	defer unlock()
 
-	cases, err := s.ListCases(opts.Set)
+	cases, err := s.ListCasesForPipeline(opts.Set, opts.Pipeline)
 	if err != nil {
 		return nil, Session{}, err
 	}
 	if len(cases) == 0 {
+		if opts.Pipeline != PipelineAny {
+			return nil, Session{}, fmt.Errorf("case set %q has no case tagged %s", opts.Set, opts.Pipeline)
+		}
 		return nil, Session{}, fmt.Errorf("case set %q is empty", opts.Set)
 	}
 	session := Session{ID: newSessionID(), StartedAt: time.Now().UTC(), Set: opts.Set, Candidate: opts.Candidate.String(), Repeats: opts.Repeats}
@@ -197,6 +203,7 @@ func replayOne(ctx context.Context, store *Store, c Case, session Session, candi
 		StartedAt: started.Unix(),
 		Status:    "failed",
 	}
+	evaluation.PipelineVersion = c.PipelineVersion
 	evaluation.HasFindingGold = c.Labels.HasGold()
 	evaluation.GoldCount = c.Labels.TrueIssueCount()
 	evaluation.FalsePositiveGold = c.Labels.FalsePositiveCount()

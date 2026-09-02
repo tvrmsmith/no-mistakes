@@ -15,44 +15,66 @@ type Interval struct {
 	Cases int
 }
 
-// CandidateReport is one locally observed candidate slice.
+// CandidateReport is one locally observed candidate slice, scoped to one
+// pipeline layout: the two populations a scope change to the pipeline
+// produces are never blended into one row (see Report).
 type CandidateReport struct {
-	Cohort        string
-	Summary       EvaluationSummary
-	RepeatCount   int
-	Confidence    *Interval
-	AverageTokens *float64
-	AverageWallMS float64
-	OnFrontier    bool
+	PipelineVersion PipelineVersion
+	Cohort          string
+	Summary         EvaluationSummary
+	RepeatCount     int
+	Confidence      *Interval
+	AverageTokens   *float64
+	AverageWallMS   float64
+	OnFrontier      bool
 }
 
 // Report loads every local evaluation result grouped by candidate. It never
 // contacts a forge, agent provider, telemetry endpoint, or remote case store.
+// It is ReportForPipeline with no pipeline filter.
 func Report(store *Store) ([]CandidateReport, error) {
+	return ReportForPipeline(store, PipelineAny)
+}
+
+// ReportForPipeline narrows the report to one pipeline layout tag.
+// PipelineAny, Report's behavior, groups every evaluation by (pipeline
+// version, cohort, candidate) rather than filtering: once Review moves
+// relative to the cheap gates, a share of the old gold-labelled findings can
+// no longer occur, so blending the two populations into one row would read as
+// a review-quality regression that is really a scope change. An evaluation
+// recorded before PipelineVersion existed is read as PipelineReviewEarly (see
+// normalizePipelineVersion).
+func ReportForPipeline(store *Store, version PipelineVersion) ([]CandidateReport, error) {
 	evaluations, err := store.evaluations()
 	if err != nil {
 		return nil, err
 	}
-	byCandidateCohort := make(map[string][]Evaluation)
+	byGroup := make(map[string][]Evaluation)
 	for _, evaluation := range evaluations {
+		pipelineVersion := normalizePipelineVersion(evaluation.PipelineVersion)
+		if version != PipelineAny && pipelineVersion != version {
+			continue
+		}
 		cohort := evaluation.Cohort
 		if cohort == "" {
 			cohort = "legacy-unmatched"
 		}
-		key := cohort + "\x00" + evaluation.Candidate
-		byCandidateCohort[key] = append(byCandidateCohort[key], evaluation)
+		key := string(pipelineVersion) + "\x00" + cohort + "\x00" + evaluation.Candidate
+		byGroup[key] = append(byGroup[key], evaluation)
 	}
-	reports := make([]CandidateReport, 0, len(byCandidateCohort))
-	for key, rows := range byCandidateCohort {
-		cohort, candidate, _ := strings.Cut(key, "\x00")
+	reports := make([]CandidateReport, 0, len(byGroup))
+	for key, rows := range byGroup {
+		fields := strings.SplitN(key, "\x00", 3)
+		pipelineVersion, cohort, candidate := fields[0], fields[1], fields[2]
 		summary := SummarizeEvaluations(rows)
 		repeats := repeatCount(rows)
 		report := CandidateReport{
-			Cohort:        cohort,
-			Summary:       summary,
-			RepeatCount:   repeats,
-			Confidence:    confidenceInterval(candidate, rows),
-			AverageWallMS: averageWallMS(rows),
+			PipelineVersion: PipelineVersion(pipelineVersion),
+			Cohort:          cohort,
+			Summary:         summary,
+			RepeatCount:     repeats,
+			Confidence:      confidenceInterval(candidate, rows),
+			AverageWallMS:   averageWallMS(rows),
 		}
 		if cost, ok := averageTokens(rows); ok {
 			report.AverageTokens = &cost
@@ -60,6 +82,9 @@ func Report(store *Store) ([]CandidateReport, error) {
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool {
+		if reports[i].PipelineVersion != reports[j].PipelineVersion {
+			return reports[i].PipelineVersion < reports[j].PipelineVersion
+		}
 		if reports[i].Cohort != reports[j].Cohort {
 			return reports[i].Cohort < reports[j].Cohort
 		}
@@ -179,7 +204,7 @@ func markFrontier(reports []CandidateReport) {
 		}
 		dominated := false
 		for j := range reports {
-			if i == j || reports[i].Cohort != reports[j].Cohort || reports[j].AverageTokens == nil || reports[j].Summary.Labeled == 0 || reports[j].Summary.Failures > 0 {
+			if i == j || reports[i].PipelineVersion != reports[j].PipelineVersion || reports[i].Cohort != reports[j].Cohort || reports[j].AverageTokens == nil || reports[j].Summary.Labeled == 0 || reports[j].Summary.Failures > 0 {
 				continue
 			}
 			betterRecall := reports[j].Summary.Recall() >= reports[i].Summary.Recall()
@@ -212,6 +237,18 @@ type SetSummary struct {
 	Warning        string
 	Composition    []CompositionRow
 	SelfScore      EvaluationSummary
+	// Pipelines buckets this set's cases by their own PipelineVersion tag, so
+	// an operator can see how much of a set exists under each pipeline layout
+	// before running a filtered report. It is independent of any pipeline
+	// filter InspectSetsForPipeline was called with.
+	Pipelines []PipelineCountRow
+}
+
+// PipelineCountRow is one pipeline-layout bucket of a case set.
+type PipelineCountRow struct {
+	PipelineVersion PipelineVersion
+	Cases           int
+	GoldCases       int
 }
 
 // CompositionRow is one stratum bucket of a case set: the same axes the
@@ -231,8 +268,14 @@ type CompositionRow struct {
 // only local registry rows and captured case files, so it stays instant no
 // matter how expensive a replay of the same sets would be.
 func InspectSets(store *Store) ([]SetSummary, error) {
+	return InspectSetsForPipeline(store, PipelineAny)
+}
+
+// InspectSetsForPipeline is InspectSets narrowed to one pipeline layout tag.
+// InspectSets is this with no filter (PipelineAny).
+func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary, error) {
 	sets := []string{"all", "labeled", "diversified", "tune"}
-	all, err := store.ListCases("all")
+	all, err := store.ListCasesForPipeline("all", version)
 	if err != nil {
 		return nil, err
 	}
@@ -248,11 +291,11 @@ func InspectSets(store *Store) ([]SetSummary, error) {
 	}
 	result := make([]SetSummary, 0, len(sets))
 	for _, name := range sets {
-		cases, err := store.ListCases(name)
+		cases, err := store.ListCasesForPipeline(name, version)
 		if err != nil {
 			return nil, err
 		}
-		summary := SetSummary{Name: name, Cases: len(cases), Cap: store.diversifiedSize, SelfScore: SelfScoreRecordedReviews(cases)}
+		summary := SetSummary{Name: name, Cases: len(cases), Cap: store.diversifiedSize, SelfScore: SelfScoreRecordedReviews(cases), Pipelines: pipelineCountRows(cases)}
 		if name == "diversified" {
 			if n, err := store.pinCount(); err == nil {
 				summary.PinCount = n
@@ -313,6 +356,29 @@ func InspectSets(store *Store) ([]SetSummary, error) {
 		result = append(result, summary)
 	}
 	return result, nil
+}
+
+// pipelineCountRows buckets cases by their own PipelineVersion tag, sorted by
+// version string ascending.
+func pipelineCountRows(cases []Case) []PipelineCountRow {
+	byVersion := map[PipelineVersion]*PipelineCountRow{}
+	for _, c := range cases {
+		row, ok := byVersion[c.PipelineVersion]
+		if !ok {
+			row = &PipelineCountRow{PipelineVersion: c.PipelineVersion}
+			byVersion[c.PipelineVersion] = row
+		}
+		row.Cases++
+		if c.Labels.HasGold() {
+			row.GoldCases++
+		}
+	}
+	rows := make([]PipelineCountRow, 0, len(byVersion))
+	for _, row := range byVersion {
+		rows = append(rows, *row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].PipelineVersion < rows[j].PipelineVersion })
+	return rows
 }
 
 func sortedCompositionRows(rows []CompositionRow) []CompositionRow {
@@ -391,7 +457,7 @@ func RenderReport(reports []CandidateReport) string {
 	b.WriteString("LOCAL-ONLY EVAL REPORT\n")
 	for _, report := range reports {
 		s := report.Summary
-		fmt.Fprintf(&b, "\n%s (cohort %s)\n", s.Candidate, report.Cohort)
+		fmt.Fprintf(&b, "\n%s (pipeline %s, cohort %s)\n", s.Candidate, report.PipelineVersion, report.Cohort)
 		fmt.Fprintf(&b, "  replays: %d across %d repeat(s); labeled: %d; failures: %d\n", s.Total, report.RepeatCount, s.Labeled, s.Failures)
 		if s.Labeled == 0 {
 			b.WriteString("  finding scores: unlabeled / pending (no finding-level gold yet)\n")

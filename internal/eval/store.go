@@ -260,7 +260,34 @@ func (s *Store) appendFindingGold(c Case, added []FindingGold) (Case, int, error
 // one per stratum when reconciling to 0 or a lower cap). Tune is leftover
 // labeled cases after those pins, the set matcher thresholds may be fitted on.
 func (s *Store) ListCases(set string) ([]Case, error) {
-	return s.listCases(set, false)
+	return s.ListCasesForPipeline(set, PipelineAny)
+}
+
+// ListCasesForPipeline narrows a resolved set to one pipeline layout.
+// PipelineAny matches every tag, so ListCases is exactly this with no filter.
+//
+// The filter is applied to the RESULT of the existing set resolution,
+// strictly AFTER materializeDiversifiedPins has run and written its pins: a
+// pipeline filter is a view onto the resolved set, never a rebuild, and must
+// never mutate, trim, or reshuffle the official diversified pin set, because
+// those pins are the held-out official set. A tag this build does not
+// recognize is not rejected here (a forward-compatible tag stored on disk is
+// legal); it simply matches nothing narrower than PipelineAny.
+func (s *Store) ListCasesForPipeline(set string, version PipelineVersion) ([]Case, error) {
+	cases, err := s.listCases(set, false)
+	if err != nil {
+		return nil, err
+	}
+	if version == PipelineAny {
+		return cases, nil
+	}
+	out := make([]Case, 0, len(cases))
+	for _, c := range cases {
+		if c.PipelineVersion == version {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 // RefreshDiversified rebuilds the official pin set from current gold.
