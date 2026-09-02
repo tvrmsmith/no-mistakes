@@ -54,6 +54,14 @@ func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 		lines = append(lines, "    unlabeled / pending (no finding-level gold yet)")
 	} else {
 		lines = append(lines, evalScoreLines(diversified.SelfScore)...)
+		// The self-score folds the whole set into one number. When the set holds
+		// more than one pipeline layout that number spans two populations whose
+		// reviews saw different trees, so it has to be read as a mix rather than
+		// as a movement in review quality. The layout counts below say how the
+		// set splits; this says the headline cannot be compared across it.
+		if len(diversified.Pipelines) > 1 {
+			lines = append(lines, sYellow.Render(fmt.Sprintf("    ⚠ spans %d pipeline layouts: not comparable as one score", len(diversified.Pipelines))))
+		}
 	}
 	if len(diversified.Composition) > 0 {
 		lines = append(lines, "")

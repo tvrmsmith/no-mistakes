@@ -772,6 +772,46 @@ func TestEvalSetsDashboardOmitsThePipelineBreakdownForASingleLayout(t *testing.T
 	}
 }
 
+// TestEvalSetsSelfScoreWarnsWhenTheSetSpansTwoPipelineLayouts pins the caveat
+// on the headline number. The self-score folds every case in the set into one
+// figure, so a set holding both layouts reports a single score over two
+// populations, which is the exact "review-quality regression that is really a
+// scope change" misreading the tag exists to prevent. The count breakdown alone
+// is passive; the number itself has to say it is not comparable.
+func TestEvalSetsSelfScoreWarnsWhenTheSetSpansTwoPipelineLayouts(t *testing.T) {
+	out := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name:      "diversified",
+		Cases:     2,
+		GoldCases: 2,
+		SelfScore: eval.EvaluationSummary{Labeled: 2},
+		Pipelines: []eval.PipelineCountRow{
+			{PipelineVersion: eval.PipelineReviewEarly, Cases: 1, GoldCases: 1},
+			{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 1, GoldCases: 1},
+		},
+	}})
+	if !strings.Contains(out, "not comparable") {
+		t.Fatalf("sets output = %q, want the self-score to be marked not comparable across layouts", out)
+	}
+	if !strings.Contains(out, "2 pipeline layouts") {
+		t.Fatalf("sets output = %q, want the caveat to name how many layouts the set spans", out)
+	}
+}
+
+func TestEvalSetsSelfScoreCarriesNoCaveatForASingleLayout(t *testing.T) {
+	out := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name:      "diversified",
+		Cases:     2,
+		GoldCases: 2,
+		SelfScore: eval.EvaluationSummary{Labeled: 2},
+		Pipelines: []eval.PipelineCountRow{
+			{PipelineVersion: eval.PipelineReviewEarly, Cases: 2, GoldCases: 2},
+		},
+	}})
+	if strings.Contains(out, "not comparable") {
+		t.Fatalf("sets output = %q, want no comparability caveat for a single layout", out)
+	}
+}
+
 // nmHomeTree lists every path under root, relative and sorted, so a test can
 // assert that a command left the app root's shape untouched.
 func nmHomeTree(t *testing.T, root string) []string {

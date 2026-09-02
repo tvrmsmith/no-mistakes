@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -165,6 +166,50 @@ func TestPruneKeepsCasesReservedByAReplaySession(t *testing.T) {
 		t.Fatalf("prune removed %d replay-reserved cases, %d remain", pruned, len(remaining))
 	}
 	store.releaseReplayReservation(session.ID)
+}
+
+// TestPruneKeepsDiversifiedPinnedCases pins the retention rule the pipeline
+// tag depends on. Once the cheap gates run before review, every newly captured
+// case carries the new tag while the pre-reorder population only ages, so
+// oldest-first eviction aims straight at the held-out baseline the tag exists
+// to keep comparable. A pinned case is the official set; it outranks the cap.
+func TestPruneKeepsDiversifiedPinnedCases(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for i, id := range []string{"pinned-oldest", "plain-older", "plain-newer", "plain-newest"} {
+		seedCase(t, store, id, int64(i))
+	}
+	if err := store.replaceDiversifiedPins([]diversifiedPin{{CaseID: "pinned-oldest", Stratum: "stratum", Rank: 1, PinnedAt: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	pruned, err := store.Prune(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned != 2 {
+		t.Fatalf("pruned = %d, want 2", pruned)
+	}
+	remaining, err := store.ListCases("all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range remaining {
+		got = append(got, c.ID)
+	}
+	sort.Strings(got)
+	want := "pinned-oldest plain-newest"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("remaining cases = %v, want %q (pinned oldest protected, unpinned oldest dropped)", got, want)
+	}
+	if _, err := os.Stat(store.caseDir("pinned-oldest")); err != nil {
+		t.Fatalf("pruned the diversified-pinned case directory: %v", err)
+	}
 }
 
 func TestPruneReleasesAbandonedReplayReservations(t *testing.T) {

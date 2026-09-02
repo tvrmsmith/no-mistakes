@@ -503,6 +503,14 @@ func (s *Store) pinCount() (int, error) {
 // recorded candidate replays: those evaluations are the result of tokens
 // somebody spent, and a cohort in an eval report pins the exact case IDs it
 // compared, so reclaiming one would silently invalidate a published comparison.
+//
+// It never removes a diversified-pinned case either. Those pins are the
+// held-out official set, and oldest-first eviction aims straight at them
+// whenever the corpus stops being homogeneous: after the cheap gates move ahead
+// of review, every newly captured case carries the new PipelineVersion tag
+// while the pre-reorder population only ages, so an unprotected cap would
+// delete exactly the baseline that tag exists to keep comparable.
+//
 // When protected cases alone exceed the cap the corpus stays over it rather than
 // deleting that evidence - the cap is a retention target, not a promise to
 // reach a number.
@@ -536,6 +544,7 @@ func (s *Store) Prune(ctx context.Context, maxCases int) (int, error) {
 	rows, err := s.db.Query(`SELECT c.id, c.path, c.repo_fingerprint FROM cases c
 WHERE NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.case_id = c.id)
   AND NOT EXISTS (SELECT 1 FROM replay_case_reservations r WHERE r.case_id = c.id AND r.reserved_until > ?)
+  AND NOT EXISTS (SELECT 1 FROM diversified_pins p WHERE p.case_id = c.id)
 ORDER BY c.captured_at, c.id LIMIT ?`, time.Now().Unix(), excess)
 	if err != nil {
 		return 0, fmt.Errorf("select prunable eval cases: %w", err)

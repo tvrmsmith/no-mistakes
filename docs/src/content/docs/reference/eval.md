@@ -80,13 +80,15 @@ The tag comes from the run's own recorded step order, not from the version of no
 
 `eval report` groups every candidate's scores by the tag, so the two populations never merge into one headline. `--pipeline` narrows `eval run`, `eval sets`, and `eval report` to one layout; the default is `any`, which shows every layout.
 
+The `eval sets` self-score is a single number over the whole set, so when a set holds both layouts the dashboard marks that score as not comparable and lists how the set splits. Narrow with `--pipeline` to get a score over one population.
+
 This exists because, after the reorder, Review sees a tree four gates already cleared. A share of the older gold-labelled findings can no longer occur, so scoring the two populations together would read as a review-quality regression that is really a scope change.
 
 ## Disk use and retention
 
 Cases from the same repository share one local Git object pool under `<NM_HOME>/eval/pools/`. The first case from a repository stores its history once; every later case adds only the objects its own commits introduced, which is normally a few kilobytes.
 
-`eval.max_cases` (default 200) is the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. A case that has a replay in progress or already has recorded candidate replays is never dropped - an eval report's cohort pins the case IDs it compared, so reclaiming one would invalidate a comparison you already paid for. Protected cases can therefore keep the corpus above the target. Set it to `0` to keep every case.
+`eval.max_cases` (default 200) is the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. Three kinds of case are never dropped: one with a replay in progress, one that already has recorded candidate replays (an eval report's cohort pins the case IDs it compared, so reclaiming one would invalidate a comparison you already paid for), and one pinned into the diversified holdout. The holdout is protected because eviction is oldest-first: after a pipeline reorder the corpus fills with newly tagged cases while the earlier population only ages, so an unprotected cap would delete the exact baseline the [pipeline layout tag](#pipeline-layout-tag) exists to keep comparable. Protected cases can therefore keep the corpus above the target. Set it to `0` to keep every case.
 
 Because the objects live in the pool rather than inside each case, a case directory is not a portable archive: copying it elsewhere does not carry the code it replays.
 
