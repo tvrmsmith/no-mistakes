@@ -106,19 +106,10 @@ func (s StepName) Value() (driver.Value, error) {
 // numerically against rows already written.
 var allSteps = []StepName{StepIntent, StepRebase, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
 
-// stepOrders maps each step to its 1-indexed position in allSteps.
-var stepOrders = func() map[StepName]int {
-	orders := make(map[StepName]int, len(allSteps))
-	for i, step := range allSteps {
-		orders[step] = i + 1
-	}
-	return orders
-}()
-
 // Order returns the fixed execution order for a step (1-indexed), derived from
 // its position in AllSteps. An unknown step returns 0.
 func (s StepName) Order() int {
-	return stepOrders[s]
+	return slices.Index(allSteps, s) + 1
 }
 
 // AllSteps returns all pipeline steps in execution order.

@@ -76,10 +76,12 @@ func TestStepNameOrderAgreesWithAllSteps(t *testing.T) {
 }
 
 func TestAllStepsReturnsACopy(t *testing.T) {
-	steps := AllSteps()
-	steps[0] = "mutated"
-	if AllSteps()[0] != StepIntent {
-		t.Fatalf("AllSteps()[0] = %q, want %q; AllSteps must return a copy", AllSteps()[0], StepIntent)
+	a, b := AllSteps(), AllSteps()
+	if len(a) == 0 || len(b) == 0 {
+		t.Fatalf("AllSteps() returned an empty slice")
+	}
+	if &a[0] == &b[0] {
+		t.Fatalf("AllSteps() results alias each other; AllSteps must return a copy, not the shared package slice")
 	}
 }
 
