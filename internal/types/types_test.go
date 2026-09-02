@@ -58,9 +58,9 @@ func TestStepNameOrder(t *testing.T) {
 	}
 }
 
-// TestStepNameOrderAgreesWithAllSteps pins the property that collapsed the two
-// sources of truth: Order() is position in AllSteps(), for every step, and
-// nothing outside that slice has an order.
+// TestStepNameOrderAgreesWithAllSteps catches a duplicate entry in allSteps and
+// a future re-divergence of AllSteps and Order. The absolute 1..9 values stay
+// pinned by TestStepNameOrder.
 func TestStepNameOrderAgreesWithAllSteps(t *testing.T) {
 	for i, step := range AllSteps() {
 		want := i + 1

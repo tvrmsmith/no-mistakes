@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -96,8 +97,13 @@ func (s StepName) Value() (driver.Value, error) {
 	return string(s), nil
 }
 
-// allSteps is the single owner of pipeline step order. Both AllSteps and
-// StepName.Order read from it, so adding or moving a step is one edit here.
+// allSteps owns step order within this package: AllSteps and StepName.Order
+// both read from it. It does not own the sequence the daemon executes, which is
+// a separate literal in steps.AllSteps() (internal/pipeline/steps/common.go)
+// that nothing asserts against this slice, so a new step added only here gets an
+// order and a TUI row but never runs. Moving a step shifts the values Order()
+// persists into step_results.step_order, which internal/db orders and compares
+// numerically against rows already written.
 var allSteps = []StepName{StepIntent, StepRebase, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
 
 // stepOrders maps each step to its 1-indexed position in allSteps.
@@ -117,9 +123,7 @@ func (s StepName) Order() int {
 
 // AllSteps returns all pipeline steps in execution order.
 func AllSteps() []StepName {
-	out := make([]StepName, len(allSteps))
-	copy(out, allSteps)
-	return out
+	return slices.Clone(allSteps)
 }
 
 // StepStatus represents the lifecycle state of a pipeline step.
