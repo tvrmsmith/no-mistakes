@@ -165,6 +165,46 @@ func TestRunAwaitingAgentSetAndClear(t *testing.T) {
 	}
 }
 
+func TestIncrementRunRestartCount(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	run, err := d.InsertRun(repo.ID, "feature", "abc123", "def456")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	// A fresh run has never restarted.
+	if run.RestartCount != 0 {
+		t.Fatalf("new run RestartCount = %d, want 0", run.RestartCount)
+	}
+
+	firstUpdatedAt := run.UpdatedAt
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("increment restart count: %v", err)
+	}
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.RestartCount != 1 {
+		t.Fatalf("RestartCount after one increment = %d, want 1", got.RestartCount)
+	}
+	if got.UpdatedAt < firstUpdatedAt {
+		t.Errorf("UpdatedAt = %d, want >= %d after increment", got.UpdatedAt, firstUpdatedAt)
+	}
+
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("increment restart count again: %v", err)
+	}
+	got, err = d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run after second increment: %v", err)
+	}
+	if got.RestartCount != 2 {
+		t.Fatalf("RestartCount after two increments = %d, want 2", got.RestartCount)
+	}
+}
+
 func TestRecoverStaleRunsClearsAwaitingAgent(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")

@@ -376,6 +376,53 @@ func TestOpenMigratesAgentInvocationsAndParkedMS(t *testing.T) {
 	}
 }
 
+// TestOpenMigratesRunRestartCount proves a database created before the
+// restart_count column existed gains it on reopen, and that the column is
+// usable immediately afterward.
+func TestOpenMigratesRunRestartCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// Simulate a legacy runs table by rebuilding it without the column.
+	if _, err := d.sql.Exec(`ALTER TABLE runs DROP COLUMN restart_count`); err != nil {
+		t.Fatalf("drop column: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	d, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer d.Close()
+
+	repo, err := d.InsertRepo("/tmp/repo", "https://github.com/test/repo", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	run, err := d.InsertRun(repo.ID, "b", "h", "b")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("restart_count column missing after migration: %v", err)
+	}
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("second increment failed: %v", err)
+	}
+
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.RestartCount != 2 {
+		t.Fatalf("RestartCount = %d, want 2", got.RestartCount)
+	}
+}
+
 // TestOpenMigratesSessionFidelityColumns proves a database whose
 // agent_invocations table predates the session-fidelity columns gains them on
 // reopen, and that pre-existing rows read those columns back as unknown (nil)
