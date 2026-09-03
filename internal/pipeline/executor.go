@@ -101,6 +101,33 @@ func (e *Executor) SetSkippedSteps(steps []types.StepName) {
 	}
 }
 
+// adoptRecordedSkips rebuilds the skip set from the run's own step rows. The
+// set a run started with lives only in the executor that started it: the
+// daemon calls SetSkippedSteps when it launches a run and nothing persists the
+// list, so an executor built to resume a recovered run knows nothing about it
+// and every restart decision that reads e.skips would come out differently
+// after a daemon restart than before one. The skipped step rows are the
+// durable record of the same decision, and they are what both Execute and
+// executeRecoveredRemainder already walk past, so reading them back makes a
+// resumed run refuse or drop a restart into a skipped boundary exactly as the
+// original run would have.
+func (e *Executor) adoptRecordedSkips(runID string) error {
+	results, err := e.db.GetStepsByRun(runID)
+	if err != nil {
+		return fmt.Errorf("read recovered step statuses: %w", err)
+	}
+	for _, result := range results {
+		if result.Status != types.StepStatusSkipped {
+			continue
+		}
+		if e.skips == nil {
+			e.skips = make(map[types.StepName]bool, len(results))
+		}
+		e.skips[result.StepName] = true
+	}
+	return nil
+}
+
 // NewExecutor creates a pipeline executor.
 func NewExecutor(database *db.DB, p *paths.Paths, cfg *config.Config, ag agent.Agent, steps []Step, onEvent EventFunc) *Executor {
 	if onEvent == nil {
@@ -259,13 +286,11 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 			break
 		}
 		if restartFrom != "" {
-			restartIndex, rewind, err := e.honourRestart(run, step.Name(), restartFrom, i)
+			restartIndex, err := e.honourRestart(run, step.Name(), restartFrom, i)
 			if err != nil {
 				return e.failRun(run, repo, err, ctx)
 			}
-			if rewind {
-				i = restartIndex - 1
-			}
+			i = restartIndex - 1
 		}
 	}
 
@@ -294,33 +319,43 @@ var ErrInvalidRestartBoundary = errors.New("invalid restart boundary")
 // skipped review, so it refuses on the NULL certification three steps later
 // with a message naming nothing about the skip. Failing where the contradiction
 // arises, naming both steps, beats spinning and beats deferring to that
-// refusal. honourRestart decides that; skipping Push too is the documented
-// validate-without-publishing mode and declines the restart instead.
+// refusal. declineRestart carves out the one exception; skipping Push too is
+// the documented validate-without-publishing mode, where the request is
+// dropped in executeStep and never reaches prepareRestart.
 var ErrRestartBoundarySkipped = errors.New("restart boundary step was skipped")
+
+// declineRestart reports whether the run drops a restart request outright
+// instead of acting on it, and is the only case where it does: a boundary this
+// run skips in a run that also skips Push (`--skip review --skip push`, the
+// documented validate-without-publishing mode). Nothing reaches a remote
+// there, so no certification is load-bearing and killing the run buys nothing,
+// while Document's and Lint's agent commits make the request itself routine
+// rather than exceptional.
+//
+// executeStep asks before it acts on outcome.RestartFrom, so a dropped request
+// leaves the round exactly as it would have been had the step never asked: its
+// auto-fix branch and its approval park both still run. Deciding later, after
+// the round had already broken out on the request, let an ask-user finding
+// reach a completed run with no human ever seeing its gate.
+func (e *Executor) declineRestart(run *db.Run, step, restartFrom types.StepName) bool {
+	if !e.skips[restartFrom] || !e.skips[types.StepPush] {
+		return false
+	}
+	slog.Warn("restart request not honoured because its boundary step is skipped",
+		"run", run.ID, "boundary", restartFrom, "requested_by", step,
+		"reason", "push is skipped too, so the run publishes nothing and has no certification to protect")
+	return true
+}
 
 // honourRestart resolves a step's restart request into the next index to run.
 // It is the single place a RestartFrom is acted on, so every producer passes
-// through it. rewind reports whether the caller should go back to the returned
-// index; false with a nil error means the request was declined and the run
-// carries on from where it is.
-//
-// The one declined case is a skipped boundary in a run that also skips Push
-// (`--skip review --skip push`, the documented validate-without-publishing
-// mode). Nothing reaches a remote there, so no certification is load-bearing
-// and killing the run buys nothing, while Document's and Lint's agent commits
-// make the request itself routine rather than exceptional.
-func (e *Executor) honourRestart(run *db.Run, step, restartFrom types.StepName, currentIndex int) (int, bool, error) {
+// through it.
+func (e *Executor) honourRestart(run *db.Run, step, restartFrom types.StepName, currentIndex int) (int, error) {
 	index, err := e.prepareRestart(run, restartFrom, currentIndex)
-	if errors.Is(err, ErrRestartBoundarySkipped) && e.skips[types.StepPush] {
-		slog.Warn("restart request not honoured because its boundary step is skipped",
-			"run", run.ID, "boundary", restartFrom, "requested_by", step,
-			"reason", "push is skipped too, so the run publishes nothing and has no certification to protect")
-		return 0, false, nil
-	}
 	if err != nil {
-		return 0, false, restartFailure(step, restartFrom, err)
+		return 0, restartFailure(step, restartFrom, err)
 	}
-	return index, true, nil
+	return index, nil
 }
 
 // restartFailure phrases a prepareRestart error for the run's failure message,
@@ -490,6 +525,9 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		return fmt.Errorf("recovered run has no repository")
 	}
 	if err := ValidateRecoveredRun(e.db, run, e.steps); err != nil {
+		return err
+	}
+	if err := e.adoptRecordedSkips(run.ID); err != nil {
 		return err
 	}
 	gate, err := e.recoveredGate(run.ID)
@@ -676,13 +714,11 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			return e.skipRecoveredRemainder(run, repo, gate.index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, rewind, restartErr := e.honourRestart(run, gate.step.Name(), restartFrom, gate.index)
+			restartIndex, restartErr := e.honourRestart(run, gate.step.Name(), restartFrom, gate.index)
 			if restartErr != nil {
 				return e.failRun(run, repo, restartErr, ctx)
 			}
-			if rewind {
-				return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex, true)
-			}
+			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex, true)
 		}
 		return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, gate.index+1, false)
 	default:
@@ -799,14 +835,12 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 			return e.skipRecoveredRemainder(run, repo, index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, rewind, restartErr := e.honourRestart(run, e.steps[index].Name(), restartFrom, index)
+			restartIndex, restartErr := e.honourRestart(run, e.steps[index].Name(), restartFrom, index)
 			if restartErr != nil {
 				return e.failRun(run, repo, restartErr, ctx)
 			}
-			if rewind {
-				revalidating = true
-				index = restartIndex - 1
-			}
+			revalidating = true
+			index = restartIndex - 1
 		}
 	}
 	if err := e.completeRun(run, repo); err != nil {
@@ -1117,6 +1151,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			return false, "", fmt.Errorf("step %s failed: %s", stepName, redactedErr)
 		}
 		restartFrom = outcome.RestartFrom
+		if restartFrom != "" && e.declineRestart(run, stepName, restartFrom) {
+			restartFrom = ""
+		}
 
 		if stepName == types.StepReview {
 			reviewApprovedHeadSHA = outcome.ReviewApprovedHeadSHA
@@ -1181,7 +1218,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// sets either alongside RestartFrom, and restart wins if one ever does.
 		// CI's own restart path is unaffected: it reports NeedsApproval false, so
 		// breaking here reaches the same place it always did, and the CI
-		// roundTrigger special case above still runs first.
+		// roundTrigger special case above still runs first. A request
+		// declineRestart already dropped is not a restart and never gets here,
+		// so the round it came from keeps its auto-fix branch and its gate.
 		if restartFrom != "" {
 			// Stash this round's findings so the step sees them again when the
 			// restart brings the run back to it, rather than re-deriving them.

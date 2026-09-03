@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -19,6 +20,11 @@ import (
 // routing it to auto-fix or to the ask-user gate, so a test can park a step on
 // NeedsApproval alone.
 const blockingFindingsJSON = `{"findings":[{"id":"f1","severity":"error","description":"blocking","action":"no-op"}]}`
+
+// askUserFindingsJSON is one finding that parks a step on the ask-user rule
+// alone, without NeedsApproval, so a test can prove a round's gate survives a
+// path that might otherwise walk past it.
+const askUserFindingsJSON = `{"findings":[{"id":"f2","severity":"warning","description":"needs a human","action":"ask-user"}]}`
 
 // TestExecutor_RestartTakesPrecedenceOverApprovalGate proves a step that both
 // found blocking issues and asked for a restart restarts instead of parking.
@@ -261,6 +267,168 @@ func TestExecutor_RestartIntoASkippedBoundary(t *testing.T) {
 				t.Fatalf("restart count = %d, want the unhonoured restart to write nothing", after.RestartCount)
 			}
 		})
+	}
+}
+
+// TestExecutor_RestartIntoASkippedBoundaryAfterDaemonRestart drives the same
+// guard on the recovery path. The skip set a run started with lives only in the
+// executor the daemon built for it, so a resumed run that read it from nowhere
+// would rewind into the skipped boundary, walk straight past its skipped row
+// back to the requesting step, and repeat that forever while the certification
+// stays NULL. The skipped step rows are the durable record of the same
+// decision, so the resumed run must reach the same verdict the original would
+// have.
+func TestExecutor_RestartIntoASkippedBoundaryAfterDaemonRestart(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	documentCalls := 0
+	steps := []Step{
+		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+			return &StepOutcome{}, nil
+		}},
+		newApprovalStep(types.StepTest, blockingFindingsJSON),
+		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
+			documentCalls++
+			return &StepOutcome{RestartFrom: types.StepReview}, nil
+		}},
+		&adaptiveCallStep{name: types.StepPush, fn: func(*StepContext) (*StepOutcome, error) {
+			return &StepOutcome{}, nil
+		}},
+	}
+
+	// The run the daemon lost: review skipped, test parked at its gate, the
+	// rest still pending.
+	skipped, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteStepWithStatus(skipped.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	gate, err := database.InsertStepResult(run.ID, types.StepTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.StartStep(gate.ID); err != nil {
+		t.Fatal(err)
+	}
+	findings := blockingFindingsJSON
+	if err := database.SetStepFindings(gate.ID, findings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.InsertStepRound(gate.ID, 1, "initial", &findings, nil, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatusWithDuration(gate.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []types.StepName{types.StepDocument, types.StepPush} {
+		if _, err := database.InsertStepResult(run.ID, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run, err = database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, steps, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Resume(context.Background(), run, repo, t.TempDir()) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var respondErr error
+	for time.Now().Before(deadline) {
+		if respondErr = exec.Respond(types.StepTest, types.ActionApprove, nil); respondErr == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if respondErr != nil {
+		t.Fatalf("Respond(approve) error = %v", respondErr)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Resume() error = nil, want the restart into a skipped boundary to fail the recovered run")
+		}
+		for _, want := range []string{"review", "document", "restart"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Resume() error = %v, want it to name %q", err, want)
+			}
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("resumed run never finished, so the restart is rewinding into the skipped boundary")
+	}
+	if documentCalls != 1 {
+		t.Fatalf("document ran %d times, want exactly 1", documentCalls)
+	}
+	after, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.RestartCount != 0 {
+		t.Fatalf("restart count = %d, want the refused restart to write nothing", after.RestartCount)
+	}
+}
+
+// TestExecutor_DeclinedRestartStillParksTheRoundsGate covers the round whose
+// restart the run drops. Dropping it means the run walks forward from that
+// step, so the step's own verdict is the last word on the tree it just
+// committed: an ask-user finding still has to reach a human. Completing the run
+// on it is the outcome this rules out.
+func TestExecutor_DeclinedRestartStillParksTheRoundsGate(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+
+	var order []types.StepName
+	call := func(name types.StepName, outcome *StepOutcome) Step {
+		return &adaptiveCallStep{name: name, fn: func(*StepContext) (*StepOutcome, error) {
+			order = append(order, name)
+			return outcome, nil
+		}}
+	}
+	steps := []Step{
+		call(types.StepReview, &StepOutcome{}),
+		call(types.StepTest, &StepOutcome{Findings: askUserFindingsJSON, RestartFrom: types.StepReview}),
+		call(types.StepPush, &StepOutcome{}),
+		call(types.StepPR, &StepOutcome{}),
+	}
+
+	exec := NewExecutor(database, p, nil, nil, steps, nil)
+	exec.SetSkippedSteps([]types.StepName{types.StepReview, types.StepPush})
+
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+
+	waitForStepStatus(t, database, run.ID, types.StepTest, types.StepStatusAwaitingApproval)
+	if err := exec.Respond(types.StepTest, types.ActionApprove, nil); err != nil {
+		t.Fatalf("Respond(approve) error = %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not finish after the gate was answered")
+	}
+
+	if !slices.Equal(order, []types.StepName{types.StepTest, types.StepPR}) {
+		t.Fatalf("execution order = %v, want the run to walk forward from the declined restart", order)
+	}
+	after, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.RestartCount != 0 {
+		t.Fatalf("restart count = %d, want the declined restart to write nothing", after.RestartCount)
 	}
 }
 
