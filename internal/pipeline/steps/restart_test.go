@@ -927,7 +927,16 @@ func TestStep_RestartCarryoverReachesTheEvidencePass(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
-	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+	// The Test step runs two agent passes, discovery then evidence. Only the
+	// evidence prompt is under test here, so discovery gets a valid layout
+	// rather than the findings payload, which would fail its validation and
+	// park the step before the evidence pass ever runs.
+	var evidencePrompt string
+	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if strings.Contains(opts.Prompt, "Derive this repository's independently testable units") {
+			return &agent.Result{Output: json.RawMessage(`{"units":[{"name":"repository","path":".","command":"exit 0"}],"selected":["repository"]}`)}, nil
+		}
+		evidencePrompt = opts.Prompt
 		return &agent.Result{Output: json.RawMessage(`{"findings":[],"risk_level":"low","risk_rationale":"none","risk_scope":"source-or-external","summary":"ok"}`)}, nil
 	}}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
@@ -938,11 +947,11 @@ func TestStep_RestartCarryoverReachesTheEvidencePass(t *testing.T) {
 	if _, err := (&TestStep{}).Execute(sctx); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if len(ag.calls) != 1 {
-		t.Fatalf("agent calls = %d, want 1", len(ag.calls))
+	if evidencePrompt == "" {
+		t.Fatal("the evidence pass did not run")
 	}
-	if !strings.Contains(ag.calls[0].Prompt, "carried-test-finding") {
-		t.Fatalf("evidence prompt does not carry the restarted findings:\n%s", ag.calls[0].Prompt)
+	if !strings.Contains(evidencePrompt, "carried-test-finding") {
+		t.Fatalf("evidence prompt does not carry the restarted findings:\n%s", evidencePrompt)
 	}
 }
 
