@@ -517,11 +517,14 @@ Stop the running daemon process.
 ```sh
 no-mistakes daemon stop
 no-mistakes daemon stop --force
+no-mistakes daemon stop --drain
+no-mistakes daemon stop --drain --drain-timeout 30m
 ```
 
 [Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping)
-owns the active-run guard, the scope of `--force`, and recursive
-validation-step containment.
+owns the active-run guard, the scope of `--force`, the `--drain` and
+`--drain-timeout` semantics (including what a drain waits on, what it cuts, and
+when it exits nonzero), and recursive validation-step containment.
 
 This does not remove the managed service. A later `no-mistakes`, `no-mistakes daemon start`, `init`, `attach`, `rerun`, or `update` can start the daemon again through the same service manager when available, or as a detached daemon otherwise.
 
@@ -532,12 +535,15 @@ Restart the daemon.
 ```sh
 no-mistakes daemon restart
 no-mistakes daemon restart --force
+no-mistakes daemon restart --drain
+no-mistakes daemon restart --drain --drain-timeout 30m
 ```
 
 Stops the current daemon and starts it again. This works whether the daemon is currently running or not.
+With `--drain` the daemon is restarted after the drain finishes, and any error the drain reports is returned only then.
 [Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping)
-owns the active-run guard, the scope of `--force`, and recursive
-validation-step containment.
+owns the active-run guard, the scope of `--force`, the `--drain` and
+`--drain-timeout` semantics, and recursive validation-step containment.
 
 ## no-mistakes daemon status
 
@@ -547,4 +553,4 @@ Check whether the daemon is running.
 no-mistakes daemon status
 ```
 
-Shows the PID if the daemon is running.
+Shows the PID if the daemon is running. A daemon that is stopping or that has been drained reports that instead, since it no longer accepts new runs; [Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping) owns those states.

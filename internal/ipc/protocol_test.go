@@ -505,3 +505,70 @@ func TestRPCErrorError(t *testing.T) {
 
 func ptrStr(s string) *string                      { return &s }
 func ptrStepName(s types.StepName) *types.StepName { return &s }
+
+// TestShutdownWireIsAdditiveForOldPeers pins the serialized bytes of the
+// shutdown exchange, which is the mixed-version contract itself: after an
+// upgrade a new CLI can talk to an old daemon and a new daemon to an old CLI,
+// and neither may see a field the other's version never had. The Go structs
+// decode identically with or without the omitempty tags, so only the encoded
+// bytes can hold this.
+func TestShutdownWireIsAdditiveForOldPeers(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  string
+	}{
+		{
+			name:  "a plain shutdown result is a bare ok",
+			value: ShutdownResult{OK: true},
+			want:  `{"ok":true}`,
+		},
+		{
+			name:  "a plain shutdown request carries no drain fields",
+			value: ShutdownParams{},
+			want:  `{}`,
+		},
+		{
+			name:  "a drain request carries every drain field it set",
+			value: ShutdownParams{Drain: true, DrainTimeoutMS: 1500, DrainOnly: true},
+			want:  `{"drain":true,"drain_timeout_ms":1500,"drain_only":true}`,
+		},
+		{
+			name: "a drain result carries its report",
+			value: ShutdownResult{
+				OK:          true,
+				Drained:     true,
+				Finished:    []string{"run-1"},
+				Interrupted: []DrainInterruptedRun{{RunID: "run-2", Branch: "feature", Reason: DrainInterruptedDeadline}},
+			},
+			want: `{"ok":true,"drained":true,"finished":["run-1"],"interrupted":[{"run_id":"run-2","branch":"feature","reason":"deadline"}]}`,
+		},
+		{
+			name:  "a healthy daemon reports no drained field",
+			value: HealthResult{Status: "ok"},
+			want:  `{"status":"ok"}`,
+		},
+		{
+			name:  "a daemon that is stopping on its own reports only the refusal",
+			value: HealthResult{Status: "ok", Drained: true},
+			want:  `{"status":"ok","drained":true}`,
+		},
+		{
+			name:  "a drained daemon waiting on a service manager says both",
+			value: HealthResult{Status: "ok", Drained: true, DrainedAlive: true},
+			want:  `{"status":"ok","drained":true,"drained_alive":true}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := json.Marshal(tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("json.Marshal(%T) = %s, want %s", tc.value, got, tc.want)
+			}
+		})
+	}
+}

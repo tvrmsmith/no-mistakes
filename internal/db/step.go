@@ -296,6 +296,22 @@ func (d *DB) FailStep(id string, errMsg string, durationMS int64) error {
 	return nil
 }
 
+// SkipStep marks a step skipped with a reason and duration. It is FailStep's
+// counterpart for a step whose context was cancelled for a reason the
+// pipeline classifies as expected rather than a failure - e.g. a CI monitor
+// cut short by an operator drain or by daemon-restart recovery - so its row
+// matches what db.RecoverStaleRunsExcept already records for the same case.
+func (d *DB) SkipStep(id string, reason string, durationMS int64) error {
+	_, err := d.sql.Exec(
+		`UPDATE step_results SET status = ?, error = ?, duration_ms = ?, completed_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
+		types.StepStatusSkipped, reason, durationMS, now(), now(), "step skipped: "+reason, id,
+	)
+	if err != nil {
+		return fmt.Errorf("skip step: %w", err)
+	}
+	return nil
+}
+
 // TouchStepActivity records the latest meaningful activity for an active step
 // without changing its status or current agent pid.
 func (d *DB) TouchStepActivity(id string, text string) error {

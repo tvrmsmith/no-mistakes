@@ -1032,6 +1032,11 @@ func configureIdentity(t *testing.T, dir string) {
 	mustRun(t, dir, "config", "core.autocrlf", "false")
 	mustRun(t, dir, "config", "user.email", "test@example.com")
 	mustRun(t, dir, "config", "user.name", "Test User")
+	// A developer's global commit.gpgsign would make these commits wait on a
+	// signing agent that has nothing to do with the test, and a signing agent
+	// that cannot answer turns a fast unit test into a minutes-long timeout.
+	mustRun(t, dir, "config", "commit.gpgsign", "false")
+	mustRun(t, dir, "config", "tag.gpgsign", "false")
 }
 
 func mustRun(t *testing.T, dir string, args ...string) string {

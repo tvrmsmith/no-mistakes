@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
@@ -19,11 +20,16 @@ import (
 )
 
 var (
-	daemonRun         = daemon.Run
-	daemonStartFn     = daemon.Start
-	daemonStopFn      = daemon.Stop
-	daemonIsRunningFn = daemon.IsRunning
+	daemonRun           = daemon.Run
+	daemonStartFn       = daemon.Start
+	daemonStopFn        = daemon.StopWithOptions
+	daemonIsRunningFn   = daemon.IsRunning
+	daemonDrainStatusFn = daemon.ReadDrainStatus
 )
+
+// defaultDrainTimeout is the CLI-side default for `--drain-timeout`, applied
+// when `--drain` is passed without an explicit timeout.
+const defaultDrainTimeout = 10 * time.Minute
 
 func newDaemonCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -332,40 +338,72 @@ func newDaemonStartCmd() *cobra.Command {
 
 func newDaemonStopCmd() *cobra.Command {
 	var force bool
+	var drain bool
+	var drainTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop the running daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			logLifecycleInvocation("daemon.stop", force)
+			logDrainLifecycleInvocation("daemon.stop", force, drain)
+			opts, err := drainStopOptions(drain, drainTimeout, cmd.Flags().Changed("drain-timeout"), force)
+			if err != nil {
+				return err
+			}
 			return trackCommand("daemon.stop", func() error {
 				p, err := paths.New()
 				if err != nil {
 					return err
 				}
-				parkedNotice, err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon stop", force)
+				parkedNotice, err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon stop", lifecycleGuardMode(force, drain))
 				if err != nil {
 					return err
 				}
-				if err := daemonStopFn(p); err != nil {
+				outcome, err := daemonStopFn(p, opts)
+				if err != nil {
+					// The drain can have run in full and still be joined with a
+					// later failure (a wait-for-exit timeout, say). Report what
+					// it did before the error, or the operator never learns
+					// which run was interrupted or that a PR was left open.
+					if opts.Drain {
+						printDrainOutcome(cmd.OutOrStdout(), outcome)
+					}
 					return err
 				}
-				fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
-				return nil
+				if !opts.Drain {
+					fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
+					return nil
+				}
+				if !outcome.NoDaemon {
+					// With nothing running, printDrainOutcome's own line says
+					// so; claiming a daemon stopped as well contradicts it.
+					fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
+				}
+				printDrainOutcome(cmd.OutOrStdout(), outcome)
+				return drainOutcomeError(outcome)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "stop the daemon even when pipeline runs are active")
+	cmd.Flags().BoolVar(&drain, "drain", false, "refuse new runs, let in-flight runs finish, then stop the daemon")
+	cmd.Flags().DurationVar(&drainTimeout, "drain-timeout", defaultDrainTimeout, "how long to wait for in-flight runs to finish before forcibly stopping them (only with --drain)")
 	return cmd
 }
 
 func newDaemonRestartCmd() *cobra.Command {
 	var force bool
+	var drain bool
+	var drainTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "restart",
 		Short: "Restart the daemon (stop if running, then start)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			logLifecycleInvocation("daemon.restart", force)
+			logDrainLifecycleInvocation("daemon.restart", force, drain)
+			opts, err := drainStopOptions(drain, drainTimeout, cmd.Flags().Changed("drain-timeout"), force)
+			if err != nil {
+				return err
+			}
 			return trackCommand("daemon.restart", func() error {
 				p, err := paths.New()
 				if err != nil {
@@ -374,31 +412,167 @@ func newDaemonRestartCmd() *cobra.Command {
 				if err := p.EnsureDirs(); err != nil {
 					return err
 				}
-				parkedNotice, err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon restart", force)
+				parkedNotice, err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon restart", lifecycleGuardMode(force, drain))
 				if err != nil {
 					return err
 				}
-				if err := daemonStopFn(p); err != nil {
+				outcome, err := daemonStopFn(p, opts)
+				if err != nil {
+					// Same as stop: a populated outcome rides alongside the
+					// error, and discarding it hides what the drain did.
+					if opts.Drain {
+						printDrainOutcome(cmd.OutOrStdout(), outcome)
+					}
 					return fmt.Errorf("stop daemon: %w", err)
+				}
+				if opts.Drain {
+					printDrainOutcome(cmd.OutOrStdout(), outcome)
 				}
 				if err := daemonStartFn(p); err != nil {
 					return fmt.Errorf("start daemon: %w", err)
 				}
 				fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon restarted\n", sGreen.Render("✓"))
-				return nil
+				if !opts.Drain {
+					return nil
+				}
+				return drainOutcomeError(outcome)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "restart the daemon even when pipeline runs are active")
+	cmd.Flags().BoolVar(&drain, "drain", false, "refuse new runs, let in-flight runs finish, then restart the daemon")
+	cmd.Flags().DurationVar(&drainTimeout, "drain-timeout", defaultDrainTimeout, "how long to wait for in-flight runs to finish before forcibly stopping them (only with --drain)")
 	return cmd
 }
+
+// drainStopOptions validates the --drain/--force/--drain-timeout combination
+// and builds the StopOptions to send to the daemon. --drain and --force say
+// opposite things about active runs, so combining them is rejected before
+// anything else happens. timeoutSet reports whether the caller actually typed
+// --drain-timeout, so a timeout that would be silently dropped is rejected
+// rather than accepted and ignored.
+func drainStopOptions(drain bool, drainTimeout time.Duration, timeoutSet, force bool) (daemon.StopOptions, error) {
+	if drain && force {
+		return daemon.StopOptions{}, fmt.Errorf("--drain and --force cannot be used together")
+	}
+	if !drain {
+		if timeoutSet {
+			return daemon.StopOptions{}, fmt.Errorf("--drain-timeout has no effect without --drain")
+		}
+		return daemon.StopOptions{}, nil
+	}
+	if drainTimeout <= 0 {
+		return daemon.StopOptions{}, fmt.Errorf("--drain-timeout must be positive, got %s", drainTimeout)
+	}
+	return daemon.StopOptions{Drain: true, DrainTimeout: drainTimeout}, nil
+}
+
+// printDrainOutcome reports what a drain actually did: how many runs completed
+// their own work, and one line per run the drain cut short. A CI-monitor cut is
+// worded as expected behavior (the PR is left open, CI keeps running); a
+// deadline cut is worded as work that was forcibly stopped.
+//
+// It reports on outcome.Drained, what the daemon did, never on the --drain
+// flag, what the operator asked for. Those differ in four real states: no
+// daemon was running (the only line printed, since the stop had nothing to
+// stop either), a new CLI against
+// an old daemon, which ignores ShutdownParams and cancels every run outright,
+// a second concurrent stop --drain, which loses the daemon's single-drain
+// guard and cancels nothing, and a live daemon whose socket was unreachable,
+// which is stopped by PID. The last three come back Drained: false with empty
+// lists. Reporting them as a clean drain of zero runs would claim the
+// opposite of what happened, but they did not do the same thing to the runs
+// either, so the line says only that no drain was reported rather than
+// asserting a fate for work it cannot see.
+func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
+	if outcome.NoDaemon {
+		fmt.Fprintf(w, "  %s no daemon was running\n", sGreen.Render("✓"))
+		return
+	}
+	if !outcome.Drained {
+		fmt.Fprintf(w, "  %s the daemon did not report a drain; in-flight runs may not have been allowed to finish\n", sYellow.Render("!"))
+		return
+	}
+	fmt.Fprintf(w, "  %s %d run(s) finished before the daemon stopped\n", sGreen.Render("✓"), len(outcome.Finished))
+	for _, run := range outcome.Interrupted {
+		switch run.Reason {
+		case ipc.DrainInterruptedCIMonitor:
+			fmt.Fprintf(w, "  %s %s (%s): CI monitor cut by drain, PR remains open and CI is still running\n", sDim.Render("-"), run.RunID, run.Branch)
+		case ipc.DrainInterruptedDeadline:
+			fmt.Fprintf(w, "  %s %s (%s): forcibly stopped at the drain deadline\n", sDim.Render("-"), run.RunID, run.Branch)
+		case ipc.DrainInterruptedShutdown:
+			fmt.Fprintf(w, "  %s %s (%s): drain ended early by daemon shutdown, run stopped mid-flight\n", sDim.Render("-"), run.RunID, run.Branch)
+		default:
+			fmt.Fprintf(w, "  %s %s (%s): interrupted by drain (%s)\n", sDim.Render("-"), run.RunID, run.Branch, run.Reason)
+		}
+	}
+}
+
+// drainOutcomeError is the nonzero case a drain introduces. Two states earn
+// it: the daemon never drained at all (see printDrainOutcome for the ways
+// that happens), and a run the drain forcibly stopped at its deadline. A ci_monitor interruption alone is the
+// drain's designed behavior and exits 0, and so is finding no daemon at all:
+// stopping an already-stopped daemon succeeds without --drain, and adding
+// --drain must not turn that same no-op into a failure.
+func drainOutcomeError(outcome daemon.StopOutcome) error {
+	if outcome.NoDaemon {
+		return nil
+	}
+	if !outcome.Drained {
+		return fmt.Errorf("the daemon did not drain: it may be running a version without drain support, another drain may already be in progress, or its socket may have been unreachable")
+	}
+	var ids []string
+	for _, run := range outcome.Interrupted {
+		// Both reasons mean a run the drain meant to let finish did not:
+		// the deadline expired, or the daemon shut down underneath the drain.
+		// A ci_monitor cut is the designed behavior and is excluded.
+		if run.Reason == ipc.DrainInterruptedDeadline || run.Reason == ipc.DrainInterruptedShutdown {
+			ids = append(ids, run.RunID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the drain stopped %d run(s) before they finished: %s", len(ids), strings.Join(ids, ", "))
+}
+
+// lifecycleGuardMode maps the stop/restart flags onto the guard's mode. An
+// explicit mode reads better here than a (force, drain bool) pair: the guard
+// has exactly three mutually exclusive behaviors (refuse, force through
+// loudly, wait quietly), and --drain with --force is already rejected before
+// this point, so the mapping is total and unambiguous.
+func lifecycleGuardMode(force, drain bool) daemonLifecycleGuardMode {
+	switch {
+	case force:
+		return lifecycleGuardForce
+	case drain:
+		return lifecycleGuardDrain
+	default:
+		return lifecycleGuardNormal
+	}
+}
+
+// daemonLifecycleGuardMode selects guardDestructiveDaemonLifecycle's
+// behavior when active pipeline runs exist.
+type daemonLifecycleGuardMode int
+
+const (
+	// lifecycleGuardNormal refuses the command and lists the active runs.
+	lifecycleGuardNormal daemonLifecycleGuardMode = iota
+	// lifecycleGuardForce proceeds, loudly warning that active runs may fail.
+	lifecycleGuardForce
+	// lifecycleGuardDrain proceeds quietly: the daemon refuses new runs and
+	// lets in-flight work finish, preserving gate-parked runs and cutting CI
+	// monitors.
+	lifecycleGuardDrain
+)
 
 // guardDestructiveDaemonLifecycle answers whether the action may proceed and
 // returns the preservation promise for the parked runs it would preserve. The
 // caller prints that notice only after the daemon has actually stopped: a
 // refusal or a failed stop preserves nothing.
-func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr io.Writer, action string, force bool) (string, error) {
+func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr io.Writer, action string, mode daemonLifecycleGuardMode) (string, error) {
 	// This process is the one that starts the daemon back up, so its own step
 	// plan is the layout the preserved runs will resume under. The executable
 	// can have been replaced out of band since a parked run started, so the
@@ -413,12 +587,22 @@ func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr io.Writer, action st
 		return parkedNotice, nil
 	}
 	runWord, verb := lifecycle.RunCountWords(len(blocking))
-	if force {
+	switch mode {
+	case lifecycleGuardForce:
 		fmt.Fprintf(stderr, "FORCE: %s will stop/restart the daemon while %d active pipeline %s %s in progress\n", action, len(blocking), runWord, verb)
 		fmt.Fprint(stderr, lifecycle.RunList(blocking))
 		return parkedNotice, nil
+	case lifecycleGuardDrain:
+		// Deliberately not "will wait on N runs": the drain does not wait on
+		// all of them. A run monitoring CI is cut rather than waited out, and
+		// a run parked at a gate is left to the shutdown's own preservation.
+		// This list is what is active, not a promise about each entry.
+		fmt.Fprintf(stderr, "%s will let in-flight work finish before stopping the daemon; %d active pipeline %s %s in progress (CI monitors are cut)\n", action, len(blocking), runWord, verb)
+		fmt.Fprint(stderr, lifecycle.RunList(blocking))
+		return parkedNotice, nil
+	default:
+		return "", fmt.Errorf("refusing %s because %d active pipeline %s %s in progress; pass --drain to let them finish first, or --force to stop/restart the daemon anyway\n%s", action, len(blocking), runWord, verb, lifecycle.RunList(blocking))
 	}
-	return "", fmt.Errorf("refusing %s because %d active pipeline %s %s in progress; pass --force to stop/restart the daemon anyway\n%s", action, len(blocking), runWord, verb, lifecycle.RunList(blocking))
 }
 
 func newDaemonStatusCmd() *cobra.Command {
@@ -437,10 +621,29 @@ func newDaemonStatusCmd() *cobra.Command {
 				}
 				if alive {
 					pid, _ := daemon.ReadPID(p)
+					suffix := ""
 					if pid > 0 {
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running %s\n", sGreen.Render("●"), sDim.Render(fmt.Sprintf("(pid %d)", pid)))
-					} else {
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running\n", sGreen.Render("●"))
+						suffix = " " + sDim.Render(fmt.Sprintf("(pid %d)", pid))
+					}
+					// A daemon that answers health can still be starting
+					// nothing. Say which: otherwise the only symptom an
+					// operator sees is every push being refused by a daemon
+					// this command called running. Only a drain_only whose
+					// service-manager exit never landed earns the recovery
+					// line; an ordinary stop is on its way out and needs no
+					// operator.
+					drain, drainErr := daemonDrainStatusFn(p)
+					switch {
+					case drainErr != nil:
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running%s\n", sGreen.Render("●"), suffix)
+						fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", sDim.Render(fmt.Sprintf("could not read whether it is still accepting runs: %v", drainErr)))
+					case drain.DrainedAlive:
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon drained, not accepting new runs%s\n", sYellow.Render("●"), suffix)
+						fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", sDim.Render("run `no-mistakes daemon restart` to accept runs again"))
+					case drain.RefusingNewRuns:
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopping, not accepting new runs%s\n", sYellow.Render("●"), suffix)
+					default:
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running%s\n", sGreen.Render("●"), suffix)
 					}
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon not running\n", sDim.Render("○"))

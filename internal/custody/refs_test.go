@@ -100,6 +100,11 @@ func recoveryTestRepo(t *testing.T) (string, string) {
 	gitRun(t, repo, "config", "core.autocrlf", "false")
 	gitRun(t, repo, "config", "user.name", "No Mistakes Test")
 	gitRun(t, repo, "config", "user.email", "test@example.com")
+	// A developer's global commit.gpgsign would make this commit wait on a
+	// signing agent that has nothing to do with the test, and a signing agent
+	// that cannot answer turns a fast unit test into a minutes-long timeout.
+	gitRun(t, repo, "config", "commit.gpgsign", "false")
+	gitRun(t, repo, "config", "tag.gpgsign", "false")
 	gitRun(t, repo, "commit", "--allow-empty", "-m", "base")
 	return repo, gitOutput(t, repo, "rev-parse", "HEAD")
 }

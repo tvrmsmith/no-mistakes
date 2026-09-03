@@ -967,6 +967,28 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			redactedErr := safeurl.RedactText(err.Error())
 			fmt.Fprintf(logFile, "\nerror: %s\n", redactedErr)
 			touchLogActivity("error: "+redactedErr, true)
+			// A CI monitor cut short by an operator drain or a daemon-restart
+			// recovery is expected, not a failure: db.RecoverStaleRunsExcept
+			// already lands the equivalent crash-recovery row skipped rather
+			// than failed, and this keeps a live drain consistent with that.
+			// Any other cancellation (or plain step error) still fails.
+			if stepName == types.StepCI {
+				if cause := context.Cause(sctx.Ctx); cause != nil {
+					switch cause.Error() {
+					case types.RunCIMonitorDrainedReason, types.RunCIMonitorInterruptedReason:
+						if dbErr := e.db.SkipStep(sr.ID, cause.Error(), durationMS); dbErr != nil {
+							slog.Warn("failed to mark ci step as skipped in db", "step", stepName, "error", dbErr)
+						}
+						e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusSkipped), "", cause.Error(), &durationMS)
+						// Worded as skipped, matching the row just written:
+						// the manager logs this error verbatim, and "failed"
+						// there would contradict the DB and the operator's
+						// own drain report. The step's real error is already
+						// in the step log above.
+						return false, "", fmt.Errorf("step %s skipped: %s", stepName, cause.Error())
+					}
+				}
+			}
 			if dbErr := e.db.FailStep(sr.ID, redactedErr, durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}

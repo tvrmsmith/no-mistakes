@@ -320,6 +320,11 @@ func setupTestGitRepoWithConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, 
 	gitCmd(t, workDir, "init")
 	gitCmd(t, workDir, "config", "user.email", "test@test.com")
 	gitCmd(t, workDir, "config", "user.name", "Test")
+	// A developer's global commit.gpgsign would make these commits wait on a
+	// signing agent that has nothing to do with the test, and a signing agent
+	// that cannot answer turns a fast unit test into a minutes-long timeout.
+	gitCmd(t, workDir, "config", "commit.gpgsign", "false")
+	gitCmd(t, workDir, "config", "tag.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(workDir, "test.txt"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}

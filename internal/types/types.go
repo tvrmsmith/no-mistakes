@@ -16,9 +16,11 @@ const (
 	RunCompleted RunStatus = "completed"
 	RunFailed    RunStatus = "failed"
 	RunCancelled RunStatus = "cancelled"
-	// RunCIMonitorInterrupted means the daemon restarted while babysitting an
-	// already-created PR. The PR remains intact, so this is not a pipeline
-	// failure.
+	// RunCIMonitorInterrupted means the daemon stopped babysitting an
+	// already-created PR, either because it restarted or because an operator
+	// drained it. The PR remains intact, so this is not a pipeline failure.
+	// The run's error text carries which of the two it was; see
+	// RunCIMonitorInterruptedReason and RunCIMonitorDrainedReason.
 	RunCIMonitorInterrupted RunStatus = "ci_monitor_interrupted"
 )
 
@@ -26,15 +28,23 @@ const (
 	RunCancelReasonAbortedByUser  = "cancelled: aborted by user"
 	RunCancelReasonSuperseded     = "cancelled: superseded by new push"
 	RunCIMonitorInterruptedReason = "ci monitor interrupted by daemon restart; PR remains open"
+	// RunCIMonitorDrainedReason marks a CI monitor cut short by an operator drain
+	// rather than by a crash. Same terminal status, distinguishable provenance.
+	RunCIMonitorDrainedReason = "ci monitor interrupted by daemon drain; PR remains open"
 )
 
 // TerminalStatusForReason is the single owner of the terminal status a run's
-// recorded reason implies: the two cancellation reasons record cancelled, and
-// everything else is a failure. Every path that ends an active run reads it
-// from here so an operator abort never lands as a pipeline failure.
+// recorded reason implies: the two cancellation reasons record cancelled, the
+// two CI-monitor reasons record an interrupted monitor, and everything else is
+// a failure. Every path that ends an active run reads it from here so an
+// operator abort never lands as a pipeline failure, and so a monitor the
+// daemon deliberately stopped is never reported as one.
 func TerminalStatusForReason(reason string) RunStatus {
-	if reason == RunCancelReasonAbortedByUser || reason == RunCancelReasonSuperseded {
+	switch reason {
+	case RunCancelReasonAbortedByUser, RunCancelReasonSuperseded:
 		return RunCancelled
+	case RunCIMonitorInterruptedReason, RunCIMonitorDrainedReason:
+		return RunCIMonitorInterrupted
 	}
 	return RunFailed
 }
@@ -44,7 +54,7 @@ func TerminalStatusForReason(reason string) RunStatus {
 // terminal": every enumeration of terminal statuses (branchsync custody
 // recovery, the axi drive outcome check, the e2e harness wait loop) routes
 // through it so a newly added terminal status can never drift out of sync.
-// RunCIMonitorInterrupted is terminal - the daemon restarted mid-CI-monitor
+// RunCIMonitorInterrupted is terminal - the daemon stopped mid-CI-monitor
 // and the run is never resumed (issue #361) - so it must classify exactly like
 // completed/failed/cancelled.
 func (s RunStatus) Terminal() bool {
