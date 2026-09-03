@@ -124,7 +124,14 @@ func (s *Store) prepareReplay(ctx context.Context, opts ReplayOptions) ([]Case, 
 	}
 	cases := filterCasesByPipeline(resolved, opts.Pipeline)
 	if len(cases) == 0 {
-		if opts.Pipeline != PipelineAny && len(resolved) > 0 {
+		corpus := resolved
+		if opts.Set != "all" {
+			corpus, err = s.listCases("all", false)
+			if err != nil {
+				return nil, Session{}, err
+			}
+		}
+		if filterEmptiedSet(opts.Pipeline, cases, resolved, corpus) {
 			return nil, Session{}, errors.New(filterMissMessage(opts.Set, opts.Pipeline))
 		}
 		return nil, Session{}, fmt.Errorf("case set %q is empty", opts.Set)

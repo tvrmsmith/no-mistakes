@@ -80,6 +80,8 @@ The tag comes from the run's own recorded step order, not from the version of no
 
 `eval report` groups every candidate's scores by the tag, so the two populations never merge into one headline. `--pipeline` narrows `eval run`, `eval sets`, and `eval report` to one layout; the default is `any`, which shows every layout.
 
+When a filter leaves a set with nothing in it, the surfaces say which of the two things happened. They report the tag as the cause (`case set "diversified" has no case tagged cheap-gates-first`) when the set held cases before the filter, or when no case anywhere in the corpus carries the tag you asked for. A set that was already empty for its own reason keeps that reason instead, so a corpus with no labeled gold still tells you `diversified` has no gold, and a corpus whose gold all fits in the holdout still tells you `tune` is empty. `eval run` refuses with the same sentence `eval sets` warns with.
+
 The `eval sets` self-score is a single number over the cases it scored, so when those cases hold both layouts the dashboard marks that score as not comparable and lists how the set splits. Narrowing with `--pipeline` silences the mark, because the score then covers one population, while the breakdown still lists every layout in the set. The `eval run` score box folds a session's replays the same way and carries the same mark when the session spans both layouts.
 
 This exists because, after the reorder, Review sees a tree four gates already cleared. A share of the older gold-labelled findings can no longer occur, so scoring the two populations together would read as a review-quality regression that is really a scope change.

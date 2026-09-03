@@ -474,6 +474,119 @@ func TestFilteredEmptyResultsNameTheFilterRatherThanAnEmptyCorpus(t *testing.T) 
 	}
 }
 
+// writeUnlabeledReviewEarlyCorpus seeds n unlabeled cases, all under the same
+// tag, so a filter for that same tag matches every one of them.
+func writeUnlabeledReviewEarlyCorpus(t *testing.T, store *Store, n int) {
+	t.Helper()
+	for i := 1; i <= n; i++ {
+		writeSyntheticCase(t, store, syntheticCaseSpec{
+			id: "unlabeled-" + strconv.Itoa(i), fingerprint: "repo-a", capturedAt: int64(i), changedLines: 10,
+			pipelineVersion: PipelineReviewEarly,
+		})
+	}
+}
+
+// replayRefusal returns the sentence eval run refuses an empty set with, so a
+// scenario can assert the two surfaces agree.
+func replayRefusal(t *testing.T, store *Store, set string, version PipelineVersion) string {
+	t.Helper()
+	_, _, err := Replay(context.Background(), store, ReplayOptions{
+		Set:       set,
+		Candidate: Candidate{Agent: types.AgentClaude, Model: "test"},
+		Repeats:   1,
+		Pipeline:  version,
+	})
+	if err == nil {
+		t.Fatalf("Replay(%q, %s) = nil error, want the empty set refused", set, version)
+	}
+	return err.Error()
+}
+
+// Every case in the corpus carries the tag being filtered for, so an empty set
+// is empty for its own reason. Naming the tag there is factually wrong and
+// sends the operator to change the filter when the fix is to hold out less.
+func TestFilteredTuneEmptyForItsOwnReasonKeepsTheHoldoutWarning(t *testing.T) {
+	store := openEvalStore(t)
+	id := "review-early-gold"
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: id, fingerprint: "repo-a", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            []FindingGold{{ID: id, Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: id, Severity: "error", Action: "auto-fix"}},
+		roundFindings:   findingsJSON(findingSpec{ID: id, Severity: "error", File: "main.go", Line: 1, Description: id, Action: "auto-fix"}),
+	})
+
+	summaries, err := InspectSetsForPipeline(context.Background(), store, PipelineReviewEarly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning := ""
+	for _, summary := range summaries {
+		if summary.Name == "tune" {
+			warning = summary.Warning
+		}
+	}
+	if strings.Contains(warning, "has no case tagged") {
+		t.Fatalf("tune warning = %q, want the holdout reason rather than the tag: every case IS review-early", warning)
+	}
+	if !strings.Contains(warning, "tune is empty") {
+		t.Fatalf("tune warning = %q, want the matcher-threshold warning", warning)
+	}
+	if refusal := replayRefusal(t, store, "tune", PipelineReviewEarly); !strings.Contains(refusal, `case set "tune" is empty`) {
+		t.Fatalf("Replay refusal = %q, want it to agree with the eval sets warning", refusal)
+	}
+}
+
+// Same rule for a corpus that simply has no gold: the filter matched every
+// case, so the fix is to label gold, not to pick another tag.
+func TestFilteredDiversifiedEmptyForItsOwnReasonKeepsTheMissingGoldWarning(t *testing.T) {
+	store := openEvalStore(t)
+	writeUnlabeledReviewEarlyCorpus(t, store, 5)
+
+	summaries, err := InspectSetsForPipeline(context.Background(), store, PipelineReviewEarly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning := ""
+	for _, summary := range summaries {
+		if summary.Name == "diversified" {
+			warning = summary.Warning
+		}
+	}
+	if strings.Contains(warning, "has no case tagged") {
+		t.Fatalf("diversified warning = %q, want the missing-gold reason rather than the tag: every case IS review-early", warning)
+	}
+	if !strings.Contains(warning, "no labeled gold") {
+		t.Fatalf("diversified warning = %q, want the missing-gold message", warning)
+	}
+	if refusal := replayRefusal(t, store, "diversified", PipelineReviewEarly); !strings.Contains(refusal, `case set "diversified" is empty`) {
+		t.Fatalf("Replay refusal = %q, want it to agree with the eval sets warning", refusal)
+	}
+}
+
+// The other half of the same rule: a set that was already empty before the
+// filter IS a filter miss when nothing in the corpus carries the requested tag,
+// because then the tag really is why the operator sees nothing.
+func TestEmptySetUnderATagNoCaseCarriesStillNamesTheFilter(t *testing.T) {
+	store := openEvalStore(t)
+	writeUnlabeledReviewEarlyCorpus(t, store, 5)
+
+	summaries, err := InspectSetsForPipeline(context.Background(), store, PipelineCheapGatesFirst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, summary := range summaries {
+		if summary.Name != "diversified" && summary.Name != "tune" {
+			continue
+		}
+		if !strings.Contains(summary.Warning, "has no case tagged cheap-gates-first") {
+			t.Fatalf("%s warning = %q, want it to name the filter no case carries", summary.Name, summary.Warning)
+		}
+	}
+	if refusal := replayRefusal(t, store, "diversified", PipelineCheapGatesFirst); !strings.Contains(refusal, "has no case tagged cheap-gates-first") {
+		t.Fatalf("Replay refusal = %q, want it to agree with the eval sets warning", refusal)
+	}
+}
+
 // The diversified warning must still report missing gold when no filter is
 // narrowing anything, so the filter-aware branch cannot swallow it.
 func TestUnfilteredEmptyDiversifiedStillReportsMissingGold(t *testing.T) {

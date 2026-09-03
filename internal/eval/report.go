@@ -267,6 +267,24 @@ func filterMissMessage(set string, version PipelineVersion) string {
 	return fmt.Sprintf("case set %q has no case tagged %s", set, version)
 }
 
+// filterEmptiedSet answers whether the pipeline filter is what emptied this
+// set, which is the only condition under which filterMissMessage is true.
+// filtered is the set after the filter, resolved is the same set before it, and
+// corpus is every case in the store. A set that was already empty before the
+// filter only counts when nothing in the whole corpus carries the requested
+// tag, because otherwise the set is empty for its own reason (no gold to pin,
+// every gold case already held out) and naming the tag sends the operator after
+// the wrong fix.
+func filterEmptiedSet(version PipelineVersion, filtered, resolved, corpus []Case) bool {
+	if version == PipelineAny || len(filtered) > 0 || len(corpus) == 0 {
+		return false
+	}
+	if len(resolved) > 0 {
+		return true
+	}
+	return len(filterCasesByPipeline(corpus, version)) == 0
+}
+
 // CompositionRow is one stratum bucket of a case set: the same axes the
 // diversified holdout stratifies on.
 type CompositionRow struct {
@@ -323,12 +341,7 @@ func InspectSetsForPipeline(ctx context.Context, store *Store, version PipelineV
 		cases := filterCasesByPipeline(resolved, version)
 		// A set that exists but has nothing under the requested tag is a filter
 		// miss, not an empty corpus, and the two need different fixes.
-		// The evidence is the UNFILTERED corpus, not this set's own unfiltered
-		// resolution: a set that resolves empty before any filter (diversified
-		// over a corpus with no gold, say) is still a filter miss when cases
-		// exist under another tag, and reporting "no labeled gold" there hides
-		// the filter that produced the empty view.
-		filterMissed := version != PipelineAny && len(cases) == 0 && len(allResolved) > 0
+		filterMissed := filterEmptiedSet(version, cases, resolved, allResolved)
 		summary := SetSummary{
 			Name:          name,
 			Cases:         len(cases),
