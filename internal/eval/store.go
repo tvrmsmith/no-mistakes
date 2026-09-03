@@ -259,8 +259,8 @@ func (s *Store) appendFindingGold(c Case, added []FindingGold) (Case, int, error
 // cap shrinks (the read path trims oldest pins to the current cap, at most
 // one per stratum when reconciling to 0 or a lower cap). Tune is leftover
 // labeled cases after those pins, the set matcher thresholds may be fitted on.
-func (s *Store) ListCases(set string) ([]Case, error) {
-	return s.ListCasesForPipeline(set, PipelineAny)
+func (s *Store) ListCases(ctx context.Context, set string) ([]Case, error) {
+	return s.ListCasesForPipeline(ctx, set, PipelineAny)
 }
 
 // ListCasesForPipeline narrows a resolved set to one pipeline layout.
@@ -273,20 +273,13 @@ func (s *Store) ListCases(set string) ([]Case, error) {
 // those pins are the held-out official set. A tag this build does not
 // recognize is not rejected here (a forward-compatible tag stored on disk is
 // legal); it simply matches nothing narrower than PipelineAny.
-func (s *Store) ListCasesForPipeline(set string, version PipelineVersion) ([]Case, error) {
-	cases, err := s.listCasesLocking(context.Background(), set, false)
-	if err != nil {
-		return nil, err
-	}
-	return filterCasesByPipeline(cases, version), nil
-}
-
-// listCasesForPipeline is ListCasesForPipeline for a caller that already holds
-// the corpus lock. The lock is not re-entrant (a second acquisition in this
-// process blocks on its own first one), so every in-package caller under the
-// lock resolves sets through here.
-func (s *Store) listCasesForPipeline(set string, version PipelineVersion) ([]Case, error) {
-	cases, err := s.listCases(set, false)
+//
+// The caller's context bounds the wait for the corpus lock, which the daemon's
+// own capture can hold for as long as its git object work takes. A resolution
+// is a read to its caller but a pin-table write underneath, so it queues behind
+// that pass rather than reading past it.
+func (s *Store) ListCasesForPipeline(ctx context.Context, set string, version PipelineVersion) ([]Case, error) {
+	cases, err := s.listCasesLocking(ctx, set, false)
 	if err != nil {
 		return nil, err
 	}
@@ -297,8 +290,10 @@ func (s *Store) listCasesForPipeline(set string, version PipelineVersion) ([]Cas
 // or tune WRITES the pin table (materializeDiversifiedPins), so a resolution is
 // a corpus writer and has to be serialized with the retention pass: an
 // unlocked one racing AutoCapture can re-plan the holdout between the pass
-// pinning a case and Prune reading the pins, releasing a pin the pass is
-// relying on to protect that case from eviction.
+// pinning a case and the prune reading the pins, releasing a pin the pass is
+// relying on to protect that case from eviction. The lock is not re-entrant (a
+// second acquisition in this process blocks on its own first one), so a caller
+// already holding it resolves through listCases instead.
 func (s *Store) listCasesLocking(ctx context.Context, set string, refreshDiversified bool) ([]Case, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("eval registry is closed")
@@ -403,8 +398,11 @@ func (s *Store) ensureDiversifiedPinsForRetention(maxCases int) error {
 // readableLabeledCases is labeledCases over the cases that still load, plus the
 // ids of the cases that did not. A case directory this build cannot read
 // carries no gold it can pin, so skipping it is the same answer ListCases would
-// give if the row were gone - except that retention keeps working and Prune can
-// reclaim the unreadable case itself.
+// give if the row were gone - except that retention keeps working, and an
+// unreadable case holding NO pin is itself eligible for eviction. One that
+// already holds a pin is not: planDiversified carries that pin forward on every
+// pass, which is the whole point of the carry, so the case stays protected for
+// as long as this build cannot read it.
 //
 // The unreadable ids matter because they are the one input that separates "this
 // case lost its gold" from "this build cannot read this case right now". The
@@ -443,8 +441,8 @@ func (s *Store) readableLabeledCases() ([]Case, map[string]bool, error) {
 // RefreshDiversified rebuilds the official pin set from current gold. It is
 // the most destructive pin writer in the package (it re-plans from scratch
 // with no preserved pins), so it runs under the corpus lock.
-func (s *Store) RefreshDiversified() ([]Case, error) {
-	return s.listCasesLocking(context.Background(), "diversified", true)
+func (s *Store) RefreshDiversified(ctx context.Context) ([]Case, error) {
+	return s.listCasesLocking(ctx, "diversified", true)
 }
 
 func (s *Store) listCases(set string, refreshDiversified bool) ([]Case, error) {
@@ -652,8 +650,13 @@ func (s *Store) pinCount() (int, error) {
 	return n, nil
 }
 
-// Prune bounds the corpus at maxCases by dropping the oldest cases first, and
+// prune bounds the corpus at maxCases by dropping the oldest cases first, and
 // reports how many it removed. A maxCases of 0 or less keeps every case.
+//
+// It is the second half of retain and is never reachable on its own: the caller
+// holds the corpus lock, has already swept the abandoned state, and has already
+// materialized the pins this respects. Retention has exactly one entry point,
+// so a caller cannot get the cap without the protection it promises.
 //
 // It never removes a case reserved by a replay session or one that already has
 // recorded candidate replays: those evaluations are the result of tokens
@@ -665,25 +668,6 @@ func (s *Store) pinCount() (int, error) {
 // homogeneous. When protected cases alone exceed the cap the corpus stays over
 // it rather than deleting that evidence: the cap is a retention target, not a
 // promise to reach a number. See docs/src/content/docs/reference/eval.md.
-func (s *Store) Prune(ctx context.Context, maxCases int) (int, error) {
-	if s == nil || s.db == nil {
-		return 0, fmt.Errorf("eval registry is closed")
-	}
-	unlock, err := lockCorpus(ctx, s.root)
-	if err != nil {
-		return 0, err
-	}
-	defer unlock()
-
-	if err := s.sweepAbandonedState(ctx); err != nil {
-		return 0, err
-	}
-	return s.prune(ctx, maxCases)
-}
-
-// prune is Prune's body for a caller that already holds the corpus lock and has
-// already swept the abandoned state. The lock is not re-entrant, so the whole
-// retention pass enters here rather than through Prune.
 func (s *Store) prune(ctx context.Context, maxCases int) (int, error) {
 	if maxCases <= 0 {
 		return 0, nil

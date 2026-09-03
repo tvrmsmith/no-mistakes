@@ -23,7 +23,7 @@ func TestListCasesForPipelineNarrowsToOneLayout(t *testing.T) {
 	writeSyntheticCase(t, store, syntheticCaseSpec{id: "b", fingerprint: "repo-a", capturedAt: 2, changedLines: 10, pipelineVersion: PipelineReviewEarly})
 	writeSyntheticCase(t, store, syntheticCaseSpec{id: "c", fingerprint: "repo-a", capturedAt: 3, changedLines: 10, pipelineVersion: PipelineCheapGatesFirst})
 
-	reviewEarly, err := store.ListCasesForPipeline("all", PipelineReviewEarly)
+	reviewEarly, err := store.ListCasesForPipeline(context.Background(), "all", PipelineReviewEarly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestListCasesForPipelineNarrowsToOneLayout(t *testing.T) {
 		t.Fatalf("ListCasesForPipeline(review-early) = %v, want [a b]", got)
 	}
 
-	cheapGatesFirst, err := store.ListCasesForPipeline("all", PipelineCheapGatesFirst)
+	cheapGatesFirst, err := store.ListCasesForPipeline(context.Background(), "all", PipelineCheapGatesFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,11 +39,11 @@ func TestListCasesForPipelineNarrowsToOneLayout(t *testing.T) {
 		t.Fatalf("ListCasesForPipeline(cheap-gates-first) = %v, want [c]", got)
 	}
 
-	unfiltered, err := store.ListCasesForPipeline("all", PipelineAny)
+	unfiltered, err := store.ListCasesForPipeline(context.Background(), "all", PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, err := store.ListCases("all")
+	all, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestListCasesForPipelineDoesNotDisturbTheDiversifiedPins(t *testing.T) {
 		roundFindings:   findingsJSON(findingSpec{ID: "g3", Severity: "error", File: "main.go", Line: 1, Description: "g3", Action: "auto-fix"}),
 	})
 
-	if _, err := store.ListCases("diversified"); err != nil {
+	if _, err := store.ListCases(context.Background(), "diversified"); err != nil {
 		t.Fatal(err)
 	}
 	pinsBefore := mustDiversifiedPinRows(t, store)
@@ -88,7 +88,7 @@ func TestListCasesForPipelineDoesNotDisturbTheDiversifiedPins(t *testing.T) {
 		t.Fatal("no diversified pin exists to protect, so this test would pass vacuously")
 	}
 
-	filtered, err := store.ListCasesForPipeline("diversified", PipelineCheapGatesFirst)
+	filtered, err := store.ListCasesForPipeline(context.Background(), "diversified", PipelineCheapGatesFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestListCasesForPipelineKeepsAnUnknownTagOutOfANarrowedSet(t *testing.T) {
 	store := openEvalStore(t)
 	writeSyntheticCase(t, store, syntheticCaseSpec{id: "future", fingerprint: "repo-a", capturedAt: 1, changedLines: 10, pipelineVersion: PipelineVersion("future-layout")})
 
-	narrowed, err := store.ListCasesForPipeline("all", PipelineReviewEarly)
+	narrowed, err := store.ListCasesForPipeline(context.Background(), "all", PipelineReviewEarly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestListCasesForPipelineKeepsAnUnknownTagOutOfANarrowedSet(t *testing.T) {
 		t.Fatalf("ListCasesForPipeline(review-early) = %v, want the unrecognized tag excluded", caseIDs(narrowed))
 	}
 
-	any, err := store.ListCasesForPipeline("all", PipelineAny)
+	any, err := store.ListCasesForPipeline(context.Background(), "all", PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestInspectSetsForPipelineNarrowsTheFiguresAndKeepsTheWholeBreakdown(t *tes
 		roundFindings: findingsJSON(),
 	})
 
-	summaries, err := InspectSetsForPipeline(store, PipelineCheapGatesFirst)
+	summaries, err := InspectSetsForPipeline(context.Background(), store, PipelineCheapGatesFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestInspectSetsForPipelineScopesTheScoredBreakdownToTheFilter(t *testing.T)
 		})
 	}
 
-	summaries, err := InspectSetsForPipeline(store, PipelineReviewEarly)
+	summaries, err := InspectSetsForPipeline(context.Background(), store, PipelineReviewEarly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func TestFilteredEmptyResultsNameTheFilterRatherThanAnEmptyCorpus(t *testing.T) 
 		})
 	}
 	for _, name := range []string{"diversified", "tune"} {
-		cases, err := store.ListCasesForPipeline(name, PipelineReviewEarly)
+		cases, err := store.ListCasesForPipeline(context.Background(), name, PipelineReviewEarly)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -447,7 +447,7 @@ func TestFilteredEmptyResultsNameTheFilterRatherThanAnEmptyCorpus(t *testing.T) 
 		}
 	}
 
-	summaries, err := InspectSetsForPipeline(store, PipelineCheapGatesFirst)
+	summaries, err := InspectSetsForPipeline(context.Background(), store, PipelineCheapGatesFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +602,7 @@ func TestEvalCommandsStayIdempotentWithThePipelineTag(t *testing.T) {
 		t.Fatalf("manifest pipeline_version after relabel = %q, want unchanged %q", got, PipelineCheapGatesFirst)
 	}
 
-	all, err := store.ListCases("all")
+	all, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}

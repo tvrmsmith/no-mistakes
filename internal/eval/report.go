@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -283,12 +284,12 @@ type CompositionRow struct {
 // narrowed to one pipeline layout tag (PipelineAny narrows nothing). It reads
 // only local registry rows and captured case files, so it stays instant no
 // matter how expensive a replay of the same sets would be.
-func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary, error) {
+func InspectSetsForPipeline(ctx context.Context, store *Store, version PipelineVersion) ([]SetSummary, error) {
 	sets := []string{"all", "labeled", "diversified", "tune"}
 	// Resolving a set re-reads every case directory off disk, so "all" is
 	// resolved once here, unfiltered, and both the labeled count and the loop's
 	// own "all" iteration narrow that same slice in memory.
-	allResolved, err := store.ListCasesForPipeline("all", PipelineAny)
+	allResolved, err := store.ListCasesForPipeline(ctx, "all", PipelineAny)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +314,7 @@ func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary
 		// the filtered view.
 		resolved := allResolved
 		if name != "all" {
-			r, err := store.ListCasesForPipeline(name, PipelineAny)
+			r, err := store.ListCasesForPipeline(ctx, name, PipelineAny)
 			if err != nil {
 				return nil, err
 			}
@@ -322,7 +323,12 @@ func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary
 		cases := filterCasesByPipeline(resolved, version)
 		// A set that exists but has nothing under the requested tag is a filter
 		// miss, not an empty corpus, and the two need different fixes.
-		filterMissed := version != PipelineAny && len(cases) == 0 && len(resolved) > 0
+		// The evidence is the UNFILTERED corpus, not this set's own unfiltered
+		// resolution: a set that resolves empty before any filter (diversified
+		// over a corpus with no gold, say) is still a filter miss when cases
+		// exist under another tag, and reporting "no labeled gold" there hides
+		// the filter that produced the empty view.
+		filterMissed := version != PipelineAny && len(cases) == 0 && len(allResolved) > 0
 		summary := SetSummary{
 			Name:          name,
 			Cases:         len(cases),

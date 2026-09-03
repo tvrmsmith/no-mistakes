@@ -118,12 +118,13 @@ func (s *Store) prepareReplay(ctx context.Context, opts ReplayOptions) ([]Case, 
 	}
 	defer unlock()
 
-	cases, err := s.listCasesForPipeline(opts.Set, opts.Pipeline)
+	resolved, err := s.listCases(opts.Set, false)
 	if err != nil {
 		return nil, Session{}, err
 	}
+	cases := filterCasesByPipeline(resolved, opts.Pipeline)
 	if len(cases) == 0 {
-		if opts.Pipeline != PipelineAny {
+		if opts.Pipeline != PipelineAny && len(resolved) > 0 {
 			return nil, Session{}, errors.New(filterMissMessage(opts.Set, opts.Pipeline))
 		}
 		return nil, Session{}, fmt.Errorf("case set %q is empty", opts.Set)

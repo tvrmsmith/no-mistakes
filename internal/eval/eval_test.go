@@ -75,7 +75,7 @@ func TestCaptureCreatesPortableReviewCaseWithoutRecordingRemoteURL(t *testing.T)
 		t.Fatalf("manifest did not pin replay inputs: %#v", manifest)
 	}
 
-	listed, err := store.ListCases("all")
+	listed, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestCaptureRejectsReviewRoundBeforeGateDecision(t *testing.T) {
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err == nil || !strings.Contains(err.Error(), "no recorded gate decision") {
 		t.Fatalf("capture error = %v, want missing gate decision", err)
 	}
-	cases, err := store.ListCases("all")
+	cases, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1151,7 +1151,7 @@ func renderReportAny(reports []CandidateReport) string {
 
 func mustInspectSets(t *testing.T, store *Store) []SetSummary {
 	t.Helper()
-	summaries, err := InspectSetsForPipeline(store, PipelineAny)
+	summaries, err := InspectSetsForPipeline(context.Background(), store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}

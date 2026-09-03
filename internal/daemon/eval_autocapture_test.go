@@ -136,7 +136,7 @@ func capturedCaseCount(t *testing.T, p *paths.Paths) int {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	cases, err := store.ListCases("all")
+	cases, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -129,23 +129,14 @@ func rankedStrata(gold []Case) (map[string][]Case, []string) {
 // whatever the gold slice says, because an absent case id otherwise reads as
 // "lost its gold" and releases the pin, and releasing it takes the case out of
 // Prune's protection at exactly the moment nothing else can vouch for it.
-// Carried pins still occupy their seats under the cap, so preserving one costs
-// a seat rather than growing the holdout.
+// Carried pins are ADDED to a holdout planned at the full cap rather than
+// charged against it, so they can push the pin count over eval.diversified_size
+// instead of displacing readable gold. Over the cap is already the documented
+// posture for protected cases, while a holdout whose seats are all held by
+// cases nothing can load resolves to an empty set and leaves every readable
+// gold case outside Prune's protection.
 func planDiversified(gold []Case, capSize int, existing []diversifiedPin, preserve map[string]bool) []diversifiedPin {
 	carried, plannable := splitPreservedPins(existing, preserve)
-	if len(carried) == 0 {
-		return planReadableDiversified(gold, capSize, plannable)
-	}
-	if capSize > 0 {
-		// planReadableDiversified reads 0 as "no cap, one pin per stratum", so
-		// a carried set that already fills the cap has to short-circuit here
-		// rather than hand the planner a seat count it would read as unbounded.
-		remaining := capSize - len(carried)
-		if remaining <= 0 {
-			return carried
-		}
-		return append(carried, planReadableDiversified(gold, remaining, plannable)...)
-	}
 	return append(carried, planReadableDiversified(gold, capSize, plannable)...)
 }
 

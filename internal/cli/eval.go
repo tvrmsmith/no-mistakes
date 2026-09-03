@@ -249,11 +249,11 @@ func newEvalSetsCmd() *cobra.Command {
 		}
 		defer store.Close()
 		if refresh {
-			if _, err := store.RefreshDiversified(); err != nil {
+			if _, err := store.RefreshDiversified(cmd.Context()); err != nil {
 				return err
 			}
 		}
-		summaries, err := eval.InspectSetsForPipeline(store, pipeline)
+		summaries, err := eval.InspectSetsForPipeline(cmd.Context(), store, pipeline)
 		if err != nil {
 			return err
 		}

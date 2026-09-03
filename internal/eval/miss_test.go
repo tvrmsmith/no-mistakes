@@ -72,7 +72,7 @@ func TestIngestPostPRMissWritesFalseNegativeGoldOnGreenReview(t *testing.T) {
 		t.Fatalf("ingest result = %#v, want FN gold on green round", result)
 	}
 
-	labeled, err := store.ListCases("labeled")
+	labeled, err := store.ListCases(context.Background(), "labeled")
 	if err != nil {
 		t.Fatal(err)
 	}

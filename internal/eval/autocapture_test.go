@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -108,7 +109,7 @@ func TestAutoCaptureProtectsAPinnedPreReorderCaseFromTheCap(t *testing.T) {
 	if !pinned["pre-reorder-baseline"] {
 		t.Fatalf("pin table = %v, want the pre-reorder baseline pinned before the cap ran", pinned)
 	}
-	cases, err := store.ListCases("all")
+	cases, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +274,7 @@ func TestAutoCaptureKeepsThePinOfAnAlreadyPinnedCaseThatBecomesUnreadable(t *tes
 	}
 	// Pin it the ordinary way, before anything is broken, so the test is about
 	// a live pin surviving rather than about one being created.
-	if _, err := seed.RefreshDiversified(); err != nil {
+	if _, err := seed.RefreshDiversified(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !pinnedCaseIDs(t, seed)["pinned-holdout"] {
@@ -510,11 +511,12 @@ func TestAutoCaptureUnderTheCapDoesNotPin(t *testing.T) {
 	}
 }
 
-// planReadableDiversified reads a cap of 0 as "no cap, one pin per stratum".
-// Carried pins that already fill the configured size therefore used to reach it
-// with a computed remainder of 0, which grew the official holdout past the size
-// the operator configured, one extra pin per readable stratum.
-func TestAutoCaptureKeepsTheHoldoutAtTheConfiguredSizeWhenCarriedPinsFillIt(t *testing.T) {
+// planReadableDiversified reads a cap of 0 as "no cap, one pin per stratum",
+// so the readable half of the plan must never be handed a seat count derived
+// from the carried pins. Carried pins ride ALONGSIDE a holdout planned at the
+// full configured size; they neither displace readable gold nor open the plan
+// up to one pin per stratum.
+func TestAutoCapturePlansTheReadableHoldoutAtTheConfiguredSizeBesideCarriedPins(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer sourceDB.Close()
@@ -538,7 +540,7 @@ func TestAutoCaptureKeepsTheHoldoutAtTheConfiguredSizeWhenCarriedPinsFillIt(t *t
 		})
 		dirs[id] = c.Dir
 	}
-	if _, err := seed.RefreshDiversified(); err != nil {
+	if _, err := seed.RefreshDiversified(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	carried := pinnedCaseIDs(t, seed)
@@ -571,13 +573,21 @@ func TestAutoCaptureKeepsTheHoldoutAtTheConfiguredSizeWhenCarriedPinsFillIt(t *t
 	}
 	defer store.Close()
 	pinned := pinnedCaseIDs(t, store)
-	if len(pinned) > configuredSize {
-		t.Fatalf("pin table holds %d pins (%v), want no more than the configured size of %d", len(pinned), pinned, configuredSize)
-	}
 	for id := range carried {
 		if !pinned[id] {
 			t.Fatalf("carried pin %q was released, so nothing protects its case from the cap", id)
 		}
+	}
+	readable := 0
+	for id := range pinned {
+		if !carried[id] {
+			readable++
+		}
+	}
+	// Four readable gold strata remain (three synthetic plus the captured run),
+	// so a plan that fell through to the uncapped sentinel would pin all four.
+	if readable != configuredSize {
+		t.Fatalf("pin table holds %d readable pins (%v), want the configured size of %d planned at full cap", readable, pinned, configuredSize)
 	}
 }
 
@@ -627,6 +637,8 @@ func TestAutoCaptureKeepsAPinnedCaseThroughARefreshRacingThePass(t *testing.T) {
 	racer.SetDiversifiedSize(1)
 	done := make(chan struct{})
 	stopped := make(chan struct{})
+	var replans atomic.Int64
+	racerErr := make(chan error, 1)
 	go func() {
 		defer close(stopped)
 		for {
@@ -635,9 +647,14 @@ func TestAutoCaptureKeepsAPinnedCaseThroughARefreshRacingThePass(t *testing.T) {
 				return
 			default:
 			}
-			if _, err := racer.RefreshDiversified(); err != nil {
+			if _, err := racer.RefreshDiversified(context.Background()); err != nil {
+				select {
+				case racerErr <- err:
+				default:
+				}
 				return
 			}
+			replans.Add(1)
 			// Yield between replans, so the refresher contends with the pass
 			// rather than starving it out of the corpus lock entirely.
 			time.Sleep(time.Millisecond)
@@ -649,6 +666,16 @@ func TestAutoCaptureKeepsAPinnedCaseThroughARefreshRacingThePass(t *testing.T) {
 	<-stopped
 	if err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case racerErr := <-racerErr:
+		t.Fatalf("the racing refresher failed with %v, so the pass never had a contender", racerErr)
+	default:
+	}
+	// Without a replan actually landing, this test degrades into "AutoCapture
+	// ran alone" while still claiming to prove serialization.
+	if n := replans.Load(); n == 0 {
+		t.Fatal("the racing refresher completed no replan, so nothing contended with the retention pass")
 	}
 	if result.PinWarning != "" {
 		t.Fatalf("AutoCapture pin warning = %q, want the pins materialized", result.PinWarning)
@@ -685,7 +712,7 @@ func TestRefreshDiversifiedWaitsForTheCorpusLock(t *testing.T) {
 	}
 	refreshed := make(chan error, 1)
 	go func() {
-		_, err := store.RefreshDiversified()
+		_, err := store.RefreshDiversified(context.Background())
 		refreshed <- err
 	}()
 	select {
@@ -706,5 +733,170 @@ func TestRefreshDiversifiedWaitsForTheCorpusLock(t *testing.T) {
 	}
 	if !pinnedCaseIDs(t, store)["gold-1"] {
 		t.Fatal("RefreshDiversified wrote no pin, so the serialization it waited for protected nothing")
+	}
+}
+
+// ListCases resolves diversified and tune by WRITING the pin table, so the
+// CLI's own read path is the same class of corpus writer as RefreshDiversified
+// and has to queue behind the retention pass rather than read past it.
+func TestListCasesDiversifiedWaitsForTheCorpusLock(t *testing.T) {
+	ctx := context.Background()
+	store := openEvalStore(t)
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: "gold-1", fingerprint: "repo-gold", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("gold-1"),
+		roundFindings:   goldRound("gold-1"),
+	})
+
+	unlock, err := lockCorpus(ctx, store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type resolution struct {
+		cases []Case
+		err   error
+	}
+	resolved := make(chan resolution, 1)
+	go func() {
+		cases, err := store.ListCases(ctx, "diversified")
+		resolved <- resolution{cases: cases, err: err}
+	}()
+	select {
+	case got := <-resolved:
+		unlock()
+		t.Fatalf("ListCases(diversified) resolved %d case(s) (err = %v) while another corpus writer held the lock", len(got.cases), got.err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	unlock()
+	select {
+	case got := <-resolved:
+		if got.err != nil {
+			t.Fatalf("ListCases(diversified) error after the lock was released = %v", got.err)
+		}
+		if len(got.cases) != 1 || got.cases[0].ID != "gold-1" {
+			t.Fatalf("ListCases(diversified) = %v, want the one gold case", caseIDs(got.cases))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ListCases(diversified) never completed after the corpus lock was released")
+	}
+	if !pinnedCaseIDs(t, store)["gold-1"] {
+		t.Fatal("ListCases(diversified) wrote no pin, so the serialization it waited for protected nothing")
+	}
+}
+
+// A carried pin costs no seat. When the cases holding every configured seat
+// become unreadable, the holdout used to consist only of them: an official set
+// no eval command can load, with every readable gold case left outside the
+// prune's protection as the oldest unevaluated rows.
+func TestAutoCaptureStillPinsReadableGoldWhenCarriedPinsFillTheConfiguredSize(t *testing.T) {
+	ctx := context.Background()
+	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+	defer sourceDB.Close()
+
+	seed, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.SetDiversifiedSize(1)
+	// The one seat goes to the oldest gold case, which then becomes unreadable.
+	unreadable := writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "gold-unreadable", fingerprint: "repo-a", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("gold-unreadable"),
+		roundFindings:   goldRound("gold-unreadable"),
+	})
+	if _, err := seed.RefreshDiversified(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !pinnedCaseIDs(t, seed)["gold-unreadable"] {
+		t.Fatal("setup did not pin the oldest gold case into the single seat")
+	}
+	writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "gold-readable", fingerprint: "repo-b", capturedAt: 2, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("gold-readable"),
+		roundFindings:   goldRound("gold-readable"),
+	})
+	// A stratum sibling, so the single readable seat lands on repo-b rather
+	// than on the case this run itself captures.
+	writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "gold-readable-sibling", fingerprint: "repo-b", capturedAt: 3, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("gold-readable-sibling"),
+		roundFindings:   goldRound("gold-readable-sibling"),
+	})
+	for i := 1; i <= 2; i++ {
+		writeSyntheticCase(t, seed, syntheticCaseSpec{
+			id: "filler-" + strconv.Itoa(i), fingerprint: "repo-c", capturedAt: int64(2 + i), changedLines: 10,
+			pipelineVersion: PipelineReviewEarly,
+			roundFindings:   findingsJSON(findingSpec{ID: "f" + strconv.Itoa(i), Severity: "error", File: "main.go", Line: 1, Description: "filler", Action: "ask-user"}),
+		})
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(unreadable.Dir, "manifest.json")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 3, DiversifiedSize: 1})
+	if err != nil {
+		t.Fatalf("AutoCapture error = %v, want the unreadable pinned case tolerated", err)
+	}
+	if result.PinWarning != "" {
+		t.Fatalf("AutoCapture pin warning = %q, want the pins materialized", result.PinWarning)
+	}
+
+	store, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	store.SetDiversifiedSize(1)
+	pinned := pinnedCaseIDs(t, store)
+	if !pinned["gold-unreadable"] {
+		t.Fatal("the carried pin was released, so nothing protects the unreadable case")
+	}
+	if !pinned["gold-readable"] {
+		t.Fatalf("pin table = %v, want the readable gold case pinned alongside the carried pin", pinned)
+	}
+	if !caseRowExists(t, store, "gold-readable") {
+		t.Fatal("the readable gold case was evicted, so the carried pin took its protection")
+	}
+	// The holdout has to hold evidence somebody can actually replay. Every pin
+	// resting on a case this build cannot load is a set that resolves to
+	// nothing, which is why the carried pin never takes the readable seat.
+	readable, _, err := store.readableLabeledCases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadable := 0
+	for _, c := range readable {
+		if pinned[c.ID] {
+			loadable++
+		}
+	}
+	if loadable == 0 {
+		t.Fatalf("pin table = %v, want at least one pinned case this build can load", pinned)
+	}
+
+	// ListCases stays strict for every caller other than retention, so the
+	// official holdout only resolves once the corrupt directory loads again.
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	holdout, err := store.ListCases(ctx, "diversified")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(holdout) == 0 {
+		t.Fatal("diversified resolved empty, so the official holdout holds only cases nothing can load")
 	}
 }

@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,14 +29,14 @@ func TestListCasesDiversified_GoldOnlyEmptyWarns(t *testing.T) {
 		roundFindings: findingsJSON(findingSpec{ID: "f1", Severity: "error", File: "main.go", Line: 3, Description: "bug", Action: "ask-user"}),
 	})
 
-	got, err := store.ListCases("diversified")
+	got, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("diversified = %#v, want empty when the corpus has no gold", got)
 	}
-	all, err := store.ListCases("all")
+	all, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestListCasesDiversified_PrefersGoldAndPins(t *testing.T) {
 		roundFindings: findingsJSON(findingSpec{ID: "c", Severity: "error", File: "main.go", Line: 3, Description: "three", Action: "auto-fix"}),
 	})
 
-	first, err := store.ListCases("diversified")
+	first, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestListCasesDiversified_PrefersGoldAndPins(t *testing.T) {
 			findingSpec{ID: "f", Severity: "error", File: "main.go", Line: 3, Description: "f", Action: "auto-fix"},
 		),
 	})
-	pinned, err := store.ListCases("diversified")
+	pinned, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestListCasesDiversified_PrefersGoldAndPins(t *testing.T) {
 		t.Fatalf("pinned diversified = %v, want the original pin (anti-churn), not %s", ids, richerStill.ID)
 	}
 
-	refreshed, err := store.RefreshDiversified()
+	refreshed, err := store.RefreshDiversified(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestListCasesDiversified_HamiltonCap(t *testing.T) {
 	writeGoldStratum(t, store, "repo-mid", "warning", 3, 20)
 	writeGoldStratum(t, store, "repo-light", "info", 1, 30)
 
-	got, err := store.ListCases("diversified")
+	got, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +141,7 @@ func TestListCasesDiversified_HamiltonCap(t *testing.T) {
 	if counts["repo-heavy"] != 2 || counts["repo-mid"] != 1 || counts["repo-light"] != 0 || len(got) != 3 {
 		t.Fatalf("hamilton allocation = %#v (n=%d), want 2/1/0 over the three strata", counts, len(got))
 	}
-	again, err := store.ListCases("diversified")
+	again, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestListCasesDiversified_SeverityAndFindingTypeAxes(t *testing.T) {
 		roundFindings: findingsJSON(findingSpec{ID: "p1", Severity: "info", File: "main.go", Line: 3, Description: "noise", Action: "ask-user"}),
 	})
 
-	got, err := store.ListCases("diversified")
+	got, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +200,7 @@ func TestListCasesDiversified_LoweringCapTakesEffectWithoutRefresh(t *testing.T)
 	writeGoldStratum(t, store, "repo-b", "error", 1, 20)
 	writeGoldStratum(t, store, "repo-c", "error", 1, 30)
 
-	first, err := store.ListCases("diversified")
+	first, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +209,7 @@ func TestListCasesDiversified_LoweringCapTakesEffectWithoutRefresh(t *testing.T)
 	}
 
 	store.SetDiversifiedSize(1)
-	got, err := store.ListCases("diversified")
+	got, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,11 +224,11 @@ func TestListCasesDiversified_RefreshHonorsLoweredCap(t *testing.T) {
 	writeGoldStratum(t, store, "repo-a", "error", 1, 10)
 	writeGoldStratum(t, store, "repo-b", "error", 1, 20)
 	writeGoldStratum(t, store, "repo-c", "error", 1, 30)
-	if _, err := store.ListCases("diversified"); err != nil {
+	if _, err := store.ListCases(context.Background(), "diversified"); err != nil {
 		t.Fatal(err)
 	}
 	store.SetDiversifiedSize(1)
-	got, err := store.RefreshDiversified()
+	got, err := store.RefreshDiversified(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +244,7 @@ func TestListCasesDiversified_ZeroCapKeepsAtMostOneCasePerStratum(t *testing.T) 
 	writeGoldStratum(t, store, "repo-mid", "warning", 3, 20)
 	writeGoldStratum(t, store, "repo-light", "info", 1, 30)
 
-	first, err := store.ListCases("diversified")
+	first, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func TestListCasesDiversified_ZeroCapKeepsAtMostOneCasePerStratum(t *testing.T) 
 	}
 
 	store.SetDiversifiedSize(0)
-	got, err := store.ListCases("diversified")
+	got, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,12 +278,12 @@ func TestListCasesDiversified_LowCapKeepsAtMostOneCasePerStratum(t *testing.T) {
 	writeGoldStratum(t, store, "repo-heavy", "error", 5, 10)
 	writeGoldStratum(t, store, "repo-mid", "warning", 3, 20)
 	writeGoldStratum(t, store, "repo-light", "info", 1, 30)
-	if _, err := store.ListCases("diversified"); err != nil {
+	if _, err := store.ListCases(context.Background(), "diversified"); err != nil {
 		t.Fatal(err)
 	}
 
 	store.SetDiversifiedSize(2)
-	got, err := store.ListCases("diversified")
+	got, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestListCasesDiversified_LowerCapFillDoesNotOverAllocateOneStratum(t *testi
 	writeGoldStratum(t, store, "repo-b", "error", 10, 20)
 	writeGoldStratum(t, store, "repo-c", "info", 2, 30)
 
-	first, err := store.ListCases("diversified")
+	first, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +321,7 @@ func TestListCasesDiversified_LowerCapFillDoesNotOverAllocateOneStratum(t *testi
 	}
 
 	store.SetDiversifiedSize(5)
-	got, err := store.ListCases("diversified")
+	got, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,14 +361,14 @@ func TestListCasesTune_IsLabeledMinusPins(t *testing.T) {
 		roundFindings: findingsJSON(findingSpec{ID: "c", Severity: "error", File: "main.go", Line: 1, Description: "c", Action: "ask-user"}),
 	})
 
-	div, err := store.ListCases("diversified")
+	div, err := store.ListCases(context.Background(), "diversified")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ids := caseIDs(div); len(ids) != 1 || ids[0] != pinned.ID {
 		t.Fatalf("diversified = %v, want the official pin %s", ids, pinned.ID)
 	}
-	tune, err := store.ListCases("tune")
+	tune, err := store.ListCases(context.Background(), "tune")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,10 +392,10 @@ func TestListCasesTune_WarnsWhenEmptyBecausePinsAreTheWholeLabeledSet(t *testing
 		},
 		roundFindings: findingsJSON(findingSpec{ID: "a", Severity: "error", File: "main.go", Line: 1, Description: "a", Action: "auto-fix"}),
 	})
-	if _, err := store.ListCases("diversified"); err != nil {
+	if _, err := store.ListCases(context.Background(), "diversified"); err != nil {
 		t.Fatal(err)
 	}
-	tune, err := store.ListCases("tune")
+	tune, err := store.ListCases(context.Background(), "tune")
 	if err != nil {
 		t.Fatal(err)
 	}
