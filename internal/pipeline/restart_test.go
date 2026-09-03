@@ -190,6 +190,52 @@ func TestExecutor_RestartCompletesNormallyWhenTheBoundaryIsValid(t *testing.T) {
 // the step's fault; a database write that fails is not, and reporting both as
 // "step X requested invalid restart" sends whoever reads the run at a step that
 // did nothing wrong.
+// TestExecutor_RestartIntoASkippedBoundaryFailsNamingBothSteps covers the run
+// whose operator skipped the boundary step. Rewinding there re-marks it skipped
+// and walks straight back to the requesting step, repeating every agent pass in
+// between while nothing revalidates, and the run is doomed regardless because
+// push refuses on the certification the skipped review never wrote.
+func TestExecutor_RestartIntoASkippedBoundaryFailsNamingBothSteps(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	var order []types.StepName
+	call := func(name types.StepName, outcome *StepOutcome) Step {
+		return &adaptiveCallStep{name: name, fn: func(*StepContext) (*StepOutcome, error) {
+			order = append(order, name)
+			return outcome, nil
+		}}
+	}
+	steps := []Step{
+		call(types.StepReview, &StepOutcome{}),
+		call(types.StepTest, &StepOutcome{RestartFrom: types.StepReview}),
+		call(types.StepPush, &StepOutcome{}),
+	}
+
+	exec := NewExecutor(database, p, nil, nil, steps, nil)
+	exec.SetSkippedSteps([]types.StepName{types.StepReview})
+
+	err := exec.Execute(context.Background(), run, repo, workDir)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want the restart into a skipped boundary to fail the run")
+	}
+	for _, want := range []string{"review", "test", "restart"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Execute() error = %v, want it to name %q", err, want)
+		}
+	}
+	if !slices.Equal(order, []types.StepName{types.StepTest}) {
+		t.Fatalf("execution order = %v, want the run to stop at the restart rather than re-enter or walk on unreviewed", order)
+	}
+	after, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.RestartCount != 0 {
+		t.Fatalf("restart count = %d, want the rejected restart to write nothing", after.RestartCount)
+	}
+}
+
 // Each of prepareRestart's three writes gets a case, because each one failing
 // silently breaks the restart a different way: an unreset step_results replays
 // the run from a step already marked completed, a swallowed

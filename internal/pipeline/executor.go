@@ -282,11 +282,26 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 // wrong. restartFailure keeps that distinction at the call sites.
 var ErrInvalidRestartBoundary = errors.New("invalid restart boundary")
 
+// ErrRestartBoundarySkipped is what prepareRestart returns when the boundary is
+// a step this run was told to skip. Rewinding to it would re-mark it skipped
+// and walk straight back to the requesting step, re-running every agent pass
+// between them while nothing revalidates, and the loop would only end when two
+// consecutive rounds happened to produce a byte-identical tree.
+//
+// Such a run is already doomed: push has no exception for a skipped review, so
+// it refuses on the NULL certification three steps later with a message naming
+// nothing about the skip. Failing where the contradiction arises, naming both
+// steps, beats spinning and beats deferring to that refusal.
+var ErrRestartBoundarySkipped = errors.New("restart boundary step was skipped")
+
 // restartFailure phrases a prepareRestart error for the run's failure message,
 // naming the step only when the step is what was wrong.
 func restartFailure(step types.StepName, restartFrom types.StepName, err error) error {
 	if errors.Is(err, ErrInvalidRestartBoundary) {
 		return fmt.Errorf("step %s requested invalid restart from %s", step, restartFrom)
+	}
+	if errors.Is(err, ErrRestartBoundarySkipped) {
+		return fmt.Errorf("cannot restart validation from %s requested by step %s: this run skips %s, so re-entering it would validate nothing", restartFrom, step, restartFrom)
 	}
 	return fmt.Errorf("restart from %s requested by step %s: %w", restartFrom, step, err)
 }
@@ -301,7 +316,9 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 }
 
 // prepareRestart rewinds the run to a boundary step and revokes the authority
-// the pre-restart passes had accumulated.
+// the pre-restart passes had accumulated. It is the single place a restart is
+// honoured, so every RestartFrom producer passes through its two rejections:
+// ErrInvalidRestartBoundary and ErrRestartBoundarySkipped.
 //
 // Every write here is fail-closed. Warning and continuing would resume a run
 // whose review approval still covers a head the re-review has not reached, and
@@ -320,6 +337,9 @@ func (e *Executor) prepareRestart(run *db.Run, name types.StepName, currentIndex
 	index, err := e.stepIndex(name)
 	if err != nil || index >= currentIndex {
 		return 0, ErrInvalidRestartBoundary
+	}
+	if e.skips[name] {
+		return 0, ErrRestartBoundarySkipped
 	}
 	if err := e.db.ResetStepsFrom(run.ID, e.steps[index].Name().Order()); err != nil {
 		return 0, err

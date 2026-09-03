@@ -353,8 +353,12 @@ func runValidationStep(
 // it anyway (approve, the existing certification stands and the run walks on),
 // try one more re-check (fix, the step runs again and a genuinely different
 // tree restarts normally), or abort. The finding is ask-user rather than the
-// residue gate's no-op, because a repeating tree is not something an
-// unattended --yes run should wave through.
+// residue gate's no-op so that an unattended --yes run answers fix and buys one
+// more re-check instead of shipping the repeated tree on sight. It does not
+// stop such a run: gateResolution (internal/cli/axi_drive.go) converges rather
+// than fixing until clean, so it approves a gate raised inside a fix round, or
+// one whose step it already answered with fix once. A churn park therefore
+// survives at most one extra round unattended and is then approved.
 //
 // The round's auto-fix eligibility is withdrawn with it. The executor's
 // auto-fix branch runs before the approval park, so a round left AutoFixable
@@ -551,10 +555,14 @@ func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName, f
 		}
 	}
 	if len(untracked) > 0 {
-		// -ffd, not -f: git status reports an untracked directory as a single
-		// entry and an embedded repository as one too, and plain clean exits 0
-		// while removing neither. The force flags stay harmless because the
-		// pathspec is the recorded list, so nothing outside it is reachable.
+		// -ffd, not -f: git.UntrackedFiles lists with --untracked-files=all, so
+		// an ordinary untracked directory arrives already expanded into its
+		// individual files. The one entry that stays a directory is an embedded
+		// repository, which needs -d to be treated as a directory at all and
+		// the second -f to be removed rather than skipped; plain clean exits 0
+		// having removed it neither way. The force flags stay harmless because
+		// the pathspec is the recorded list, so nothing outside it is
+		// reachable.
 		args := append([]string{"clean", "-ffd", "--"}, literalPathspecs(untracked)...)
 		if _, err := git.Run(sctx.Ctx, sctx.WorkDir, args...); err != nil {
 			return fmt.Errorf("remove untracked files after %s: %w", name, err)
