@@ -295,10 +295,13 @@ func runValidationStep(
 	}
 
 	if pipeline.RestartBoundary.Order() >= name.Order() {
-		// The boundary step cannot restart into itself, and it has nothing to
-		// revoke either: the certifying step parks rather than committing at
-		// its exit, so a commit that reaches here carried no certification of
-		// its own and cannot have left one covering an ancestor.
+		// The boundary step cannot restart into itself, and it has no stale
+		// certification to revoke either. A Review fix round does reach here
+		// having committed and certified, but review.go captures
+		// reviewTargetSHA from sctx.Run.HeadSHA AFTER commitAgentFixes has
+		// run, so the SHA it records is the head that commit produced and can
+		// never be an ancestor of it. Moving that capture above the fix-mode
+		// commit is what would break this.
 		return outcome, nil
 	}
 	if !agentAuthored || outcome.RestartFrom != "" {
@@ -419,10 +422,13 @@ func parseStepFindings(sctx *pipeline.StepContext, name types.StepName, raw stri
 // no-op, so an unattended --yes run discards and reports instead of bouncing
 // through review with nobody watching.
 //
-// The round's auto-fix eligibility is withdrawn here too. A certifying round
-// can carry ordinary auto-fix findings of its own, and the executor's auto-fix
-// branch runs before the approval park, so leaving it set spends a fix round
-// and drops the residue gate the certification depends on.
+// The round's auto-fix eligibility is withdrawn here too, and not because an
+// auto-fix round would reach a bad tree: it would commit the residue through
+// executeFixMode and re-certify the head that results, which is what the
+// gate's own fix answer does. It is withdrawn because that happens with nobody
+// told. Making a certifying step that left files behind visible to a human is
+// the whole purpose of this gate, and an unattended round that quietly tidies
+// up and re-certifies is exactly the outcome it exists to prevent.
 func residueGateOutcome(sctx *pipeline.StepContext, name types.StepName, outcome *pipeline.StepOutcome) (*pipeline.StepOutcome, error) {
 	modified, untracked, err := worktreeResidue(sctx.Ctx, sctx.WorkDir)
 	if err != nil {
@@ -545,13 +551,49 @@ func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName, f
 		}
 	}
 	if len(untracked) > 0 {
-		args := append([]string{"clean", "-f", "--"}, untracked...)
+		// -ffd, not -f: git status reports an untracked directory as a single
+		// entry and an embedded repository as one too, and plain clean exits 0
+		// while removing neither. The force flags stay harmless because the
+		// pathspec is the recorded list, so nothing outside it is reachable.
+		args := append([]string{"clean", "-ffd", "--"}, untracked...)
 		if _, err := git.Run(sctx.Ctx, sctx.WorkDir, args...); err != nil {
 			return fmt.Errorf("remove untracked files after %s: %w", name, err)
 		}
 	}
+	if err := assertResidueGone(sctx, name, modified, untracked); err != nil {
+		return err
+	}
 	sctx.Log(fmt.Sprintf("discarded %s residue; the existing certification stands: restored %s, removed %s",
 		name, describePaths(modified), describePaths(untracked)))
+	return nil
+}
+
+// assertResidueGone re-reads the worktree and fails when a path the park
+// recorded is still there. Every git command above can report success while
+// removing nothing, and a silent no-op here is the worst outcome the gate has:
+// the executor completes the step, and the survivor rides into a later
+// validation step's exit commit that no certification ever judged.
+func assertResidueGone(sctx *pipeline.StepContext, name types.StepName, modified, untracked []string) error {
+	stillModified, stillUntracked, err := worktreeResidue(sctx.Ctx, sctx.WorkDir)
+	if err != nil {
+		return fmt.Errorf("re-read worktree after discarding %s residue: %w", name, err)
+	}
+	present := make(map[string]bool, len(stillModified)+len(stillUntracked))
+	for _, path := range stillModified {
+		present[path] = true
+	}
+	for _, path := range stillUntracked {
+		present[path] = true
+	}
+	var survivors []string
+	for _, path := range append(append([]string{}, modified...), untracked...) {
+		if present[path] {
+			survivors = append(survivors, path)
+		}
+	}
+	if len(survivors) > 0 {
+		return fmt.Errorf("discarding %s residue left %s in the worktree", name, describePaths(survivors))
+	}
 	return nil
 }
 

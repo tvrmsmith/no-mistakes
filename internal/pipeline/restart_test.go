@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -189,71 +190,101 @@ func TestExecutor_RestartCompletesNormallyWhenTheBoundaryIsValid(t *testing.T) {
 // the step's fault; a database write that fails is not, and reporting both as
 // "step X requested invalid restart" sends whoever reads the run at a step that
 // did nothing wrong.
-// The write it injects is the revocation itself, the one whose failure matters:
-// a swallowed UpdateRunHeadSHAForRevalidation leaves review_approved_head_sha
-// covering a head the re-review never reached, and push accepts a certified
-// ancestor.
+// Each of prepareRestart's three writes gets a case, because each one failing
+// silently breaks the restart a different way: an unreset step_results replays
+// the run from a step already marked completed, a swallowed
+// UpdateRunHeadSHAForRevalidation leaves review_approved_head_sha covering a
+// head the re-review never reached so push accepts a certified ancestor, and a
+// lost restart_count hides a thrashing run from the soft-cap warning and from
+// axi status.
 func TestExecutor_PrepareRestartWriteFailureIsNotReportedAsAStepBug(t *testing.T) {
-	database, p, run, repo := setupTest(t)
-	workDir := t.TempDir()
-
-	if err := database.UpdateRunReviewApprovedHeadSHA(run.ID, run.HeadSHA); err != nil {
-		t.Fatalf("UpdateRunReviewApprovedHeadSHA() error = %v", err)
-	}
-	seeded, err := database.GetRun(run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run.ReviewApprovedHeadSHA = seeded.ReviewApprovedHeadSHA
-
-	refuseRevalidationWrite(t, p.DB())
-
-	reachedPush := false
-	steps := []Step{
-		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
-			return &StepOutcome{}, nil
-		}},
-		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
-			return &StepOutcome{RestartFrom: types.StepReview}, nil
-		}},
-		&adaptiveCallStep{name: types.StepPush, fn: func(*StepContext) (*StepOutcome, error) {
-			reachedPush = true
-			return &StepOutcome{}, nil
-		}},
+	tests := []struct {
+		name    string
+		on      string
+		message string
+	}{
+		{
+			name:    "step_results reset",
+			on:      "UPDATE OF status ON step_results WHEN NEW.status = 'pending'",
+			message: "step reset refused",
+		},
+		{
+			name:    "review authority revocation",
+			on:      "UPDATE OF head_sha ON runs",
+			message: "revalidation write refused",
+		},
+		{
+			name:    "restart count",
+			on:      "UPDATE OF restart_count ON runs",
+			message: "restart count write refused",
+		},
 	}
 
-	exec := NewExecutor(database, p, nil, nil, steps, nil)
-	err = exec.Execute(context.Background(), run, repo, workDir)
-	if err == nil {
-		t.Fatal("Execute() error = nil, want the failed revocation to fail the run")
-	}
-	if strings.Contains(err.Error(), "invalid restart") {
-		t.Fatalf("Execute() error = %v, want a write failure reported as itself, not as a step bug", err)
-	}
-	if !strings.Contains(err.Error(), "restart from review requested by step document") {
-		t.Fatalf("Execute() error = %v, want the restart failure wrapper naming the requesting step", err)
-	}
-	if !strings.Contains(err.Error(), "revalidation write refused") {
-		t.Fatalf("Execute() error = %v, want it to carry the underlying write failure", err)
-	}
-	if reachedPush {
-		t.Fatal("the run walked on to push while a certification the re-review never renewed still stood")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, p, run, repo := setupTest(t)
+			workDir := t.TempDir()
+
+			if err := database.UpdateRunReviewApprovedHeadSHA(run.ID, run.HeadSHA); err != nil {
+				t.Fatalf("UpdateRunReviewApprovedHeadSHA() error = %v", err)
+			}
+			seeded, err := database.GetRun(run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run.ReviewApprovedHeadSHA = seeded.ReviewApprovedHeadSHA
+
+			refusePrepareRestartWrite(t, p.DB(), tt.on, tt.message)
+
+			reachedPush := false
+			steps := []Step{
+				&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+					return &StepOutcome{}, nil
+				}},
+				&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
+					return &StepOutcome{RestartFrom: types.StepReview}, nil
+				}},
+				&adaptiveCallStep{name: types.StepPush, fn: func(*StepContext) (*StepOutcome, error) {
+					reachedPush = true
+					return &StepOutcome{}, nil
+				}},
+			}
+
+			exec := NewExecutor(database, p, nil, nil, steps, nil)
+			err = exec.Execute(context.Background(), run, repo, workDir)
+			if err == nil {
+				t.Fatal("Execute() error = nil, want the failed write to fail the run")
+			}
+			if strings.Contains(err.Error(), "invalid restart") {
+				t.Fatalf("Execute() error = %v, want a write failure reported as itself, not as a step bug", err)
+			}
+			if !strings.Contains(err.Error(), "restart from review requested by step document") {
+				t.Fatalf("Execute() error = %v, want the restart failure wrapper naming the requesting step", err)
+			}
+			if !strings.Contains(err.Error(), tt.message) {
+				t.Fatalf("Execute() error = %v, want it to carry the underlying write failure", err)
+			}
+			if reachedPush {
+				t.Fatal("the run walked on to push on a restart that never completed")
+			}
+		})
 	}
 }
 
-// refuseRevalidationWrite makes exactly UpdateRunHeadSHAForRevalidation fail,
-// by refusing any update that touches runs.head_sha. prepareRestart's other two
-// writes (step_results and runs.restart_count) are untouched, so the run's
-// failure can only have come from the revocation.
-func refuseRevalidationWrite(t *testing.T, dbPath string) {
+// refusePrepareRestartWrite aborts one of prepareRestart's writes and leaves the
+// other two working, so a case's failure can only have come from the write it
+// named. The step_results clause is narrowed to NEW.status = 'pending' because
+// ResetStepsFrom is the only writer that sets that value, while every ordinary
+// step transition also updates the same column.
+func refusePrepareRestartWrite(t *testing.T, dbPath, on, message string) {
 	t.Helper()
 	conn, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := conn.Exec(`CREATE TRIGGER refuse_revalidation BEFORE UPDATE OF head_sha ON runs
-		BEGIN SELECT RAISE(ABORT, 'revalidation write refused'); END`); err != nil {
+	stmt := fmt.Sprintf("CREATE TRIGGER refuse_restart_write BEFORE %s BEGIN SELECT RAISE(ABORT, '%s'); END", on, message)
+	if _, err := conn.Exec(stmt); err != nil {
 		t.Fatal(err)
 	}
 }

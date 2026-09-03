@@ -417,6 +417,11 @@ Rules:
 		// reads it here rather than re-deriving what it already reported. A fix
 		// round already pasted them into the fix prompt one call earlier in this
 		// same Execute, so it skips them here.
+		//
+		// For whoever restructures this file: the evidencePrompt hoist and this
+		// block are the restart work's only additions here beyond the
+		// runValidationStep call site. Without them the restart plumbing writes
+		// PreviousFindings that the test step never reads.
 		if !sctx.Fixing && sctx.PreviousFindings != "" {
 			evidencePrompt += `
 

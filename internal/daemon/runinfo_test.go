@@ -40,6 +40,43 @@ func TestRunToInfoIncludesImmutableSubmittedHead(t *testing.T) {
 	}
 }
 
+// runToInfo is the only path by which a daemon-fed axi status learns how often
+// a run restarted. Dropping the mapping leaves every live status reporting zero
+// while the run row says otherwise, so the thrash signal disappears without
+// anything failing.
+func TestRunToInfoCarriesTheRestartCount(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+
+	repo, err := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "abc", "def")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if info := runToInfo(d, run, nil); info.RestartCount != 0 {
+		t.Fatalf("restart count on a fresh run = %d, want 0", info.RestartCount)
+	}
+	for range 2 {
+		if err := d.IncrementRunRestartCount(run.ID); err != nil {
+			t.Fatalf("increment restart count: %v", err)
+		}
+	}
+	run, err = d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("reload run: %v", err)
+	}
+
+	if info := runToInfo(d, run, nil); info.RestartCount != 2 {
+		t.Fatalf("restart count = %d, want 2", info.RestartCount)
+	}
+}
+
 func TestStepToInfoIncludesFixSummaries(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

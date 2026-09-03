@@ -319,6 +319,10 @@ Previous review findings to address:
 		}
 		fixSummary = summary
 	}
+	// Captured after the fix-mode commit above, deliberately: this is the SHA
+	// the round certifies, and reading it earlier would certify an ancestor of
+	// the head the run goes on to push. runValidationStep's boundary
+	// early-return depends on that ordering.
 	reviewTargetSHA := sctx.Run.HeadSHA
 
 	// The changed-file set is read once and viewed two ways on purpose: the

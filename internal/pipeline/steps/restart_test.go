@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -144,7 +145,7 @@ func TestRunValidationStep_CertifyingStepParksOverResidue(t *testing.T) {
 		t.Fatalf("runValidationStep() error = %v", err)
 	}
 	if outcome.AutoFixable {
-		t.Fatal("AutoFixable = true; the executor auto-fixes before it parks, so the residue gate would never be seen")
+		t.Fatal("AutoFixable = true; the executor auto-fixes before it parks, so the residue would be committed and re-certified with nobody told the certifying step left a mess")
 	}
 	if outcome.ReviewApprovedHeadSHA != headSHA {
 		t.Fatalf("ReviewApprovedHeadSHA = %q, want %q", outcome.ReviewApprovedHeadSHA, headSHA)
@@ -386,9 +387,24 @@ func TestReviewStep_DiscardApprovalResidueLeavesANonResidueGateAlone(t *testing.
 // hand-builds that payload on both sides passes while the two disagree in
 // production. Here the park's own outcome.Findings is what discard is handed,
 // exactly as the executor hands it.
+//
+// The awkward names are the point of half the cases. core.quotePath C-quotes a
+// path holding a non-ASCII, quote, or backslash byte, so a park that recorded
+// the quoted spelling hands git a pathspec matching nothing and discard reports
+// success over a file still sitting there. The embedded repository is the same
+// failure from the other side: git status reports it as one entry, and clean
+// without -ffd exits 0 without touching it.
 func TestRunValidationStep_ParkedResidueIsWhatDiscardRemoves(t *testing.T) {
 	t.Parallel()
-	dir, baseSHA, headSHA := setupGitRepo(t)
+	dir, baseSHA, _ := setupGitRepo(t)
+
+	const accented = "café.txt"
+	if err := os.WriteFile(filepath.Join(dir, accented), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", accented)
+	gitCmd(t, dir, "commit", "-m", "add an accented path")
+	headSHA := strings.TrimSpace(gitCmd(t, dir, "rev-parse", "HEAD"))
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 	tracked := filepath.Join(dir, "feature.txt")
@@ -397,11 +413,30 @@ func TestRunValidationStep_ParkedResidueIsWhatDiscardRemoves(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	const quoted = `say "hi".txt`
+	const backslashed = `back\slash.txt`
+	const embedded = "vendor-clone"
+
 	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
 		if err := os.WriteFile(tracked, []byte("residue\n"), 0o644); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("scratch\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, accented), []byte("residue\n"), 0o644); err != nil {
+			return nil, err
+		}
+		for _, name := range []string{"scratch.txt", quoted, backslashed} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("scratch\n"), 0o644); err != nil {
+				return nil, err
+			}
+		}
+		// An embedded repository. git status collapses it to a single entry
+		// naming the directory, so discard is handed a directory path and not
+		// the files inside it.
+		if err := os.MkdirAll(filepath.Join(dir, embedded), 0o755); err != nil {
+			return nil, err
+		}
+		gitCmd(t, filepath.Join(dir, embedded), "init")
+		if err := os.WriteFile(filepath.Join(dir, embedded, "junk.txt"), []byte("junk\n"), 0o644); err != nil {
 			return nil, err
 		}
 		// A path the agent staged. git diff against HEAD reports it, so the
@@ -428,6 +463,19 @@ func TestRunValidationStep_ParkedResidueIsWhatDiscardRemoves(t *testing.T) {
 		t.Fatal("NeedsApproval = false, want the certifying step parked over its residue")
 	}
 
+	recordedModified, recordedUntracked, err := recordedResidue(parked.Findings)
+	if err != nil {
+		t.Fatalf("recordedResidue() error = %v", err)
+	}
+	recorded := append(append([]string{}, recordedModified...), recordedUntracked...)
+	// git reports the embedded repository with a trailing slash, and discard
+	// has to cope with the directory spelling it was actually handed.
+	for _, want := range []string{accented, quoted, backslashed, embedded + "/"} {
+		if !slices.Contains(recorded, want) {
+			t.Fatalf("park recorded %q, want it to carry %q verbatim", recorded, want)
+		}
+	}
+
 	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, parked.Findings); err != nil {
 		t.Fatalf("DiscardApprovalResidue() error = %v", err)
 	}
@@ -438,11 +486,17 @@ func TestRunValidationStep_ParkedResidueIsWhatDiscardRemoves(t *testing.T) {
 	if string(restored) != string(original) {
 		t.Fatalf("tracked file = %q, want it restored to %q", restored, original)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "scratch.txt")); !os.IsNotExist(err) {
-		t.Fatalf("untracked residue still present (stat err = %v), want it removed", err)
+	accentedRestored, err := os.ReadFile(filepath.Join(dir, accented))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "staged.txt")); !os.IsNotExist(err) {
-		t.Fatalf("staged residue still present (stat err = %v), want it removed", err)
+	if string(accentedRestored) != "committed\n" {
+		t.Fatalf("accented tracked file = %q, want it restored to its committed content", accentedRestored)
+	}
+	for _, gone := range []string{"scratch.txt", "staged.txt", quoted, backslashed, embedded} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); !os.IsNotExist(err) {
+			t.Fatalf("residue %q still present (stat err = %v), want it removed", gone, err)
+		}
 	}
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("worktree = %q, want the recorded residue fully discarded", status)
