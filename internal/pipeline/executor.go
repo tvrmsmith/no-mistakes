@@ -259,11 +259,13 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 			break
 		}
 		if restartFrom != "" {
-			restartIndex, err := e.prepareRestart(run, restartFrom, i)
+			restartIndex, rewind, err := e.honourRestart(run, step.Name(), restartFrom, i)
 			if err != nil {
-				return e.failRun(run, repo, restartFailure(step.Name(), restartFrom, err), ctx)
+				return e.failRun(run, repo, err, ctx)
 			}
-			i = restartIndex - 1
+			if rewind {
+				i = restartIndex - 1
+			}
 		}
 	}
 
@@ -288,11 +290,38 @@ var ErrInvalidRestartBoundary = errors.New("invalid restart boundary")
 // between them while nothing revalidates, and the loop would only end when two
 // consecutive rounds happened to produce a byte-identical tree.
 //
-// Such a run is already doomed: push has no exception for a skipped review, so
-// it refuses on the NULL certification three steps later with a message naming
-// nothing about the skip. Failing where the contradiction arises, naming both
-// steps, beats spinning and beats deferring to that refusal.
+// A run that still publishes is already doomed: push has no exception for a
+// skipped review, so it refuses on the NULL certification three steps later
+// with a message naming nothing about the skip. Failing where the contradiction
+// arises, naming both steps, beats spinning and beats deferring to that
+// refusal. honourRestart decides that; skipping Push too is the documented
+// validate-without-publishing mode and declines the restart instead.
 var ErrRestartBoundarySkipped = errors.New("restart boundary step was skipped")
+
+// honourRestart resolves a step's restart request into the next index to run.
+// It is the single place a RestartFrom is acted on, so every producer passes
+// through it. rewind reports whether the caller should go back to the returned
+// index; false with a nil error means the request was declined and the run
+// carries on from where it is.
+//
+// The one declined case is a skipped boundary in a run that also skips Push
+// (`--skip review --skip push`, the documented validate-without-publishing
+// mode). Nothing reaches a remote there, so no certification is load-bearing
+// and killing the run buys nothing, while Document's and Lint's agent commits
+// make the request itself routine rather than exceptional.
+func (e *Executor) honourRestart(run *db.Run, step, restartFrom types.StepName, currentIndex int) (int, bool, error) {
+	index, err := e.prepareRestart(run, restartFrom, currentIndex)
+	if errors.Is(err, ErrRestartBoundarySkipped) && e.skips[types.StepPush] {
+		slog.Warn("restart request not honoured because its boundary step is skipped",
+			"run", run.ID, "boundary", restartFrom, "requested_by", step,
+			"reason", "push is skipped too, so the run publishes nothing and has no certification to protect")
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, restartFailure(step, restartFrom, err)
+	}
+	return index, true, nil
+}
 
 // restartFailure phrases a prepareRestart error for the run's failure message,
 // naming the step only when the step is what was wrong.
@@ -316,8 +345,8 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 }
 
 // prepareRestart rewinds the run to a boundary step and revokes the authority
-// the pre-restart passes had accumulated. It is the single place a restart is
-// honoured, so every RestartFrom producer passes through its two rejections:
+// the pre-restart passes had accumulated. honourRestart is its only caller, so
+// every RestartFrom producer passes through its two rejections:
 // ErrInvalidRestartBoundary and ErrRestartBoundarySkipped.
 //
 // Every write here is fail-closed. Warning and continuing would resume a run
@@ -647,11 +676,13 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			return e.skipRecoveredRemainder(run, repo, gate.index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run, restartFrom, gate.index)
-			if indexErr != nil {
-				return e.failRun(run, repo, restartFailure(gate.step.Name(), restartFrom, indexErr), ctx)
+			restartIndex, rewind, restartErr := e.honourRestart(run, gate.step.Name(), restartFrom, gate.index)
+			if restartErr != nil {
+				return e.failRun(run, repo, restartErr, ctx)
 			}
-			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex, true)
+			if rewind {
+				return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex, true)
+			}
 		}
 		return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, gate.index+1, false)
 	default:
@@ -768,12 +799,14 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 			return e.skipRecoveredRemainder(run, repo, index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run, restartFrom, index)
-			if indexErr != nil {
-				return e.failRun(run, repo, restartFailure(e.steps[index].Name(), restartFrom, indexErr), ctx)
+			restartIndex, rewind, restartErr := e.honourRestart(run, e.steps[index].Name(), restartFrom, index)
+			if restartErr != nil {
+				return e.failRun(run, repo, restartErr, ctx)
 			}
-			revalidating = true
-			index = restartIndex - 1
+			if rewind {
+				revalidating = true
+				index = restartIndex - 1
+			}
 		}
 	}
 	if err := e.completeRun(run, repo); err != nil {

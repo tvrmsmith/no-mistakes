@@ -482,8 +482,14 @@ func residueGateOutcome(sctx *pipeline.StepContext, name types.StepName, outcome
 // what an operator reads at the gate and what discard hands back to git as a
 // pathspec. Splitting on newlines and trimming spaces also corrupts a path that
 // legitimately holds either.
+//
+// --no-renames because rename detection collapses a staged rename into the new
+// path alone, and discard restoring only that path leaves the staged deletion
+// of the old one behind. assertResidueGone would still pass, since every path
+// the park recorded really is gone, and a deletion nobody ruled on would ride
+// into the next validation step's exit commit.
 func worktreeResidue(ctx context.Context, workDir string) (modified, untracked []string, err error) {
-	out, err := git.RunRaw(ctx, workDir, "diff", "--name-only", "-z", "HEAD")
+	out, err := git.RunRaw(ctx, workDir, "diff", "--name-only", "-z", "--no-renames", "HEAD")
 	if err != nil {
 		return nil, nil, fmt.Errorf("list modified tracked files: %w", err)
 	}

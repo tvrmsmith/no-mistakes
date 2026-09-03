@@ -185,57 +185,91 @@ func TestExecutor_RestartCompletesNormallyWhenTheBoundaryIsValid(t *testing.T) {
 	}
 }
 
+// TestExecutor_RestartIntoASkippedBoundary covers the run whose operator
+// skipped the boundary step. Rewinding there re-marks it skipped and walks
+// straight back to the requesting step, repeating every agent pass in between
+// while nothing revalidates, so the run must not rewind either way. Whether it
+// dies there turns on publication: a run that still pushes would refuse three
+// steps later on the certification the skipped review never wrote, naming
+// nothing about the skip, while --skip review --skip push is the documented
+// validate-without-publishing mode with no certification to protect. Document's
+// and Lint's agent commits make the request routine, so failing that mode would
+// break it outright.
+func TestExecutor_RestartIntoASkippedBoundary(t *testing.T) {
+	tests := []struct {
+		name        string
+		skips       []types.StepName
+		wantOrder   []types.StepName
+		wantFailure bool
+	}{
+		{
+			name:        "push still runs",
+			skips:       []types.StepName{types.StepReview},
+			wantOrder:   []types.StepName{types.StepTest},
+			wantFailure: true,
+		},
+		{
+			name:      "push skipped too",
+			skips:     []types.StepName{types.StepReview, types.StepPush},
+			wantOrder: []types.StepName{types.StepTest, types.StepPR},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, p, run, repo := setupTest(t)
+			workDir := t.TempDir()
+
+			var order []types.StepName
+			call := func(name types.StepName, outcome *StepOutcome) Step {
+				return &adaptiveCallStep{name: name, fn: func(*StepContext) (*StepOutcome, error) {
+					order = append(order, name)
+					return outcome, nil
+				}}
+			}
+			steps := []Step{
+				call(types.StepReview, &StepOutcome{}),
+				call(types.StepTest, &StepOutcome{RestartFrom: types.StepReview}),
+				call(types.StepPush, &StepOutcome{}),
+				call(types.StepPR, &StepOutcome{}),
+			}
+
+			exec := NewExecutor(database, p, nil, nil, steps, nil)
+			exec.SetSkippedSteps(tt.skips)
+
+			err := exec.Execute(context.Background(), run, repo, workDir)
+			if tt.wantFailure {
+				if err == nil {
+					t.Fatal("Execute() error = nil, want the restart into a skipped boundary to fail the run")
+				}
+				for _, want := range []string{"review", "test", "restart"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("Execute() error = %v, want it to name %q", err, want)
+					}
+				}
+			} else if err != nil {
+				t.Fatalf("Execute() error = %v, want the declined restart to leave the run running", err)
+			}
+			if !slices.Equal(order, tt.wantOrder) {
+				t.Fatalf("execution order = %v, want %v", order, tt.wantOrder)
+			}
+			after, err := database.GetRun(run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.RestartCount != 0 {
+				t.Fatalf("restart count = %d, want the unhonoured restart to write nothing", after.RestartCount)
+			}
+		})
+	}
+}
+
 // TestExecutor_PrepareRestartWriteFailureIsNotReportedAsAStepBug separates the
 // two ways a restart can fail. A step naming a boundary the pipeline rejects is
 // the step's fault; a database write that fails is not, and reporting both as
 // "step X requested invalid restart" sends whoever reads the run at a step that
 // did nothing wrong.
-// TestExecutor_RestartIntoASkippedBoundaryFailsNamingBothSteps covers the run
-// whose operator skipped the boundary step. Rewinding there re-marks it skipped
-// and walks straight back to the requesting step, repeating every agent pass in
-// between while nothing revalidates, and the run is doomed regardless because
-// push refuses on the certification the skipped review never wrote.
-func TestExecutor_RestartIntoASkippedBoundaryFailsNamingBothSteps(t *testing.T) {
-	database, p, run, repo := setupTest(t)
-	workDir := t.TempDir()
-
-	var order []types.StepName
-	call := func(name types.StepName, outcome *StepOutcome) Step {
-		return &adaptiveCallStep{name: name, fn: func(*StepContext) (*StepOutcome, error) {
-			order = append(order, name)
-			return outcome, nil
-		}}
-	}
-	steps := []Step{
-		call(types.StepReview, &StepOutcome{}),
-		call(types.StepTest, &StepOutcome{RestartFrom: types.StepReview}),
-		call(types.StepPush, &StepOutcome{}),
-	}
-
-	exec := NewExecutor(database, p, nil, nil, steps, nil)
-	exec.SetSkippedSteps([]types.StepName{types.StepReview})
-
-	err := exec.Execute(context.Background(), run, repo, workDir)
-	if err == nil {
-		t.Fatal("Execute() error = nil, want the restart into a skipped boundary to fail the run")
-	}
-	for _, want := range []string{"review", "test", "restart"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("Execute() error = %v, want it to name %q", err, want)
-		}
-	}
-	if !slices.Equal(order, []types.StepName{types.StepTest}) {
-		t.Fatalf("execution order = %v, want the run to stop at the restart rather than re-enter or walk on unreviewed", order)
-	}
-	after, err := database.GetRun(run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.RestartCount != 0 {
-		t.Fatalf("restart count = %d, want the rejected restart to write nothing", after.RestartCount)
-	}
-}
-
+//
 // Each of prepareRestart's three writes gets a case, because each one failing
 // silently breaks the restart a different way: an unreset step_results replays
 // the run from a step already marked completed, a swallowed

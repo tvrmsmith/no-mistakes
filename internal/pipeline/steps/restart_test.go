@@ -423,6 +423,58 @@ func TestReviewStep_DiscardApprovalResidueTreatsRecordedPathsAsNames(t *testing.
 	}
 }
 
+// TestRunValidationStep_ParkedResidueRecordsBothHalvesOfARename pins the one
+// case where git reports fewer paths than it changed. Rename detection collapses
+// a staged rename into the new path, so a park that recorded only that path
+// leaves the staged deletion of the old one behind, discard reports success
+// because every recorded path really is gone, and the deletion nobody ruled on
+// rides into the next validation step's exit commit.
+func TestRunValidationStep_ParkedResidueRecordsBothHalvesOfARename(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		gitCmd(t, dir, "mv", "feature.txt", "renamed.txt")
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+
+	parked, err := runValidationStep(sctx, types.StepReview, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: headSHA}, nil
+	})
+	if err != nil {
+		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if !parked.NeedsApproval {
+		t.Fatal("NeedsApproval = false, want the certifying step parked over its residue")
+	}
+
+	recordedModified, _, err := recordedResidue(parked.Findings)
+	if err != nil {
+		t.Fatalf("recordedResidue() error = %v", err)
+	}
+	for _, want := range []string{"feature.txt", "renamed.txt"} {
+		if !slices.Contains(recordedModified, want) {
+			t.Fatalf("park recorded %v, want both halves of the rename including %q", recordedModified, want)
+		}
+	}
+
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, parked.Findings); err != nil {
+		t.Fatalf("DiscardApprovalResidue() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "feature.txt")); err != nil {
+		t.Fatalf("the rename's source was not restored: %v", err)
+	}
+	if status := gitStatusPorcelain(t, dir); status != "" {
+		t.Fatalf("worktree = %q, want the rename fully discarded", status)
+	}
+}
+
 // TestReviewStep_DiscardApprovalResidueLeavesANonResidueGateAlone covers every
 // other gate the certifying step raises. Those record no residue, so discard
 // has nothing to remove and must not reach for the worktree at all.
