@@ -178,6 +178,18 @@ type ReviewStep struct{}
 func (s *ReviewStep) Name() types.StepName { return types.StepReview }
 
 func (s *ReviewStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+// DiscardApprovalResidue implements pipeline.ApprovalResidueDiscarder. Review
+// is the step that records the review-approved head, so it parks rather than
+// committing when it exits with an unclean worktree; approving that gate means
+// discard the leftovers and continue under the certification that stands.
+func (s *ReviewStep) DiscardApprovalResidue(sctx *pipeline.StepContext) error {
+	return discardValidationResidue(sctx, s.Name())
+}
+
+func (s *ReviewStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	ctx := sctx.Ctx
 	var cancel context.CancelFunc
 	var timeout time.Duration
@@ -307,6 +319,10 @@ Previous review findings to address:
 		}
 		fixSummary = summary
 	}
+	// Captured after the fix-mode commit above, deliberately: this is the SHA
+	// the round certifies, and reading it earlier would certify an ancestor of
+	// the head the run goes on to push. runValidationStep's boundary
+	// early-return depends on that ordering.
 	reviewTargetSHA := sctx.Run.HeadSHA
 
 	// The changed-file set is read once and viewed two ways on purpose: the

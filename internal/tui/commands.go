@@ -261,7 +261,8 @@ func (m *Model) drainDiffFetches() []tea.Cmd {
 	return cmds
 }
 
-// fetchStepDiffCmd reads one fix-review gate's working-tree diff on demand.
+// fetchStepDiffCmd reads one fix-review gate's diff of what the parked step
+// changed, on demand.
 // The diff is derived from the run's worktree rather than carried by the event
 // stream, where an unbounded frame would break the subscription.
 func (m *Model) fetchStepDiffCmd(request stepDiffRequest) tea.Cmd {

@@ -126,7 +126,11 @@ type runView struct {
 	// awaiting the driving agent, or nil when the run is not parked. It powers
 	// the top-level parked signal in the run object.
 	AwaitingAgentSince *int64
-	Steps              []stepView
+	// RestartCount is how many times the run re-entered validation from the
+	// restart boundary. Unlike AwaitingAgentSince it is history rather than a
+	// live signal, so it renders even once the run is terminal.
+	RestartCount int64
+	Steps        []stepView
 }
 
 func runViewFromIPC(r *ipc.RunInfo) runView {
@@ -138,6 +142,7 @@ func runViewFromIPC(r *ipc.RunInfo) runView {
 		CIReady:            r.CIReady,
 		CIReadyNoCI:        r.CIReadyNoCI,
 		AwaitingAgentSince: r.AwaitingAgentSince,
+		RestartCount:       r.RestartCount,
 	}
 	if r.PRURL != nil {
 		rv.PRURL = *r.PRURL
@@ -177,6 +182,7 @@ func runViewFromDB(r *db.Run, steps []*db.StepResult) runView {
 		Status:             string(r.Status),
 		HeadSHA:            r.HeadSHA,
 		AwaitingAgentSince: r.AwaitingAgentSince,
+		RestartCount:       r.RestartCount,
 	}
 	if r.PRURL != nil {
 		rv.PRURL = *r.PRURL
@@ -238,6 +244,18 @@ func formatParkedFor(sinceUnix int64) string {
 	default:
 		return fmt.Sprintf("parked %dd%dh", int(d.Hours())/24, int(d.Hours())%24)
 	}
+}
+
+// restartCountValue renders a run's restart count. Below and at db.RestartSoftCap
+// it stays a plain integer so TOON encodes it without quoting; strictly above the
+// cap it becomes an annotated string so a maintainer can spot a thrashing fix
+// loop without cross-referencing the threshold themselves. The cap itself is
+// advisory only and never blocks or limits anything.
+func restartCountValue(count int64) any {
+	if count > db.RestartSoftCap {
+		return fmt.Sprintf("%d (soft cap %d exceeded)", count, db.RestartSoftCap)
+	}
+	return count
 }
 
 // shortSHA trims a commit SHA for display.
@@ -439,6 +457,12 @@ func runObjectFieldWithKey(key string, rv runView) toon.Field {
 	// while genuinely parked (non-nil marker on a non-terminal run).
 	if rv.AwaitingAgentSince != nil && !terminalStatus(rv.Status) {
 		fields = append(fields, toon.Field{Key: "awaiting_agent", Value: formatParkedFor(*rv.AwaitingAgentSince)})
+	}
+	// RestartCount is history, not a live signal like awaiting_agent, so it
+	// renders regardless of whether the run is terminal. Zero renders nothing:
+	// a run that never restarted has nothing worth reporting here.
+	if rv.RestartCount > 0 {
+		fields = append(fields, toon.Field{Key: "restarts", Value: restartCountValue(rv.RestartCount)})
 	}
 	fields = append(fields, toon.Field{Key: "head", Value: shortSHA(rv.HeadSHA)})
 	if rv.PRURL != "" {

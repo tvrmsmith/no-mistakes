@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // HousekeepingLintResult is the lint assessment produced by the combined
@@ -88,6 +89,13 @@ type RunShared struct {
 	testDiscoveryFingerprint string
 	// testScopeFaults counts under-selection faults noticed so far this run.
 	testScopeFaults int
+	// restartTrees remembers, per step, the tree its last restart-triggering
+	// commit produced, so a later round of that step committing an identical
+	// tree is recognised as churn rather than progress.
+	restartTrees map[types.StepName]string
+	// residue records, per step, the worktree state that step's current round
+	// parked over instead of committing.
+	residue map[types.StepName]ValidationResidue
 }
 
 // NewRunShared returns the run-scoped results holder a fresh run starts with.
@@ -205,6 +213,102 @@ func (s *RunShared) NoteTestScopeFault() int {
 	s.testScopeFaults++
 	s.persistTestDiscoveryLocked()
 	return s.testScopeFaults
+}
+
+// ValidationResidue is the exact worktree state a certifying step's round
+// refused to commit, as that step read it from git at the moment it raised the
+// gate. Approving the gate destroys these paths and only these paths.
+type ValidationResidue struct {
+	// Modified are tracked paths that differ from HEAD; discard restores them.
+	Modified []string
+	// Untracked are untracked non-ignored paths; discard deletes them.
+	Untracked []string
+}
+
+// SetValidationResidue records what a step's residue park enumerated, and by
+// recording it marks the round as parked for residue.
+//
+// The record is what discard acts on. Reading the paths back out of the parked
+// gate's findings instead put the decision in the review agent's hands: a
+// finding ID is a free-form agent-supplied string, so a round that returned an
+// ordinary finding with a residue-shaped ID and a file it merely commented on
+// could have that file reverted the moment a human approved the gate.
+func (s *RunShared) SetValidationResidue(step types.StepName, residue ValidationResidue) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.residue == nil {
+		s.residue = make(map[types.StepName]ValidationResidue)
+	}
+	s.residue[step] = residue
+}
+
+// ValidationResidue reports what a step's current round parked over. The
+// second result is false when the round did not park for residue at all, which
+// is what keeps an ordinary approval of an ordinary gate from destroying
+// anything.
+//
+// It is in-memory like the rest of RunShared, so a daemon restart forgets it
+// and approving the recovered gate discards nothing, leaving the leftovers for
+// the next validation step's exit commit. Forgetting the record can only fail
+// towards touching no files, never towards deleting one nothing recorded.
+func (s *RunShared) ValidationResidue(step types.StepName) (ValidationResidue, bool) {
+	if s == nil {
+		return ValidationResidue{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	residue, ok := s.residue[step]
+	return residue, ok
+}
+
+// ClearValidationResidue forgets a step's record. Every round of a validation
+// step clears its own before it starts, so a record only ever describes the
+// round that is parked right now: a later round that committed those paths, or
+// exited clean, leaves nothing for an approval to act on.
+func (s *RunShared) ClearValidationResidue(step types.StepName) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.residue, step)
+}
+
+// LastRestartTree returns the tree a step's previous restart-triggering commit
+// produced, or "" when that step has not restarted the run yet.
+func (s *RunShared) LastRestartTree(step types.StepName) string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.restartTrees[step]
+}
+
+// SetLastRestartTree records the tree a step's restart-triggering commit
+// produced, so a later round of the same step that commits an identical tree
+// is recognised as churn rather than progress. Unlike the housekeeping stash
+// this is not consume-once: the comparison must survive every later round of
+// the run.
+//
+// Only the most recent tree per step is kept, and RunShared is rebuilt on
+// every Execute and Resume, so the guard catches a consecutive repeat within
+// one daemon process and nothing more. An A/B/A oscillation and a loop that
+// spans a daemon restart both slip past it; runs.restart_count is what stays
+// durable across those.
+func (s *RunShared) SetLastRestartTree(step types.StepName, tree string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restartTrees == nil {
+		s.restartTrees = make(map[types.StepName]string)
+	}
+	s.restartTrees[step] = tree
 }
 
 // SetHousekeepingLint records the combined pass's lint assessment for the

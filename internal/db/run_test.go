@@ -1,6 +1,7 @@
 package db
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
@@ -162,6 +163,112 @@ func TestRunAwaitingAgentSetAndClear(t *testing.T) {
 	}
 	if got.AwaitingAgentSince != nil {
 		t.Errorf("AwaitingAgentSince = %d after clear, want nil", *got.AwaitingAgentSince)
+	}
+}
+
+func TestIncrementRunRestartCount(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	run, err := d.InsertRun(repo.ID, "feature", "abc123", "def456")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	// A fresh run has never restarted.
+	if run.RestartCount != 0 {
+		t.Fatalf("new run RestartCount = %d, want 0", run.RestartCount)
+	}
+
+	firstUpdatedAt := run.UpdatedAt
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("increment restart count: %v", err)
+	}
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.RestartCount != 1 {
+		t.Fatalf("RestartCount after one increment = %d, want 1", got.RestartCount)
+	}
+	if got.UpdatedAt < firstUpdatedAt {
+		t.Errorf("UpdatedAt = %d, want >= %d after increment", got.UpdatedAt, firstUpdatedAt)
+	}
+
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("increment restart count again: %v", err)
+	}
+	got, err = d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run after second increment: %v", err)
+	}
+	if got.RestartCount != 2 {
+		t.Fatalf("RestartCount after two increments = %d, want 2", got.RestartCount)
+	}
+}
+
+// TestOpenMigratesRunRestartCount proves a database created before the
+// restart_count column existed gains it on reopen. The row inserted before the
+// migration is the case that matters: SQLite backfills an added NOT NULL column
+// with its default, but a read path that forgot COALESCE would surface that
+// legacy run's count as a scan error rather than 0.
+func TestOpenMigratesRunRestartCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	legacyRepo, err := d.InsertRepo("/tmp/legacy", "https://github.com/test/legacy", "main")
+	if err != nil {
+		t.Fatalf("insert legacy repo: %v", err)
+	}
+	legacyRun, err := d.InsertRun(legacyRepo.ID, "b", "h", "b")
+	if err != nil {
+		t.Fatalf("insert legacy run: %v", err)
+	}
+	// Simulate a legacy runs table by dropping the column out from under the
+	// row that already exists.
+	if _, err := d.sql.Exec(`ALTER TABLE runs DROP COLUMN restart_count`); err != nil {
+		t.Fatalf("drop column: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	d, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer d.Close()
+
+	migrated, err := d.GetRun(legacyRun.ID)
+	if err != nil {
+		t.Fatalf("get legacy run after migration: %v", err)
+	}
+	if migrated.RestartCount != 0 {
+		t.Fatalf("legacy run RestartCount = %d, want 0", migrated.RestartCount)
+	}
+
+	repo, err := d.InsertRepo("/tmp/repo", "https://github.com/test/repo", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	run, err := d.InsertRun(repo.ID, "b", "h", "b")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("restart_count column missing after migration: %v", err)
+	}
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("second increment failed: %v", err)
+	}
+
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.RestartCount != 2 {
+		t.Fatalf("RestartCount = %d, want 2", got.RestartCount)
 	}
 }
 

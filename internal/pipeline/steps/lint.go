@@ -16,6 +16,10 @@ type LintStep struct{}
 func (s *LintStep) Name() types.StepName { return types.StepLint }
 
 func (s *LintStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
@@ -29,7 +33,12 @@ func (s *LintStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		// of paying a second cold agent invocation. Fix rounds and any round
 		// without a stashed result fall through to a full agent pass, so the
 		// lint responsibility is never silently skipped.
-		if !sctx.Fixing {
+		//
+		// A round carrying previous findings also falls through. Those findings
+		// are this step's own verdict, carried back by a restart, and the
+		// stashed result was produced without them. Paying a full lint pass to
+		// answer them is the deliberate cost.
+		if !sctx.Fixing && sctx.PreviousFindings == "" {
 			if stash, ok := sctx.Shared.TakeHousekeepingLint(); ok {
 				return lintOutcomeFromHousekeeping(sctx, stash)
 			}

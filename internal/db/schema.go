@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS runs (
     error                   TEXT,
     awaiting_agent_since INTEGER,
     parked_ms            INTEGER,
+    restart_count        INTEGER NOT NULL DEFAULT 0,
+    skipped_steps        TEXT,
     created_at           INTEGER NOT NULL,
     updated_at           INTEGER NOT NULL
 );
@@ -262,4 +264,8 @@ var migrationStatements = []string{
 	`ALTER TABLE agent_invocations ADD COLUMN workload_files INTEGER`,
 	`ALTER TABLE agent_invocations ADD COLUMN workload_lines INTEGER`,
 	`ALTER TABLE agent_invocations ADD COLUMN finding_count INTEGER`,
+	// A pre-existing row reads 0 because no run before this column existed could
+	// have restarted under the attribution rule (internal/pipeline increments it
+	// only from the restart boundary it introduces).
+	`ALTER TABLE runs ADD COLUMN restart_count INTEGER NOT NULL DEFAULT 0`,
 }

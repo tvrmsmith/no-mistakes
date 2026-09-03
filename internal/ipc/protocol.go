@@ -101,17 +101,19 @@ type GetRunParams struct {
 	RunID string `json:"run_id"`
 }
 
-// GetStepDiffParams requests the working-tree diff for a run parked at a
-// fix-review gate. The diff is derived on demand from the run's worktree and
-// is never stored, so it is the reconstruction authority for the one piece of
-// gate context that is not persisted.
+// GetStepDiffParams requests the diff of what the parked step changed for a
+// run at a fix-review gate: the working-tree diff, or the round's own exit
+// commit when the step committed its work and left the tree clean. The diff is
+// derived on demand from the run's worktree and is never stored, so it is the
+// reconstruction authority for the one piece of gate context that is not
+// persisted.
 type GetStepDiffParams struct {
 	RunID string `json:"run_id"`
 }
 
-// GetStepDiffResult carries a bounded working-tree diff. Truncated reports
-// that the diff exceeded the response budget and was cut, so a very large
-// change degrades to a partial view instead of an oversized frame.
+// GetStepDiffResult carries a bounded diff of what the parked step changed.
+// Truncated reports that the diff exceeded the response budget and was cut, so
+// a very large change degrades to a partial view instead of an oversized frame.
 type GetStepDiffResult struct {
 	Diff      string `json:"diff"`
 	Truncated bool   `json:"truncated,omitempty"`
@@ -290,9 +292,14 @@ type RunInfo struct {
 	// driving agent's response. AwaitingAgentSince is the unix-seconds time it
 	// parked, so a supervisor can read "parked for N seconds" in one call. Both
 	// are observability only and clear the moment the agent responds.
-	AwaitingAgent      bool             `json:"awaiting_agent,omitempty"`
-	AwaitingAgentSince *int64           `json:"awaiting_agent_since,omitempty"`
-	Steps              []StepResultInfo `json:"steps,omitempty"`
+	AwaitingAgent      bool   `json:"awaiting_agent,omitempty"`
+	AwaitingAgentSince *int64 `json:"awaiting_agent_since,omitempty"`
+	// RestartCount mirrors db.Run.RestartCount: how many times the run
+	// re-entered validation from the restart boundary. Unlike AwaitingAgent it
+	// is history, not a live signal, and is always carried regardless of run
+	// status.
+	RestartCount int64            `json:"restart_count,omitempty"`
+	Steps        []StepResultInfo `json:"steps,omitempty"`
 	// StateRev is the monotonic run-state revision this snapshot is at least
 	// as new as. It is sampled before the database read, so every event at or
 	// below it is already reflected here and every event above it still
