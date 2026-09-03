@@ -136,14 +136,17 @@ func planDiversified(gold []Case, capSize int, existing []diversifiedPin, preser
 	if len(carried) == 0 {
 		return planReadableDiversified(gold, capSize, plannable)
 	}
-	remaining := capSize
 	if capSize > 0 {
-		remaining = capSize - len(carried)
-		if remaining < 0 {
-			remaining = 0
+		// planReadableDiversified reads 0 as "no cap, one pin per stratum", so
+		// a carried set that already fills the cap has to short-circuit here
+		// rather than hand the planner a seat count it would read as unbounded.
+		remaining := capSize - len(carried)
+		if remaining <= 0 {
+			return carried
 		}
+		return append(carried, planReadableDiversified(gold, remaining, plannable)...)
 	}
-	return append(carried, planReadableDiversified(gold, remaining, plannable)...)
+	return append(carried, planReadableDiversified(gold, capSize, plannable)...)
 }
 
 // splitPreservedPins separates the pins whose case the caller could not load

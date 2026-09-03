@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 )
@@ -506,5 +507,204 @@ func TestAutoCaptureUnderTheCapDoesNotPin(t *testing.T) {
 	defer store.Close()
 	if pins := mustDiversifiedPinRows(t, store); len(pins) != 0 {
 		t.Fatalf("pin table = %#v, want no pin written while the corpus is inside its cap", pins)
+	}
+}
+
+// planReadableDiversified reads a cap of 0 as "no cap, one pin per stratum".
+// Carried pins that already fill the configured size therefore used to reach it
+// with a computed remainder of 0, which grew the official holdout past the size
+// the operator configured, one extra pin per readable stratum.
+func TestAutoCaptureKeepsTheHoldoutAtTheConfiguredSizeWhenCarriedPinsFillIt(t *testing.T) {
+	ctx := context.Background()
+	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+	defer sourceDB.Close()
+
+	const configuredSize = 2
+	seed, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.SetDiversifiedSize(configuredSize)
+	// One gold case per repository fingerprint, so every case is its own
+	// stratum and an uncapped plan would pin all of them.
+	dirs := map[string]string{}
+	for i := 1; i <= 5; i++ {
+		id := "gold-" + strconv.Itoa(i)
+		c := writeSyntheticCase(t, seed, syntheticCaseSpec{
+			id: id, fingerprint: "repo-" + strconv.Itoa(i), capturedAt: int64(i), changedLines: 10,
+			pipelineVersion: PipelineReviewEarly,
+			gold:            goldSpec(id),
+			roundFindings:   goldRound(id),
+		})
+		dirs[id] = c.Dir
+	}
+	if _, err := seed.RefreshDiversified(); err != nil {
+		t.Fatal(err)
+	}
+	carried := pinnedCaseIDs(t, seed)
+	if len(carried) != configuredSize {
+		t.Fatalf("seeded pins = %v, want the configured size of %d", carried, configuredSize)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Both pinned cases become unloadable, so every pin the next pass sees is
+	// carried forward rather than replanned, and the carried set alone fills
+	// the configured size.
+	for id := range carried {
+		if err := os.WriteFile(filepath.Join(dirs[id], "manifest.json"), []byte("{not json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 3, DiversifiedSize: configuredSize})
+	if err != nil {
+		t.Fatalf("AutoCapture error = %v, want the unreadable pinned cases tolerated", err)
+	}
+	if result.PinWarning != "" {
+		t.Fatalf("AutoCapture pin warning = %q, want the pins materialized", result.PinWarning)
+	}
+
+	store, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	pinned := pinnedCaseIDs(t, store)
+	if len(pinned) > configuredSize {
+		t.Fatalf("pin table holds %d pins (%v), want no more than the configured size of %d", len(pinned), pinned, configuredSize)
+	}
+	for id := range carried {
+		if !pinned[id] {
+			t.Fatalf("carried pin %q was released, so nothing protects its case from the cap", id)
+		}
+	}
+}
+
+// The pins a retention pass writes are only worth anything for the prune they
+// gate, so the two have to be one instant. A set resolution replans the holdout
+// and can release a pin, so an unserialized one landing between the gate and
+// the prune drops a protected case back into the eviction window.
+func TestAutoCaptureKeepsAPinnedCaseThroughARefreshRacingThePass(t *testing.T) {
+	ctx := context.Background()
+	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+	defer sourceDB.Close()
+
+	seed, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One synthetic gold case, the OLDEST in the corpus, so oldest-first
+	// eviction aims straight at it and only its pin keeps it. With the captured
+	// run's own gold case that is exactly two strata, which a holdout of two
+	// seats pins in full however the pass is interleaved.
+	writeSyntheticCase(t, seed, syntheticCaseSpec{
+		// The fingerprint sorts last so a one-seat replan by the refresher
+		// always drops THIS pin, which is what the pass has to defend.
+		id: "gold-1", fingerprint: "zzz-gold", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("gold-1"),
+		roundFindings:   goldRound("gold-1"),
+	})
+	for i := 1; i <= 3; i++ {
+		writeSyntheticCase(t, seed, syntheticCaseSpec{
+			id: "filler-" + strconv.Itoa(i), fingerprint: "repo-filler", capturedAt: int64(10 + i), changedLines: 10,
+			pipelineVersion: PipelineReviewEarly,
+			roundFindings:   findingsJSON(findingSpec{ID: "f" + strconv.Itoa(i), Severity: "error", File: "main.go", Line: 1, Description: "filler", Action: "ask-user"}),
+		})
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second registry on the same corpus with a SMALLER holdout, which is
+	// what makes its replan release a pin the pass is relying on.
+	racer, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer racer.Close()
+	racer.SetDiversifiedSize(1)
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if _, err := racer.RefreshDiversified(); err != nil {
+				return
+			}
+			// Yield between replans, so the refresher contends with the pass
+			// rather than starving it out of the corpus lock entirely.
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 3, DiversifiedSize: 2})
+	close(done)
+	<-stopped
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PinWarning != "" {
+		t.Fatalf("AutoCapture pin warning = %q, want the pins materialized", result.PinWarning)
+	}
+
+	store, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if !caseRowExists(t, store, "gold-1") {
+		t.Fatal("case \"gold-1\" was evicted, so a concurrent refresh released the pin the retention pass wrote")
+	}
+}
+
+// Replanning the holdout is a pin-table write, so it has to be serialized with
+// the retention pass that materializes the pins the cap respects. An
+// unserialized replan can release a pin between the pass writing it and the
+// prune reading it, which drops the case it protects back into the eviction
+// window.
+func TestRefreshDiversifiedWaitsForTheCorpusLock(t *testing.T) {
+	ctx := context.Background()
+	store := openEvalStore(t)
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: "gold-1", fingerprint: "repo-gold", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("gold-1"),
+		roundFindings:   goldRound("gold-1"),
+	})
+
+	unlock, err := lockCorpus(ctx, store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshed := make(chan error, 1)
+	go func() {
+		_, err := store.RefreshDiversified()
+		refreshed <- err
+	}()
+	select {
+	case err := <-refreshed:
+		unlock()
+		t.Fatalf("RefreshDiversified replanned the holdout (err = %v) while another corpus writer held the lock", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	unlock()
+	select {
+	case err := <-refreshed:
+		if err != nil {
+			t.Fatalf("RefreshDiversified error after the lock was released = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RefreshDiversified never completed after the corpus lock was released")
+	}
+	if !pinnedCaseIDs(t, store)["gold-1"] {
+		t.Fatal("RefreshDiversified wrote no pin, so the serialization it waited for protected nothing")
 	}
 }

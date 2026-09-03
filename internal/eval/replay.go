@@ -118,7 +118,7 @@ func (s *Store) prepareReplay(ctx context.Context, opts ReplayOptions) ([]Case, 
 	}
 	defer unlock()
 
-	cases, err := s.ListCasesForPipeline(opts.Set, opts.Pipeline)
+	cases, err := s.listCasesForPipeline(opts.Set, opts.Pipeline)
 	if err != nil {
 		return nil, Session{}, err
 	}

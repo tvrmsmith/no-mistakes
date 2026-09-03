@@ -274,11 +274,41 @@ func (s *Store) ListCases(set string) ([]Case, error) {
 // recognize is not rejected here (a forward-compatible tag stored on disk is
 // legal); it simply matches nothing narrower than PipelineAny.
 func (s *Store) ListCasesForPipeline(set string, version PipelineVersion) ([]Case, error) {
+	cases, err := s.listCasesLocking(context.Background(), set, false)
+	if err != nil {
+		return nil, err
+	}
+	return filterCasesByPipeline(cases, version), nil
+}
+
+// listCasesForPipeline is ListCasesForPipeline for a caller that already holds
+// the corpus lock. The lock is not re-entrant (a second acquisition in this
+// process blocks on its own first one), so every in-package caller under the
+// lock resolves sets through here.
+func (s *Store) listCasesForPipeline(set string, version PipelineVersion) ([]Case, error) {
 	cases, err := s.listCases(set, false)
 	if err != nil {
 		return nil, err
 	}
 	return filterCasesByPipeline(cases, version), nil
+}
+
+// listCasesLocking resolves a set under the corpus lock. Resolving diversified
+// or tune WRITES the pin table (materializeDiversifiedPins), so a resolution is
+// a corpus writer and has to be serialized with the retention pass: an
+// unlocked one racing AutoCapture can re-plan the holdout between the pass
+// pinning a case and Prune reading the pins, releasing a pin the pass is
+// relying on to protect that case from eviction.
+func (s *Store) listCasesLocking(ctx context.Context, set string, refreshDiversified bool) ([]Case, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("eval registry is closed")
+	}
+	unlock, err := lockCorpus(ctx, s.root)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return s.listCases(set, refreshDiversified)
 }
 
 // filterCasesByPipeline is that view, shared with the callers that already hold
@@ -297,33 +327,64 @@ func filterCasesByPipeline(cases []Case, version PipelineVersion) []Case {
 	return out
 }
 
+// retentionOutcome is one retention pass's result. A failed pin
+// materialization is reported as a warning rather than an error, because the
+// capture that triggered the pass still succeeded.
+type retentionOutcome struct {
+	Pruned     int
+	PinWarning string
+}
+
+// retain runs one whole retention pass under a SINGLE corpus lock: reclaim
+// abandoned state, materialize the pins the cap has to respect, then enforce
+// the cap. The three are one critical section because the pins are only
+// meaningful for the prune they gate. Taking the lock once per step would let
+// a set resolution slip in between and re-plan the holdout, releasing a pin
+// the pass just wrote and dropping its case back into the eviction window.
+//
+// The housekeeping runs first, and outside the pin gate, because it owes
+// nothing to the pins: a half-finished deletion and an expired reservation
+// both have to be reclaimed even on a pass that never reaches the cap.
+func (s *Store) retain(ctx context.Context, maxCases int) (retentionOutcome, error) {
+	if s == nil || s.db == nil {
+		return retentionOutcome{}, fmt.Errorf("eval registry is closed")
+	}
+	unlock, err := lockCorpus(ctx, s.root)
+	if err != nil {
+		return retentionOutcome{}, err
+	}
+	defer unlock()
+
+	if err := s.sweepAbandonedState(ctx); err != nil {
+		return retentionOutcome{}, err
+	}
+	if pinErr := s.ensureDiversifiedPinsForRetention(maxCases); pinErr != nil {
+		return retentionOutcome{PinWarning: pinErr.Error()}, nil
+	}
+	pruned, err := s.prune(ctx, maxCases)
+	return retentionOutcome{Pruned: pruned}, err
+}
+
 // ensureDiversifiedPinsForRetention materializes the diversified pin set so
 // Prune's pin protection has pins to protect: only ListCases("diversified"|
 // "tune") and RefreshDiversified write that table, so a machine that only
 // collects automatically would reach the cap with an empty pin table. The work
 // is bounded to the pass that can actually evict something: no cap, or a corpus
-// still inside it, materializes nothing.
+// still inside it, materializes nothing. The caller holds the corpus lock.
 //
-// It plans over the READABLE gold rather than going through ListCases, and
-// takes the corpus lock while it writes. Both differences matter on this path:
-// ListCases fails on the first unloadable case directory, and this is the only
+// It plans over the READABLE gold rather than going through ListCases, because
+// ListCases fails on the first unloadable case directory and this is the only
 // caller that must survive one, or a single corrupt manifest would veto
 // retention forever (nothing repairs such a case, and Prune is what would have
 // evicted it). Every other ListCases caller still fails loudly on an
-// unsupported manifest. The lock keeps an automatic pass from re-planning the
-// holdout underneath an in-flight replay that reserved it.
-func (s *Store) ensureDiversifiedPinsForRetention(ctx context.Context, maxCases int) error {
+// unsupported manifest.
+func (s *Store) ensureDiversifiedPinsForRetention(maxCases int) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("eval registry is closed")
 	}
 	if maxCases <= 0 {
 		return nil
 	}
-	unlock, err := lockCorpus(ctx, s.root)
-	if err != nil {
-		return err
-	}
-	defer unlock()
 	var total int
 	if err := s.db.QueryRow(`SELECT count(*) FROM cases`).Scan(&total); err != nil {
 		return fmt.Errorf("count eval cases: %w", err)
@@ -379,9 +440,11 @@ func (s *Store) readableLabeledCases() ([]Case, map[string]bool, error) {
 	return gold, unreadable, nil
 }
 
-// RefreshDiversified rebuilds the official pin set from current gold.
+// RefreshDiversified rebuilds the official pin set from current gold. It is
+// the most destructive pin writer in the package (it re-plans from scratch
+// with no preserved pins), so it runs under the corpus lock.
 func (s *Store) RefreshDiversified() ([]Case, error) {
-	return s.listCases("diversified", true)
+	return s.listCasesLocking(context.Background(), "diversified", true)
 }
 
 func (s *Store) listCases(set string, refreshDiversified bool) ([]Case, error) {
@@ -615,6 +678,13 @@ func (s *Store) Prune(ctx context.Context, maxCases int) (int, error) {
 	if err := s.sweepAbandonedState(ctx); err != nil {
 		return 0, err
 	}
+	return s.prune(ctx, maxCases)
+}
+
+// prune is Prune's body for a caller that already holds the corpus lock and has
+// already swept the abandoned state. The lock is not re-entrant, so the whole
+// retention pass enters here rather than through Prune.
+func (s *Store) prune(ctx context.Context, maxCases int) (int, error) {
 	if maxCases <= 0 {
 		return 0, nil
 	}
@@ -688,20 +758,6 @@ func (s *Store) sweepAbandonedState(ctx context.Context) error {
 		return fmt.Errorf("release abandoned eval replay reservations: %w", err)
 	}
 	return nil
-}
-
-// sweepAbandonedStateLocking is sweepAbandonedState taking the corpus lock
-// itself, for a caller that does not already hold it.
-func (s *Store) sweepAbandonedStateLocking(ctx context.Context) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("eval registry is closed")
-	}
-	unlock, err := lockCorpus(ctx, s.root)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return s.sweepAbandonedState(ctx)
 }
 
 func (s *Store) cleanupPendingCaseDeletions(ctx context.Context) error {

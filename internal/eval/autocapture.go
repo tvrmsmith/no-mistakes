@@ -41,7 +41,9 @@ type Retention struct {
 // materializes the diversified pins the retention cap has to protect, and then
 // enforces that cap. The cap is enforced only once those pins exist, so a
 // failed materialization leaves the corpus over its target rather than pruning
-// a holdout nothing is protecting.
+// a holdout nothing is protecting. Store.retain owns that whole second half and
+// holds the corpus lock across it, so no concurrent set resolution can release
+// a pin between the pass writing it and the prune reading it.
 //
 // It is the single entry point for collection that nobody asked for by hand, so
 // it deliberately keeps the same Capture the CLI uses rather than a looser
@@ -74,18 +76,9 @@ func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID str
 		return AutoCaptureResult{}, err
 	}
 	result := AutoCaptureResult{Captured: len(cases)}
-	// The housekeeping runs before the pin gate because it owes nothing to the
-	// pins: a staged deletion left half-finished and an expired reservation
-	// both have to be reclaimed even on a pass that never reaches the cap.
-	if err := store.sweepAbandonedStateLocking(ctx); err != nil {
-		return result, err
-	}
-	if pinErr := store.ensureDiversifiedPinsForRetention(ctx, retention.MaxCases); pinErr != nil {
-		result.PinWarning = pinErr.Error()
-		return result, nil
-	}
-	pruned, err := store.Prune(ctx, retention.MaxCases)
-	result.Pruned = pruned
+	outcome, err := store.retain(ctx, retention.MaxCases)
+	result.Pruned = outcome.Pruned
+	result.PinWarning = outcome.PinWarning
 	if err != nil {
 		return result, err
 	}
