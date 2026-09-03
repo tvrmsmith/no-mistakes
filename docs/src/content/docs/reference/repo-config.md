@@ -541,15 +541,7 @@ Each unit is a service, a directory of code with its own test command, or the re
 
 `command` runs verbatim via the platform shell, exactly like `commands.test`, and should cover the unit, integration, and service-isolation test tiers for that unit. End-to-end tests stay in CI; do not put them in a unit command.
 
-The command receives three environment variables so it can scope itself the same way discovery did. A `commands.test` command receives them too, since discovery treats it as one implicit `repository` unit.
-
-| Variable | Value |
-| --- | --- |
-| `NO_MISTAKES_BASE_SHA` | The base commit the run is validating against |
-| `NO_MISTAKES_CHANGED_FILES` | The changed paths, one per line |
-| `NO_MISTAKES_CHANGED_FILE_COUNT` | How many paths the run changed |
-
-`NO_MISTAKES_CHANGED_FILES` separates paths with a newline, because an environment variable cannot carry a NUL. A path containing a newline or a carriage return is therefore omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. `NO_MISTAKES_CHANGED_FILE_COUNT` always reports the true total, so a command can detect the gap by comparing the count with the number of lines it read.
+The command receives [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_CHANGED_FILES`](/no-mistakes/reference/environment/#no_mistakes_changed_files), and [`NO_MISTAKES_CHANGED_FILE_COUNT`](/no-mistakes/reference/environment/#no_mistakes_changed_file_count) so it can scope itself the same way discovery did; the environment reference owns their values and encoding limits. A `commands.test` command receives them too, since discovery treats it as one implicit `repository` unit.
 
 `command` runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so the whole `test.units` list is honored only from the trusted default-branch copy of this file unless the repository opts in via `allow_repo_commands: true` - see [`allow_repo_commands`](#allow_repo_commands). A contributor's pushed branch cannot inject shell by naming a new unit or repointing an existing one's command.
 
