@@ -72,11 +72,29 @@ If a PR merges after the first capture, already-captured cases are relabeled. Th
 
 A case with no finding-level gold is unlabeled / pending, never a pass. True-negative also stays unlabeled because the current capture evidence cannot establish that a finding is invalid without the shipped-unfixed or adjudication paths above.
 
+## Pipeline layout tag
+
+Every case records the pipeline layout its review pass ran under, as `pipeline_version` in the case manifest. The two values today are `review-early` (Review ran before the cheap gates) and `cheap-gates-first` (Review certifies after Format, Lint, Test, and Metrics).
+
+The tag comes from the run's own recorded step order, not from the version of no-mistakes doing the capturing. Capturing an old run long after the pipeline changed still tags it correctly. A run that recorded a Review step but no cheap gate at all is `review-early` too: partial evidence resolves to the pre-reorder layout rather than to whatever the capturing build happens to run. A cheap gate whose step order was never recorded counts as no evidence for the same reason, so it can never flip a run to `cheap-gates-first`. Only a run with no recorded Review step falls back to the capturing build's own step order. A case captured before the tag existed reads as `review-early`. Nothing on disk is rewritten and no gold label is touched.
+
+`eval report` groups every candidate's scores by the tag, so the two populations never merge into one headline. `--pipeline` narrows `eval run`, `eval sets`, and `eval report` to one layout; the default is `any`, which shows every layout.
+
+When a filter leaves a set with nothing in it, the surfaces say which of the two things happened. They report the tag as the cause (`case set "diversified" has no case tagged cheap-gates-first`) when the set held cases before the filter, or when no case anywhere in the corpus carries the tag you asked for. A set that was already empty for its own reason keeps that reason instead, so a corpus with no labeled gold still tells you `diversified` has no gold, and a corpus whose gold all fits in the holdout still tells you `tune` is empty. `eval run` refuses with the same sentence `eval sets` warns with.
+
+The `eval sets` self-score is a single number over the cases it scored, so when those cases hold both layouts the dashboard marks that score as not comparable and lists how the set splits. Narrowing with `--pipeline` silences the mark, because the score then covers one population, while the breakdown still lists every layout in the set. The `eval run` score box folds a session's replays the same way and carries the same mark when the session spans both layouts.
+
+This exists because, after the reorder, Review sees a tree four gates already cleared. A share of the older gold-labelled findings can no longer occur, so scoring the two populations together would read as a review-quality regression that is really a scope change.
+
 ## Disk use and retention
 
 Cases from the same repository share one local Git object pool under `<NM_HOME>/eval/pools/`. The first case from a repository stores its history once; every later case adds only the objects its own commits introduced, which is normally a few kilobytes.
 
-`eval.max_cases` (default 200) is the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. A case that has a replay in progress or already has recorded candidate replays is never dropped - an eval report's cohort pins the case IDs it compared, so reclaiming one would invalidate a comparison you already paid for. Protected cases can therefore keep the corpus above the target. Set it to `0` to keep every case.
+`eval.max_cases` (default 200) is the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. Three kinds of case are never dropped: one with a replay in progress, one that already has recorded candidate replays (an eval report's cohort pins the case IDs it compared, so reclaiming one would invalidate a comparison you already paid for), and one pinned into the diversified holdout. The holdout is protected because eviction is oldest-first: after a pipeline reorder the corpus fills with newly tagged cases while the earlier population only ages, so an unprotected cap would delete the exact baseline the [pipeline layout tag](#pipeline-layout-tag) exists to keep comparable. Automatic collection materializes the holdout pins itself, at your configured `eval.diversified_size`, before enforcing the cap, so the protection holds on a machine where nobody has ever run `eval sets`. If that materialization fails, the pass skips the prune rather than evicting a case nothing is protecting; the capture still succeeds and the corpus stays over its target until the next pass. Protected cases can therefore keep the corpus above the target. Set it to `0` to keep every case.
+
+An `eval.diversified_size` larger than `eval.max_cases` is allowed and is not a misconfiguration: the holdout is protected evidence, so the corpus deliberately sits above the retention target rather than deleting held-out cases to reach a disk figure. If you want the target actually reached, keep `eval.diversified_size` below `eval.max_cases`.
+
+An unreadable case directory (a corrupt manifest, or one written by a newer build) does not stop retention. The pins are planned over the cases that still load, so the cap keeps being enforced and an unreadable case that holds no pin is itself eligible for eviction. A case that is already pinned into the holdout keeps its pin while it is unreadable, so becoming unreadable never turns held-out evidence into the next thing the cap deletes. Those carried pins ride alongside a holdout planned at the full `eval.diversified_size`, they are not charged against it, so a corpus with several unreadable pinned cases can hold more pins than the configured size rather than leaving readable gold unpinned. Over the configured size is the same posture protected cases already take against `eval.max_cases`, and a holdout whose every seat is held by a case nothing can load would resolve to an empty set. Every other eval command still fails loudly on an unsupported version.
 
 Because the objects live in the pool rather than inside each case, a case directory is not a portable archive: copying it elsewhere does not carry the code it replays.
 
@@ -92,7 +110,7 @@ The command renders a dashboard headlined by the **diversified holdout** - the o
 
 The headline includes an instant **self-score**: the recorded source reviews of the diversified set scored against their own gold with the same matcher a replayed candidate faces. It is computed from the already-captured case files - no replay, agent invocation, or network - and is the baseline a candidate has to beat. Recall, precision bounds, and F1 follow the report's semantics, including withholding F1 when no false-positive gold exists.
 
-`eval sets` is safe to re-run: inspecting the sets materializes the diversified pins, and a second read returns the same summaries without repinning anything.
+`eval sets` is safe to re-run: inspecting the sets materializes the diversified pins, and a second read returns the same summaries without repinning anything. `--pipeline review-early`, `--pipeline cheap-gates-first`, or `--pipeline any` (the default) narrows every set summary to one pipeline layout; see [Pipeline layout tag](#pipeline-layout-tag). Two figures stay whole under a filter: the headline pin count, labelled corpus-wide because that is what the cap governs, and the layout breakdown, which is what you read to choose a filter in the first place.
 
 Four logical sets are available to replay:
 
@@ -131,7 +149,7 @@ Matching is a documented cascade of strengths: the same finding ID, the same fil
 
 The report prints recall, precision bounds (adjudicated vs pending-as-FP), and F1 as the headline metric **only when false-positive gold exists** so precision is real. Otherwise F1 is withheld rather than reported as recall-in-disguise.
 
-`--repeats` defaults to `3` and must be at least `1`. Candidates must use an agent whose model no-mistakes can actually pin. ACP targets such as `cursor` and `acp:<target>` are pinned through `acpx --model`, but they cannot take `effort`; `rovodev` and `antigravity` expose no mechanism at all and are rejected outright. `opencode` needs the `provider/model` form. The per-harness mapping table lives in [`agent_config`](/no-mistakes/reference/global-config/#agent_config).
+`--repeats` defaults to `3` and must be at least `1`. `--pipeline review-early`, `--pipeline cheap-gates-first`, or `--pipeline any` (the default) narrows the replayed cases to one pipeline layout; see [Pipeline layout tag](#pipeline-layout-tag). Candidates must use an agent whose model no-mistakes can actually pin. ACP targets such as `cursor` and `acp:<target>` are pinned through `acpx --model`, but they cannot take `effort`; `rovodev` and `antigravity` expose no mechanism at all and are rejected outright. `opencode` needs the `provider/model` form. The per-harness mapping table lives in [`agent_config`](/no-mistakes/reference/global-config/#agent_config).
 
 The replay never inherits this machine's own harness pins: capture strips `agent`, `agent_args_override`, and `agent_config` from the configuration it freezes, so the candidate is the only thing that decides what the harness runs as.
 
@@ -145,7 +163,7 @@ The command streams one scored progress line per replay as it completes, then re
 no-mistakes eval report
 ```
 
-The report groups local replays by candidate and cohort. A cohort pins the selected case IDs and repeat count, so frontier comparisons only compare candidates run over the same corpus and repeat plan. It shows:
+The report groups local replays by candidate, pipeline layout, and cohort. A cohort pins the selected case IDs and repeat count, so frontier comparisons only compare candidates run over the same corpus and repeat plan. `--pipeline review-early`, `--pipeline cheap-gates-first`, or `--pipeline any` (the default) narrows the report to one pipeline layout; see [Pipeline layout tag](#pipeline-layout-tag). It shows:
 
 - finding-level true-positive, false-negative, false-positive, and pending counts
 - recall over gold issues, or unlabeled / pending when a case has no finding-level gold

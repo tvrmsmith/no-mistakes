@@ -239,6 +239,7 @@ func Capture(ctx context.Context, store *Store, p *paths.Paths, database *db.DB,
 			Branch: run.Branch, DefaultBranch: repo.DefaultBranch, BaseSHA: replayBaseSHA,
 			HeadSHA: run.HeadSHA, StartingHeadSHA: startingSHA, ReviewedHeadSHA: reviewedSHA, TrustedConfigSHA: trustedSHA,
 			ChangedFiles: changedFiles, ChangedLines: changedLines,
+			PipelineVersion: PipelineVersionFromSteps(steps),
 		}
 		if run.Intent != nil {
 			manifest.Intent = *run.Intent
@@ -713,7 +714,7 @@ func RelabelAll(ctx context.Context, store *Store, p *paths.Paths, database *db.
 	if store == nil || p == nil || database == nil {
 		return nil, fmt.Errorf("eval relabel requires a store, paths, and database")
 	}
-	cases, err := store.ListCases("all")
+	cases, err := store.ListCases(ctx, "all")
 	if err != nil {
 		return nil, err
 	}

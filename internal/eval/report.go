@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -15,44 +16,62 @@ type Interval struct {
 	Cases int
 }
 
-// CandidateReport is one locally observed candidate slice.
+// CandidateReport is one locally observed candidate slice, scoped to one
+// pipeline layout: the two populations a scope change to the pipeline
+// produces are never blended into one row (see Report).
 type CandidateReport struct {
-	Cohort        string
-	Summary       EvaluationSummary
-	RepeatCount   int
-	Confidence    *Interval
-	AverageTokens *float64
-	AverageWallMS float64
-	OnFrontier    bool
+	PipelineVersion PipelineVersion
+	Cohort          string
+	Summary         EvaluationSummary
+	RepeatCount     int
+	Confidence      *Interval
+	AverageTokens   *float64
+	AverageWallMS   float64
+	OnFrontier      bool
 }
 
-// Report loads every local evaluation result grouped by candidate. It never
-// contacts a forge, agent provider, telemetry endpoint, or remote case store.
-func Report(store *Store) ([]CandidateReport, error) {
+// ReportForPipeline loads every local evaluation result grouped by candidate,
+// narrowed to one pipeline layout tag. It never contacts a forge, agent
+// provider, telemetry endpoint, or remote case store.
+//
+// PipelineAny groups every evaluation by (pipeline
+// version, cohort, candidate) rather than filtering: once Review moves
+// relative to the cheap gates, a share of the old gold-labelled findings can
+// no longer occur, so blending the two populations into one row would read as
+// a review-quality regression that is really a scope change. An evaluation
+// recorded before PipelineVersion existed is read as PipelineReviewEarly (see
+// normalizePipelineVersion).
+func ReportForPipeline(store *Store, version PipelineVersion) ([]CandidateReport, error) {
 	evaluations, err := store.evaluations()
 	if err != nil {
 		return nil, err
 	}
-	byCandidateCohort := make(map[string][]Evaluation)
+	byGroup := make(map[string][]Evaluation)
 	for _, evaluation := range evaluations {
+		pipelineVersion := normalizePipelineVersion(evaluation.PipelineVersion)
+		if version != PipelineAny && pipelineVersion != version {
+			continue
+		}
 		cohort := evaluation.Cohort
 		if cohort == "" {
 			cohort = "legacy-unmatched"
 		}
-		key := cohort + "\x00" + evaluation.Candidate
-		byCandidateCohort[key] = append(byCandidateCohort[key], evaluation)
+		key := string(pipelineVersion) + "\x00" + cohort + "\x00" + evaluation.Candidate
+		byGroup[key] = append(byGroup[key], evaluation)
 	}
-	reports := make([]CandidateReport, 0, len(byCandidateCohort))
-	for key, rows := range byCandidateCohort {
-		cohort, candidate, _ := strings.Cut(key, "\x00")
+	reports := make([]CandidateReport, 0, len(byGroup))
+	for key, rows := range byGroup {
+		fields := strings.SplitN(key, "\x00", 3)
+		pipelineVersion, cohort, candidate := fields[0], fields[1], fields[2]
 		summary := SummarizeEvaluations(rows)
 		repeats := repeatCount(rows)
 		report := CandidateReport{
-			Cohort:        cohort,
-			Summary:       summary,
-			RepeatCount:   repeats,
-			Confidence:    confidenceInterval(candidate, rows),
-			AverageWallMS: averageWallMS(rows),
+			PipelineVersion: PipelineVersion(pipelineVersion),
+			Cohort:          cohort,
+			Summary:         summary,
+			RepeatCount:     repeats,
+			Confidence:      confidenceInterval(candidate, rows),
+			AverageWallMS:   averageWallMS(rows),
 		}
 		if cost, ok := averageTokens(rows); ok {
 			report.AverageTokens = &cost
@@ -60,6 +79,9 @@ func Report(store *Store) ([]CandidateReport, error) {
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool {
+		if reports[i].PipelineVersion != reports[j].PipelineVersion {
+			return reports[i].PipelineVersion < reports[j].PipelineVersion
+		}
 		if reports[i].Cohort != reports[j].Cohort {
 			return reports[i].Cohort < reports[j].Cohort
 		}
@@ -179,7 +201,7 @@ func markFrontier(reports []CandidateReport) {
 		}
 		dominated := false
 		for j := range reports {
-			if i == j || reports[i].Cohort != reports[j].Cohort || reports[j].AverageTokens == nil || reports[j].Summary.Labeled == 0 || reports[j].Summary.Failures > 0 {
+			if i == j || reports[i].PipelineVersion != reports[j].PipelineVersion || reports[i].Cohort != reports[j].Cohort || reports[j].AverageTokens == nil || reports[j].Summary.Labeled == 0 || reports[j].Summary.Failures > 0 {
 				continue
 			}
 			betterRecall := reports[j].Summary.Recall() >= reports[i].Summary.Recall()
@@ -207,11 +229,60 @@ type SetSummary struct {
 	FalsePositive  int
 	Unlabeled      int
 	QueuedFindings int
-	PinCount       int
-	Cap            int
-	Warning        string
-	Composition    []CompositionRow
-	SelfScore      EvaluationSummary
+	// PinCount is the corpus-wide size of the diversified pin set, which is
+	// what the cap governs. It is deliberately not narrowed by a pipeline
+	// filter, so a filtered Cases beside it is a subset of these pins rather
+	// than a contradiction; the renderer labels it corpus-wide for that reason.
+	PinCount    int
+	Cap         int
+	Warning     string
+	Composition []CompositionRow
+	SelfScore   EvaluationSummary
+	// Pipelines buckets this set's cases by their own PipelineVersion tag, so
+	// an operator can see how much of a set exists under each pipeline layout
+	// before running a filtered report. It is independent of any pipeline
+	// filter InspectSetsForPipeline was called with.
+	Pipelines []PipelineCountRow
+	// ScoredLayouts counts the distinct layouts spanned by the cases SelfScore
+	// actually folds into one number, which is the gold-bearing subset of the
+	// filtered cases. An unlabeled case contributes nothing to the score, so
+	// counting it here would raise a not-comparable caveat about a layout the
+	// score never saw. A filter that leaves a single layout makes the score
+	// comparable even though Pipelines still lists two.
+	ScoredLayouts int
+}
+
+// PipelineCountRow is one pipeline-layout bucket of a case set.
+type PipelineCountRow struct {
+	PipelineVersion PipelineVersion
+	Cases           int
+	GoldCases       int
+}
+
+// filterMissMessage is the one sentence every surface uses for "the set exists,
+// the tag matched nothing in it". Both eval sets and a replay refusal read it,
+// and the two have to say the same thing, because the fix is the same: pick
+// another tag, not capture more cases.
+func filterMissMessage(set string, version PipelineVersion) string {
+	return fmt.Sprintf("case set %q has no case tagged %s", set, version)
+}
+
+// filterEmptiedSet answers whether the pipeline filter is what emptied this
+// set, which is the only condition under which filterMissMessage is true.
+// filtered is the set after the filter, resolved is the same set before it, and
+// corpus is every case in the store. A set that was already empty before the
+// filter only counts when nothing in the whole corpus carries the requested
+// tag, because otherwise the set is empty for its own reason (no gold to pin,
+// every gold case already held out) and naming the tag sends the operator after
+// the wrong fix.
+func filterEmptiedSet(version PipelineVersion, filtered, resolved, corpus []Case) bool {
+	if version == PipelineAny || len(filtered) > 0 || len(corpus) == 0 {
+		return false
+	}
+	if len(resolved) > 0 {
+		return true
+	}
+	return len(filterCasesByPipeline(corpus, version)) == 0
 }
 
 // CompositionRow is one stratum bucket of a case set: the same axes the
@@ -227,17 +298,24 @@ type CompositionRow struct {
 	Cases       int
 }
 
-// InspectSets summarizes all logical sets and their diversified mix. It reads
+// InspectSetsForPipeline summarizes all logical sets and their diversified mix,
+// narrowed to one pipeline layout tag (PipelineAny narrows nothing). It reads
 // only local registry rows and captured case files, so it stays instant no
 // matter how expensive a replay of the same sets would be.
-func InspectSets(store *Store) ([]SetSummary, error) {
+func InspectSetsForPipeline(ctx context.Context, store *Store, version PipelineVersion) ([]SetSummary, error) {
 	sets := []string{"all", "labeled", "diversified", "tune"}
-	all, err := store.ListCases("all")
+	// Resolving a set re-reads every case directory off disk, so "all" is
+	// resolved once here, unfiltered, and both the labeled count and the loop's
+	// own "all" iteration narrow that same slice in memory.
+	allResolved, err := store.ListCasesForPipeline(ctx, "all", PipelineAny)
 	if err != nil {
 		return nil, err
 	}
+	// labeledCount is deliberately unfiltered: it answers "does any labeled gold
+	// exist at all", which is what separates an empty corpus from a filter that
+	// matched nothing. Counting it through the filter made both look identical.
 	labeledCount := 0
-	for _, c := range all {
+	for _, c := range allResolved {
 		if c.Labels.HasGold() {
 			labeledCount++
 		}
@@ -248,20 +326,44 @@ func InspectSets(store *Store) ([]SetSummary, error) {
 	}
 	result := make([]SetSummary, 0, len(sets))
 	for _, name := range sets {
-		cases, err := store.ListCases(name)
-		if err != nil {
-			return nil, err
+		// The set is resolved once unfiltered and narrowed in memory: the
+		// layout breakdown has to describe the whole set (that is what makes it
+		// useful before choosing a filter), while every other field describes
+		// the filtered view.
+		resolved := allResolved
+		if name != "all" {
+			r, err := store.ListCasesForPipeline(ctx, name, PipelineAny)
+			if err != nil {
+				return nil, err
+			}
+			resolved = r
 		}
-		summary := SetSummary{Name: name, Cases: len(cases), Cap: store.diversifiedSize, SelfScore: SelfScoreRecordedReviews(cases)}
+		cases := filterCasesByPipeline(resolved, version)
+		// A set that exists but has nothing under the requested tag is a filter
+		// miss, not an empty corpus, and the two need different fixes.
+		filterMissed := filterEmptiedSet(version, cases, resolved, allResolved)
+		summary := SetSummary{
+			Name:          name,
+			Cases:         len(cases),
+			Cap:           store.diversifiedSize,
+			SelfScore:     SelfScoreRecordedReviews(cases),
+			Pipelines:     pipelineCountRows(resolved),
+			ScoredLayouts: scoredPipelineLayouts(cases, caseScoredLayout),
+		}
 		if name == "diversified" {
 			if n, err := store.pinCount(); err == nil {
 				summary.PinCount = n
 			}
-			if len(cases) == 0 && labeledCount == 0 {
-				summary.Warning = "diversified is empty: no labeled gold (unlabeled cases are not filled)"
-			}
 		}
-		if name == "tune" && len(cases) == 0 && labeledCount > 0 {
+		// The filter-miss arm is shared, but it stays scoped to the two sets
+		// that warn at all today: "all" and "labeled" report their size and
+		// nothing else, and widening them here would be a separate change.
+		switch {
+		case filterMissed && (name == "diversified" || name == "tune"):
+			summary.Warning = filterMissMessage(name, version)
+		case name == "diversified" && len(cases) == 0 && labeledCount == 0:
+			summary.Warning = "diversified is empty: no labeled gold (unlabeled cases are not filled)"
+		case name == "tune" && len(cases) == 0 && labeledCount > 0:
 			summary.Warning = "tune is empty; do not fit matcher thresholds on diversified"
 		}
 		type compositionKey struct {
@@ -313,6 +415,62 @@ func InspectSets(store *Store) ([]SetSummary, error) {
 		result = append(result, summary)
 	}
 	return result, nil
+}
+
+// scoredPipelineLayouts counts the distinct pipeline layouts spanned by exactly
+// the items that reach a score, reading an untagged item as pre-reorder. The
+// scored predicate is the caller's, because eval sets scores cases and eval run
+// scores replay evaluations, but the counting rule is shared: a caveat drawn
+// over a wider population than the one folded into the number warns about a
+// layout the score never saw. A summary is comparable only at a count of one.
+func scoredPipelineLayouts[T any](items []T, scored func(T) (PipelineVersion, bool)) int {
+	seen := map[PipelineVersion]bool{}
+	for _, item := range items {
+		version, ok := scored(item)
+		if !ok {
+			continue
+		}
+		seen[normalizePipelineVersion(version)] = true
+	}
+	return len(seen)
+}
+
+// caseScoredLayout is the eval sets side of that predicate: SelfScore folds in
+// the gold-bearing cases only.
+func caseScoredLayout(c Case) (PipelineVersion, bool) {
+	return c.PipelineVersion, c.Labels.HasGold()
+}
+
+// PipelineLayoutsInEvaluations counts the layouts spanned by the evaluations
+// SummarizeEvaluations actually scores, which is the eval run side of the same
+// rule scoredPipelineLayouts owns.
+func PipelineLayoutsInEvaluations(evaluations []Evaluation) int {
+	return scoredPipelineLayouts(evaluations, func(e Evaluation) (PipelineVersion, bool) {
+		return e.PipelineVersion, e.hasScoredGold()
+	})
+}
+
+// pipelineCountRows buckets cases by their own PipelineVersion tag, sorted by
+// version string ascending.
+func pipelineCountRows(cases []Case) []PipelineCountRow {
+	byVersion := map[PipelineVersion]*PipelineCountRow{}
+	for _, c := range cases {
+		row, ok := byVersion[c.PipelineVersion]
+		if !ok {
+			row = &PipelineCountRow{PipelineVersion: c.PipelineVersion}
+			byVersion[c.PipelineVersion] = row
+		}
+		row.Cases++
+		if c.Labels.HasGold() {
+			row.GoldCases++
+		}
+	}
+	rows := make([]PipelineCountRow, 0, len(byVersion))
+	for _, row := range byVersion {
+		rows = append(rows, *row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].PipelineVersion < rows[j].PipelineVersion })
+	return rows
 }
 
 func sortedCompositionRows(rows []CompositionRow) []CompositionRow {
@@ -380,18 +538,25 @@ func shortFingerprint(value string) string {
 	return value[:12]
 }
 
-// RenderReport is a stable human-readable local comparison. Scores are
-// finding-level. Unmatched candidate findings stay pending and are never
+// RenderReportForPipeline is a stable human-readable local comparison. Scores
+// are finding-level. Unmatched candidate findings stay pending and are never
 // called false positives. A replay with no gold is unlabeled, not a pass.
-func RenderReport(reports []CandidateReport) string {
+//
+// It is told which pipeline filter produced the reports, so an empty result
+// says whether the filter matched nothing or nothing was recorded. Those need
+// different fixes, and the caller is the only one who knows which filter ran.
+func RenderReportForPipeline(reports []CandidateReport, version PipelineVersion) string {
 	if len(reports) == 0 {
+		if version != PipelineAny {
+			return fmt.Sprintf("LOCAL-ONLY EVAL REPORT\nno candidate replay tagged %s recorded yet\n", version)
+		}
 		return "LOCAL-ONLY EVAL REPORT\nno candidate replays recorded yet\n"
 	}
 	var b strings.Builder
 	b.WriteString("LOCAL-ONLY EVAL REPORT\n")
 	for _, report := range reports {
 		s := report.Summary
-		fmt.Fprintf(&b, "\n%s (cohort %s)\n", s.Candidate, report.Cohort)
+		fmt.Fprintf(&b, "\n%s (pipeline %s, cohort %s)\n", s.Candidate, report.PipelineVersion, report.Cohort)
 		fmt.Fprintf(&b, "  replays: %d across %d repeat(s); labeled: %d; failures: %d\n", s.Total, report.RepeatCount, s.Labeled, s.Failures)
 		if s.Labeled == 0 {
 			b.WriteString("  finding scores: unlabeled / pending (no finding-level gold yet)\n")

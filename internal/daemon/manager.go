@@ -1678,13 +1678,19 @@ func (m *RunManager) autoCaptureEvalCase(ctx context.Context, cfg *config.Config
 	ctx, cancel := context.WithTimeout(ctx, evalAutoCaptureTimeout)
 	defer cancel()
 
-	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, cfg.Eval.MaxCases)
+	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, eval.Retention{
+		MaxCases:        cfg.Eval.MaxCases,
+		DiversifiedSize: cfg.Eval.DiversifiedSize,
+	})
 	switch {
 	case err != nil:
 		slog.Warn("failed to collect eval case", "run_id", runID, "error", err)
 	case result.Skipped:
 		slog.Debug("run has no eval case to collect", "run_id", runID, "reason", result.Reason)
 	default:
+		if result.PinWarning != "" {
+			slog.Warn("eval retention skipped: diversified pins unavailable", "run_id", runID, "reason", result.PinWarning)
+		}
 		slog.Info("collected eval case", "run_id", runID, "cases", result.Captured, "pruned", result.Pruned)
 	}
 }

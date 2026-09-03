@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -258,61 +260,11 @@ type evalCLIFixture struct {
 }
 
 // setupEvalCLIFixture builds the minimal real gate, working clone, and
-// recorded review round the eval CLI commands read from.
+// recorded review round the eval CLI commands read from. The repository is
+// named "repo" so its URL stays https://example.test/org/repo.
 func setupEvalCLIFixture(t *testing.T, ctx context.Context, root, findings string) evalCLIFixture {
 	t.Helper()
-	p := paths.WithRoot(root)
-	if err := p.EnsureDirs(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := db.Open(p.DB())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-
-	gateDir := p.RepoDir("eval-repo")
-	if err := git.InitBare(ctx, gateDir); err != nil {
-		t.Fatal(err)
-	}
-	workDir := filepath.Join(root, "source")
-	mustCLIGit(t, ctx, root, "clone", gateDir, workDir)
-	mustCLIGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
-	mustCLIGit(t, ctx, workDir, "config", "user.name", "Eval Test")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mustCLIGit(t, ctx, workDir, "add", ".")
-	mustCLIGit(t, ctx, workDir, "commit", "-m", "base")
-	mustCLIGit(t, ctx, workDir, "branch", "-M", "main")
-	mustCLIGit(t, ctx, workDir, "push", "origin", "main")
-	baseSHA := mustCLIGit(t, ctx, workDir, "rev-parse", "HEAD")
-	mustCLIGit(t, ctx, workDir, "checkout", "-b", "feature/eval")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mustCLIGit(t, ctx, workDir, "add", "main.go")
-	mustCLIGit(t, ctx, workDir, "commit", "-m", "change")
-	mustCLIGit(t, ctx, workDir, "push", "origin", "feature/eval")
-	headSHA := mustCLIGit(t, ctx, workDir, "rev-parse", "HEAD")
-
-	repo, err := database.InsertRepoWithID("eval-repo", workDir, "https://example.test/org/repo", "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := database.InsertRun(repo.ID, "feature/eval", headSHA, baseSHA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	step, err := database.InsertStepResult(run.ID, types.StepReview)
-	if err != nil {
-		t.Fatal(err)
-	}
-	round, err := database.InsertReviewStepRoundWithProvenance(step.ID, 1, "initial", &findings, nil, headSHA, headSHA, baseSHA, []byte("{}\n"), []byte("{}\n"), 50)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return evalCLIFixture{run: run, round: round, step: step, db: database}
+	return setupEvalCLIFixtureNamed(t, ctx, root, "repo", findings)
 }
 
 // installFakeCLIReviewAgent puts a scripted claude on PATH that replies with
@@ -477,6 +429,517 @@ func TestEvalCompositionFitsTheBoxWhenCaseCountsExpand(t *testing.T) {
 	}
 	if got := strings.Count(box, "warning/auto-fix"); got != len(rows) {
 		t.Fatalf("rendered box contains %d complete finding types, want %d:\n%s", got, len(rows), box)
+	}
+}
+
+func TestEvalReportPipelineFlagRejectsAnUnknownLayout(t *testing.T) {
+	t.Setenv("NM_HOME", t.TempDir())
+	chdir(t, t.TempDir())
+
+	_, err := executeCmd("eval", "report", "--pipeline", "v2")
+	if err == nil || !strings.Contains(err.Error(), `unknown pipeline version "v2"`) {
+		t.Fatalf("eval report --pipeline v2 error = %v, want unknown pipeline version", err)
+	}
+}
+
+func TestEvalSetsPipelineFlagRejectsAnUnknownLayout(t *testing.T) {
+	t.Setenv("NM_HOME", t.TempDir())
+	chdir(t, t.TempDir())
+
+	_, err := executeCmd("eval", "sets", "--pipeline", "v2")
+	if err == nil || !strings.Contains(err.Error(), `unknown pipeline version "v2"`) {
+		t.Fatalf("eval sets --pipeline v2 error = %v, want unknown pipeline version", err)
+	}
+}
+
+// The pipeline flag is validated before eval run does any other work: the
+// error returned must be the parse error, never a replay or empty-corpus
+// error, so a typo costs nothing.
+func TestEvalRunPipelineFlagRejectsAnUnknownLayout(t *testing.T) {
+	t.Setenv("NM_HOME", t.TempDir())
+	chdir(t, t.TempDir())
+
+	_, err := executeCmd("eval", "run", "--cases", "all", "--candidate", "codex,model=gpt-5.4", "--pipeline", "v2")
+	if err == nil || !strings.Contains(err.Error(), `unknown pipeline version "v2"`) {
+		t.Fatalf("eval run --pipeline v2 error = %v, want unknown pipeline version", err)
+	}
+}
+
+// The --pipeline flag's usage string must read identically on every command
+// that carries it, so an operator learns the flag once.
+func TestEvalPipelineFlagUsageIsIdenticalOnEveryCommand(t *testing.T) {
+	root := newEvalCmd()
+	usage := map[string]string{}
+	for _, name := range []string{"run", "sets", "report"} {
+		sub, _, err := root.Find([]string{name})
+		if err != nil {
+			t.Fatalf("find eval %s: %v", name, err)
+		}
+		flag := sub.Flags().Lookup("pipeline")
+		if flag == nil {
+			t.Fatalf("eval %s has no --pipeline flag", name)
+		}
+		usage[name] = flag.Usage
+	}
+	// Compared to each other rather than to a copy of the text: the wording is
+	// free to change, the three commands disagreeing about it is the bug.
+	if usage["sets"] != usage["run"] || usage["report"] != usage["run"] {
+		t.Fatalf("--pipeline usage differs between commands: %#v", usage)
+	}
+	if usage["run"] == "" {
+		t.Fatal("--pipeline carries no usage text on any command")
+	}
+}
+
+// setupEvalCLIFixtureNamed is setupEvalCLIFixture parameterized by repository
+// name, so two fixtures can coexist under one NM_HOME root: setupEvalCLIFixture
+// always names its gate and worktree "eval-repo"/"source", which collides when
+// a test needs two independent captured runs (one per pipeline layout) side by
+// side.
+func setupEvalCLIFixtureNamed(t *testing.T, ctx context.Context, root, name, findings string) evalCLIFixture {
+	t.Helper()
+	p := paths.WithRoot(root)
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	gateDir := p.RepoDir(name)
+	if err := git.InitBare(ctx, gateDir); err != nil {
+		t.Fatal(err)
+	}
+	workDir := filepath.Join(root, name)
+	mustCLIGit(t, ctx, root, "clone", gateDir, workDir)
+	mustCLIGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
+	mustCLIGit(t, ctx, workDir, "config", "user.name", "Eval Test")
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCLIGit(t, ctx, workDir, "add", ".")
+	mustCLIGit(t, ctx, workDir, "commit", "-m", "base")
+	mustCLIGit(t, ctx, workDir, "branch", "-M", "main")
+	mustCLIGit(t, ctx, workDir, "push", "origin", "main")
+	baseSHA := mustCLIGit(t, ctx, workDir, "rev-parse", "HEAD")
+	mustCLIGit(t, ctx, workDir, "checkout", "-b", "feature/eval")
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCLIGit(t, ctx, workDir, "add", "main.go")
+	mustCLIGit(t, ctx, workDir, "commit", "-m", "change")
+	mustCLIGit(t, ctx, workDir, "push", "origin", "feature/eval")
+	headSHA := mustCLIGit(t, ctx, workDir, "rev-parse", "HEAD")
+
+	repo, err := database.InsertRepoWithID(name, workDir, "https://example.test/org/"+name, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := database.InsertRun(repo.ID, "feature/eval", headSHA, baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, err := database.InsertReviewStepRoundWithProvenance(step.ID, 1, "initial", &findings, nil, headSHA, headSHA, baseSHA, []byte("{}\n"), []byte("{}\n"), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evalCLIFixture{run: run, round: round, step: step, db: database}
+}
+
+// forceStepOrder overrides a recorded step's order directly in the pipeline
+// database, mirroring internal/eval's own test helper of the same name: it is
+// the only way to make a captured run's OWN recorded step order say the cheap
+// gates ran before review, since InsertStepResult always assigns the build's
+// current order.
+func forceStepOrder(t *testing.T, p *paths.Paths, stepID string, order int) {
+	t.Helper()
+	// The live *db.DB handle is still open on this WAL database, so this second
+	// writer needs the same busy timeout db.Open uses or a concurrent
+	// checkpoint returns SQLITE_BUSY immediately and fails the test spuriously.
+	raw, err := sql.Open("sqlite", p.DB()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`UPDATE step_results SET step_order = ? WHERE id = ?`, order, stepID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setupEvalCLIFixtureTaggedCheapGatesFirst is setupEvalCLIFixtureNamed with
+// extra cheap-gate step rows forced ahead of review, so the captured case's
+// OWN recorded step order tags it cheap-gates-first instead of the default
+// review-early.
+func setupEvalCLIFixtureTaggedCheapGatesFirst(t *testing.T, ctx context.Context, root, name, findings string) evalCLIFixture {
+	t.Helper()
+	fixture := setupEvalCLIFixtureNamed(t, ctx, root, name, findings)
+	p := paths.WithRoot(root)
+	for _, stepName := range []types.StepName{"format", types.StepLint, types.StepTest} {
+		step, err := fixture.db.InsertStepResult(fixture.run.ID, stepName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forceStepOrder(t, p, step.ID, 1)
+	}
+	forceStepOrder(t, p, fixture.step.ID, 10)
+	return fixture
+}
+
+// TestEvalReportNarrowsToOnePipelineLayout and
+// TestEvalReportGroupsBothPipelineLayoutsByDefault share one corpus holding a
+// recorded evaluation under each pipeline layout.
+func recordTwoPipelineLayoutEvaluations(t *testing.T, root string) {
+	t.Helper()
+	ctx := context.Background()
+
+	reviewEarlyFindings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
+	reviewEarly := setupEvalCLIFixtureNamed(t, ctx, root, "alpha-service", reviewEarlyFindings)
+	selected := `["real-bug"]`
+	if err := reviewEarly.db.SetStepRoundSelection(reviewEarly.round.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	installFakeCLIReviewAgent(t, root, reviewEarlyFindings)
+	if out, err := executeCmd("eval", "capture", reviewEarly.run.ID); err != nil {
+		t.Fatalf("eval capture (review-early): %v\n%s", err, out)
+	}
+	if out, err := executeCmd("eval", "run", "--cases", "labeled", "--candidate", "claude,model=test", "--repeats", "1", "--pipeline", "review-early"); err != nil {
+		t.Fatalf("eval run (review-early): %v\n%s", err, out)
+	}
+
+	cheapGatesFindings := `{"findings":[{"id":"other-bug","severity":"warning","file":"main.go","line":3,"description":"other bug","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"minor","risk_scope":"source-or-external"}`
+	cheapGatesFirst := setupEvalCLIFixtureTaggedCheapGatesFirst(t, ctx, root, "beta-service", cheapGatesFindings)
+	otherSelected := `["other-bug"]`
+	if err := cheapGatesFirst.db.SetStepRoundSelection(cheapGatesFirst.round.ID, &otherSelected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	installFakeCLIReviewAgent(t, root, cheapGatesFindings)
+	if out, err := executeCmd("eval", "capture", cheapGatesFirst.run.ID); err != nil {
+		t.Fatalf("eval capture (cheap-gates-first): %v\n%s", err, out)
+	}
+	if out, err := executeCmd("eval", "run", "--cases", "labeled", "--candidate", "claude,model=test", "--repeats", "1", "--pipeline", "cheap-gates-first"); err != nil {
+		t.Fatalf("eval run (cheap-gates-first): %v\n%s", err, out)
+	}
+}
+
+func TestEvalReportNarrowsToOnePipelineLayout(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NM_HOME", root)
+	chdir(t, t.TempDir())
+	recordTwoPipelineLayoutEvaluations(t, root)
+
+	out, err := executeCmd("eval", "report", "--pipeline", "review-early")
+	if err != nil {
+		t.Fatalf("eval report --pipeline review-early: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "pipeline review-early") {
+		t.Fatalf("report output = %q, want it to contain the review-early group", out)
+	}
+	if strings.Contains(out, "cheap-gates-first") {
+		t.Fatalf("report output = %q, want cheap-gates-first excluded", out)
+	}
+}
+
+func TestEvalReportGroupsBothPipelineLayoutsByDefault(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NM_HOME", root)
+	chdir(t, t.TempDir())
+	recordTwoPipelineLayoutEvaluations(t, root)
+
+	out, err := executeCmd("eval", "report")
+	if err != nil {
+		t.Fatalf("eval report: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "pipeline review-early") || !strings.Contains(out, "pipeline cheap-gates-first") {
+		t.Fatalf("report output = %q, want both pipeline layouts grouped separately", out)
+	}
+}
+
+// TestEvalSetsDashboardShowsThePipelineBreakdown and
+// TestEvalSetsDashboardOmitsThePipelineBreakdownForASingleLayout use distinct
+// finding severities across the two fixtures so both cases land in the
+// diversified holdout: diversifiedStratum keys on severity among other axes,
+// so cases of one severity never collide with and evict the other.
+func TestEvalSetsDashboardShowsThePipelineBreakdown(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NM_HOME", root)
+	chdir(t, t.TempDir())
+	ctx := context.Background()
+
+	reviewEarlyFindings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
+	reviewEarly := setupEvalCLIFixtureNamed(t, ctx, root, "alpha-service", reviewEarlyFindings)
+	selected := `["real-bug"]`
+	if err := reviewEarly.db.SetStepRoundSelection(reviewEarly.round.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCmd("eval", "capture", reviewEarly.run.ID); err != nil {
+		t.Fatalf("eval capture (review-early): %v\n%s", err, out)
+	}
+
+	cheapGatesFindings := `{"findings":[{"id":"other-bug","severity":"warning","file":"main.go","line":3,"description":"other bug","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"minor","risk_scope":"source-or-external"}`
+	cheapGatesFirst := setupEvalCLIFixtureTaggedCheapGatesFirst(t, ctx, root, "beta-service", cheapGatesFindings)
+	otherSelected := `["other-bug"]`
+	if err := cheapGatesFirst.db.SetStepRoundSelection(cheapGatesFirst.round.ID, &otherSelected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCmd("eval", "capture", cheapGatesFirst.run.ID); err != nil {
+		t.Fatalf("eval capture (cheap-gates-first): %v\n%s", err, out)
+	}
+
+	out, err := executeCmd("eval", "sets")
+	if err != nil {
+		t.Fatalf("eval sets: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Pipeline layouts") {
+		t.Fatalf("sets output = %q, want the pipeline breakdown block", out)
+	}
+	// The row shape, not the bare version string: a repository name or a
+	// warning mentioning a layout would satisfy a substring match on its own.
+	for _, want := range []string{"1  review-early · 1 gold", "1  cheap-gates-first · 1 gold"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("sets output = %q, want the breakdown row %q", out, want)
+		}
+	}
+}
+
+// The --pipeline filter on eval sets and eval run has to change what those
+// commands actually operate on, not just parse.
+func TestEvalPipelineFilterNarrowsWhatSetsAndRunOperateOn(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NM_HOME", root)
+	chdir(t, t.TempDir())
+	ctx := context.Background()
+
+	reviewEarlyFindings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
+	reviewEarly := setupEvalCLIFixtureNamed(t, ctx, root, "alpha-service", reviewEarlyFindings)
+	selected := `["real-bug"]`
+	if err := reviewEarly.db.SetStepRoundSelection(reviewEarly.round.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCmd("eval", "capture", reviewEarly.run.ID); err != nil {
+		t.Fatalf("eval capture (review-early): %v\n%s", err, out)
+	}
+
+	cheapGatesFindings := `{"findings":[{"id":"other-bug","severity":"warning","file":"main.go","line":3,"description":"other bug","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"minor","risk_scope":"source-or-external"}`
+	cheapGatesFirst := setupEvalCLIFixtureTaggedCheapGatesFirst(t, ctx, root, "beta-service", cheapGatesFindings)
+	otherSelected := `["other-bug"]`
+	if err := cheapGatesFirst.db.SetStepRoundSelection(cheapGatesFirst.round.ID, &otherSelected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCmd("eval", "capture", cheapGatesFirst.run.ID); err != nil {
+		t.Fatalf("eval capture (cheap-gates-first): %v\n%s", err, out)
+	}
+
+	unfiltered, err := executeCmd("eval", "sets")
+	if err != nil {
+		t.Fatalf("eval sets: %v\n%s", err, unfiltered)
+	}
+	if want := strings.TrimRight(metricStatsLine("Cases", "2", ""), " "); !strings.Contains(unfiltered, want) {
+		t.Fatalf("eval sets = %q, want the unfiltered diversified line %q", unfiltered, want)
+	}
+
+	filtered, err := executeCmd("eval", "sets", "--pipeline", "review-early")
+	if err != nil {
+		t.Fatalf("eval sets --pipeline review-early: %v\n%s", err, filtered)
+	}
+	if want := strings.TrimRight(metricStatsLine("Cases", "1", ""), " "); !strings.Contains(filtered, want) {
+		t.Fatalf("eval sets --pipeline review-early = %q, want the diversified line narrowed to %q", filtered, want)
+	}
+
+	installFakeCLIReviewAgent(t, root, reviewEarlyFindings)
+	run, err := executeCmd("eval", "run", "--cases", "labeled", "--candidate", "claude,model=test", "--repeats", "1", "--pipeline", "review-early")
+	if err != nil {
+		t.Fatalf("eval run --pipeline review-early: %v\n%s", err, run)
+	}
+	if !strings.Contains(run, "replaying 1 case(s)") {
+		t.Fatalf("eval run --pipeline review-early = %q, want it to plan the one review-early case", run)
+	}
+	unfilteredRun, err := executeCmd("eval", "run", "--cases", "labeled", "--candidate", "claude,model=test", "--repeats", "1")
+	if err != nil {
+		t.Fatalf("eval run: %v\n%s", err, unfilteredRun)
+	}
+	if !strings.Contains(unfilteredRun, "replaying 2 case(s)") {
+		t.Fatalf("eval run = %q, want both cases planned without a filter", unfilteredRun)
+	}
+}
+
+func TestEvalSetsDashboardOmitsThePipelineBreakdownForASingleLayout(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("NM_HOME", root)
+	chdir(t, t.TempDir())
+
+	findings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
+	fixture := setupEvalCLIFixture(t, ctx, root, findings)
+	selected := `["real-bug"]`
+	if err := fixture.db.SetStepRoundSelection(fixture.round.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCmd("eval", "capture", fixture.run.ID); err != nil {
+		t.Fatalf("eval capture: %v\n%s", err, out)
+	}
+
+	out, err := executeCmd("eval", "sets")
+	if err != nil {
+		t.Fatalf("eval sets: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "Pipeline layouts") {
+		t.Fatalf("sets output = %q, want no pipeline breakdown for a single layout", out)
+	}
+}
+
+// TestEvalSetsSelfScoreWarnsWhenTheSetSpansTwoPipelineLayouts pins the caveat
+// on the headline number. The self-score folds every case in the set into one
+// figure, so a set holding both layouts reports a single score over two
+// populations, which is the exact "review-quality regression that is really a
+// scope change" misreading the tag exists to prevent. The count breakdown alone
+// is passive; the number itself has to say it is not comparable.
+func TestEvalSetsSelfScoreWarnsWhenTheSetSpansTwoPipelineLayouts(t *testing.T) {
+	out := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name:      "diversified",
+		Cases:     2,
+		GoldCases: 2,
+		SelfScore: eval.EvaluationSummary{Labeled: 2},
+		Pipelines: []eval.PipelineCountRow{
+			{PipelineVersion: eval.PipelineReviewEarly, Cases: 1, GoldCases: 1},
+			{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 1, GoldCases: 1},
+		},
+		// Unfiltered, so the scored population is the whole set.
+		ScoredLayouts: 2,
+	}})
+	if !strings.Contains(out, "not comparable") {
+		t.Fatalf("sets output = %q, want the self-score to be marked not comparable across layouts", out)
+	}
+	if !strings.Contains(out, "2 pipeline layouts") {
+		t.Fatalf("sets output = %q, want the caveat to name how many layouts the set spans", out)
+	}
+}
+
+// renderBoxLine silently cuts a line wider than the box content width, so the
+// cap detail has to fit at every pin count rather than only at the small ones
+// a fixture happens to use. "cap none" is the long branch.
+func TestEvalCapDetailFitsTheBox(t *testing.T) {
+	for _, pins := range []int{0, 9, 32, 999, 9999} {
+		for _, capValue := range []int{0, 32, 9999} {
+			line := metricStatsLine("Cases", strconv.Itoa(pins), evalCapDetail(pins, capValue))
+			if width := lipgloss.Width(line); width > evalCompositionContentWidth {
+				t.Fatalf("cap line at pins=%d cap=%d is %d columns wide, want at most %d: %q", pins, capValue, width, evalCompositionContentWidth, line)
+			}
+		}
+	}
+}
+
+// The dashboard must show the whole cap detail, not a prefix of it, and it must
+// say the pin count is corpus-wide: under `eval sets --pipeline X` the Cases
+// figure beside it counts one layout's share, so a bare "pins 999" next to
+// "Cases 4" reads as pins having been lost. The literal is spelled out here
+// rather than derived from evalCapDetail, which would pass on any wording.
+func TestEvalSetsDashboardRendersTheCapDetailUntruncated(t *testing.T) {
+	out := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name: "diversified", Cases: 4, GoldCases: 4, PinCount: 999, Cap: 0,
+		SelfScore: eval.EvaluationSummary{Labeled: 4},
+	}})
+	want := strings.TrimRight(metricStatsLine("Cases", "4", "pins 999 corpus-wide · cap none (1 per stratum)"), " ")
+	if !strings.Contains(out, want) {
+		t.Fatalf("sets dashboard = %q, want the complete cap line %q rather than a truncated one", out, want)
+	}
+
+	capped := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name: "diversified", Cases: 4, GoldCases: 4, PinCount: 999, Cap: 32,
+		SelfScore: eval.EvaluationSummary{Labeled: 4},
+	}})
+	if wantCapped := strings.TrimRight(metricStatsLine("Cases", "4", "pins 999 corpus-wide · cap 32"), " "); !strings.Contains(capped, wantCapped) {
+		t.Fatalf("sets dashboard = %q, want the capped detail %q", capped, wantCapped)
+	}
+}
+
+// The layout breakdown is computed over the WHOLE set while the Cases and
+// Composition figures above it honor the filter, so it has to say which
+// population it describes or its rows read as contradicting the count.
+func TestEvalSetsDashboardLabelsThePipelineBreakdownAsWholeSet(t *testing.T) {
+	out := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name: "diversified", Cases: 1, GoldCases: 1,
+		SelfScore: eval.EvaluationSummary{Labeled: 1},
+		Pipelines: []eval.PipelineCountRow{
+			{PipelineVersion: eval.PipelineReviewEarly, Cases: 1, GoldCases: 1},
+			{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 5, GoldCases: 5},
+		},
+		ScoredLayouts: 1,
+	}})
+	if !strings.Contains(out, "Pipeline layouts (whole set)") {
+		t.Fatalf("sets dashboard = %q, want the layout breakdown labeled as covering the whole set", out)
+	}
+}
+
+func TestEvalSetsSelfScoreCarriesNoCaveatForASingleLayout(t *testing.T) {
+	out := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name:      "diversified",
+		Cases:     2,
+		GoldCases: 2,
+		SelfScore: eval.EvaluationSummary{Labeled: 2},
+		Pipelines: []eval.PipelineCountRow{
+			{PipelineVersion: eval.PipelineReviewEarly, Cases: 2, GoldCases: 2},
+		},
+		ScoredLayouts: 1,
+	}})
+	if strings.Contains(out, "not comparable") {
+		t.Fatalf("sets output = %q, want no comparability caveat for a single layout", out)
+	}
+}
+
+// eval run is the surface an operator watches while paying for the replays, and
+// its score box folds every replay into one number the same way the sets
+// self-score does, so an unfiltered run over a mixed corpus has to carry the
+// same caveat.
+func TestEvalRunSummaryWarnsWhenTheReplaysSpanTwoPipelineLayouts(t *testing.T) {
+	session := eval.Session{Candidate: "claude,model=test", Set: "all", Cohort: "cohort", Repeats: 1}
+	evaluations := []eval.Evaluation{
+		{CaseID: "a", Status: "completed", HasFindingGold: true, GoldCount: 1, TruePositive: 1, PipelineVersion: eval.PipelineReviewEarly},
+		{CaseID: "b", Status: "completed", HasFindingGold: true, GoldCount: 1, TruePositive: 1, PipelineVersion: eval.PipelineCheapGatesFirst},
+	}
+	out := renderEvalRunSummary(session, evaluations, 2)
+	if !strings.Contains(out, "not comparable") || !strings.Contains(out, "2 pipeline layouts") {
+		t.Fatalf("run summary = %q, want the mixed-layout caveat naming how many layouts the session spans", out)
+	}
+
+	single := renderEvalRunSummary(session, evaluations[:1], 1)
+	if strings.Contains(single, "not comparable") {
+		t.Fatalf("run summary = %q, want no comparability caveat for a single layout", single)
+	}
+}
+
+// Under `eval sets --pipeline review-early` over a mixed corpus the self-score
+// covers one layout and is comparable, while the breakdown still lists both so
+// an operator can see what the filter left out. The caveat follows the scored
+// population, so it stays silent.
+func TestEvalSetsDashboardKeepsTheCaveatSilentForAFilteredSingleLayoutScore(t *testing.T) {
+	both := []eval.PipelineCountRow{
+		{PipelineVersion: eval.PipelineReviewEarly, Cases: 20, GoldCases: 20},
+		{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 10, GoldCases: 10},
+	}
+	filtered := eval.SetSummary{
+		Name: "diversified", Cases: 20, GoldCases: 20, TruePositive: 20, Cap: 32, PinCount: 30,
+		SelfScore:     eval.EvaluationSummary{Total: 20, Labeled: 20, TruePositive: 20},
+		Pipelines:     both,
+		ScoredLayouts: 1,
+	}
+	out := renderEvalSetsDashboard([]eval.SetSummary{filtered})
+	if strings.Contains(out, "not comparable") {
+		t.Fatalf("sets dashboard = %q, want no caveat when the filter left one layout in the score", out)
+	}
+	if !strings.Contains(out, string(eval.PipelineCheapGatesFirst)) {
+		t.Fatalf("sets dashboard = %q, want the unfiltered breakdown to still list both layouts", out)
+	}
+
+	unfiltered := filtered
+	unfiltered.ScoredLayouts = 2
+	if !strings.Contains(renderEvalSetsDashboard([]eval.SetSummary{unfiltered}), "not comparable") {
+		t.Fatal("sets dashboard printed no caveat for a score that really does span two layouts")
 	}
 }
 

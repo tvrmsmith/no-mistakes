@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -109,14 +110,15 @@ func TestPruneBoundsTheCorpusOldestFirstAndKeepsEvaluatedCases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pruned, err := store.Prune(ctx, 2)
+	outcome, err := store.retain(ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	pruned := outcome.Pruned
 	if pruned != 2 {
 		t.Fatalf("pruned = %d, want 2", pruned)
 	}
-	remaining, err := store.ListCases("all")
+	remaining, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,11 +155,12 @@ func TestPruneKeepsCasesReservedByAReplaySession(t *testing.T) {
 	if len(session.CaseIDs) != 3 {
 		t.Fatalf("reserved cases = %v, want all three cases", session.CaseIDs)
 	}
-	pruned, err := store.Prune(ctx, 1)
+	outcome, err := store.retain(ctx, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	remaining, err := store.ListCases("all")
+	pruned := outcome.Pruned
+	remaining, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +168,56 @@ func TestPruneKeepsCasesReservedByAReplaySession(t *testing.T) {
 		t.Fatalf("prune removed %d replay-reserved cases, %d remain", pruned, len(remaining))
 	}
 	store.releaseReplayReservation(session.ID)
+}
+
+// TestPruneKeepsDiversifiedPinnedCases pins the retention rule the pipeline
+// tag depends on. Once the cheap gates run before review, every newly captured
+// case carries the new tag while the pre-reorder population only ages, so
+// oldest-first eviction aims straight at the held-out baseline the tag exists
+// to keep comparable. A pinned case is the official set; it outranks the cap.
+func TestPruneKeepsDiversifiedPinnedCases(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// Gold, so the retention pass pins it itself. Nothing here writes the pin
+	// by hand: the protection has to come from the same path production takes.
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: "pinned-oldest", fingerprint: "fingerprint", capturedAt: 0, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("pinned-oldest"),
+		roundFindings:   goldRound("pinned-oldest"),
+	})
+	for i, id := range []string{"plain-older", "plain-newer", "plain-newest"} {
+		seedCase(t, store, id, int64(i+1))
+	}
+
+	outcome, err := store.retain(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pruned := outcome.Pruned
+	if pruned != 2 {
+		t.Fatalf("pruned = %d, want 2", pruned)
+	}
+	remaining, err := store.ListCases(context.Background(), "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range remaining {
+		got = append(got, c.ID)
+	}
+	sort.Strings(got)
+	want := "pinned-oldest plain-newest"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("remaining cases = %v, want %q (pinned oldest protected, unpinned oldest dropped)", got, want)
+	}
+	if _, err := os.Stat(store.caseDir("pinned-oldest")); err != nil {
+		t.Fatalf("pruned the diversified-pinned case directory: %v", err)
+	}
 }
 
 func TestPruneReleasesAbandonedReplayReservations(t *testing.T) {
@@ -181,11 +234,12 @@ func TestPruneReleasesAbandonedReplayReservations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pruned, err := store.Prune(ctx, 1)
+	outcome, err := store.retain(ctx, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	remaining, err := store.ListCases("all")
+	pruned := outcome.Pruned
+	remaining, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,11 +258,12 @@ func TestPruneKeepsEveryCaseWhenTheCapIsDisabled(t *testing.T) {
 	for i, id := range []string{"a", "b", "c"} {
 		seedCase(t, store, id, int64(i))
 	}
-	pruned, err := store.Prune(ctx, 0)
+	outcome, err := store.retain(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	remaining, err := store.ListCases("all")
+	pruned := outcome.Pruned
+	remaining, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +311,7 @@ func TestConcurrentCaptureKeepsThePublishedCaseRestorable(t *testing.T) {
 		}
 	}
 
-	cases, err := stores[0].ListCases("all")
+	cases, err := stores[0].ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,10 +363,10 @@ func TestCaptureReconcilesPendingDeletionBeforeRecapturing(t *testing.T) {
 	if len(recaptured) != 1 || recaptured[0].ID != c.ID {
 		t.Fatalf("recaptured cases = %#v, want %q", recaptured, c.ID)
 	}
-	if _, err := store.Prune(ctx, 0); err != nil {
+	if _, err := store.retain(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
-	remaining, err := store.ListCases("all")
+	remaining, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}

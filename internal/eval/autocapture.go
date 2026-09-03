@@ -17,10 +17,33 @@ type AutoCaptureResult struct {
 	Pruned   int
 	Skipped  bool
 	Reason   string
+	// PinWarning reports a diversified pin materialization that failed, which
+	// skips the prune for this pass. It is a warning rather than an error
+	// because the capture itself succeeded: the corpus simply stays over its
+	// retention target, which is already the posture for protected cases, and
+	// that is cheaper than evicting an unprotected holdout for a disk figure.
+	PinWarning string
 }
 
-// AutoCapture freezes one finished run's review passes into the local corpus
-// and then enforces the retention cap.
+// Retention is what one automatic pass is allowed to keep. The two numbers are
+// both case counts and mean opposite things, so they are named rather than
+// positional: transposing them silently re-plans the official holdout at the
+// retention cap and bounds the corpus at the holdout size.
+type Retention struct {
+	// MaxCases bounds the whole corpus. Zero or less keeps every case.
+	MaxCases int
+	// DiversifiedSize caps the held-out diversified set. Zero means no cap
+	// beyond one case per stratum.
+	DiversifiedSize int
+}
+
+// AutoCapture freezes one finished run's review passes into the local corpus,
+// materializes the diversified pins the retention cap has to protect, and then
+// enforces that cap. The cap is enforced only once those pins exist, so a
+// failed materialization leaves the corpus over its target rather than pruning
+// a holdout nothing is protecting. Store.retain owns that whole second half and
+// holds the corpus lock across it, so no concurrent set resolution can release
+// a pin between the pass writing it and the prune reading it.
 //
 // It is the single entry point for collection that nobody asked for by hand, so
 // it deliberately keeps the same Capture the CLI uses rather than a looser
@@ -31,7 +54,7 @@ type AutoCaptureResult struct {
 // The caller owns the timeout and the decision to run at all. This function
 // owns nothing of the pipeline: it opens its own registry, does its work, and
 // closes it, so a failure here cannot reach the run that triggered it.
-func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID string, maxCases int) (AutoCaptureResult, error) {
+func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID string, retention Retention) (AutoCaptureResult, error) {
 	if p == nil || database == nil {
 		return AutoCaptureResult{}, fmt.Errorf("eval auto-capture requires paths and a database")
 	}
@@ -40,6 +63,10 @@ func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID str
 		return AutoCaptureResult{}, err
 	}
 	defer store.Close()
+	// The configured cap has to be applied before anything here resolves a set:
+	// materializing the pins re-plans the whole holdout, so planning it at the
+	// package default would silently resize the operator's official set.
+	store.SetDiversifiedSize(retention.DiversifiedSize)
 
 	cases, err := Capture(ctx, store, p, database, runID)
 	if err != nil {
@@ -49,8 +76,9 @@ func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID str
 		return AutoCaptureResult{}, err
 	}
 	result := AutoCaptureResult{Captured: len(cases)}
-	pruned, err := store.Prune(ctx, maxCases)
-	result.Pruned = pruned
+	outcome, err := store.retain(ctx, retention.MaxCases)
+	result.Pruned = outcome.Pruned
+	result.PinWarning = outcome.PinWarning
 	if err != nil {
 		return result, err
 	}

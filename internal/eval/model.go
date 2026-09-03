@@ -174,6 +174,11 @@ type Manifest struct {
 	BuildSHA         string `json:"no_mistakes_build_sha,omitempty"`
 	ChangedFiles     int    `json:"changed_files"`
 	ChangedLines     int    `json:"changed_lines"`
+	// PipelineVersion tags the pipeline layout this case was collected under
+	// (see PipelineVersionFromSteps). An absent value reads as pre-reorder
+	// (see normalizePipelineVersion): every case captured before this field
+	// existed was captured under that layout.
+	PipelineVersion PipelineVersion `json:"pipeline_version,omitempty"`
 }
 
 // Decision records the human gate evidence available for the exported review
@@ -298,6 +303,11 @@ type Evaluation struct {
 	TokensReported    bool   `json:"tokens_reported"`
 	DurationMS        int64  `json:"duration_ms"`
 	Model             string `json:"model,omitempty"`
+	// PipelineVersion is the case's own tag (see Case.PipelineVersion), copied
+	// onto the evaluation so a report can group by it without rejoining the
+	// case. An evaluation recorded before this field existed reads as
+	// PipelineReviewEarly via normalizePipelineVersion.
+	PipelineVersion PipelineVersion `json:"pipeline_version,omitempty"`
 }
 
 // EvaluationSummary aggregates finding-level scores. A case with no gold is
@@ -373,6 +383,13 @@ func harmonicMean(a, b float64) float64 {
 	return 2 * a * b / (a + b)
 }
 
+// hasScoredGold reports whether SummarizeEvaluations folds this evaluation into
+// its numbers. A failed replay still counts when it carries gold, because its
+// gold becomes false negatives. Anything else contributes only to Total.
+func (e Evaluation) hasScoredGold() bool {
+	return e.HasFindingGold || e.GoldCount > 0
+}
+
 // SummarizeEvaluations scores finding-level gold only. Unmatched candidate
 // findings stay pending. A replay with no gold is unlabeled, not a pass.
 func SummarizeEvaluations(evaluations []Evaluation) EvaluationSummary {
@@ -389,7 +406,7 @@ func SummarizeEvaluations(evaluations []Evaluation) EvaluationSummary {
 		if evaluation.TokensReported {
 			summary.TokensReported++
 		}
-		hasFindingGold := evaluation.HasFindingGold || evaluation.GoldCount > 0
+		hasFindingGold := evaluation.hasScoredGold()
 		if evaluation.Status != "completed" {
 			summary.Failures++
 			if hasFindingGold {

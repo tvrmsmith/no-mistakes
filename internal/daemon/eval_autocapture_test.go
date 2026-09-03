@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,8 +74,59 @@ func TestAutoCaptureEvalCaseSurvivesAnUncapturableRun(t *testing.T) {
 	}
 }
 
+// Auto capture re-plans the whole diversified holdout before it enforces the
+// cap, so the operator's configured size has to reach it. Planning at the
+// package default would silently resize the official held-out set.
+func TestAutoCaptureEvalCasePlansThePinsAtTheConfiguredDiversifiedSize(t *testing.T) {
+	ctx := context.Background()
+	p, database, firstRun := setupFinishedReviewRun(t, ctx)
+	m := NewRunManager(database, p, nil)
+	// One run per stratum, so a size of 1 keeps strictly fewer pins than the
+	// package default of 32 would.
+	secondRun := addFinishedReviewRun(t, ctx, p, database, "warning-repo", "warning")
+	thirdRun := addFinishedReviewRun(t, ctx, p, database, "info-repo", "info")
+
+	cfg := evalRetentionConfig(true, true, 2, 1)
+	for _, runID := range []string{firstRun, secondRun, thirdRun} {
+		m.autoCaptureEvalCase(ctx, cfg, runID)
+	}
+
+	if got := diversifiedPinCount(t, p); got != 1 {
+		t.Fatalf("diversified pins = %d, want the configured size of 1 rather than the package default of %d", got, config.DefaultEvalDiversifiedSize)
+	}
+	if got := capturedCaseCount(t, p); got != 2 {
+		t.Fatalf("corpus = %d case(s), want the configured max_cases of 2", got)
+	}
+}
+
 func evalConfig(provenance, autoCapture bool) *config.Config {
-	return &config.Config{Eval: config.Eval{CaptureProvenance: provenance, AutoCapture: autoCapture, MaxCases: config.DefaultEvalMaxCases}}
+	return evalRetentionConfig(provenance, autoCapture, config.DefaultEvalMaxCases, config.DefaultEvalDiversifiedSize)
+}
+
+func evalRetentionConfig(provenance, autoCapture bool, maxCases, diversifiedSize int) *config.Config {
+	return &config.Config{Eval: config.Eval{
+		CaptureProvenance: provenance,
+		AutoCapture:       autoCapture,
+		MaxCases:          maxCases,
+		DiversifiedSize:   diversifiedSize,
+	}}
+}
+
+// diversifiedPinCount reads the pin table straight off the registry file.
+// Resolving the set through the store would re-plan the pins at the store's own
+// default size, which is the very value this asks about.
+func diversifiedPinCount(t *testing.T, p *paths.Paths) int {
+	t.Helper()
+	raw, err := sql.Open("sqlite", filepath.Join(p.EvalDir(), "registry.sqlite")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	var n int
+	if err := raw.QueryRow(`SELECT count(*) FROM diversified_pins`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func capturedCaseCount(t *testing.T, p *paths.Paths) int {
@@ -84,7 +136,7 @@ func capturedCaseCount(t *testing.T, p *paths.Paths) int {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	cases, err := store.ListCases("all")
+	cases, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,12 +158,23 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
+	return p, database, addFinishedReviewRun(t, ctx, p, database, "eval-repo", "error")
+}
 
-	gateDir := p.RepoDir("eval-repo")
+// addFinishedReviewRun is setupFinishedReviewRun's body, parameterized by
+// repository name and finding severity so one root can hold several finished
+// runs. The severity matters because it is one of the axes the diversified
+// holdout stratifies on, so runs with different severities land in different
+// strata and a size cap can actually bind.
+func addFinishedReviewRun(t *testing.T, ctx context.Context, p *paths.Paths, database *db.DB, name, severity string) string {
+	t.Helper()
+	root := p.Root()
+
+	gateDir := p.RepoDir(name)
 	if err := git.InitBare(ctx, gateDir); err != nil {
 		t.Fatal(err)
 	}
-	workDir := filepath.Join(root, "source")
+	workDir := filepath.Join(root, "source-"+name)
 	mustGitRun(t, ctx, root, "clone", gateDir, workDir)
 	mustGitRun(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustGitRun(t, ctx, workDir, "config", "user.name", "Eval Test")
@@ -132,7 +195,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	mustGitRun(t, ctx, workDir, "push", "origin", "feature/eval")
 	headSHA := mustGitRun(t, ctx, workDir, "rev-parse", "HEAD")
 
-	repo, err := database.InsertRepoWithID("eval-repo", workDir, "https://example.test/org/repo", "main")
+	repo, err := database.InsertRepoWithID(name, workDir, "https://example.test/org/"+name, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +207,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
+	findings := `{"findings":[{"id":"real-bug","severity":"` + severity + `","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	round, err := database.InsertReviewStepRoundWithProvenance(step.ID, 1, "initial", &findings, nil, headSHA, headSHA, baseSHA, []byte("{}\n"), []byte("{}\n"), 50)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +219,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	if err := database.UpdateStepStatus(step.ID, types.StepStatusCompleted); err != nil {
 		t.Fatal(err)
 	}
-	return p, database, run.ID
+	return run.ID
 }
 
 func mustGitRun(t *testing.T, ctx context.Context, dir string, args ...string) string {

@@ -51,7 +51,7 @@ func TestCaptureTwiceLeavesIdenticalCorpusState(t *testing.T) {
 	if setsAfter := mustInspectSets(t, store); !reflect.DeepEqual(setsBefore, setsAfter) {
 		t.Fatalf("second capture changed set summaries:\nbefore: %#v\nafter: %#v", setsBefore, setsAfter)
 	}
-	all, err := store.ListCases("all")
+	all, err := store.ListCases(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,11 +192,11 @@ func TestRefreshDiversifiedTwiceKeepsTheSamePins(t *testing.T) {
 	writeGoldStratum(t, store, "repo-a", "error", 2, 10)
 	writeGoldStratum(t, store, "repo-b", "warning", 1, 20)
 
-	first, err := store.RefreshDiversified()
+	first, err := store.RefreshDiversified(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.RefreshDiversified()
+	second, err := store.RefreshDiversified(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,15 +284,15 @@ func TestReportTwiceRendersIdentically(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := Report(store)
+	first, err := ReportForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Report(store)
+	second, err := ReportForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := RenderReport(second), RenderReport(first); got != want {
+	if got, want := renderReportAny(second), renderReportAny(first); got != want {
 		t.Fatalf("report changed between identical reads:\nfirst: %s\nsecond: %s", want, got)
 	}
 }

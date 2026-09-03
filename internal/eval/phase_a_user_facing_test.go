@@ -43,7 +43,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 			changedFiles:  []string{"main.go"},
 			roundFindings: findingsJSON(findingSpec{ID: "f1", Severity: "error", File: "main.go", Line: 3, Description: "bug", Action: "ask-user"}),
 		})
-		got, err := store.ListCases("diversified")
+		got, err := store.ListCases(context.Background(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,14 +81,14 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 			changedFiles:  []string{"main.go"},
 			roundFindings: findingsJSON(findingSpec{ID: "c", Severity: "error", File: "main.go", Line: 1, Description: "c", Action: "ask-user"}),
 		})
-		div, err := store.ListCases("diversified")
+		div, err := store.ListCases(context.Background(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if ids := caseIDs(div); len(ids) != 1 || ids[0] != pinned.ID {
 			t.Fatalf("diversified = %v, want official pin %s", ids, pinned.ID)
 		}
-		leftover, err := store.ListCases("tune")
+		leftover, err := store.ListCases(context.Background(), "tune")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +107,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		writeGoldStratum(t, store, "repo-heavy", "error", 5, 10)
 		writeGoldStratum(t, store, "repo-mid", "warning", 3, 20)
 		writeGoldStratum(t, store, "repo-light", "info", 1, 30)
-		before, err := store.ListCases("diversified")
+		before, err := store.ListCases(context.Background(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		beforeOut := summariesJSON(t, store)
 
 		store.SetDiversifiedSize(0)
-		after, err := store.ListCases("diversified")
+		after, err := store.ListCases(context.Background(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -144,7 +144,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		writeGoldStratum(t, store, "repo-a", "error", 10, 10)
 		writeGoldStratum(t, store, "repo-b", "error", 10, 20)
 		writeGoldStratum(t, store, "repo-c", "info", 2, 30)
-		before, err := store.ListCases("diversified")
+		before, err := store.ListCases(context.Background(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,7 +158,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		beforeOut := summariesJSON(t, store)
 
 		store.SetDiversifiedSize(5)
-		after, err := store.ListCases("diversified")
+		after, err := store.ListCases(context.Background(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -180,7 +180,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 			Candidate: "codex+test", Status: "completed", HasFindingGold: true, GoldCount: 2,
 			TruePositive: 2, Pending: 1,
 		}})
-		noFPOut := RenderReport([]CandidateReport{{Cohort: "official-holdout", Summary: noFP, RepeatCount: 1}})
+		noFPOut := renderReportAny([]CandidateReport{{Cohort: "official-holdout", Summary: noFP, RepeatCount: 1}})
 		if !strings.Contains(noFPOut, "recall: 100.0%") || !strings.Contains(noFPOut, "F1: withheld") {
 			t.Fatalf("no-FP report = %q, want recall plus withheld F1", noFPOut)
 		}
@@ -193,7 +193,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 			Candidate: "codex+test", Status: "completed", HasFindingGold: true, GoldCount: 2,
 			TruePositive: 2, FalsePositive: 1, FalsePositiveGold: 1,
 		}})
-		withFPOut := RenderReport([]CandidateReport{{Cohort: "official-holdout", Summary: withFP, RepeatCount: 1}})
+		withFPOut := renderReportAny([]CandidateReport{{Cohort: "official-holdout", Summary: withFP, RepeatCount: 1}})
 		if !strings.Contains(withFPOut, "F1:") || strings.Contains(withFPOut, "F1: withheld") {
 			t.Fatalf("FP-gold report = %q, want headline F1", withFPOut)
 		}

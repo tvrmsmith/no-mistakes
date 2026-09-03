@@ -124,7 +124,41 @@ func rankedStrata(gold []Case) (map[string][]Case, []string) {
 	return grouped, keys
 }
 
-func planDiversified(gold []Case, cap int, existing []diversifiedPin) []diversifiedPin {
+// planDiversified plans the holdout from the readable gold. preserve names
+// cases the caller could not load at all: their pin rows are carried forward
+// whatever the gold slice says, because an absent case id otherwise reads as
+// "lost its gold" and releases the pin, and releasing it takes the case out of
+// Prune's protection at exactly the moment nothing else can vouch for it.
+// Carried pins are ADDED to a holdout planned at the full cap rather than
+// charged against it, so they can push the pin count over eval.diversified_size
+// instead of displacing readable gold. Over the cap is already the documented
+// posture for protected cases, while a holdout whose seats are all held by
+// cases nothing can load resolves to an empty set and leaves every readable
+// gold case outside Prune's protection.
+func planDiversified(gold []Case, capSize int, existing []diversifiedPin, preserve map[string]bool) []diversifiedPin {
+	carried, plannable := splitPreservedPins(existing, preserve)
+	return append(carried, planReadableDiversified(gold, capSize, plannable)...)
+}
+
+// splitPreservedPins separates the pins whose case the caller could not load
+// from the ones the planner can reason about. A preserved pin holds every
+// column the table needs (case id, stratum, rank, pinned time), so it survives
+// without the case directory being readable.
+func splitPreservedPins(existing []diversifiedPin, preserve map[string]bool) (carried, plannable []diversifiedPin) {
+	if len(preserve) == 0 {
+		return nil, existing
+	}
+	for _, pin := range existing {
+		if preserve[pin.CaseID] {
+			carried = append(carried, pin)
+			continue
+		}
+		plannable = append(plannable, pin)
+	}
+	return carried, plannable
+}
+
+func planReadableDiversified(gold []Case, cap int, existing []diversifiedPin) []diversifiedPin {
 	grouped, keys := rankedStrata(gold)
 	byID := map[string]Case{}
 	for _, c := range gold {
