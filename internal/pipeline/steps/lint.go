@@ -33,7 +33,11 @@ func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		// of paying a second cold agent invocation. Fix rounds and any round
 		// without a stashed result fall through to a full agent pass, so the
 		// lint responsibility is never silently skipped.
-		if !sctx.Fixing {
+		//
+		// A round carrying previous findings also falls through. Those findings
+		// are this step's own verdict, carried back by a restart, and the
+		// stashed housekeeping result cannot have accounted for them.
+		if !sctx.Fixing && sctx.PreviousFindings == "" {
 			if stash, ok := sctx.Shared.TakeHousekeepingLint(); ok {
 				return lintOutcomeFromHousekeeping(sctx, stash)
 			}

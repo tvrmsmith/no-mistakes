@@ -106,6 +106,36 @@ func TestStepDiff_BoundsAnOversizedDiff(t *testing.T) {
 	}
 }
 
+// A validation step commits its own output at its exit, so by the time its
+// gate is observable the worktree is clean and the working-tree diff is empty.
+// The gate must still show what the step did: without the exit-commit fallback
+// a reviewer reads an empty diff and has nothing to rule on.
+func TestStepDiff_ShowsTheExitCommitWhenTheWorktreeIsClean(t *testing.T) {
+	m, runID := stepDiffFixture(t, "agent fix\n")
+	run, err := m.db.GetRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := m.db.GetRepo(run.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktree := m.paths.WorktreeDir(repo.ID, run.ID)
+	runGit(t, worktree, "add", "-A")
+	runGit(t, worktree, "commit", "-m", "step exit commit")
+
+	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Fatal("small diff reported as truncated")
+	}
+	if !strings.Contains(diff, "tracked.txt") || !strings.Contains(diff, "agent fix") {
+		t.Fatalf("clean worktree served no exit-commit diff:\n%s", diff)
+	}
+}
+
 func TestStepDiff_UnknownRunFailsClosed(t *testing.T) {
 	m, _ := stepDiffFixture(t, "agent fix\n")
 	if _, _, err := m.StepDiff(context.Background(), "01NOSUCHRUN"); err == nil {

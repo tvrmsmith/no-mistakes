@@ -12,7 +12,6 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -236,6 +235,10 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 // agent is agent-authored, so nothing has judged it and validation must see it
 // again. A commit a deterministic tool produced - a formatter rewriting
 // whitespace - carries nothing new to judge and costs no revalidation.
+//
+// The one step that does not commit at its exit is the one that certifies: a
+// step which records the review-approved head must not modify the tree it
+// certifies, so it parks over the leftovers instead (residueGateOutcome).
 func runValidationStep(
 	sctx *pipeline.StepContext,
 	name types.StepName,
@@ -254,8 +257,20 @@ func runValidationStep(
 		outcome = &pipeline.StepOutcome{}
 	}
 
-	status, _ := git.Run(sctx.Ctx, sctx.WorkDir, "status", "--porcelain")
-	if strings.TrimSpace(status) != "" {
+	// A failure here is not "the tree is clean": a locked index or a transient
+	// filesystem error would skip the exit commit, leave the agent's edits
+	// uncommitted, and silently skip the attribution this helper exists for.
+	dirty, err := git.HasUncommittedChanges(sctx.Ctx, sctx.WorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("inspect worktree after %s: %w", name, err)
+	}
+	if dirty && outcome.ReviewApprovedHeadSHA != "" {
+		// The step that certifies must not modify the tree it certifies, so it
+		// parks over the residue instead of committing it. See
+		// residueGateOutcome and pipeline.ApprovalResidueDiscarder.
+		return residueGateOutcome(sctx, name, outcome)
+	}
+	if dirty {
 		fallback := "commit " + string(name) + " changes"
 		// A commit failure fails the run, exactly as every other
 		// commitAgentFixes call site already does.
@@ -280,21 +295,10 @@ func runValidationStep(
 	}
 
 	if pipeline.RestartBoundary.Order() >= name.Order() {
-		// The boundary step cannot restart into itself. Its commit still moves
-		// the head past whatever it just certified, and push accepts an
-		// ancestor, so an approval left standing here would ship an uncertified
-		// tree. Drop the certification whatever the attribution: a tool-authored
-		// commit leaves the captured SHA a strict ancestor just the same.
-		//
-		// The one commit that keeps its certification is the one the boundary step
-		// judged after making it. Review's fix mode commits the fix and then
-		// re-reviews the new head, so the captured SHA IS the head rather than an
-		// ancestor of it, and dropping it there would mean review could never
-		// certify anything it had just fixed.
-		if outcome.ReviewApprovedHeadSHA != "" && outcome.ReviewApprovedHeadSHA != sctx.Run.HeadSHA {
-			sctx.Log(fmt.Sprintf("%s committed after capturing its approved head; dropping the certification so the new head must be certified on its own", name))
-			outcome.ReviewApprovedHeadSHA = ""
-		}
+		// The boundary step cannot restart into itself, and it has nothing to
+		// revoke either: the certifying step parks rather than committing at
+		// its exit, so a commit that reaches here carried no certification of
+		// its own and cannot have left one covering an ancestor.
 		return outcome, nil
 	}
 	if !agentAuthored || outcome.RestartFrom != "" {
@@ -308,29 +312,152 @@ func runValidationStep(
 		return nil, fmt.Errorf("resolve tree after %s commit: %w", name, err)
 	}
 	tree = strings.TrimSpace(tree)
+	if tree == "" {
+		// Storing "" would make every later comparison for this step
+		// short-circuit and disarm the guard for the rest of the run.
+		return nil, fmt.Errorf("resolve tree after %s commit: git reported no tree for HEAD", name)
+	}
 	// Same grain as the CI step's lastFixedChecks guard: a step that commits
-	// the tree its previous restart already produced is churning, so stop
-	// asking. This is what bounds the loop; it is deliberately not a cap.
-	if tree != "" && tree == sctx.Shared.LastRestartTree(name) {
+	// the tree its own most recent restart already produced is churning, so
+	// stop asking. The comparison is per-process and remembers only that one
+	// tree, so it narrows the loop rather than bounding it - runs.restart_count
+	// and the soft-cap warning are what make a divergent loop visible.
+	if tree == sctx.Shared.LastRestartTree(name) {
 		sctx.Log(fmt.Sprintf("%s committed the same tree it already restarted on; continuing instead of restarting again", name))
+		// Declining the restart does not make the commit judged. It still moved
+		// the head past whatever review certified, and push accepts a certified
+		// ancestor, so revoke that authority rather than ship the commit
+		// unjudged.
+		if err := revokeReviewAuthority(sctx); err != nil {
+			return nil, err
+		}
 		return outcome, nil
 	}
 	sctx.Shared.SetLastRestartTree(name, tree)
 
+	// prepareRestart owns revoking review authority and warning above the soft
+	// cap; doing either here would write state the executor may then reject,
+	// and would report a restart count that never existed.
 	outcome.RestartFrom = pipeline.RestartBoundary
-	// Revoke the stale approval in the same statement that records the head.
-	// Split into two writes, a daemon crashing between them would recover a run
-	// whose approval covers an ancestor of its head and whose push guard passes.
-	if err := sctx.DB.UpdateRunHeadSHAForRevalidation(sctx.Run.ID, sctx.Run.HeadSHA); err != nil {
-		return nil, err
-	}
-	sctx.Run.ReviewApprovedHeadSHA = nil
-	if sctx.Run.RestartCount+1 > db.RestartSoftCap {
-		sctx.Log(fmt.Sprintf("warning: this run has restarted %d times, above the soft cap of %d; the fix loop may be thrashing",
-			sctx.Run.RestartCount+1, db.RestartSoftCap))
-	}
 	sctx.Log(fmt.Sprintf("%s made an agent-authored commit; re-entering validation from %s", name, pipeline.RestartBoundary))
 	return outcome, nil
+}
+
+// revokeReviewAuthority NULLs the run's review approval in the same statement
+// that records the head. Split into two writes, a daemon crashing between them
+// would recover a run whose approval covers an ancestor of its head and whose
+// push guard therefore passes.
+func revokeReviewAuthority(sctx *pipeline.StepContext) error {
+	if err := sctx.DB.UpdateRunHeadSHAForRevalidation(sctx.Run.ID, sctx.Run.HeadSHA); err != nil {
+		return err
+	}
+	sctx.Run.ReviewApprovedHeadSHA = nil
+	return nil
+}
+
+// residueGateOutcome parks the certifying step over work it refused to commit.
+//
+// Committing at the exit of the step that records the review-approved head
+// leaves that SHA a strict ancestor of the new head, and push accepts a
+// certified ancestor, so the leftovers would ship with nothing having judged
+// them. Dropping the certification instead dead-ends the run: the boundary step
+// cannot restart into itself, so nothing would ever re-certify and push would
+// fail three steps later on a NULL column.
+//
+// So nothing is committed and nothing is destroyed. The gate lists what was
+// left behind, separating tracked-file modifications - the reviewer editing
+// code outside its deliberate fix path, the louder case - from untracked
+// non-ignored files. The two answers are discard (ApprovalResidueDiscarder,
+// the existing certification stands) and fix, which commits the residue through
+// the step's own fix round and re-reviews the new head. Every residue item is
+// no-op, so an unattended --yes run discards and reports instead of bouncing
+// through review with nobody watching.
+func residueGateOutcome(sctx *pipeline.StepContext, name types.StepName, outcome *pipeline.StepOutcome) (*pipeline.StepOutcome, error) {
+	modified, untracked, err := worktreeResidue(sctx.Ctx, sctx.WorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("inspect worktree residue after %s: %w", name, err)
+	}
+	var findings Findings
+	if outcome.Findings != "" {
+		if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
+			findings = Findings{}
+		}
+	}
+	for i, file := range modified {
+		findings.Items = append(findings.Items, Finding{
+			ID:          fmt.Sprintf("residue-tracked-%d", i+1),
+			Severity:    "warning",
+			Action:      types.ActionNoOp,
+			File:        file,
+			Description: fmt.Sprintf("%s left tracked file %s modified and uncommitted; discarding restores it, fixing commits it and re-reviews the new head", name, file),
+		})
+	}
+	for i, file := range untracked {
+		findings.Items = append(findings.Items, Finding{
+			ID:          fmt.Sprintf("residue-untracked-%d", i+1),
+			Severity:    "info",
+			Action:      types.ActionNoOp,
+			File:        file,
+			Description: fmt.Sprintf("%s left untracked file %s in the worktree; discarding removes it, fixing commits it and re-reviews the new head", name, file),
+		})
+	}
+	findingsJSON, err := json.Marshal(findings)
+	if err != nil {
+		return nil, fmt.Errorf("render %s residue findings: %w", name, err)
+	}
+	sctx.Log(fmt.Sprintf("%s certified %s but left %d modified tracked and %d untracked file(s) uncommitted; parking instead of committing over its own certification",
+		name, sctx.Run.HeadSHA, len(modified), len(untracked)))
+	outcome.NeedsApproval = true
+	outcome.Findings = string(findingsJSON)
+	return outcome, nil
+}
+
+// worktreeResidue splits an unclean worktree into tracked files that differ
+// from HEAD and untracked non-ignored files. Gitignored build output is in
+// neither list: it is not residue anyone needs to rule on, and discard leaves
+// it alone.
+func worktreeResidue(ctx context.Context, workDir string) (modified, untracked []string, err error) {
+	out, err := git.Run(ctx, workDir, "diff", "--name-only", "HEAD")
+	if err != nil {
+		return nil, nil, fmt.Errorf("list modified tracked files: %w", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			modified = append(modified, line)
+		}
+	}
+	untracked, err = git.UntrackedFiles(ctx, workDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list untracked files: %w", err)
+	}
+	return modified, untracked, nil
+}
+
+// discardValidationResidue restores tracked files and removes untracked
+// non-ignored ones, leaving gitignored output in place. It is what approving a
+// residue gate means, and it is a no-op on a clean worktree so approving any
+// other gate the certifying step raises changes nothing.
+func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName) error {
+	dirty, err := git.HasUncommittedChanges(sctx.Ctx, sctx.WorkDir)
+	if err != nil {
+		return fmt.Errorf("inspect worktree before discarding %s residue: %w", name, err)
+	}
+	if !dirty {
+		return nil
+	}
+	modified, untracked, err := worktreeResidue(sctx.Ctx, sctx.WorkDir)
+	if err != nil {
+		return err
+	}
+	if _, err := git.Run(sctx.Ctx, sctx.WorkDir, "reset", "--hard", "HEAD"); err != nil {
+		return fmt.Errorf("restore tracked files after %s: %w", name, err)
+	}
+	if _, err := git.Run(sctx.Ctx, sctx.WorkDir, "clean", "-fd"); err != nil {
+		return fmt.Errorf("remove untracked files after %s: %w", name, err)
+	}
+	sctx.Log(fmt.Sprintf("discarded %s residue: restored %d tracked and removed %d untracked file(s); the existing certification stands",
+		name, len(modified), len(untracked)))
+	return nil
 }
 
 func extractCommitSummary(result *agent.Result) (string, error) {

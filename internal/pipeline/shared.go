@@ -228,6 +228,12 @@ func (s *RunShared) LastRestartTree(step types.StepName) string {
 // is recognised as churn rather than progress. Unlike the housekeeping stash
 // this is not consume-once: the comparison must survive every later round of
 // the run.
+//
+// Only the most recent tree per step is kept, and RunShared is rebuilt on
+// every Execute and Resume, so the guard catches a consecutive repeat within
+// one daemon process and nothing more. An A/B/A oscillation and a loop that
+// spans a daemon restart both slip past it; runs.restart_count is what stays
+// durable across those.
 func (s *RunShared) SetLastRestartTree(step types.StepName, tree string) {
 	if s == nil {
 		return

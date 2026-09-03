@@ -11,20 +11,6 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-// TestRestartBoundaryIsTheFirstValidationStep pins the boundary to the first
-// step of the validation region. Issues #7/#8 move that region's head to
-// Format; this assertion is what makes the retarget break loudly instead of
-// leaving a boundary that silently sits in the middle of the region.
-func TestRestartBoundaryIsTheFirstValidationStep(t *testing.T) {
-	if RestartBoundary != types.StepReview {
-		t.Fatalf("RestartBoundary = %q, want %q", RestartBoundary, types.StepReview)
-	}
-	if RestartBoundary.Order() >= types.StepTest.Order() {
-		t.Fatalf("RestartBoundary order = %d, want less than Test's %d",
-			RestartBoundary.Order(), types.StepTest.Order())
-	}
-}
-
 // blockingFindingsJSON is one finding the executor treats as blocking without
 // routing it to auto-fix or to the ask-user gate, so a test can park a step on
 // NeedsApproval alone.
@@ -78,7 +64,9 @@ func TestExecutor_RestartTakesPrecedenceOverApprovalGate(t *testing.T) {
 // TestExecutor_RestartPreventsReviewCertification proves a later step's restart
 // revokes the certification the earlier review captured. Push accepts a
 // certified ancestor, so a surviving first-pass approval would authorise a head
-// nothing has reviewed.
+// nothing has reviewed. The re-review deliberately certifies nothing, which is
+// what a re-entry that parks or defers looks like, so the only way the column
+// can hold a value at the end is a revocation that never happened.
 func TestExecutor_RestartPreventsReviewCertification(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
@@ -91,7 +79,7 @@ func TestExecutor_RestartPreventsReviewCertification(t *testing.T) {
 			if reviewCalls == 1 {
 				return &StepOutcome{ReviewApprovedHeadSHA: "sha-review-1"}, nil
 			}
-			return &StepOutcome{ReviewApprovedHeadSHA: "sha-review-2"}, nil
+			return &StepOutcome{}, nil
 		}},
 		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
 			documentCalls++
@@ -106,16 +94,19 @@ func TestExecutor_RestartPreventsReviewCertification(t *testing.T) {
 	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
+	if reviewCalls != 2 {
+		t.Fatalf("review executions = %d, want 2", reviewCalls)
+	}
 
-	if run.ReviewApprovedHeadSHA == nil || *run.ReviewApprovedHeadSHA != "sha-review-2" {
-		t.Fatalf("run.ReviewApprovedHeadSHA = %v, want sha-review-2", run.ReviewApprovedHeadSHA)
+	if run.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("run.ReviewApprovedHeadSHA = %q, want nil", *run.ReviewApprovedHeadSHA)
 	}
 	stored, err := database.GetRun(run.ID)
 	if err != nil {
 		t.Fatalf("GetRun() error = %v", err)
 	}
-	if stored.ReviewApprovedHeadSHA == nil || *stored.ReviewApprovedHeadSHA != "sha-review-2" {
-		t.Fatalf("stored review_approved_head_sha = %v, want sha-review-2", stored.ReviewApprovedHeadSHA)
+	if stored.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("stored review_approved_head_sha = %q, want NULL", *stored.ReviewApprovedHeadSHA)
 	}
 }
 

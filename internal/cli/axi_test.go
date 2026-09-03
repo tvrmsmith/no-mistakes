@@ -172,16 +172,18 @@ func TestRunObjectRendersRestartCount(t *testing.T) {
 	}
 
 	// Exactly at the soft cap is still plain, not annotated.
-	rv.RestartCount = 5
+	rv.RestartCount = db.RestartSoftCap
 	out = axiDoc(runObjectField(rv))
-	if !strings.Contains(out, "restarts: 5\n") {
+	atCap := fmt.Sprintf("restarts: %d\n", db.RestartSoftCap)
+	if !strings.Contains(out, atCap) {
 		t.Errorf("run object at soft cap should render plain count in:\n%s", out)
 	}
 
 	// Strictly above the soft cap gets the exceeded annotation.
-	rv.RestartCount = 6
+	rv.RestartCount = db.RestartSoftCap + 1
 	out = axiDoc(runObjectField(rv))
-	if !strings.Contains(out, "restarts: 6 (soft cap 5 exceeded)\n") {
+	aboveCap := fmt.Sprintf("restarts: %d (soft cap %d exceeded)\n", db.RestartSoftCap+1, db.RestartSoftCap)
+	if !strings.Contains(out, aboveCap) {
 		t.Errorf("run object above soft cap missing exceeded annotation in:\n%s", out)
 	}
 
@@ -189,7 +191,7 @@ func TestRunObjectRendersRestartCount(t *testing.T) {
 	// history, not a live signal like awaiting_agent.
 	rv.Status = string(types.RunCompleted)
 	out = axiDoc(runObjectField(rv))
-	if !strings.Contains(out, "restarts: 6 (soft cap 5 exceeded)\n") {
+	if !strings.Contains(out, aboveCap) {
 		t.Errorf("restarts should render on a terminal run too in:\n%s", out)
 	}
 
@@ -213,6 +215,19 @@ func TestRunObjectRendersRestartCount(t *testing.T) {
 	headIdx := strings.Index(out, "head:")
 	if awaitingIdx < 0 || restartsIdx < 0 || headIdx < 0 || !(awaitingIdx < restartsIdx && restartsIdx < headIdx) {
 		t.Errorf("restarts should render after awaiting_agent and before head in:\n%s", out)
+	}
+}
+
+// TestRunViewCarriesRestartCount covers the two adapters that feed
+// runObjectField. Rendering is only half the surface: a restart count dropped
+// on the way in from either the daemon snapshot or the local database renders a
+// zero that reads as "this run never restarted".
+func TestRunViewCarriesRestartCount(t *testing.T) {
+	if got := runViewFromIPC(&ipc.RunInfo{ID: "run-1", RestartCount: 4}).RestartCount; got != 4 {
+		t.Errorf("runViewFromIPC RestartCount = %d, want 4", got)
+	}
+	if got := runViewFromDB(&db.Run{ID: "run-1", RestartCount: 4}, nil).RestartCount; got != 4 {
+		t.Errorf("runViewFromDB RestartCount = %d, want 4", got)
 	}
 }
 

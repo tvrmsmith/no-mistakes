@@ -117,6 +117,15 @@ type StepContext struct {
 	// read and written with sync/atomic free functions on the field address
 	// rather than an atomic.Int64 so StepContext stays copyable and go vet's
 	// copylocks check stays quiet.
+	//
+	// Copyability is the constraint that bounds this counter's reach: a copied
+	// StepContext counts independently, so a turn run through a copy is
+	// invisible to the original and its commit would be attributed to a
+	// deterministic tool. The two copy sites (reconcileApprovalGate and the CI
+	// step's publishedBranchHead) run no agent, and CIStep is the only
+	// ApprovalGateReconciler. A step that routes through runValidationStep must
+	// therefore never implement ApprovalGateReconciler; TestValidationStepsAreNotApprovalGateReconcilers
+	// in internal/pipeline/steps pins that.
 	agentInvocations int64
 }
 
@@ -198,4 +207,24 @@ type Step interface {
 // leaves the gate parked. Implementations must be read-only and fail closed.
 type ApprovalGateReconciler interface {
 	ReconcileApprovalGate(sctx *StepContext) (resolved bool, err error)
+}
+
+// ApprovalResidueDiscarder is implemented by the step that records the run's
+// review-approved head (Review today, whatever certifies after issues #7/#8).
+// The step that certifies must not modify the tree it certifies, so when it
+// exits with an unclean worktree it parks instead of committing: nothing is
+// destroyed, the leftovers stay visible in the gate diff, and the existing
+// certification is untouched.
+//
+// That gate has two answers. Approving means "discard", and the executor calls
+// this so the step restores tracked files and removes untracked non-ignored
+// ones (gitignored build output is left alone) before the run continues under
+// the certification that already stands. Choosing fix instead means "keep":
+// the step's own fix round commits the residue and re-reviews the new head, so
+// that answer needs no hook here.
+//
+// It is fail-closed. A discard that cannot complete leaves an uncommitted tree
+// a later step would commit unjudged, so the error fails the run.
+type ApprovalResidueDiscarder interface {
+	DiscardApprovalResidue(sctx *StepContext) error
 }

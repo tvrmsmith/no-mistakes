@@ -358,9 +358,8 @@ Previous test findings to address:
 			existingTestsRule = "- The selected units' test commands above already ran and passed. Treat their results as the baseline, do NOT run them again, and do NOT run tests for any unit outside that selection. Spend this pass on evidence those commands do not produce."
 		}
 		evidenceCtx, cancelEvidence, evidenceTimeout := testAgentContext(sctx)
-		result, err := sctx.RunAgentContext(evidenceCtx, agent.RunOpts{
-			Prompt: fmt.Sprintf(
-				`%s
+		evidencePrompt := fmt.Sprintf(
+			`%s
 
 Context:
 - branch: %s
@@ -404,15 +403,26 @@ Rules:
 - Do NOT report passing tests (whether existing or new), test counts, coverage summaries, or other non-actionable information.
 - If all tests pass and there are no issues, return an empty findings array.
 - Set action to "ask-user" for missing-evidence warning findings and only otherwise when a test failure seems desired and you question the author's intent of having the test in the first place. Set action to "auto-fix" for objective test failures that can be safely fixed. Set action to "no-op" for informational notes.%s`,
-				evidenceOpening,
-				sctx.Run.Branch,
-				baseSHA,
-				sctx.Run.HeadSHA,
-				baselineSection,
-				evidenceGuidance,
-				existingTestsRule,
-				reassessHistory,
-			),
+			evidenceOpening,
+			sctx.Run.Branch,
+			baseSHA,
+			sctx.Run.HeadSHA,
+			baselineSection,
+			evidenceGuidance,
+			existingTestsRule,
+			reassessHistory,
+		)
+		// A restart carries this step's own last verdict back into the
+		// re-entry, and that re-entry is not a fix round, so the evidence pass
+		// reads it here rather than re-deriving what it already reported.
+		if sctx.PreviousFindings != "" {
+			evidencePrompt += `
+
+Previous test findings to address:
+` + sanitizedPreviousFindingsForPrompt(sctx.PreviousFindings)
+		}
+		result, err := sctx.RunAgentContext(evidenceCtx, agent.RunOpts{
+			Prompt:     evidencePrompt,
 			CWD:        sctx.WorkDir,
 			JSONSchema: testFindingsSchema,
 			OnChunk:    sctx.LogChunk,

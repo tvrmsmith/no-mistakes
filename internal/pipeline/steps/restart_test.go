@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,11 +25,29 @@ func commitCount(t *testing.T, dir string) int {
 	return count
 }
 
+// validationStepBody is satisfied by exactly the steps that route their exit
+// through runValidationStep: the wrapper Execute is public, the real body is
+// the unexported execute this interface names.
+type validationStepBody interface {
+	execute(*pipeline.StepContext) (*pipeline.StepOutcome, error)
+}
+
+func validationSteps() []pipeline.Step {
+	var out []pipeline.Step
+	for _, step := range AllSteps() {
+		if _, ok := step.(validationStepBody); ok {
+			out = append(out, step)
+		}
+	}
+	return out
+}
+
 // TestRunValidationStep_CommitAttributionMatrix crosses "an agent ran this
 // round" with the kind of path the commit touches. Attribution is the only
 // axis that decides a restart today: the documentation-glob exemption is issue
 // #6 and does not exist yet, so a docs-only agent commit restarts exactly like
-// a code one.
+// a code one. The row that writes nothing pins the other half of attribution:
+// an agent that ran and changed nothing leaves no commit to restart on.
 func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -36,11 +55,13 @@ func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 		agentRan    bool
 		dirtyPath   string
 		wantRestart types.StepName
+		wantCommits int
 	}{
-		{name: "agent_docs", agentRan: true, dirtyPath: "README.md", wantRestart: types.StepReview},
-		{name: "agent_code", agentRan: true, dirtyPath: "main.go", wantRestart: types.StepReview},
-		{name: "tool_docs", agentRan: false, dirtyPath: "README.md", wantRestart: ""},
-		{name: "tool_code", agentRan: false, dirtyPath: "main.go", wantRestart: ""},
+		{name: "agent_docs", agentRan: true, dirtyPath: "README.md", wantRestart: types.StepReview, wantCommits: 1},
+		{name: "agent_code", agentRan: true, dirtyPath: "main.go", wantRestart: types.StepReview, wantCommits: 1},
+		{name: "tool_docs", agentRan: false, dirtyPath: "README.md", wantRestart: "", wantCommits: 1},
+		{name: "tool_code", agentRan: false, dirtyPath: "main.go", wantRestart: "", wantCommits: 1},
+		{name: "agent_no_write", agentRan: true, dirtyPath: "", wantRestart: "", wantCommits: 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,6 +70,9 @@ func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 			gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 			write := func() {
+				if tc.dirtyPath == "" {
+					return
+				}
 				if err := os.WriteFile(filepath.Join(dir, tc.dirtyPath), []byte("changed\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
@@ -77,8 +101,8 @@ func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 			if outcome.RestartFrom != tc.wantRestart {
 				t.Fatalf("RestartFrom = %q, want %q", outcome.RestartFrom, tc.wantRestart)
 			}
-			if got := commitCount(t, dir) - before; got != 1 {
-				t.Fatalf("new commits = %d, want 1", got)
+			if got := commitCount(t, dir) - before; got != tc.wantCommits {
+				t.Fatalf("new commits = %d, want %d", got, tc.wantCommits)
 			}
 			if status := gitStatusPorcelain(t, dir); status != "" {
 				t.Fatalf("worktree = %q, want clean", status)
@@ -87,20 +111,86 @@ func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 	}
 }
 
-// TestRunValidationStep_BoundaryStepCommitDropsCertification covers the step
-// that cannot restart into itself. Its own exit commit leaves the SHA it just
-// certified a strict ancestor of the new head, and push accepts an ancestor,
-// so the certification is dropped instead.
-func TestRunValidationStep_BoundaryStepCommitDropsCertification(t *testing.T) {
+// TestRunValidationStep_CertifyingStepParksOverResidue covers the step that
+// records the review-approved head. Committing at its exit would leave the SHA
+// it just certified a strict ancestor of the new head, and push accepts an
+// ancestor, so the residue would ship unjudged. It parks instead: nothing is
+// committed, nothing is destroyed, and the certification stands.
+func TestRunValidationStep_CertifyingStepParksOverResidue(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("edited\n"), 0o644); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("scratch\n"), 0o644); err != nil {
 			return nil, err
 		}
 		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+	before := commitCount(t, dir)
+
+	outcome, err := runValidationStep(sctx, types.StepReview, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: headSHA}, nil
+	})
+	if err != nil {
+		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if outcome.ReviewApprovedHeadSHA != headSHA {
+		t.Fatalf("ReviewApprovedHeadSHA = %q, want %q", outcome.ReviewApprovedHeadSHA, headSHA)
+	}
+	if outcome.RestartFrom != "" {
+		t.Fatalf("RestartFrom = %q, want empty", outcome.RestartFrom)
+	}
+	if !outcome.NeedsApproval {
+		t.Fatal("NeedsApproval = false, want true")
+	}
+	if got := commitCount(t, dir) - before; got != 0 {
+		t.Fatalf("new commits = %d, want 0", got)
+	}
+	if status := gitStatusPorcelain(t, dir); status == "" {
+		t.Fatal("worktree is clean, want the residue preserved for the gate")
+	}
+
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatalf("parse residue findings: %v", err)
+	}
+	if types.HasActionableFindings(findings) {
+		t.Fatal("residue findings are actionable, want every item no-op so --yes discards")
+	}
+	severityByFile := map[string]string{}
+	for _, item := range findings.Items {
+		severityByFile[item.File] = item.Severity
+	}
+	if got := severityByFile["feature.txt"]; got != "warning" {
+		t.Fatalf("tracked-file severity = %q, want warning", got)
+	}
+	if got := severityByFile["scratch.txt"]; got != "info" {
+		t.Fatalf("untracked-file severity = %q, want info", got)
+	}
+}
+
+// TestRunValidationStep_CertifyingStepCleanExitKeepsCertification is the other
+// half of the branch above: a review round that ends clean, including one whose
+// own fix mode already committed, passes its certification straight through.
+func TestRunValidationStep_CertifyingStepCleanExitKeepsCertification(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("fixed\n"), 0o644); err != nil {
+			return nil, err
+		}
+		return &agent.Result{Output: json.RawMessage(`{"summary":"fix it"}`)}, nil
 	}}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Shared = &pipeline.RunShared{}
@@ -109,30 +199,118 @@ func TestRunValidationStep_BoundaryStepCommitDropsCertification(t *testing.T) {
 		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
 			return nil, err
 		}
-		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: "sha-x"}, nil
+		if err := commitAgentFixes(inner, types.StepReview, "fix it", "fix it"); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: inner.Run.HeadSHA}, nil
 	})
 	if err != nil {
 		t.Fatalf("runValidationStep() error = %v", err)
 	}
-	if outcome.ReviewApprovedHeadSHA != "" {
-		t.Fatalf("ReviewApprovedHeadSHA = %q, want empty", outcome.ReviewApprovedHeadSHA)
+	if outcome.ReviewApprovedHeadSHA != sctx.Run.HeadSHA {
+		t.Fatalf("ReviewApprovedHeadSHA = %q, want the new head %q", outcome.ReviewApprovedHeadSHA, sctx.Run.HeadSHA)
 	}
-	if outcome.RestartFrom != "" {
-		t.Fatalf("RestartFrom = %q, want empty", outcome.RestartFrom)
+	if outcome.NeedsApproval {
+		t.Fatal("NeedsApproval = true, want false for a fix round that ended clean")
 	}
 }
 
-// TestRunValidationStep_NoProgressCommitDoesNotRestart proves a step that
-// commits the same tree twice stops asking for a restart. This is what makes
-// the loop terminate without a cap.
-func TestRunValidationStep_NoProgressCommitDoesNotRestart(t *testing.T) {
+// TestRunValidationStep_FailedRoundCommitsNothing proves a step body that
+// errors takes its residue with it. Committing there would publish work no
+// gate ever accepted, from a round the run is about to fail on.
+func TestRunValidationStep_FailedRoundCommitsNothing(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
-	round := 0
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+	before := commitCount(t, dir)
+
+	boom := errors.New("step body failed")
+	_, err := runValidationStep(sctx, types.StepDocument, func(*pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if writeErr := os.WriteFile(filepath.Join(dir, "half-done.txt"), []byte("partial\n"), 0o644); writeErr != nil {
+			return nil, writeErr
+		}
+		return nil, boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("runValidationStep() error = %v, want %v", err, boom)
+	}
+	if got := commitCount(t, dir) - before; got != 0 {
+		t.Fatalf("new commits = %d, want 0", got)
+	}
+}
+
+// TestReviewStep_DiscardApprovalResidue proves what approving a residue gate
+// means: tracked files go back to HEAD, untracked non-ignored files are
+// removed, and gitignored build output is left alone.
+func TestReviewStep_DiscardApprovalResidue(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("build/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "ignore build output")
+
+	tracked := filepath.Join(dir, "feature.txt")
+	original, err := os.ReadFile(tracked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tracked, []byte("residue\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "build", "out.bin"), []byte("binary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Run.HeadSHA = strings.TrimSpace(gitCmd(t, dir, "rev-parse", "HEAD"))
+	before := commitCount(t, dir)
+
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx); err != nil {
+		t.Fatalf("DiscardApprovalResidue() error = %v", err)
+	}
+
+	restored, err := os.ReadFile(tracked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != string(original) {
+		t.Fatalf("tracked file = %q, want it restored to %q", restored, original)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "scratch.txt")); !os.IsNotExist(err) {
+		t.Fatalf("untracked residue still present (stat err = %v), want it removed", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build", "out.bin")); err != nil {
+		t.Fatalf("gitignored output was removed: %v", err)
+	}
+	if got := commitCount(t, dir) - before; got != 0 {
+		t.Fatalf("new commits = %d, want 0", got)
+	}
+}
+
+// TestRunValidationStep_NoProgressCommitRevokesCertification covers the churn
+// path. Declining a second restart on the tree the step already restarted on
+// does not make its commit judged: the head still moved past what review
+// certified, and push accepts a certified ancestor, so the authority is
+// revoked rather than the commit shipped.
+func TestRunValidationStep_NoProgressCommitRevokesCertification(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
 	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-		round++
 		// Round 2 writes the same content back over a file the pipeline
 		// reverted, so its commit lands on a tree identical to round 1's.
 		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
@@ -142,6 +320,7 @@ func TestRunValidationStep_NoProgressCommitDoesNotRestart(t *testing.T) {
 	}}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Shared = &pipeline.RunShared{}
+	recordReviewApproval(t, sctx, headSHA)
 
 	run := func() *pipeline.StepOutcome {
 		t.Helper()
@@ -177,6 +356,17 @@ func TestRunValidationStep_NoProgressCommitDoesNotRestart(t *testing.T) {
 	if got := run().RestartFrom; got != "" {
 		t.Fatalf("second round RestartFrom = %q, want empty (no progress)", got)
 	}
+
+	if sctx.Run.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("in-memory ReviewApprovedHeadSHA = %q, want nil", *sctx.Run.ReviewApprovedHeadSHA)
+	}
+	stored, err := sctx.DB.GetRun(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("stored ReviewApprovedHeadSHA = %q, want NULL", *stored.ReviewApprovedHeadSHA)
+	}
 }
 
 // TestDocumentStep_AgentCommitRestartsValidation proves a real step routes its
@@ -204,5 +394,106 @@ func TestDocumentStep_AgentCommitRestartsValidation(t *testing.T) {
 	}
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("worktree = %q, want clean", status)
+	}
+}
+
+// TestStep_RestartCarryoverReachesTheEvidencePass proves the non-fix path
+// reads the findings a restart carried back. A restart re-entry is deliberately
+// not a fix round, so a step that only consults PreviousFindings while fixing
+// re-derives from scratch the verdict it already reported.
+func TestStep_RestartCarryoverReachesTheEvidencePass(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		return &agent.Result{Output: json.RawMessage(`{"findings":[],"risk_level":"low","risk_rationale":"none","risk_scope":"source-or-external","summary":"ok"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+	sctx.Fixing = false
+	sctx.PreviousFindings = `{"findings":[{"id":"carried-test-finding","severity":"warning","description":"assertion never ran","action":"no-op"}],"summary":"1 issue"}`
+
+	if _, err := (&TestStep{}).Execute(sctx); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(ag.calls) != 1 {
+		t.Fatalf("agent calls = %d, want 1", len(ag.calls))
+	}
+	if !strings.Contains(ag.calls[0].Prompt, "carried-test-finding") {
+		t.Fatalf("evidence prompt does not carry the restarted findings:\n%s", ag.calls[0].Prompt)
+	}
+}
+
+// TestLintStep_RestartCarryoverBypassesTheHousekeepingStash is the same rule on
+// the lint side. The stashed combined document+lint result was produced before
+// the restart, so it cannot have accounted for the findings the restart carried
+// back; consuming it would answer the gate with a verdict that predates them.
+func TestLintStep_RestartCarryoverBypassesTheHousekeepingStash(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"lint clean"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+	sctx.Shared.SetHousekeepingLint(pipeline.HousekeepingLintResult{
+		FindingsJSON: `{"findings":[],"summary":"stale"}`,
+		Summary:      "stale",
+	})
+	sctx.Fixing = false
+	sctx.PreviousFindings = `{"findings":[{"id":"carried-lint-finding","severity":"warning","description":"vet warning","action":"no-op"}],"summary":"1 issue"}`
+
+	outcome, err := (&LintStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(ag.calls) != 1 {
+		t.Fatalf("agent calls = %d, want 1 (the stash must not answer a restart re-entry)", len(ag.calls))
+	}
+	if !strings.Contains(ag.calls[0].Prompt, "carried-lint-finding") {
+		t.Fatalf("lint prompt does not carry the restarted findings:\n%s", ag.calls[0].Prompt)
+	}
+	if outcome.FixSummary == "stale" {
+		t.Fatal("outcome came from the stale housekeeping stash")
+	}
+}
+
+// TestRestartBoundaryIsTheEarliestValidationStep pins the constant against the
+// executor's real step list rather than a second hand-written copy of it. A
+// boundary that is not itself a validation step, or that sits after one, would
+// let that earlier step's agent commit skip re-validation entirely. Deriving
+// the set from AllSteps means the Format step of issues #7/#8 is picked up the
+// moment it exists.
+func TestRestartBoundaryIsTheEarliestValidationStep(t *testing.T) {
+	t.Parallel()
+	validation := validationSteps()
+	if len(validation) == 0 {
+		t.Fatal("no validation steps found in AllSteps()")
+	}
+	earliest := validation[0].Name()
+	for _, step := range validation[1:] {
+		if step.Name().Order() < earliest.Order() {
+			earliest = step.Name()
+		}
+	}
+	if pipeline.RestartBoundary != earliest {
+		t.Fatalf("RestartBoundary = %q, want the earliest validation step %q", pipeline.RestartBoundary, earliest)
+	}
+}
+
+// TestValidationStepsAreNotApprovalGateReconcilers guards the commit
+// attribution counter. StepContext is copyable and a copy counts its agent
+// turns independently, so a turn run through the copy reconcileApprovalGate
+// makes would be invisible to the original and its commit would be attributed
+// to a deterministic tool.
+func TestValidationStepsAreNotApprovalGateReconcilers(t *testing.T) {
+	t.Parallel()
+	for _, step := range validationSteps() {
+		if _, ok := step.(pipeline.ApprovalGateReconciler); ok {
+			t.Fatalf("validation step %s implements ApprovalGateReconciler; its agent turns would escape commit attribution", step.Name())
+		}
 	}
 }

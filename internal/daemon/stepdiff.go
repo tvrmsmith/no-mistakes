@@ -16,8 +16,17 @@ import (
 // transport failure.
 const maxStepDiffBytes = 512 * 1024
 
-// StepDiff returns the working-tree diff for a run that is parked at a
-// fix-review gate, derived on demand from the run's worktree.
+// StepDiff returns the diff of what the parked step changed, derived on demand
+// from the run's worktree.
+//
+// Which diff that is depends on where the step left its work. A step parked
+// over an unclean worktree - the certifying step refusing to commit over its
+// own certification - is served the working-tree diff. Every validation step
+// otherwise commits its own output at its exit, so by the time its gate is
+// observable the worktree is clean and the working-tree diff is empty; those
+// gates are served HEAD~1..HEAD, the commit the step just made. Without that
+// fallback the Test step's evidence round, whose new test files a human at the
+// gate reads, would show nothing at all.
 //
 // This diff is the only piece of gate context the pipeline never persists, so
 // it is the one thing a subscriber cannot rebuild from get_run. Serving it
@@ -43,9 +52,18 @@ func (m *RunManager) StepDiff(ctx context.Context, runID string) (string, bool, 
 		return "", false, fmt.Errorf("repo not found for run %s", runID)
 	}
 
-	diff, err := git.DiffHead(ctx, worktrees.RecordedDir(m.paths, run.WorktreePath(), repo.ID, run.ID))
+	workDir := worktrees.RecordedDir(m.paths, run.WorktreePath(), repo.ID, run.ID)
+	diff, err := git.DiffHead(ctx, workDir)
 	if err != nil {
 		return "", false, fmt.Errorf("diff worktree: %w", err)
+	}
+	if diff == "" {
+		// The step committed its own output at its exit. Show that commit
+		// rather than an empty gate. A root commit has no HEAD~1, in which case
+		// there is genuinely nothing to show and the empty diff stands.
+		if committed, commitErr := git.Diff(ctx, workDir, "HEAD~1", "HEAD"); commitErr == nil {
+			diff = committed
+		}
 	}
 	if len(diff) > maxStepDiffBytes {
 		return diff[:maxStepDiffBytes], true, nil

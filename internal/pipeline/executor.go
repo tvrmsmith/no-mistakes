@@ -294,9 +294,12 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 // Termination is deliberately uncapped. ResetStepsFrom leaves step_rounds
 // intact, so a re-entered step recounts the auto-fix rounds it already spent
 // and its per-step budget never refills, and the no-progress tree guard in
-// runValidationStep stops a step that commits the same tree twice. A step whose
-// agent produces genuinely different output every round is still unbounded;
-// restart_count and the soft-cap warning make that visible instead of silent.
+// runValidationStep stops a step that re-commits the tree its own most recent
+// restart produced. That guard is per-process and remembers only that one
+// tree, so it narrows the loop rather than bounding it: a step whose agent
+// produces genuinely different output every round is still unbounded, and
+// restart_count plus the soft-cap warning are what make that visible instead
+// of silent.
 func (e *Executor) prepareRestart(run *db.Run, name types.StepName, currentIndex int) (int, error) {
 	index, err := e.stepIndex(name)
 	if err != nil || index >= currentIndex {
@@ -551,6 +554,9 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	switch response.action {
 	case types.ActionApprove:
 		e.recordDeclinedRound(gate.lastRoundID, gate.findings, gate.step.Name(), gate.round)
+		if err := e.discardApprovalResidue(gate.step, reconcileCtx); err != nil {
+			return e.failRun(run, repo, err, ctx)
+		}
 		if err := completeRecoveredGate(); err != nil {
 			return e.failRun(run, repo, fmt.Errorf("complete recovered step %s: %w", gate.step.Name(), err), ctx)
 		}
@@ -1159,11 +1165,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		executionMS += time.Since(phaseStart).Milliseconds()
 
 		// Determine approval status: fix_review after a fix cycle, awaiting_approval otherwise.
-		// The working-tree diff that shows what the agent changed is NOT
-		// attached here: it is unbounded, and one frame over the transport
-		// limit kills the whole subscription and hides every event after it.
-		// Consumers fetch it on demand from the run's worktree instead
-		// (ipc.MethodGetStepDiff).
+		// The diff that shows what the agent changed is NOT attached here: it
+		// is unbounded, and one frame over the transport limit kills the whole
+		// subscription and hides every event after it. Consumers fetch it on
+		// demand from the run's worktree instead (ipc.MethodGetStepDiff), which
+		// serves the working tree when the step left work uncommitted and the
+		// step's own exit commit (HEAD~1..HEAD) when it did not - a validation
+		// step commits at its exit, so its worktree is usually already clean by
+		// the time the gate is observable.
 		approvalStatus := types.StepStatusAwaitingApproval
 		if sctx.Fixing {
 			approvalStatus = types.StepStatusFixReview
@@ -1238,6 +1247,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// Approved - execution already frozen in executionMS, reset phaseStart
 			// so the done label computes no additional elapsed.
 			e.recordDeclinedRound(currentRoundID, outcome.Findings, stepName, roundNum)
+			if err := e.discardApprovalResidue(step, sctx); err != nil {
+				return false, "", err
+			}
 			phaseStart = time.Now()
 			goto done
 
@@ -1340,6 +1352,22 @@ done:
 //
 // Best effort by design. This is advisory prompt context for later steps, so a
 // failed write degrades to today's behavior and must never fail the run.
+// discardApprovalResidue is what both ActionApprove sites route
+// through. A step that parked over work it deliberately refused to commit
+// (ApprovalResidueDiscarder) clears that work here, because approving such a
+// gate means discard. Every step that does not implement the interface is
+// unaffected, and a discarder with a clean worktree does nothing.
+func (e *Executor) discardApprovalResidue(step Step, sctx *StepContext) error {
+	discarder, ok := step.(ApprovalResidueDiscarder)
+	if !ok {
+		return nil
+	}
+	if err := discarder.DiscardApprovalResidue(sctx); err != nil {
+		return fmt.Errorf("discard approval residue for step %s: %w", step.Name(), err)
+	}
+	return nil
+}
+
 func (e *Executor) recordDeclinedRound(roundID, findingsJSON string, stepName types.StepName, roundNum int) {
 	if e == nil || e.db == nil || roundID == "" {
 		return
