@@ -117,7 +117,7 @@ After a fix cycle, press `d` to toggle the diff view:
 - Finding context line showing which finding you're viewing
 - Scroll position in the box title: `Diff (45/312)`
 
-The TUI loads this working-tree diff on demand when the fix-review gate opens. If loading either the authoritative run state or the diff fails, approval actions stay disabled and the action bar offers `r retry`. Diff previews are capped at 512 KiB; when a preview is truncated, the TUI shows a warning because approval still applies to the complete working-tree diff.
+The TUI loads this diff on demand when the fix-review gate opens. It shows the parked step's working-tree changes, or, for a validation step that committed its own work at its exit and left the tree clean, the changes that round committed. If loading either the authoritative run state or the diff fails, approval actions stay disabled and the action bar offers `r retry`. Diff previews are capped at 512 KiB; when a preview is truncated, the TUI shows a warning because approval still applies to the complete diff.
 
 ### Log tail
 

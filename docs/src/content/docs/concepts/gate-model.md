@@ -184,7 +184,8 @@ An agent-supplied AXI intent is stored directly on the run.
 Raw transcript text is not stored in this database.
 Legacy `user_fix` rounds are still read as `auto-fix` for backward compatibility.
 Run records also store the nullable `awaiting_agent_since` timestamp set while a gate is waiting for the driving agent, which both renders the AXI parked signal and marks the run as one a clean daemon stop preserves, plus accumulated `parked_ms` for local performance reporting.
-They also record the run's requested `--skip` set and the ordered step layout it started under, so a preserved run resumes with the scope it began with and a lifecycle guard can tell that its layout still matches the installed binary.
+They also record the run's requested `--skip` set and the ordered step layout it started under, so a preserved run resumes with the scope it began with and a lifecycle guard can tell that its layout still matches the installed binary. The restored skip set is also what a resumed run judges a restart request against, so it decides the same way the original executor did.
+They also store `restart_count`, the number of times the run re-entered validation.
 For version-specific debugging, inspect `runs.no_mistakes_version` and `runs.no_mistakes_build_sha`: each new run records the version returned by `internal/buildinfo.CurrentVersion()` and the `internal/buildinfo.Commit` build SHA embedded through release `-ldflags`, the same identity shown by `no-mistakes --version`. Historical rows remain `NULL`.
 Each agent invocation records local-only purpose, provider/model metadata, session mode and a truncated session-identity hash, timing, failure category, and token usage; prompts, outputs, diffs, and credentials are never stored there.
 Use `no-mistakes stats --agents` for aggregates or `no-mistakes stats --run <id>` for a run timeline and parked time.

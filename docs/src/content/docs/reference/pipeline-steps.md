@@ -24,6 +24,23 @@ They instead require an executable interface or a typed or normalized semantic m
 Reading a file remains valid when that file is itself an owned output or data contract, and deterministic tests may inspect the final emitted agent prompt as a generated interface; model interpretation is reserved for development-only evaluation.
 Review flags every newly added violation and requires same-pattern tests encountered directly in the accepted change's scope to be removed or made semantic, without expanding the change into a repository-wide test cleanup.
 
+## Validation restart
+
+Review, Test, Document, and Lint share one exit path. When a round leaves the worktree unclean, that step commits the leftovers itself, and the commit is attributed to whoever produced it.
+
+A commit made in a round that invoked an agent is agent-authored: nothing has judged it, so the run re-enters validation from Review, and the run's review approval is revoked in the same write that records the new head. Review, Test, Document, and Lint then run again against that head. A commit a deterministic tool produced, such as a formatter rewriting whitespace, carries nothing new to judge and restarts nothing.
+
+A re-entry is not a fix round. The re-entered step receives the previous round's findings as context, and per-step auto-fix budgets do not refill across a restart, so a step cannot buy more attempts by restarting.
+
+Restarts are not capped. Two guards make a loop visible instead:
+
+- A step that commits the same tree its own previous restart already produced parks with an `ask-user` finding naming the step and the tree instead of restarting again. Approve to ship it under the review that already stands, fix to run that step once more, or abort.
+- Each run counts its restarts. `no-mistakes axi status` renders that count as `restarts`, annotated once it passes an advisory soft cap of 5. The cap only annotates; it never blocks or limits a run.
+
+Review is both the restart boundary and the step that records the review-approved head, and the step that certifies must not modify the tree it certifies. A review round that records an approved head and still leaves the worktree unclean therefore commits nothing: it parks and lists what was left behind, tracked modifications as warnings and untracked non-ignored files as informational notes. Approving discards exactly the paths that gate recorded and keeps the certification; fixing commits them through Review's own fix round and re-reviews the resulting head. Every item is `no-op`, so an unattended `--yes` run discards and reports. A daemon restart forgets the recorded paths, so approving the recovered gate discards nothing and leaves the leftovers for the next validation step's exit commit.
+
+A run that skipped Review never rewinds into it, because that would re-mark Review skipped and walk straight back to the requesting step. With Push live the run fails, naming both steps, since Push would otherwise refuse three steps later on the missing certification. With Push skipped too - the validate-without-publishing mode of `--skip review,push` - the restart request is dropped with a log naming both steps and the run continues; the round's own findings and approval gate are unaffected. A run resumed after a daemon restart reaches the same verdict, because the run records the operator's skip list when it starts.
+
 ## Finding decision history
 
 When a human resolves a findings gate with Approve, Skip, or Abort without selecting a fix, no-mistakes records that the round's findings were declined. A gate with no findings records no decision. When the human selects only some findings to fix, the unselected complement is recorded as declined; findings merely left out by automatic filtering remain undecided.
