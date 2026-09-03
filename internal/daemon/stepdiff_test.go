@@ -10,6 +10,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // The fix-review diff is the one piece of gate context that is not persisted
@@ -106,12 +107,9 @@ func TestStepDiff_BoundsAnOversizedDiff(t *testing.T) {
 	}
 }
 
-// A validation step commits its own output at its exit, so by the time its
-// gate is observable the worktree is clean and the working-tree diff is empty.
-// The gate must still show what the step did: without the exit-commit fallback
-// a reviewer reads an empty diff and has nothing to rule on.
-func TestStepDiff_ShowsTheExitCommitWhenTheWorktreeIsClean(t *testing.T) {
-	m, runID := stepDiffFixture(t, "agent fix\n")
+// stepDiffWorktree resolves the run's worktree directory.
+func stepDiffWorktree(t *testing.T, m *RunManager, runID string) string {
+	t.Helper()
 	run, err := m.db.GetRun(runID)
 	if err != nil {
 		t.Fatal(err)
@@ -120,9 +118,52 @@ func TestStepDiff_ShowsTheExitCommitWhenTheWorktreeIsClean(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worktree := m.paths.WorktreeDir(repo.ID, run.ID)
+	return m.paths.WorktreeDir(repo.ID, run.ID)
+}
+
+// parkStepAtGate puts a step at an approval gate with one round that started on
+// startingHead, which is the shape StepDiff reads to decide whether the round
+// committed anything.
+func parkStepAtGate(t *testing.T, m *RunManager, runID string, name types.StepName, startingHead string) {
+	t.Helper()
+	result, err := m.db.InsertStepResult(runID, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.StartStep(result.ID); err != nil {
+		t.Fatal(err)
+	}
+	findings := `{"findings":[]}`
+	if _, err := m.db.InsertStepRoundWithStartingHead(result.ID, 1, "initial", &findings, nil, startingHead, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.UpdateStepStatusWithDuration(result.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func headSHA(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A validation step commits its own output at its exit, so by the time its
+// gate is observable the worktree is clean and the working-tree diff is empty.
+// The gate must still show what the step did: without the exit-commit fallback
+// a reviewer reads an empty diff and has nothing to rule on.
+func TestStepDiff_ShowsTheExitCommitWhenTheWorktreeIsClean(t *testing.T) {
+	m, runID := stepDiffFixture(t, "agent fix\n")
+	worktree := stepDiffWorktree(t, m, runID)
+	startingHead := headSHA(t, worktree)
 	runGit(t, worktree, "add", "-A")
 	runGit(t, worktree, "commit", "-m", "step exit commit")
+	parkStepAtGate(t, m, runID, types.StepDocument, startingHead)
 
 	diff, truncated, err := m.StepDiff(context.Background(), runID)
 	if err != nil {
@@ -133,6 +174,32 @@ func TestStepDiff_ShowsTheExitCommitWhenTheWorktreeIsClean(t *testing.T) {
 	}
 	if !strings.Contains(diff, "tracked.txt") || !strings.Contains(diff, "agent fix") {
 		t.Fatalf("clean worktree served no exit-commit diff:\n%s", diff)
+	}
+}
+
+// The reported defect: a gate whose step committed nothing was served the
+// PREVIOUS step's commit as "what the parked step changed". A configured test
+// command that exits nonzero parks the Test step with an untouched worktree, so
+// the honest answer is an empty diff.
+func TestStepDiff_StepThatCommittedNothingGetsNoDiff(t *testing.T) {
+	m, runID := stepDiffFixture(t, "agent fix\n")
+	worktree := stepDiffWorktree(t, m, runID)
+
+	// An earlier step's commit, already ruled on, sitting at HEAD~1..HEAD.
+	runGit(t, worktree, "add", "-A")
+	runGit(t, worktree, "commit", "-m", "an earlier step's commit")
+	// The parked step then runs and changes nothing.
+	parkStepAtGate(t, m, runID, types.StepTest, headSHA(t, worktree))
+
+	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Fatal("empty diff reported as truncated")
+	}
+	if diff != "" {
+		t.Fatalf("diff = %q, want empty: the parked step committed nothing", diff)
 	}
 }
 

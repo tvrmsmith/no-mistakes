@@ -68,8 +68,8 @@ type Run struct {
 	// step duration_ms values exclude this time).
 	ParkedMS int64
 	// RestartCount is how many times the run re-entered validation from the
-	// restart boundary (internal/pipeline stamps this on a commit the driving
-	// agent pushes mid-run). It is history, not a live signal, so it stays
+	// restart boundary. The executor's prepareRestart is the only writer, via
+	// IncrementRunRestartCount. It is history, not a live signal, so it stays
 	// nonzero and rendered after the run goes terminal.
 	RestartCount int64
 	// SkippedSteps is the run's requested skip set. It is empty for runs

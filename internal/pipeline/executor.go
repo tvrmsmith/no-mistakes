@@ -261,7 +261,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 		if restartFrom != "" {
 			restartIndex, err := e.prepareRestart(run, restartFrom, i)
 			if err != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", step.Name(), restartFrom), ctx)
+				return e.failRun(run, repo, restartFailure(step.Name(), restartFrom, err), ctx)
 			}
 			i = restartIndex - 1
 		}
@@ -273,6 +273,22 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 		return e.failRun(run, repo, fmt.Errorf("update run status: %w", err))
 	}
 	return nil
+}
+
+// ErrInvalidRestartBoundary is what prepareRestart returns when the step named
+// a boundary the pipeline cannot restart at. Every other error it returns is a
+// failed write, and the two must not be reported alike: blaming the step for a
+// database failure sends whoever reads the run at a step that did nothing
+// wrong. restartFailure keeps that distinction at the call sites.
+var ErrInvalidRestartBoundary = errors.New("invalid restart boundary")
+
+// restartFailure phrases a prepareRestart error for the run's failure message,
+// naming the step only when the step is what was wrong.
+func restartFailure(step types.StepName, restartFrom types.StepName, err error) error {
+	if errors.Is(err, ErrInvalidRestartBoundary) {
+		return fmt.Errorf("step %s requested invalid restart from %s", step, restartFrom)
+	}
+	return fmt.Errorf("restart from %s requested by step %s: %w", restartFrom, step, err)
 }
 
 func (e *Executor) stepIndex(name types.StepName) (int, error) {
@@ -294,7 +310,7 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 // Termination is deliberately uncapped. ResetStepsFrom leaves step_rounds
 // intact, so a re-entered step recounts the auto-fix rounds it already spent
 // and its per-step budget never refills, and the no-progress tree guard in
-// runValidationStep stops a step that re-commits the tree its own most recent
+// runValidationStep parks a step that re-commits the tree its own most recent
 // restart produced. That guard is per-process and remembers only that one
 // tree, so it narrows the loop rather than bounding it: a step whose agent
 // produces genuinely different output every round is still unbounded, and
@@ -303,7 +319,7 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 func (e *Executor) prepareRestart(run *db.Run, name types.StepName, currentIndex int) (int, error) {
 	index, err := e.stepIndex(name)
 	if err != nil || index >= currentIndex {
-		return 0, fmt.Errorf("invalid restart boundary")
+		return 0, ErrInvalidRestartBoundary
 	}
 	if err := e.db.ResetStepsFrom(run.ID, e.steps[index].Name().Order()); err != nil {
 		return 0, err
@@ -554,7 +570,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	switch response.action {
 	case types.ActionApprove:
 		e.recordDeclinedRound(gate.lastRoundID, gate.findings, gate.step.Name(), gate.round)
-		if err := e.discardApprovalResidue(gate.step, reconcileCtx); err != nil {
+		if err := e.discardApprovalResidue(gate.step, reconcileCtx, gate.findings); err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
 		if err := completeRecoveredGate(); err != nil {
@@ -613,7 +629,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		if restartFrom != "" {
 			restartIndex, indexErr := e.prepareRestart(run, restartFrom, gate.index)
 			if indexErr != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", gate.step.Name(), restartFrom), ctx)
+				return e.failRun(run, repo, restartFailure(gate.step.Name(), restartFrom, indexErr), ctx)
 			}
 			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex, true)
 		}
@@ -734,7 +750,7 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		if restartFrom != "" {
 			restartIndex, indexErr := e.prepareRestart(run, restartFrom, index)
 			if indexErr != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", e.steps[index].Name(), restartFrom), ctx)
+				return e.failRun(run, repo, restartFailure(e.steps[index].Name(), restartFrom, indexErr), ctx)
 			}
 			revalidating = true
 			index = restartIndex - 1
@@ -1086,10 +1102,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if e.config != nil && e.config.CaptureEvalProvenance {
 				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, e.config.TrustedConfigSHA, e.config.ReplayGlobalYAML, e.config.ReplayRepoYAML, roundDuration)
 			} else {
-				inserted, dbErr = e.db.InsertReviewStepRound(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, roundDuration)
+				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, "", nil, nil, roundDuration)
 			}
 		} else {
-			inserted, dbErr = e.db.InsertStepRound(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, roundDuration)
+			inserted, dbErr = e.db.InsertStepRoundWithStartingHead(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewStartingHeadSHA, roundDuration)
 		}
 		if dbErr != nil {
 			currentRoundID = roundInsertID(currentRoundID, inserted, dbErr)
@@ -1247,7 +1263,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// Approved - execution already frozen in executionMS, reset phaseStart
 			// so the done label computes no additional elapsed.
 			e.recordDeclinedRound(currentRoundID, outcome.Findings, stepName, roundNum)
-			if err := e.discardApprovalResidue(step, sctx); err != nil {
+			if err := e.discardApprovalResidue(step, sctx, outcome.Findings); err != nil {
 				return false, "", err
 			}
 			phaseStart = time.Now()
@@ -1355,14 +1371,17 @@ done:
 // discardApprovalResidue is what both ActionApprove sites route
 // through. A step that parked over work it deliberately refused to commit
 // (ApprovalResidueDiscarder) clears that work here, because approving such a
-// gate means discard. Every step that does not implement the interface is
-// unaffected, and a discarder with a clean worktree does nothing.
-func (e *Executor) discardApprovalResidue(step Step, sctx *StepContext) error {
+// gate means discard. The parked gate's own findings go with it: they name the
+// paths the park recorded, and discard is scoped to exactly those so anything
+// edited while the run sat parked survives. Every step that does not implement
+// the interface is unaffected, and a gate that recorded no residue does
+// nothing.
+func (e *Executor) discardApprovalResidue(step Step, sctx *StepContext, findingsJSON string) error {
 	discarder, ok := step.(ApprovalResidueDiscarder)
 	if !ok {
 		return nil
 	}
-	if err := discarder.DiscardApprovalResidue(sctx); err != nil {
+	if err := discarder.DiscardApprovalResidue(sctx, findingsJSON); err != nil {
 		return fmt.Errorf("discard approval residue for step %s: %w", step.Name(), err)
 	}
 	return nil

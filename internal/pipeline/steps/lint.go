@@ -36,7 +36,8 @@ func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		//
 		// A round carrying previous findings also falls through. Those findings
 		// are this step's own verdict, carried back by a restart, and the
-		// stashed housekeeping result cannot have accounted for them.
+		// stashed result was produced without them. Paying a full lint pass to
+		// answer them is the deliberate cost.
 		if !sctx.Fixing && sctx.PreviousFindings == "" {
 			if stash, ok := sctx.Shared.TakeHousekeepingLint(); ok {
 				return lintOutcomeFromHousekeeping(sctx, stash)

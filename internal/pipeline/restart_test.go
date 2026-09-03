@@ -114,23 +114,53 @@ func TestExecutor_RestartPreventsReviewCertification(t *testing.T) {
 // for a restart completes as an ordinary step. Certifying the head it is
 // simultaneously sending back for revalidation would publish authority over a
 // tree it has already declared unfinished.
+//
+// The restart deliberately names a boundary the pipeline rejects (review's own
+// index), so the run fails before prepareRestart can revoke anything. That is
+// what makes the assertion discriminating: the completion write is the only
+// thing that could have put a value in the column, so a stored SHA here means
+// the restarting round certified.
 func TestExecutor_RestartingReviewCertifiesNothing(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
 
-	intentCalls := 0
+	steps := []Step{
+		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+			return &StepOutcome{ReviewApprovedHeadSHA: "sha-a", RestartFrom: types.StepReview}, nil
+		}},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, steps, nil)
+	err := exec.Execute(context.Background(), run, repo, workDir)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want the invalid restart boundary to fail the run")
+	}
+	if !strings.Contains(err.Error(), "invalid restart") {
+		t.Fatalf("Execute() error = %v, want it to name the invalid restart boundary", err)
+	}
+
+	stored, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	if stored.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("stored review_approved_head_sha = %q, want NULL from a round that asked for a restart", *stored.ReviewApprovedHeadSHA)
+	}
+	if run.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("run.ReviewApprovedHeadSHA = %q, want nil", *run.ReviewApprovedHeadSHA)
+	}
+}
+
+// TestExecutor_RestartCompletesNormallyWhenTheBoundaryIsValid keeps the happy
+// path the discriminating test above gave up: a valid restart re-enters, and
+// the re-review's own certification is the one that lands.
+func TestExecutor_RestartCompletesNormallyWhenTheBoundaryIsValid(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
 	reviewCalls := 0
 	steps := []Step{
 		&adaptiveCallStep{name: types.StepIntent, fn: func(*StepContext) (*StepOutcome, error) {
-			intentCalls++
-			if intentCalls == 2 {
-				stored, err := database.GetRun(run.ID)
-				if err != nil {
-					t.Errorf("GetRun() error = %v", err)
-				} else if stored.ReviewApprovedHeadSHA != nil {
-					t.Errorf("review_approved_head_sha = %q during re-entry, want NULL", *stored.ReviewApprovedHeadSHA)
-				}
-			}
 			return &StepOutcome{}, nil
 		}},
 		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
@@ -146,9 +176,44 @@ func TestExecutor_RestartingReviewCertifiesNothing(t *testing.T) {
 	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-
 	if run.ReviewApprovedHeadSHA == nil || *run.ReviewApprovedHeadSHA != "sha-b" {
 		t.Fatalf("run.ReviewApprovedHeadSHA = %v, want sha-b", run.ReviewApprovedHeadSHA)
+	}
+}
+
+// TestExecutor_PrepareRestartWriteFailureIsNotReportedAsAStepBug separates the
+// two ways a restart can fail. A step naming a boundary the pipeline rejects is
+// the step's fault; a database write that fails is not, and reporting both as
+// "step X requested invalid restart" sends whoever reads the run at a step that
+// did nothing wrong.
+func TestExecutor_PrepareRestartWriteFailureIsNotReportedAsAStepBug(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	steps := []Step{
+		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+			return &StepOutcome{}, nil
+		}},
+		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
+			// Closing the database makes prepareRestart's writes fail while the
+			// boundary it was handed stays perfectly valid.
+			if err := database.Close(); err != nil {
+				t.Errorf("Close() error = %v", err)
+			}
+			return &StepOutcome{RestartFrom: types.StepReview}, nil
+		}},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, steps, nil)
+	err := exec.Execute(context.Background(), run, repo, workDir)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want the failed restart write to fail the run")
+	}
+	if strings.Contains(err.Error(), "invalid restart") {
+		t.Fatalf("Execute() error = %v, want a write failure reported as itself, not as a step bug", err)
+	}
+	if !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "sql:") {
+		t.Fatalf("Execute() error = %v, want it to carry the underlying write failure", err)
 	}
 }
 

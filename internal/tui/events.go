@@ -269,7 +269,7 @@ func (m *Model) clearGateState(step types.StepName) {
 }
 
 // requestStepDiff queues one on-demand read of a fix-review gate's
-// working-tree diff. At most one request per step is in flight.
+// diff of what the parked step changed. At most one request per step is in flight.
 func (m *Model) requestStepDiff(step types.StepName, replace bool) {
 	if m.stepDiffFetching[step] && !replace {
 		return

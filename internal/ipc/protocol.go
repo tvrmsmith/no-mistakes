@@ -101,17 +101,19 @@ type GetRunParams struct {
 	RunID string `json:"run_id"`
 }
 
-// GetStepDiffParams requests the working-tree diff for a run parked at a
-// fix-review gate. The diff is derived on demand from the run's worktree and
-// is never stored, so it is the reconstruction authority for the one piece of
-// gate context that is not persisted.
+// GetStepDiffParams requests the diff of what the parked step changed for a
+// run at a fix-review gate: the working-tree diff, or the round's own exit
+// commit when the step committed its work and left the tree clean. The diff is
+// derived on demand from the run's worktree and is never stored, so it is the
+// reconstruction authority for the one piece of gate context that is not
+// persisted.
 type GetStepDiffParams struct {
 	RunID string `json:"run_id"`
 }
 
-// GetStepDiffResult carries a bounded working-tree diff. Truncated reports
-// that the diff exceeded the response budget and was cut, so a very large
-// change degrades to a partial view instead of an oversized frame.
+// GetStepDiffResult carries a bounded diff of what the parked step changed.
+// Truncated reports that the diff exceeded the response budget and was cut, so
+// a very large change degrades to a partial view instead of an oversized frame.
 type GetStepDiffResult struct {
 	Diff      string `json:"diff"`
 	Truncated bool   `json:"truncated,omitempty"`

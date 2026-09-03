@@ -38,9 +38,16 @@ func evidenceUnavailable(cause error) error {
 	return fmt.Errorf("%w: %w", ErrRecoveryEvidenceUnavailable, cause)
 }
 
-// RestartBoundary is the step a restart re-enters validation at: the first
-// step of the validation region. Review today; issues #7/#8 move it to Format
-// once that step exists.
+// RestartBoundary is the step a restart re-enters validation at, the first
+// step of the validation region.
+//
+// On today's unreordered pipeline Review holds both roles the region has: it
+// is the boundary and it is the certifier that records the review-approved
+// head, so the region is a single step. That is why the boundary step cannot
+// restart into itself - it would re-enter the same step whose commit triggered
+// the restart, and nothing further along would ever judge the result. Issues
+// #7/#8 separate the two roles by adding Format and making it the boundary,
+// leaving Review the certifier at the far end of a multi-step region.
 const RestartBoundary types.StepName = types.StepReview
 
 // StepContext provides shared resources to pipeline steps during execution.
@@ -217,14 +224,19 @@ type ApprovalGateReconciler interface {
 // certification is untouched.
 //
 // That gate has two answers. Approving means "discard", and the executor calls
-// this so the step restores tracked files and removes untracked non-ignored
-// ones (gitignored build output is left alone) before the run continues under
-// the certification that already stands. Choosing fix instead means "keep":
-// the step's own fix round commits the residue and re-reviews the new head, so
-// that answer needs no hook here.
+// this so the step removes exactly the leftovers the park recorded before the
+// run continues under the certification that already stands. Choosing fix
+// instead means "keep": the step's own fix round commits the residue and
+// re-reviews the new head, so that answer needs no hook here.
+//
+// findingsJSON is the parked gate's own findings, and it is what says which
+// paths the park recorded. Discard is scoped to those paths because a human or
+// a driving agent may edit the worktree while the run is parked, and a blanket
+// reset over whatever the tree holds at approval time would destroy work
+// nobody ruled on.
 //
 // It is fail-closed. A discard that cannot complete leaves an uncommitted tree
 // a later step would commit unjudged, so the error fails the run.
 type ApprovalResidueDiscarder interface {
-	DiscardApprovalResidue(sctx *StepContext) error
+	DiscardApprovalResidue(sctx *StepContext, findingsJSON string) error
 }

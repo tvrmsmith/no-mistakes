@@ -46,7 +46,7 @@ type runReconciledMsg struct {
 	subscriptionID uint64
 }
 
-// stepDiffMsg carries a fix-review gate's working-tree diff, read on demand
+// stepDiffMsg carries a fix-review gate's diff of what the parked step changed, read on demand
 // because it is derived state that the event stream deliberately does not
 // carry.
 type stepDiffMsg struct {

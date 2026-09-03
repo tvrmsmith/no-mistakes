@@ -414,8 +414,10 @@ Rules:
 		)
 		// A restart carries this step's own last verdict back into the
 		// re-entry, and that re-entry is not a fix round, so the evidence pass
-		// reads it here rather than re-deriving what it already reported.
-		if sctx.PreviousFindings != "" {
+		// reads it here rather than re-deriving what it already reported. A fix
+		// round already pasted them into the fix prompt one call earlier in this
+		// same Execute, so it skips them here.
+		if !sctx.Fixing && sctx.PreviousFindings != "" {
 			evidencePrompt += `
 
 Previous test findings to address:
