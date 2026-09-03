@@ -728,7 +728,7 @@ type Review struct {
 // TestRaw is the YAML representation of test-step settings.
 type TestRaw struct {
 	Evidence EvidenceRaw `yaml:"evidence"`
-	// Units lists the repository's independently testable components. See
+	// Units lists the repository's independently testable units. See
 	// TestUnit for why the whole list is trusted-only.
 	Units []TestUnit `yaml:"units"`
 }
@@ -782,7 +782,7 @@ type EvidenceRaw struct {
 // Test is the resolved test-step config.
 type Test struct {
 	Evidence Evidence
-	// Units lists the repository's independently testable components, sourced
+	// Units lists the repository's independently testable units, sourced
 	// per TestUnit's trust rules. Nil means no unit layout is configured.
 	Units []TestUnit
 }
