@@ -89,6 +89,58 @@ func resumeAndReadSharedDiscovery(t *testing.T, seed string, fingerprint string)
 	return got, hit
 }
 
+// TestExecutor_FreshRunPersistsTheTestDiscoveryItRecorded covers the other
+// side of the wiring the resume tests read: a fresh run's shared state has to
+// write through to the run row, or there is nothing for a recovered run to
+// restore.
+func TestExecutor_FreshRunPersistsTheTestDiscoveryItRecorded(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+
+	step := &adaptiveCallStep{
+		name: types.StepTest,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			sctx.Shared.SetTestDiscovery("fp-fresh", TestDiscovery{
+				Units:    []config.TestUnit{{Name: "api", Path: "services/api", Command: "go test ./services/api/..."}},
+				Selected: []string{"api"},
+				Source:   "agent",
+			})
+			sctx.Shared.NoteTestScopeFault()
+			return &StepOutcome{}, nil
+		},
+	}
+	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
+	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	payload, err := database.GetRunTestDiscovery(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		Fingerprint string            `json:"fingerprint"`
+		Units       []config.TestUnit `json:"units"`
+		Selected    []string          `json:"selected"`
+		Source      string            `json:"source"`
+		ScopeFaults int               `json:"scope_faults"`
+	}
+	if err := json.Unmarshal([]byte(payload), &record); err != nil {
+		t.Fatalf("decode persisted discovery %q: %v", payload, err)
+	}
+	if record.Fingerprint != "fp-fresh" || record.Source != "agent" {
+		t.Fatalf("persisted record = %+v", record)
+	}
+	if len(record.Units) != 1 || record.Units[0].Command != "go test ./services/api/..." {
+		t.Fatalf("persisted units = %+v", record.Units)
+	}
+	if len(record.Selected) != 1 || record.Selected[0] != "api" {
+		t.Fatalf("persisted selection = %v", record.Selected)
+	}
+	if record.ScopeFaults != 1 {
+		t.Fatalf("persisted scope faults = %d, want 1", record.ScopeFaults)
+	}
+}
+
 func TestExecutor_ResumedRunReusesTheRunsPersistedTestDiscovery(t *testing.T) {
 	seed, err := json.Marshal(map[string]any{
 		"fingerprint": "fp-1",

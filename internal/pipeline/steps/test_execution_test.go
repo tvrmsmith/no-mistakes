@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // newUnitRepo builds a git repo with a base commit containing services/api and
@@ -179,6 +181,129 @@ func TestTestStep_LogsTheSelectedUnitsAndEachCommand(t *testing.T) {
 	}
 }
 
+// TestTestStep_NestedLayoutRunsOnlyTheNarrowUnit covers the layout a "." unit
+// is written for: it is the catch-all for code no narrower unit owns, so a
+// change under api/ runs api alone and raises no scope fault.
+func TestTestStep_NestedLayoutRunsOnlyTheNarrowUnit(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+	markerDir := t.TempDir()
+	rootMarker := filepath.Join(markerDir, "root.done")
+	apiMarker := filepath.Join(markerDir, "api.done")
+
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+
+	units := []config.TestUnit{
+		{Name: "root", Path: ".", Command: markerCommand(rootMarker)},
+		{Name: "api", Path: "services/api", Command: markerCommand(apiMarker)},
+	}
+	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
+	lines := capturingLog(sctx)
+
+	step := &TestStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.NeedsApproval {
+		t.Fatalf("outcome parked unexpectedly: %s", outcome.Findings)
+	}
+	if !fileExists(apiMarker) {
+		t.Error("api marker not created, expected the api unit to run")
+	}
+	if fileExists(rootMarker) {
+		t.Error("root marker created, expected the catch-all unit not to run")
+	}
+	if log := joinedLog(*lines); strings.Contains(log, "test scope fault") {
+		t.Errorf("expected no scope fault, got:\n%s", log)
+	}
+}
+
+// TestTestStep_RootLevelChangeSelectsTheCatchAllUnit is the other half: a
+// root-level file no narrower unit owns belongs to the "." unit.
+func TestTestStep_RootLevelChangeSelectsTheCatchAllUnit(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+	markerDir := t.TempDir()
+	rootMarker := filepath.Join(markerDir, "root.done")
+	apiMarker := filepath.Join(markerDir, "api.done")
+
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "add go.mod")
+	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	units := []config.TestUnit{
+		{Name: "root", Path: ".", Command: markerCommand(rootMarker)},
+		{Name: "api", Path: "services/api", Command: markerCommand(apiMarker)},
+	}
+	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
+
+	step := &TestStep{}
+	if _, err := step.Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(rootMarker) {
+		t.Error("root marker not created, expected the catch-all unit to run")
+	}
+	if fileExists(apiMarker) {
+		t.Error("api marker created, expected the api unit not to run")
+	}
+}
+
+// TestTestStep_GreenAttemptReportsTheDroppedChangedFileList proves the
+// omission reaches the durable record and not only the run log: a command that
+// reads NO_MISTAKES_CHANGED_FILES validated less than the change, so a green
+// attempt still has to say so.
+func TestTestStep_GreenAttemptReportsTheDroppedChangedFileList(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+
+	// One path per file whose name alone exceeds the cap across the set, so
+	// changedFilesEnvValue empties the value rather than truncating it.
+	long := strings.Repeat("n", 200)
+	for i := 0; i < 600; i++ {
+		name := filepath.Join(dir, "services", "api", long+"-"+strconv.Itoa(i)+".go")
+		if err := os.WriteFile(name, []byte("package api\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "many files")
+	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	units := []config.TestUnit{
+		{Name: "api", Path: "services/api", Command: "exit 0"},
+	}
+	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
+
+	step := &TestStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	findings := decodeFindings(t, outcome.Findings)
+	var omission *Finding
+	for i := range findings.Items {
+		if strings.Contains(findings.Items[i].Description, envTestChangedFiles) {
+			omission = &findings.Items[i]
+			break
+		}
+	}
+	if omission == nil {
+		t.Fatalf("findings do not report the dropped changed-file list: %s", outcome.Findings)
+	}
+	if omission.Severity != types.FindingSeverityWarning {
+		t.Errorf("omission severity = %q, want warning", omission.Severity)
+	}
+	if !strings.Contains(omission.Description, envTestChangedFileCount) {
+		t.Errorf("omission does not point at the true-total variable: %q", omission.Description)
+	}
+}
+
 // decodeFindings reads a step outcome's findings payload, the durable record a
 // reviewer and the PR body read, as opposed to the run log.
 func decodeFindings(t *testing.T, payload string) Findings {
@@ -261,7 +386,7 @@ func TestTestStep_ConfiguredLayoutOwningNoChangedFileFallsBackToTheEvidenceAgent
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"items":[],"testing_summary":"exercised the change by hand"}`)}, nil
+			return &agent.Result{Output: json.RawMessage(`{"findings":[],"testing_summary":"exercised the change by hand"}`)}, nil
 		},
 	}
 	// Both units sit outside the changed file's directory, so the selection is
@@ -312,7 +437,7 @@ func TestTestStep_EvidencePassAfterUnitCommandsJudgesThemInsteadOfRerunning(t *t
 				return &agent.Result{Output: json.RawMessage(`{"units":[{"name":"api","path":"services/api","command":"exit 0"}],"selected":["api"]}`)}, nil
 			}
 			evidencePrompt = opts.Prompt
-			return &agent.Result{Output: json.RawMessage(`{"items":[]}`)}, nil
+			return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
 		},
 	}
 	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
@@ -329,6 +454,39 @@ func TestTestStep_EvidencePassAfterUnitCommandsJudgesThemInsteadOfRerunning(t *t
 	}
 	if !strings.Contains(evidencePrompt, "do NOT run them again") {
 		t.Errorf("evidence prompt does not bind the agent to the results that already ran:\n%s", evidencePrompt)
+	}
+}
+
+// TestTestStep_EvidenceFindingsDriveApproval is the sibling of the empty-array
+// cases above: it proves those fixtures pass because the agent reported
+// nothing, not because the step failed to read what it reported.
+func TestTestStep_EvidenceFindingsDriveApproval(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if strings.Contains(opts.Prompt, "Derive this repository's independently testable units") {
+				return &agent.Result{Output: json.RawMessage(`{"units":[{"name":"api","path":"services/api","command":"exit 0"}],"selected":["api"]}`)}, nil
+			}
+			return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"error","action":"auto-fix","description":"the new handler has no test"}]}`)}, nil
+		},
+	}
+	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
+
+	step := &TestStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NeedsApproval {
+		t.Fatalf("outcome did not park on a blocking evidence finding: %s", outcome.Findings)
+	}
+	findings := decodeFindings(t, outcome.Findings)
+	if len(findings.Items) != 1 || findings.Items[0].Description != "the new handler has no test" {
+		t.Fatalf("findings did not carry the agent's report: %s", outcome.Findings)
 	}
 }
 
@@ -493,7 +651,7 @@ func TestTestStep_ExpandedSelectionIsReusedByTheNextAttemptInTheSameRun(t *testi
 			name: "test",
 			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				if !isDiscoveryCall(opts) {
-					return &agent.Result{Output: json.RawMessage(`{"items":[]}`)}, nil
+					return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
 				}
 				out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, markerCommand(apiMarker)) + `},{"name":"web","path":"services/web","command":` + jsonString(t, markerCommand(webMarker)) + `}],"selected":["api"]}`
 				return &agent.Result{Output: json.RawMessage(out)}, nil

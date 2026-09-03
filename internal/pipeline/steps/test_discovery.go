@@ -81,49 +81,109 @@ func toSlashPath(path string) string {
 	return strings.ReplaceAll(path, "\\", "/")
 }
 
-// selectUnitsForPaths returns the names of the units a changed-file set
-// touches, in the order the units are declared.
-func selectUnitsForPaths(units []config.TestUnit, changed []string) []string {
-	var selected []string
-	seen := map[string]bool{}
+// mostSpecificOwners returns the units a changed path belongs to at the
+// narrowest specificity available: the owners with the longest unit path, so a
+// nested layout assigns the path to the narrowest units that claim it. A "."
+// unit is the shortest owner of every path, which is what a layout means by
+// it, a catch-all for code no narrower unit owns. Two units may share one path
+// (a suite and its contract tests, say), so every owner at that length is
+// returned rather than the first one found.
+func mostSpecificOwners(units []config.TestUnit, path string) []config.TestUnit {
+	var owners []config.TestUnit
+	bestLen := -1
 	for _, unit := range units {
-		if seen[unit.Name] {
+		if !unitOwnsPath(unit, path) {
 			continue
 		}
-		for _, path := range changed {
-			if unitOwnsPath(unit, path) {
-				selected = append(selected, unit.Name)
-				seen[unit.Name] = true
-				break
-			}
+		unitPath := normalizeUnitPath(unit.Path)
+		length := len(unitPath)
+		if unitPath == "." {
+			length = 0
+		}
+		switch {
+		case length > bestLen:
+			owners = []config.TestUnit{unit}
+			bestLen = length
+		case length == bestLen:
+			owners = append(owners, unit)
 		}
 	}
-	return selected
+	return owners
 }
 
-// underSelectedUnits returns the units that own a changed file but are absent
-// from the selection. Under-selection is a scope fault, not a coverage
+// selectUnitsForPaths returns the names of the units a changed-file set
+// touches, in the order the units are declared. Each path contributes only its
+// most specific owner, so a change under api/ selects api and leaves a "."
+// unit for the root-level files no narrower unit claims.
+func selectUnitsForPaths(units []config.TestUnit, changed []string) []string {
+	owners := map[string]bool{}
+	for _, path := range changed {
+		for _, owner := range mostSpecificOwners(units, path) {
+			owners[owner.Name] = true
+		}
+	}
+	return unitNamesInDeclarationOrder(units, owners)
+}
+
+// underSelectedUnits returns the units a changed file belongs to that the
+// selection left out. Under-selection is a scope fault, not a coverage
 // finding: discovery claimed a scope the changed files contradict.
+//
+// A path an already-selected unit owns raises nothing, whatever its most
+// specific owner is, so a selection of the narrow unit alone stands and a
+// broader unit is added only for the paths nothing selected covers. The
+// predicate is the one selectUnitsForPaths derives from, so the config and
+// command sources still cannot disagree with themselves.
 func underSelectedUnits(units []config.TestUnit, changed, selected []string) []config.TestUnit {
 	selectedSet := map[string]bool{}
 	for _, name := range selected {
 		selectedSet[name] = true
 	}
+	missingSet := map[string]bool{}
+	for _, path := range changed {
+		if anySelectedUnitOwns(units, selectedSet, path) {
+			continue
+		}
+		for _, owner := range mostSpecificOwners(units, path) {
+			missingSet[owner.Name] = true
+		}
+	}
 	var missing []config.TestUnit
 	seen := map[string]bool{}
 	for _, unit := range units {
-		if seen[unit.Name] || selectedSet[unit.Name] {
+		if seen[unit.Name] || !missingSet[unit.Name] {
 			continue
 		}
-		for _, path := range changed {
-			if unitOwnsPath(unit, path) {
-				missing = append(missing, unit)
-				seen[unit.Name] = true
-				break
-			}
-		}
+		missing = append(missing, unit)
+		seen[unit.Name] = true
 	}
 	return missing
+}
+
+// anySelectedUnitOwns reports whether a unit already in the selection covers
+// the path.
+func anySelectedUnitOwns(units []config.TestUnit, selected map[string]bool, path string) bool {
+	for _, unit := range units {
+		if selected[unit.Name] && unitOwnsPath(unit, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// unitNamesInDeclarationOrder renders a name set in the order the layout
+// declares the units.
+func unitNamesInDeclarationOrder(units []config.TestUnit, names map[string]bool) []string {
+	var ordered []string
+	seen := map[string]bool{}
+	for _, unit := range units {
+		if seen[unit.Name] || !names[unit.Name] {
+			continue
+		}
+		ordered = append(ordered, unit.Name)
+		seen[unit.Name] = true
+	}
+	return ordered
 }
 
 // discoveryResultError marks a discovery failure the Test step parks on: the

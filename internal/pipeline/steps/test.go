@@ -105,6 +105,34 @@ Previous test findings to address:
 	var covered []config.TestUnit
 	ran := map[string]bool{}
 
+	// The changed-file list a unit command reads can lose paths: the whole list
+	// when it exceeds the byte cap, and individual paths a newline or carriage
+	// return makes unreadable. Either way a command that takes its targets from
+	// the variable validates less than the change, so the omission is a warning
+	// finding on every outcome rather than a log line alone. The count variable
+	// still carries the true total, which is the machine-readable signal a
+	// command can compare against.
+	changedFilesEnv, omittedChangedFiles := changedFilesEnvValue(changed)
+	var omissionFindings []Finding
+	if omittedChangedFiles > 0 {
+		omission := fmt.Sprintf("%s omits %d of %d changed paths, so a command that reads it validates less than the change; %s carries the true total", envTestChangedFiles, omittedChangedFiles, len(changed), envTestChangedFileCount)
+		sctx.Log(omission)
+		omissionFindings = []Finding{{
+			Severity:    types.FindingSeverityWarning,
+			Action:      types.ActionAskUser,
+			Description: omission,
+		}}
+	}
+
+	// withOmission puts the changed-file omission in front of whatever a path
+	// found, so every outcome the step can return carries it.
+	withOmission := func(items []Finding) []Finding {
+		if len(omissionFindings) == 0 {
+			return items
+		}
+		return append(append([]Finding{}, omissionFindings...), items...)
+	}
+
 	// tested renders the durable record a reviewer reads on the outcome and in
 	// the PR body. It names the unit beside its command, because the command
 	// alone does not say which unit it covered and two units may share one.
@@ -124,11 +152,11 @@ Previous test findings to address:
 	parkForMaintainer := func(description string) (*pipeline.StepOutcome, error) {
 		sctx.Log(description)
 		findings := Findings{
-			Items: []Finding{{
+			Items: withOmission([]Finding{{
 				Severity:    types.FindingSeverityError,
 				Action:      types.ActionAskUser,
 				Description: description,
-			}},
+			}}),
 			Tested: tested(),
 		}
 		findingsJSON, _ := json.Marshal(findings)
@@ -182,11 +210,6 @@ Previous test findings to address:
 		}
 	}
 
-	changedFilesEnv, omittedChangedFiles := changedFilesEnvValue(changed)
-	if omittedChangedFiles > 0 {
-		sctx.Log(fmt.Sprintf("%s omits %d of %d changed paths; %s carries the true total", envTestChangedFiles, omittedChangedFiles, len(changed), envTestChangedFileCount))
-	}
-
 	// runUnit runs one unit's command exactly once per attempt, tracked by
 	// name in ran so the under-selection expansion below can never re-run a
 	// unit the first pass already covered. It returns a non-nil outcome only
@@ -216,10 +239,10 @@ Previous test findings to address:
 		}
 		projectedOutput := logConfiguredCommandOutput(sctx, output, types.StepTest)
 		findings := Findings{
-			Items: []Finding{{
+			Items: withOmission([]Finding{{
 				Severity:    types.FindingSeverityError,
 				Description: description,
-			}},
+			}}),
 			Summary: projectedOutput,
 			Tested:  tested(),
 		}
@@ -282,10 +305,12 @@ Previous test findings to address:
 	// intent. A configured layout with a non-empty selection still gets the
 	// pass only for intent.
 	//
-	// Whenever the selected units' commands already ran, the pass reads and
-	// judges those results instead of running tests again, so every unit's
-	// command still runs exactly once per attempt and the pass never widens
-	// past the selection.
+	// Whenever the selected units' commands already ran, the prompt tells the
+	// agent to read and judge those results instead of running tests again and
+	// not to widen past the selection. The step itself runs each unit's command
+	// exactly once per attempt; the evidence half of that bound is a prompt
+	// contract, not an enforced sandbox, and the pinned regression tests guard
+	// the wording.
 	useEvidenceAgent := len(discovery.Selected) == 0 || discovery.Source == "agent" || cleanedUserIntent(sctx) != ""
 	if useEvidenceAgent {
 		evidenceDir := testEvidenceDir(sctx)
@@ -401,6 +426,7 @@ Rules:
 		if len(covered) > 0 {
 			findings.Tested = append(tested(), findings.Tested...)
 		}
+		findings.Items = withOmission(findings.Items)
 
 		needsApproval := hasBlockingFindings(findings.Items)
 		autoFixable := needsApproval
@@ -433,6 +459,7 @@ Rules:
 	if sctx.Fixing && len(newTestsFromFix) > 0 {
 		findings := Findings{
 			Summary: "tests passed, but agent wrote new test files",
+			Items:   withOmission(nil),
 			Tested:  tested(),
 		}
 		for _, f := range newTestsFromFix {
@@ -445,15 +472,20 @@ Rules:
 		}
 		findingsJSON, _ := json.Marshal(findings)
 		return &pipeline.StepOutcome{
-			NeedsApproval: false,
+			NeedsApproval: hasBlockingFindings(findings.Items),
 			Findings:      string(findingsJSON),
 			FixSummary:    fixSummary,
 		}, nil
 	}
 
 	sctx.Log("all tests passed")
-	findingsJSON, _ := json.Marshal(Findings{Tested: tested()})
-	return &pipeline.StepOutcome{Findings: string(findingsJSON), FixSummary: fixSummary}, nil
+	greenFindings := Findings{Items: withOmission(nil), Tested: tested()}
+	findingsJSON, _ := json.Marshal(greenFindings)
+	return &pipeline.StepOutcome{
+		NeedsApproval: hasBlockingFindings(greenFindings.Items),
+		Findings:      string(findingsJSON),
+		FixSummary:    fixSummary,
+	}, nil
 }
 
 func testAgentContext(sctx *pipeline.StepContext) (context.Context, context.CancelFunc, time.Duration) {

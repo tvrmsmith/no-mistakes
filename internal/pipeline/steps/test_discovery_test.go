@@ -91,6 +91,45 @@ func TestUnderSelectedUnits_EmptyWhenSelectionCoversEveryChangedFile(t *testing.
 	}
 }
 
+func TestSelectUnitsForPaths_NestedLayoutSelectsTheMostSpecificOwner(t *testing.T) {
+	units := []config.TestUnit{
+		{Name: "root", Path: "."},
+		{Name: "api", Path: "api"},
+	}
+
+	got := selectUnitsForPaths(units, []string{"api/main.go"})
+	if len(got) != 1 || got[0] != "api" {
+		t.Fatalf("selected = %v, want [api]", got)
+	}
+
+	got = selectUnitsForPaths(units, []string{"go.mod"})
+	if len(got) != 1 || got[0] != "root" {
+		t.Fatalf("selected = %v, want [root]", got)
+	}
+
+	got = selectUnitsForPaths(units, []string{"api/main.go", "go.mod"})
+	if len(got) != 2 || got[0] != "root" || got[1] != "api" {
+		t.Fatalf("selected = %v, want [root api]", got)
+	}
+}
+
+func TestUnderSelectedUnits_NestedLayoutRaisesNoFaultForASelectedNarrowUnit(t *testing.T) {
+	units := []config.TestUnit{
+		{Name: "root", Path: "."},
+		{Name: "api", Path: "api"},
+	}
+
+	got := underSelectedUnits(units, []string{"api/main.go"}, []string{"api"})
+	if len(got) != 0 {
+		t.Fatalf("under-selected = %+v, want none", got)
+	}
+
+	got = underSelectedUnits(units, []string{"api/main.go", "go.mod"}, []string{"api"})
+	if len(got) != 1 || got[0].Name != "root" {
+		t.Fatalf("under-selected = %+v, want [root]", got)
+	}
+}
+
 func TestChangedFilesFingerprint_OrderIndependentAndSetSensitive(t *testing.T) {
 	a := []string{"b", "a"}
 	b := []string{"a", "b"}
