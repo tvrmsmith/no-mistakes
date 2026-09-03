@@ -354,6 +354,75 @@ func residueFindingsJSON(t *testing.T, modified, untracked []string) string {
 	return string(raw)
 }
 
+// TestReviewStep_DiscardApprovalResidueTreatsRecordedPathsAsNames drives the
+// same "outside the recorded list survives" guarantee through a filename that
+// happens to hold glob characters. The recorded paths are names git handed
+// back, never patterns anyone wrote, so a discard that lets git expand them
+// destroys a neighbour nobody ruled on and still reports success, since every
+// path it did record really is gone.
+func TestReviewStep_DiscardApprovalResidueTreatsRecordedPathsAsNames(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	const globbed = "notes*.txt"
+	const bracketed = "draft[1].txt"
+	for _, name := range []string{bracketed, "draft1.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("committed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "add a bracketed path and its neighbour")
+	headSHA = strings.TrimSpace(gitCmd(t, dir, "rev-parse", "HEAD"))
+
+	if err := os.WriteFile(filepath.Join(dir, bracketed), []byte("residue\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, globbed), []byte("residue\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Run.HeadSHA = headSHA
+
+	parked := residueFindingsJSON(t, []string{bracketed}, []string{globbed})
+
+	// The neighbours arrive after the park, so nothing ruled on them. Each is
+	// matched by one of the recorded names read as a pattern: notes*.txt by the
+	// glob, draft[1].txt by the character class.
+	if err := os.WriteFile(filepath.Join(dir, "notes1.txt"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "draft1.txt"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, parked); err != nil {
+		t.Fatalf("DiscardApprovalResidue() error = %v", err)
+	}
+
+	restored, err := os.ReadFile(filepath.Join(dir, bracketed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != "committed\n" {
+		t.Fatalf("recorded tracked file = %q, want it restored", restored)
+	}
+	if _, err := os.Stat(filepath.Join(dir, globbed)); !os.IsNotExist(err) {
+		t.Fatalf("recorded untracked file still present (stat err = %v), want it removed", err)
+	}
+	for _, neighbour := range []string{"notes1.txt", "draft1.txt"} {
+		got, err := os.ReadFile(filepath.Join(dir, neighbour))
+		if err != nil {
+			t.Fatalf("%s was outside the recorded list and was destroyed: %v", neighbour, err)
+		}
+		if string(got) != "mine\n" {
+			t.Fatalf("%s = %q, want it untouched", neighbour, got)
+		}
+	}
+}
+
 // TestReviewStep_DiscardApprovalResidueLeavesANonResidueGateAlone covers every
 // other gate the certifying step raises. Those record no residue, so discard
 // has nothing to remove and must not reach for the worktree at all.

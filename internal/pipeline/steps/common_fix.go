@@ -545,7 +545,7 @@ func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName, f
 		// not contain, and checkout aborts the whole invocation on that
 		// unmatched pathspec without restoring anything. restore resets index
 		// and worktree to HEAD, deleting such a path instead of failing.
-		args := append([]string{"restore", "--source=HEAD", "--staged", "--worktree", "--"}, modified...)
+		args := append([]string{"restore", "--source=HEAD", "--staged", "--worktree", "--"}, literalPathspecs(modified)...)
 		if _, err := git.Run(sctx.Ctx, sctx.WorkDir, args...); err != nil {
 			return fmt.Errorf("restore tracked files after %s: %w", name, err)
 		}
@@ -555,7 +555,7 @@ func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName, f
 		// entry and an embedded repository as one too, and plain clean exits 0
 		// while removing neither. The force flags stay harmless because the
 		// pathspec is the recorded list, so nothing outside it is reachable.
-		args := append([]string{"clean", "-ffd", "--"}, untracked...)
+		args := append([]string{"clean", "-ffd", "--"}, literalPathspecs(untracked)...)
 		if _, err := git.Run(sctx.Ctx, sctx.WorkDir, args...); err != nil {
 			return fmt.Errorf("remove untracked files after %s: %w", name, err)
 		}
@@ -566,6 +566,22 @@ func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName, f
 	sctx.Log(fmt.Sprintf("discarded %s residue; the existing certification stands: restored %s, removed %s",
 		name, describePaths(modified), describePaths(untracked)))
 	return nil
+}
+
+// literalPathspecs wraps each recorded path so git matches it as a name rather
+// than a pattern. A residue path is a filename git already handed us, never a
+// pattern anyone wrote, so the glob characters in it are part of the name: an
+// unwrapped notes*.txt would make clean delete an unrecorded notes1.txt a human
+// created while the run sat parked, and a path beginning with a colon would
+// read as pathspec magic and never be discarded at all. git clean has no
+// --pathspec-from-file, so the magic prefix is the portable way to say this to
+// both commands.
+func literalPathspecs(paths []string) []string {
+	specs := make([]string, len(paths))
+	for i, path := range paths {
+		specs[i] = ":(literal)" + path
+	}
+	return specs
 }
 
 // assertResidueGone re-reads the worktree and fails when a path the park
