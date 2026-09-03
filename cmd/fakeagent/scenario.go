@@ -74,14 +74,45 @@ func loadScenario(path string) (*Scenario, error) {
 	if err := yaml.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("parse scenario %q: %w", path, err)
 	}
+	s.applyDefaultTestUnits()
 	return &s, nil
+}
+
+// applyDefaultTestUnits gives every structured action a one-unit test layout
+// when it declares neither units nor selected.
+//
+// The test step's discovery pass parks the run when it cannot read a usable
+// layout, so a scenario written before discovery existed would wait at that
+// gate instead of reaching the step it was written to exercise. An action
+// that sets either key owns both and is left alone, so a scenario can still
+// drive a multi-unit layout or an unusable one. StructuredRaw is untouched,
+// because that field is how a scenario asks for malformed output on purpose.
+func (s *Scenario) applyDefaultTestUnits() {
+	for i := range s.Actions {
+		structured := s.Actions[i].Structured
+		if structured == nil {
+			continue
+		}
+		if _, ok := structured["units"]; ok {
+			continue
+		}
+		if _, ok := structured["selected"]; ok {
+			continue
+		}
+		structured["units"] = []any{map[string]any{
+			"name":    "repository",
+			"path":    ".",
+			"command": "exit 0",
+		}}
+		structured["selected"] = []string{"repository"}
+	}
 }
 
 // defaultScenario returns an "everything is clean" response that satisfies
 // every JSON schema no-mistakes hands to an agent: empty findings array,
 // low risk, a populated tested array for the test step.
 func defaultScenario() *Scenario {
-	return &Scenario{
+	s := &Scenario{
 		Actions: []Action{{
 			Text: "no issues found",
 			Structured: map[string]any{
@@ -96,6 +127,8 @@ func defaultScenario() *Scenario {
 			},
 		}},
 	}
+	s.applyDefaultTestUnits()
+	return s
 }
 
 // Match returns the first action whose Match substring is contained in the

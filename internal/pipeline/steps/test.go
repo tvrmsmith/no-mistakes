@@ -333,21 +333,24 @@ Previous test findings to address:
 		if sctx.Config.Test.Evidence.StoreInRepo {
 			evidenceGuidance = fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; they are published to the repository's %s branch automatically and linked from the PR: %s", sctx.Config.Test.Evidence.Branch, evidenceDir)
 		}
-		// The opening instruction and the existing-tests rule both swap once
-		// the selected units' commands have already run this attempt: telling
-		// the agent to "run the smallest relevant tests yourself" there would
-		// run those same suites a second time, and nothing in the evidence
-		// prompt bounds it to the selection.
-		evidenceOpening := "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself."
+		// What the agent is told to DO swaps once the selected units' commands
+		// have already run this attempt: telling it to "run the smallest
+		// relevant tests yourself" there would run those same suites a second
+		// time, and nothing in the evidence prompt bounds it to the selection.
+		//
+		// The opening sentence stays the same in both modes and the direction
+		// moves into the section below the Context block, so a reader (and a
+		// scenario matching on the prompt) can identify the test step's
+		// evidence pass without knowing which mode it took.
+		const evidenceOpening = "You are validating a code change by testing it."
 		existingTestsRule := "- Look for existing tests that would generate sufficient evidence. If they exist, run the smallest relevant set that proves the requested intent."
-		baselineSection := ""
+		baselineSection := "\nExamine the repository and run the smallest relevant tests yourself.\n"
 		if len(covered) > 0 {
 			quoted := make([]string, len(covered))
 			for i, unit := range covered {
 				quoted[i] = unit.Name + " (`" + unit.Command + "`)"
 			}
-			baselineSection = fmt.Sprintf("\nThe selected test units already ran to completion and passed in this attempt: %s\n", strings.Join(quoted, ", "))
-			evidenceOpening = "You are validating a code change whose selected test units have already run in this attempt. Read and judge those results rather than running them again."
+			baselineSection = fmt.Sprintf("\nThe selected test units already ran to completion and passed in this attempt: %s\nRead and judge those results rather than running them again.\n", strings.Join(quoted, ", "))
 			existingTestsRule = "- The selected units' test commands above already ran and passed. Treat their results as the baseline, do NOT run them again, and do NOT run tests for any unit outside that selection. Spend this pass on evidence those commands do not produce."
 		}
 		evidenceCtx, cancelEvidence, evidenceTimeout := testAgentContext(sctx)

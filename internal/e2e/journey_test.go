@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -445,7 +446,7 @@ func cleanReviewScenario(t *testing.T) string {
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
       artifacts: []
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself.\n\nContext:\n- branch: test-agent-new-test-file"
+  - match: "You are validating a code change by testing it.\n\nContext:\n- branch: test-agent-new-test-file"
     text: "tests passed after adding a regression test"
     edits:
       - path: "agent_test.py"
@@ -459,13 +460,13 @@ func cleanReviewScenario(t *testing.T) string {
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
       artifacts: []
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself.\n\nContext:\n- branch: test-malformed-structured-output"
+  - match: "You are validating a code change by testing it.\n\nContext:\n- branch: test-malformed-structured-output"
     text: "tests found some issues"
     structured_raw: '{"summary":123}'
   - match: "Detect the linting and formatting tools for this project, run the relevant checks yourself, apply safe fixes, and verify the result.\n\nContext:\n- branch: lint-malformed-structured-output"
     text: "lint found some issues"
     structured_raw: '{"summary":123}'
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself.\n\nContext:\n- branch: test-agent-staged-new-test-file"
+  - match: "You are validating a code change by testing it.\n\nContext:\n- branch: test-agent-staged-new-test-file"
     text: "tests passed after staging a regression test"
     edits:
       - path: "agent_staged_test.go"
@@ -479,7 +480,7 @@ func cleanReviewScenario(t *testing.T) string {
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
       artifacts: []
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself."
+  - match: "You are validating a code change by testing it."
     text: "tests passed with no evidence artifacts"
     structured:
       findings: []
@@ -1361,7 +1362,9 @@ func assertConfiguredCommandRun(t *testing.T, h *Harness) {
 	if err != nil {
 		t.Fatalf("parse configured test findings: %v", err)
 	}
-	if len(findings.Tested) != 1 || findings.Tested[0] != "nm-test-e2e" {
+	// A configured commands.test is discovery's implicit "repository" unit, so
+	// the recorded entry names that unit alongside the command it ran.
+	if len(findings.Tested) != 1 || findings.Tested[0] != "repository: nm-test-e2e" {
 		t.Fatalf("expected configured test command to be recorded, got %+v", findings.Tested)
 	}
 	logData, err := os.ReadFile(testCommandLog)
@@ -2171,7 +2174,9 @@ func assertFailingTestCommandRun(t *testing.T, h *Harness) {
 	if findings.Items[0].ID != "test-1" {
 		t.Fatalf("expected normalized failing test finding ID test-1, got %q", findings.Items[0].ID)
 	}
-	if len(findings.Tested) != 1 || findings.Tested[0] != "nm-test-fails-e2e" {
+	// The configured command is discovery's implicit "repository" unit, so a
+	// failing run records the unit name beside the command that failed.
+	if len(findings.Tested) != 1 || findings.Tested[0] != "repository: nm-test-fails-e2e" {
 		t.Fatalf("expected failing test command to be recorded, got %+v", findings.Tested)
 	}
 	if testStep.DurationMS == nil {
@@ -2859,8 +2864,11 @@ func assertNoCommandTestStep(t *testing.T, steps []ipc.StepResultInfo, invs []In
 	if err != nil {
 		t.Fatalf("parse test step findings: %v", err)
 	}
-	if len(findings.Tested) != 1 || findings.Tested[0] != "fakeagent: simulated test run" {
-		t.Fatalf("expected fakeagent test details to be preserved, got %+v", findings.Tested)
+	// Tested carries both halves of the step: the units execution ran, each
+	// as "<name>: <command>", and whatever the evidence pass reported.
+	wantTested := []string{"repository: exit 0", "fakeagent: simulated test run"}
+	if !slices.Equal(findings.Tested, wantTested) {
+		t.Fatalf("tested = %+v, want the executed unit plus the fakeagent detail %+v", findings.Tested, wantTested)
 	}
 	if findings.TestingSummary != "simulated tests passed" {
 		t.Fatalf("expected fakeagent testing summary to be preserved, got %q", findings.TestingSummary)

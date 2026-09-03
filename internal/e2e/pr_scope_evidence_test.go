@@ -27,7 +27,7 @@ func writeFinalPRScopeScenario(t *testing.T) string {
       summary: "review clean"
       risk_level: medium
       risk_rationale: "medium risk because only two source files changed"
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself."
+  - match: "You are validating a code change by testing it."
     text: "two-file test evidence"
     structured:
       findings: []

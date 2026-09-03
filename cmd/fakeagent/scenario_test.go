@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -174,4 +175,85 @@ func TestRunClaudeFailsWhenScenarioEditReplacementMissing(t *testing.T) {
 	if string(data) != "before\n" {
 		t.Fatalf("file contents = %q, want unchanged", data)
 	}
+}
+
+func TestLoadScenarioAddsDefaultTestUnitsWhenAbsent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "scenario.yaml")
+	body := "actions:\n  - match: \"\"\n    structured:\n      summary: clean\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write scenario: %v", err)
+	}
+
+	s, err := loadScenario(path)
+	if err != nil {
+		t.Fatalf("loadScenario: %v", err)
+	}
+
+	var payload discoveryPayload
+	if err := json.Unmarshal(s.Actions[0].structuredJSON(), &payload); err != nil {
+		t.Fatalf("unmarshal structured: %v", err)
+	}
+	if len(payload.Units) != 1 {
+		t.Fatalf("units = %+v, want one unit", payload.Units)
+	}
+	if payload.Units[0].Name != "repository" || payload.Units[0].Path != "." || payload.Units[0].Command != "exit 0" {
+		t.Fatalf("unit = %+v, want the repository unit", payload.Units[0])
+	}
+	if len(payload.Selected) != 1 || payload.Selected[0] != "repository" {
+		t.Fatalf("selected = %v, want [repository]", payload.Selected)
+	}
+	if payload.Summary != "clean" {
+		t.Fatalf("summary = %q, want clean", payload.Summary)
+	}
+}
+
+func TestLoadScenarioKeepsAnAuthoredTestUnitLayout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "scenario.yaml")
+	body := "actions:\n  - match: \"\"\n    structured:\n      units:\n        - name: api\n          path: services/api\n          command: exit 0\n      selected:\n        - api\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write scenario: %v", err)
+	}
+
+	s, err := loadScenario(path)
+	if err != nil {
+		t.Fatalf("loadScenario: %v", err)
+	}
+
+	var payload discoveryPayload
+	if err := json.Unmarshal(s.Actions[0].structuredJSON(), &payload); err != nil {
+		t.Fatalf("unmarshal structured: %v", err)
+	}
+	if len(payload.Units) != 1 || payload.Units[0].Name != "api" || payload.Units[0].Path != "services/api" {
+		t.Fatalf("units = %+v, want the authored api unit", payload.Units)
+	}
+	if len(payload.Selected) != 1 || payload.Selected[0] != "api" {
+		t.Fatalf("selected = %v, want [api]", payload.Selected)
+	}
+}
+
+func TestLoadScenarioLeavesRawStructuredOutputVerbatim(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "scenario.yaml")
+	body := "actions:\n  - match: \"\"\n    structured_raw: \"[1,2,3]\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write scenario: %v", err)
+	}
+
+	s, err := loadScenario(path)
+	if err != nil {
+		t.Fatalf("loadScenario: %v", err)
+	}
+
+	if got := string(s.Actions[0].structuredJSON()); got != "[1,2,3]" {
+		t.Fatalf("structured = %s, want the raw payload verbatim", got)
+	}
+}
+
+type discoveryPayload struct {
+	Summary string `json:"summary"`
+	Units   []struct {
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		Command string `json:"command"`
+	} `json:"units"`
+	Selected []string `json:"selected"`
 }
