@@ -181,19 +181,21 @@ func TestExecutor_ApproveDiscardsResidueOnTheRecoveredPath(t *testing.T) {
 	}
 }
 
-// TestExecutor_OrdinaryStepIsNeverAskedToDiscard pins that a step which does
-// not implement the interface is untouched by this path.
-func TestExecutor_OrdinaryStepIsNeverAskedToDiscard(t *testing.T) {
+// TestExecutor_OnlyApprovalDiscardsResidue pins the other half of the trigger
+// condition. Approving is what means discard; skipping the step says nothing
+// about the leftovers, and discarding them there would destroy work no answer
+// asked to throw away.
+func TestExecutor_OnlyApprovalDiscardsResidue(t *testing.T) {
 	database, p, run, repo := setupTest(t)
-	step := newApprovalStep(types.StepDocument, `{"findings":[]}`)
+	step := &residueDiscardingStep{mockStep: newApprovalStep(types.StepReview, residueGateFindings)}
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
 
 	waitForStepStatus(t, database, run.ID, step.Name(), types.StepStatusAwaitingApproval)
-	if err := exec.Respond(step.Name(), types.ActionApprove, nil); err != nil {
-		t.Fatalf("Respond(approve) error = %v", err)
+	if err := exec.Respond(step.Name(), types.ActionSkip, nil); err != nil {
+		t.Fatalf("Respond(skip) error = %v", err)
 	}
 	select {
 	case err := <-done:
@@ -201,6 +203,10 @@ func TestExecutor_OrdinaryStepIsNeverAskedToDiscard(t *testing.T) {
 			t.Fatalf("Execute() error = %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("executor did not complete after approval")
+		t.Fatal("executor did not complete after the skip")
+	}
+
+	if calls, _ := step.observed(); calls != 0 {
+		t.Fatalf("DiscardApprovalResidue calls = %d, want 0 for a skipped gate", calls)
 	}
 }

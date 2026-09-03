@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/kunchenguid/no-mistakes/internal/worktrees"
 )
@@ -31,13 +32,19 @@ const maxStepDiffBytes = 512 * 1024
 // round, whose new test files a human at the gate reads, would show nothing at
 // all.
 //
-// The commit range is served only on proof that this round advanced the head,
-// read from the parked round's recorded starting head. A gate whose step
-// committed nothing - the Test step parking because a configured test command
-// exited nonzero, or CI, PR, and push gates, none of which commit at all - gets
-// the empty diff it earned. Guessing HEAD~1..HEAD there would present the
-// PREVIOUS step's commit as what this step changed, which is worse than showing
-// nothing.
+// The commit range is served only for a step that commits its own work at its
+// exit (pipeline.CommitsOwnWorkAtExit) and only on proof that this round
+// advanced the head, read from the parked round's recorded starting head. A
+// gate whose step committed nothing - the Test step parking because a
+// configured test command exited nonzero - gets the empty diff it earned.
+// Guessing HEAD~1..HEAD there would present the PREVIOUS step's commit as what
+// this step changed, which is worse than showing nothing.
+//
+// Every other parked step gets the working-tree diff alone, because head
+// movement under it is not its own authorship: the rebase step parks after
+// replaying the branch onto upstream, so the range would be every commit it
+// picked up, and the CI step can park in the same round its local repair
+// commit advanced the head.
 //
 // This diff is the only piece of gate context the pipeline never persists, so
 // it is the one thing a subscriber cannot rebuild from get_run. Serving it
@@ -90,7 +97,8 @@ func (m *RunManager) StepDiff(ctx context.Context, runID string) (string, bool, 
 }
 
 // parkedRoundStartingHead returns the head the run's parked step began its
-// latest round on, or "" when no step is parked, when the round predates the
+// latest round on, or "" when no step is parked, when the parked step is not
+// one that commits its own work at its exit, when the round predates the
 // column, or when the lookup fails. Every one of those answers means "no proof
 // this step committed anything", so the caller keeps the empty diff rather than
 // showing a commit some earlier step made.
@@ -103,6 +111,9 @@ func (m *RunManager) parkedRoundStartingHead(runID string) string {
 	for _, step := range steps {
 		if step.Status != types.StepStatusAwaitingApproval && step.Status != types.StepStatusFixReview {
 			continue
+		}
+		if !pipeline.CommitsOwnWorkAtExit(step.StepName) {
+			return ""
 		}
 		rounds, err := m.db.GetRoundsByStep(step.ID)
 		if err != nil {

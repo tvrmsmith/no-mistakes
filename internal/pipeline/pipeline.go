@@ -50,6 +50,24 @@ func evidenceUnavailable(cause error) error {
 // leaving Review the certifier at the far end of a multi-step region.
 const RestartBoundary types.StepName = types.StepReview
 
+// CommitsOwnWorkAtExit reports whether a step routes its exit through the
+// validation helper that commits an unclean worktree, which is what makes the
+// step's own round the author of every commit between the head the round
+// started on and the current head.
+//
+// Steps outside this set move the head for reasons of their own - the rebase
+// step replays the branch onto upstream, the CI step commits an agent repair -
+// so the same range there is not "what this step changed" and must not be
+// presented as it.
+func CommitsOwnWorkAtExit(name types.StepName) bool {
+	switch name {
+	case types.StepReview, types.StepTest, types.StepDocument, types.StepLint:
+		return true
+	default:
+		return false
+	}
+}
+
 // StepContext provides shared resources to pipeline steps during execution.
 type StepContext struct {
 	Ctx                   context.Context
@@ -220,8 +238,10 @@ type ApprovalGateReconciler interface {
 // review-approved head (Review today, whatever certifies after issues #7/#8).
 // The step that certifies must not modify the tree it certifies, so when it
 // exits with an unclean worktree it parks instead of committing: nothing is
-// destroyed, the leftovers stay visible in the gate diff, and the existing
-// certification is untouched.
+// destroyed and the existing certification is untouched. The gate's own
+// findings are what enumerate the leftovers, one item per path. The gate diff
+// shows only the tracked modifications among them, since it is a git diff
+// against the worktree and untracked files never appear in one.
 //
 // That gate has two answers. Approving means "discard", and the executor calls
 // this so the step removes exactly the leftovers the park recorded before the
@@ -233,7 +253,9 @@ type ApprovalGateReconciler interface {
 // paths the park recorded. Discard is scoped to those paths because a human or
 // a driving agent may edit the worktree while the run is parked, and a blanket
 // reset over whatever the tree holds at approval time would destroy work
-// nobody ruled on.
+// nobody ruled on. The guarantee is exactly that scope: a file outside the
+// recorded list survives, and an edit made during the park to a file that IS
+// on the list goes with the rest of that path's contents.
 //
 // It is fail-closed. A discard that cannot complete leaves an uncommitted tree
 // a later step would commit unjudged, so the error fails the run.

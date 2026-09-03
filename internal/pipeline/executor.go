@@ -1186,9 +1186,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// subscription and hides every event after it. Consumers fetch it on
 		// demand from the run's worktree instead (ipc.MethodGetStepDiff), which
 		// serves the working tree when the step left work uncommitted and the
-		// step's own exit commit (HEAD~1..HEAD) when it did not - a validation
-		// step commits at its exit, so its worktree is usually already clean by
-		// the time the gate is observable.
+		// range from the round's recorded starting head to the current head
+		// when it did not - a validation step commits at its exit, so its
+		// worktree is usually already clean by the time the gate is
+		// observable. daemon.parkedRoundStartingHead owns reading that head.
 		approvalStatus := types.StepStatusAwaitingApproval
 		if sctx.Fixing {
 			approvalStatus = types.StepStatusFixReview
@@ -1372,8 +1373,9 @@ done:
 // through. A step that parked over work it deliberately refused to commit
 // (ApprovalResidueDiscarder) clears that work here, because approving such a
 // gate means discard. The parked gate's own findings go with it: they name the
-// paths the park recorded, and discard is scoped to exactly those so anything
-// edited while the run sat parked survives. Every step that does not implement
+// paths the park recorded, and discard is scoped to exactly those, so a file
+// edited while the run sat parked survives unless the park recorded that same
+// path. Every step that does not implement
 // the interface is unaffected, and a gate that recorded no residue does
 // nothing.
 func (e *Executor) discardApprovalResidue(step Step, sctx *StepContext, findingsJSON string) error {

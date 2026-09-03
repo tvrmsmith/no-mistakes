@@ -138,10 +138,13 @@ func TestRunValidationStep_CertifyingStepParksOverResidue(t *testing.T) {
 		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
 			return nil, err
 		}
-		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: headSHA}, nil
+		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: headSHA, AutoFixable: true}, nil
 	})
 	if err != nil {
 		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if outcome.AutoFixable {
+		t.Fatal("AutoFixable = true; the executor auto-fixes before it parks, so the residue gate would never be seen")
 	}
 	if outcome.ReviewApprovedHeadSHA != headSHA {
 		t.Fatalf("ReviewApprovedHeadSHA = %q, want %q", outcome.ReviewApprovedHeadSHA, headSHA)
@@ -377,6 +380,133 @@ func TestReviewStep_DiscardApprovalResidueLeavesANonResidueGateAlone(t *testing.
 	}
 }
 
+// TestRunValidationStep_ParkedResidueIsWhatDiscardRemoves closes the loop
+// between the two halves of the residue contract. The park writes the path
+// list into its findings and discard reads it back out of them, so a test that
+// hand-builds that payload on both sides passes while the two disagree in
+// production. Here the park's own outcome.Findings is what discard is handed,
+// exactly as the executor hands it.
+func TestRunValidationStep_ParkedResidueIsWhatDiscardRemoves(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	tracked := filepath.Join(dir, "feature.txt")
+	original, err := os.ReadFile(tracked)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(tracked, []byte("residue\n"), 0o644); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("scratch\n"), 0o644); err != nil {
+			return nil, err
+		}
+		// A path the agent staged. git diff against HEAD reports it, so the
+		// park records it as tracked residue even though HEAD has no such file.
+		if err := os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("staged\n"), 0o644); err != nil {
+			return nil, err
+		}
+		gitCmd(t, dir, "add", "staged.txt")
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+
+	parked, err := runValidationStep(sctx, types.StepReview, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: headSHA}, nil
+	})
+	if err != nil {
+		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if !parked.NeedsApproval {
+		t.Fatal("NeedsApproval = false, want the certifying step parked over its residue")
+	}
+
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, parked.Findings); err != nil {
+		t.Fatalf("DiscardApprovalResidue() error = %v", err)
+	}
+	restored, err := os.ReadFile(tracked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != string(original) {
+		t.Fatalf("tracked file = %q, want it restored to %q", restored, original)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "scratch.txt")); !os.IsNotExist(err) {
+		t.Fatalf("untracked residue still present (stat err = %v), want it removed", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "staged.txt")); !os.IsNotExist(err) {
+		t.Fatalf("staged residue still present (stat err = %v), want it removed", err)
+	}
+	if status := gitStatusPorcelain(t, dir); status != "" {
+		t.Fatalf("worktree = %q, want the recorded residue fully discarded", status)
+	}
+}
+
+// TestRunValidationStep_ResidueGateFixAnswerCommitsAndRecertifies drives the
+// other answer the residue gate offers. Fixing keeps the leftovers: the step's
+// own fix round commits them and certifies the head that results, so the run
+// ships the work rather than the tree the park refused to certify over.
+func TestRunValidationStep_ResidueGateFixAnswerCommitsAndRecertifies(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("residue\n"), 0o644); err != nil {
+			return nil, err
+		}
+		return &agent.Result{Output: json.RawMessage(`{"summary":"keep the residue"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+
+	parked, err := runValidationStep(sctx, types.StepReview, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: headSHA}, nil
+	})
+	if err != nil {
+		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if !parked.NeedsApproval {
+		t.Fatal("NeedsApproval = false, want the residue gate")
+	}
+
+	sctx.Fixing = true
+	fixed, err := runValidationStep(sctx, types.StepReview, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if err := commitAgentFixes(inner, types.StepReview, "keep the residue", "keep the residue"); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{ReviewApprovedHeadSHA: inner.Run.HeadSHA}, nil
+	})
+	if err != nil {
+		t.Fatalf("fix round error = %v", err)
+	}
+	if fixed.NeedsApproval {
+		t.Fatal("NeedsApproval = true, want the fix round to clear the gate")
+	}
+	if fixed.ReviewApprovedHeadSHA == headSHA {
+		t.Fatal("the fix round certified the pre-residue head, want the head its commit produced")
+	}
+	if fixed.ReviewApprovedHeadSHA != sctx.Run.HeadSHA {
+		t.Fatalf("ReviewApprovedHeadSHA = %q, want the new head %q", fixed.ReviewApprovedHeadSHA, sctx.Run.HeadSHA)
+	}
+	if status := gitStatusPorcelain(t, dir); status != "" {
+		t.Fatalf("worktree = %q, want the residue committed", status)
+	}
+	if got := strings.TrimSpace(gitCmd(t, dir, "show", "HEAD:feature.txt")); got != "residue" {
+		t.Fatalf("committed feature.txt = %q, want the residue kept", got)
+	}
+}
+
 // TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn covers the
 // churn path. A step that re-commits the tree its own last restart produced
 // holds the run at a gate naming the step and the repeated tree, rather than
@@ -387,10 +517,11 @@ func TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn(t *testing.T)
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
+	agentWrites := "package main\n"
 	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
 		// Round 2 writes the same content back over a file the pipeline
 		// reverted, so its commit lands on a tree identical to round 1's.
-		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(agentWrites), 0o644); err != nil {
 			return nil, err
 		}
 		return &agent.Result{}, nil
@@ -405,7 +536,7 @@ func TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn(t *testing.T)
 			if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
 				return nil, err
 			}
-			return &pipeline.StepOutcome{}, nil
+			return &pipeline.StepOutcome{AutoFixable: true}, nil
 		})
 		if err != nil {
 			t.Fatalf("runValidationStep() error = %v", err)
@@ -437,6 +568,9 @@ func TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn(t *testing.T)
 	if !churned.NeedsApproval {
 		t.Fatal("NeedsApproval = false, want the run parked over the repeating tree")
 	}
+	if churned.AutoFixable {
+		t.Fatal("AutoFixable = true; the executor auto-fixes before it parks, so the churn gate would never be seen")
+	}
 	findings, err := types.ParseFindingsJSON(churned.Findings)
 	if err != nil {
 		t.Fatalf("parse churn findings: %v", err)
@@ -466,6 +600,27 @@ func TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn(t *testing.T)
 	}
 	if stored.ReviewApprovedHeadSHA == nil {
 		t.Fatal("stored ReviewApprovedHeadSHA = NULL, want the certification left intact")
+	}
+
+	// The gate's fix answer: the step runs once more, and a round that finally
+	// produces a different tree restarts normally. The recorded tree narrows
+	// the loop rather than wedging the run at the gate forever.
+	agentWrites = "package main // moved on\n"
+	sctx.Fixing = true
+	progressed, err := runValidationStep(sctx, types.StepDocument, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{}, nil
+	})
+	if err != nil {
+		t.Fatalf("fix round error = %v", err)
+	}
+	if progressed.NeedsApproval {
+		t.Fatal("NeedsApproval = true, want the gate cleared once the tree changed")
+	}
+	if progressed.RestartFrom != types.StepReview {
+		t.Fatalf("RestartFrom = %q, want %q once the step produced a different tree", progressed.RestartFrom, types.StepReview)
 	}
 }
 
@@ -629,6 +784,25 @@ func TestRestartBoundaryIsTheEarliestValidationStep(t *testing.T) {
 	}
 	if pipeline.RestartBoundary != earliest {
 		t.Fatalf("RestartBoundary = %q, want the earliest validation step %q", pipeline.RestartBoundary, earliest)
+	}
+}
+
+// TestCommitsOwnWorkAtExitMatchesTheValidationSteps keeps the predicate the
+// daemon reads for the gate diff in step with the steps that actually route
+// their exit through runValidationStep. A step that drifts onto the wrong side
+// of it is either shown another step's commits as its own work or shown
+// nothing when it committed.
+func TestCommitsOwnWorkAtExitMatchesTheValidationSteps(t *testing.T) {
+	t.Parallel()
+	routed := map[types.StepName]bool{}
+	for _, step := range validationSteps() {
+		routed[step.Name()] = true
+	}
+	for _, step := range AllSteps() {
+		name := step.Name()
+		if got := pipeline.CommitsOwnWorkAtExit(name); got != routed[name] {
+			t.Fatalf("CommitsOwnWorkAtExit(%q) = %v, want %v", name, got, routed[name])
+		}
 	}
 }
 

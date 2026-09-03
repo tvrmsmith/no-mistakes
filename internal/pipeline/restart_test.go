@@ -2,9 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"slices"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -186,34 +189,72 @@ func TestExecutor_RestartCompletesNormallyWhenTheBoundaryIsValid(t *testing.T) {
 // the step's fault; a database write that fails is not, and reporting both as
 // "step X requested invalid restart" sends whoever reads the run at a step that
 // did nothing wrong.
+// The write it injects is the revocation itself, the one whose failure matters:
+// a swallowed UpdateRunHeadSHAForRevalidation leaves review_approved_head_sha
+// covering a head the re-review never reached, and push accepts a certified
+// ancestor.
 func TestExecutor_PrepareRestartWriteFailureIsNotReportedAsAStepBug(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
 
+	if err := database.UpdateRunReviewApprovedHeadSHA(run.ID, run.HeadSHA); err != nil {
+		t.Fatalf("UpdateRunReviewApprovedHeadSHA() error = %v", err)
+	}
+	seeded, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.ReviewApprovedHeadSHA = seeded.ReviewApprovedHeadSHA
+
+	refuseRevalidationWrite(t, p.DB())
+
+	reachedPush := false
 	steps := []Step{
 		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
 			return &StepOutcome{}, nil
 		}},
 		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
-			// Closing the database makes prepareRestart's writes fail while the
-			// boundary it was handed stays perfectly valid.
-			if err := database.Close(); err != nil {
-				t.Errorf("Close() error = %v", err)
-			}
 			return &StepOutcome{RestartFrom: types.StepReview}, nil
+		}},
+		&adaptiveCallStep{name: types.StepPush, fn: func(*StepContext) (*StepOutcome, error) {
+			reachedPush = true
+			return &StepOutcome{}, nil
 		}},
 	}
 
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err = exec.Execute(context.Background(), run, repo, workDir)
 	if err == nil {
-		t.Fatal("Execute() error = nil, want the failed restart write to fail the run")
+		t.Fatal("Execute() error = nil, want the failed revocation to fail the run")
 	}
 	if strings.Contains(err.Error(), "invalid restart") {
 		t.Fatalf("Execute() error = %v, want a write failure reported as itself, not as a step bug", err)
 	}
-	if !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "sql:") {
+	if !strings.Contains(err.Error(), "restart from review requested by step document") {
+		t.Fatalf("Execute() error = %v, want the restart failure wrapper naming the requesting step", err)
+	}
+	if !strings.Contains(err.Error(), "revalidation write refused") {
 		t.Fatalf("Execute() error = %v, want it to carry the underlying write failure", err)
+	}
+	if reachedPush {
+		t.Fatal("the run walked on to push while a certification the re-review never renewed still stood")
+	}
+}
+
+// refuseRevalidationWrite makes exactly UpdateRunHeadSHAForRevalidation fail,
+// by refusing any update that touches runs.head_sha. prepareRestart's other two
+// writes (step_results and runs.restart_count) are untouched, so the run's
+// failure can only have come from the revocation.
+func refuseRevalidationWrite(t *testing.T, dbPath string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Exec(`CREATE TRIGGER refuse_revalidation BEFORE UPDATE OF head_sha ON runs
+		BEGIN SELECT RAISE(ABORT, 'revalidation write refused'); END`); err != nil {
+		t.Fatal(err)
 	}
 }
 

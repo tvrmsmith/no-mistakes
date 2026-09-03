@@ -352,6 +352,12 @@ func runValidationStep(
 // tree restarts normally), or abort. The finding is ask-user rather than the
 // residue gate's no-op, because a repeating tree is not something an
 // unattended --yes run should wave through.
+//
+// The round's auto-fix eligibility is withdrawn with it. The executor's
+// auto-fix branch runs before the approval park, so a round left AutoFixable
+// spends a fix round and discards this warning with it, and the operator never
+// sees the gate. A step that already produced the same tree twice is by
+// definition not something another automatic round should attempt.
 func churnGateOutcome(sctx *pipeline.StepContext, name types.StepName, tree string, outcome *pipeline.StepOutcome) (*pipeline.StepOutcome, error) {
 	sctx.Log(fmt.Sprintf("%s committed tree %s, the same tree its last restart produced; parking instead of restarting again", name, tree))
 	findings, err := parseStepFindings(sctx, name, outcome.Findings)
@@ -369,6 +375,7 @@ func churnGateOutcome(sctx *pipeline.StepContext, name types.StepName, tree stri
 	if err != nil {
 		return nil, fmt.Errorf("render %s churn findings: %w", name, err)
 	}
+	outcome.AutoFixable = false
 	outcome.NeedsApproval = true
 	outcome.Findings = string(findingsJSON)
 	return outcome, nil
@@ -411,6 +418,11 @@ func parseStepFindings(sctx *pipeline.StepContext, name types.StepName, raw stri
 // the step's own fix round and re-reviews the new head. Every residue item is
 // no-op, so an unattended --yes run discards and reports instead of bouncing
 // through review with nobody watching.
+//
+// The round's auto-fix eligibility is withdrawn here too. A certifying round
+// can carry ordinary auto-fix findings of its own, and the executor's auto-fix
+// branch runs before the approval park, so leaving it set spends a fix round
+// and drops the residue gate the certification depends on.
 func residueGateOutcome(sctx *pipeline.StepContext, name types.StepName, outcome *pipeline.StepOutcome) (*pipeline.StepOutcome, error) {
 	modified, untracked, err := worktreeResidue(sctx.Ctx, sctx.WorkDir)
 	if err != nil {
@@ -444,6 +456,7 @@ func residueGateOutcome(sctx *pipeline.StepContext, name types.StepName, outcome
 	}
 	sctx.Log(fmt.Sprintf("%s examined %s but left these files uncommitted; parking instead of committing over its own certification: modified %s, untracked %s",
 		name, sctx.Run.HeadSHA, describePaths(modified), describePaths(untracked)))
+	outcome.AutoFixable = false
 	outcome.NeedsApproval = true
 	outcome.Findings = string(findingsJSON)
 	return outcome, nil
@@ -453,14 +466,20 @@ func residueGateOutcome(sctx *pipeline.StepContext, name types.StepName, outcome
 // from HEAD and untracked non-ignored files. Gitignored build output is in
 // neither list: it is not residue anyone needs to rule on, and discard leaves
 // it alone.
+//
+// The listing is NUL-separated because core.quotePath C-quotes any path with a
+// non-ASCII, control, quote, or backslash byte, and that quoted token is both
+// what an operator reads at the gate and what discard hands back to git as a
+// pathspec. Splitting on newlines and trimming spaces also corrupts a path that
+// legitimately holds either.
 func worktreeResidue(ctx context.Context, workDir string) (modified, untracked []string, err error) {
-	out, err := git.Run(ctx, workDir, "diff", "--name-only", "HEAD")
+	out, err := git.RunRaw(ctx, workDir, "diff", "--name-only", "-z", "HEAD")
 	if err != nil {
 		return nil, nil, fmt.Errorf("list modified tracked files: %w", err)
 	}
-	for _, line := range strings.Split(out, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			modified = append(modified, line)
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			modified = append(modified, path)
 		}
 	}
 	untracked, err = git.UntrackedFiles(ctx, workDir)
@@ -515,7 +534,12 @@ func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName, f
 		return nil
 	}
 	if len(modified) > 0 {
-		args := append([]string{"checkout", "HEAD", "--"}, modified...)
+		// git restore rather than git checkout HEAD --: the tracked list comes
+		// from diff against HEAD, which includes a staged-added path HEAD does
+		// not contain, and checkout aborts the whole invocation on that
+		// unmatched pathspec without restoring anything. restore resets index
+		// and worktree to HEAD, deleting such a path instead of failing.
+		args := append([]string{"restore", "--source=HEAD", "--staged", "--worktree", "--"}, modified...)
 		if _, err := git.Run(sctx.Ctx, sctx.WorkDir, args...); err != nil {
 			return fmt.Errorf("restore tracked files after %s: %w", name, err)
 		}

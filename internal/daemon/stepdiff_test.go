@@ -203,6 +203,31 @@ func TestStepDiff_StepThatCommittedNothingGetsNoDiff(t *testing.T) {
 	}
 }
 
+// A step that did not author the commits under it must not be handed the
+// range as "what the parked step changed". The rebase step is the reachable
+// case: it replays the branch onto upstream, aborts a later conflicting
+// target, and parks with a clean worktree, so the range from its round's
+// starting head is every upstream commit the successful part picked up.
+func TestStepDiff_NonValidationStepGetsNoCommitRange(t *testing.T) {
+	m, runID := stepDiffFixture(t, "upstream work\n")
+	worktree := stepDiffWorktree(t, m, runID)
+	startingHead := headSHA(t, worktree)
+	runGit(t, worktree, "add", "-A")
+	runGit(t, worktree, "commit", "-m", "commit the rebase picked up")
+	parkStepAtGate(t, m, runID, types.StepRebase, startingHead)
+
+	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Fatal("empty diff reported as truncated")
+	}
+	if diff != "" {
+		t.Fatalf("diff = %q, want empty: the rebase step did not author that commit", diff)
+	}
+}
+
 func TestStepDiff_UnknownRunFailsClosed(t *testing.T) {
 	m, _ := stepDiffFixture(t, "agent fix\n")
 	if _, _, err := m.StepDiff(context.Background(), "01NOSUCHRUN"); err == nil {
