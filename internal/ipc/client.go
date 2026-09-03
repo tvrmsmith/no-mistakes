@@ -74,7 +74,10 @@ const (
 	// DefaultDialTimeout is the read deadline used for the daemon health check
 	// dial made by callers outside this package (see internal/daemon/selfexec.go).
 	DefaultDialTimeout = 250 * time.Millisecond
-	defaultCallTimeout = 30 * time.Second
+	// DefaultCallTimeout bounds any Call that does not name its own timeout.
+	// Callers whose request can legitimately outlast it (a drain the operator
+	// gave a long deadline) must use CallWithTimeout.
+	DefaultCallTimeout = 30 * time.Second
 )
 
 // Dial connects to the IPC server at the given endpoint path.
@@ -113,7 +116,7 @@ func dialEndpoint(socketPath string) (net.Conn, error) {
 // The result is unmarshaled into the provided pointer.
 // If the server returns a JSON-RPC error, it is returned as *RPCError.
 func (c *Client) Call(method string, params interface{}, result interface{}) error {
-	return c.CallWithTimeout(method, params, result, defaultCallTimeout)
+	return c.CallWithTimeout(method, params, result, DefaultCallTimeout)
 }
 
 // CallWithTimeout is Call with a caller-selected read deadline.
@@ -139,7 +142,7 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 	}
 
 	if timeout <= 0 {
-		timeout = defaultCallTimeout
+		timeout = DefaultCallTimeout
 	}
 	c.conn.SetReadDeadline(time.Now().Add(timeout))
 	interruptDone := make(chan struct{})

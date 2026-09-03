@@ -115,6 +115,11 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	mustGitRun(t, ctx, root, "clone", gateDir, workDir)
 	mustGitRun(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustGitRun(t, ctx, workDir, "config", "user.name", "Eval Test")
+	// A developer's global commit.gpgsign would make these commits wait on a
+	// signing agent that has nothing to do with the test, and a signing agent
+	// that cannot answer turns a fast unit test into a minutes-long timeout.
+	mustGitRun(t, ctx, workDir, "config", "commit.gpgsign", "false")
+	mustGitRun(t, ctx, workDir, "config", "tag.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

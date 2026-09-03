@@ -60,6 +60,17 @@ If the daemon is already running from a different executable path, update still 
 If the daemon executable path cannot be determined, the update aborts before replacing anything.
 
 `no-mistakes daemon stop` and `no-mistakes daemon restart` apply the same guard, including the same gate-parked exemption and the same step-plan check: if pending or running pipeline runs exist, each refuses by default and lists the active runs, and each takes its own `--force` to proceed anyway.
+Both commands also take `--drain` as an alternative to `--force`: instead of cutting active runs off, the daemon refuses new runs, lets in-flight runs finish, then stops. With `--drain` the guard does not refuse and does not treat active runs as a problem; it lists what is currently active and proceeds. That list is not a promise to wait on every entry, since the two classifications below take runs out of the wait. `--drain` and `--force` cannot be combined, since they say opposite things about what should happen to those runs.
+A run parked at a gate (`axi respond` waiting on you) is never waited on: stopping the daemon preserves it, so it stays parked in the database and the next daemon start resumes it, the same as it is today without `--drain`. Answer that gate while the drain is still waiting and the run rejoins the wait and the report, since it is working again. A run actively monitoring CI for an already-open PR is cut immediately rather than waited on, since a drain that blocked on CI could run indefinitely; the PR is left open and CI keeps running, so this is expected behavior, not a failure. A CI step partway through an auto-fix repair is not that case: an agent is working, so the run is waited on like any other and bounded by the deadline below. `daemon stop --drain` reports that run's ID and branch and says the PR remains open, and exits `0`. The run lands in the same terminal `ci_monitor_interrupted` state a [restart mid-monitor](#crash-recovery) produces, with an error text naming the drain as the cause. A cut CI monitor is not counted among the runs that finished.
+Parked wins over CI monitoring: a run parked at a CI gate is preserved and resumed, not cut, because it is not actively monitoring anything and the recovery path can re-check its PR on the next start.
+Both classifications are rechecked while the drain waits, so a run that parks at a gate or reaches its CI monitor after the drain starts is released or cut just as one that was already there.
+The drain itself is bounded by `--drain-timeout` (a Go duration, default `10m`; must be positive, and rejected without `--drain` rather than silently ignored). Any run still active when that deadline passes is forcibly stopped, exactly as an undrained stop would have stopped it. `daemon stop --drain` reports each such run and returns a nonzero exit naming them; `daemon restart --drain` still restarts the daemon afterward and only then returns that error.
+A drain that the daemon's own shutdown ends early (a signal, or a concurrent stop) reports its still-running runs the same way, under the reason `shutdown` rather than `deadline`, because raising `--drain-timeout` would not have helped.
+`--drain` also exits nonzero when the daemon did not drain at all, which happens when it is an older build without drain support or another drain is already in progress. The report is what the daemon did, not what the flag asked for, so this case is never printed as a clean drain of zero runs. Finding no daemon running is not that case: stopping an already-stopped daemon reports that no daemon was running and exits `0`, exactly as it does without `--drain`.
+On a managed service the drain does not exit the process itself, because `launchd` and `systemd` would respawn a daemon into the gap before the service manager's own stop lands. The daemon stays alive with new runs refused, and the service manager performs the exit a moment later. If that stop never arrives, the daemon keeps refusing every push: `no-mistakes daemon status` reports `daemon drained, not accepting new runs` instead of `daemon running`, and each refused push names `no-mistakes daemon restart` as the way back. A daemon that is merely on its way out under an ordinary stop also refuses runs, and status says `daemon stopping, not accepting new runs` for that one, with no restart advice, because it needs no operator.
+A push that arrives after the latch is refused rather than failed: the run is recorded as cancelled, the same terminal status an operator's own abort produces, since none of the pipeline ran.
+When the drain request itself fails on a managed service, the stop aborts instead of falling through to the service manager, whose stop carries no drain semantics and would cut the very runs `--drain` was protecting. The command exits nonzero, says the daemon was left running and its in-flight runs were not touched, and leaves you to retry the drain or stop without it.
+
 That `--force` override is available only to an ordinary top-level caller. A
 process descended from an active validation-step agent cannot start, stop,
 restart, or update the daemon; recursive containment refuses the command before
@@ -168,8 +179,10 @@ log_level: debug # debug | info | warn | error
 
 `no-mistakes daemon stop` stops the current daemon process without removing the managed service. The next `no-mistakes daemon start`, `no-mistakes`, `init`, `attach`, `rerun`, or `update` will start it again through the same service manager when available, or as a detached daemon otherwise.
 The [starting and stopping](#starting-and-stopping) section owns the active-run
-guard, the top-level `--force` override, and the separate validation-step
-containment rule.
+guard, the top-level `--force` override, `--drain`, and the separate
+validation-step containment rule.
+
+Without `--drain`:
 
 1. Cancels every active run, which fails a run interrupted mid-step but leaves a run parked at a gate preserved for the next start
 2. Waits up to 30 seconds for goroutines to finish
