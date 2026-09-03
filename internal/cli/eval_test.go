@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -259,61 +260,11 @@ type evalCLIFixture struct {
 }
 
 // setupEvalCLIFixture builds the minimal real gate, working clone, and
-// recorded review round the eval CLI commands read from.
+// recorded review round the eval CLI commands read from. The repository is
+// named "repo" so its URL stays https://example.test/org/repo.
 func setupEvalCLIFixture(t *testing.T, ctx context.Context, root, findings string) evalCLIFixture {
 	t.Helper()
-	p := paths.WithRoot(root)
-	if err := p.EnsureDirs(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := db.Open(p.DB())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-
-	gateDir := p.RepoDir("eval-repo")
-	if err := git.InitBare(ctx, gateDir); err != nil {
-		t.Fatal(err)
-	}
-	workDir := filepath.Join(root, "source")
-	mustCLIGit(t, ctx, root, "clone", gateDir, workDir)
-	mustCLIGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
-	mustCLIGit(t, ctx, workDir, "config", "user.name", "Eval Test")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mustCLIGit(t, ctx, workDir, "add", ".")
-	mustCLIGit(t, ctx, workDir, "commit", "-m", "base")
-	mustCLIGit(t, ctx, workDir, "branch", "-M", "main")
-	mustCLIGit(t, ctx, workDir, "push", "origin", "main")
-	baseSHA := mustCLIGit(t, ctx, workDir, "rev-parse", "HEAD")
-	mustCLIGit(t, ctx, workDir, "checkout", "-b", "feature/eval")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mustCLIGit(t, ctx, workDir, "add", "main.go")
-	mustCLIGit(t, ctx, workDir, "commit", "-m", "change")
-	mustCLIGit(t, ctx, workDir, "push", "origin", "feature/eval")
-	headSHA := mustCLIGit(t, ctx, workDir, "rev-parse", "HEAD")
-
-	repo, err := database.InsertRepoWithID("eval-repo", workDir, "https://example.test/org/repo", "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := database.InsertRun(repo.ID, "feature/eval", headSHA, baseSHA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	step, err := database.InsertStepResult(run.ID, types.StepReview)
-	if err != nil {
-		t.Fatal(err)
-	}
-	round, err := database.InsertReviewStepRoundWithProvenance(step.ID, 1, "initial", &findings, nil, headSHA, headSHA, baseSHA, []byte("{}\n"), []byte("{}\n"), 50)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return evalCLIFixture{run: run, round: round, step: step, db: database}
+	return setupEvalCLIFixtureNamed(t, ctx, root, "repo", findings)
 }
 
 // installFakeCLIReviewAgent puts a scripted claude on PATH that replies with
@@ -545,8 +496,7 @@ func setupEvalCLIFixtureNamed(t *testing.T, ctx context.Context, root, name, fin
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	dbPath := filepath.Join(p.DB())
-	database, err := db.Open(dbPath)
+	database, err := db.Open(p.DB())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,8 +574,8 @@ func setupEvalCLIFixtureTaggedCheapGatesFirst(t *testing.T, ctx context.Context,
 	t.Helper()
 	fixture := setupEvalCLIFixtureNamed(t, ctx, root, name, findings)
 	p := paths.WithRoot(root)
-	for _, name := range []types.StepName{"format", types.StepLint, types.StepTest} {
-		step, err := fixture.db.InsertStepResult(fixture.run.ID, name)
+	for _, stepName := range []types.StepName{"format", types.StepLint, types.StepTest} {
+		step, err := fixture.db.InsertStepResult(fixture.run.ID, stepName)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -643,7 +593,7 @@ func recordTwoPipelineLayoutEvaluations(t *testing.T, root string) {
 	ctx := context.Background()
 
 	reviewEarlyFindings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
-	reviewEarly := setupEvalCLIFixtureNamed(t, ctx, root, "review-early-repo", reviewEarlyFindings)
+	reviewEarly := setupEvalCLIFixtureNamed(t, ctx, root, "alpha-service", reviewEarlyFindings)
 	selected := `["real-bug"]`
 	if err := reviewEarly.db.SetStepRoundSelection(reviewEarly.round.ID, &selected, db.RoundSelectionSourceUser); err != nil {
 		t.Fatal(err)
@@ -657,7 +607,7 @@ func recordTwoPipelineLayoutEvaluations(t *testing.T, root string) {
 	}
 
 	cheapGatesFindings := `{"findings":[{"id":"other-bug","severity":"warning","file":"main.go","line":3,"description":"other bug","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"minor","risk_scope":"source-or-external"}`
-	cheapGatesFirst := setupEvalCLIFixtureTaggedCheapGatesFirst(t, ctx, root, "cheap-gates-repo", cheapGatesFindings)
+	cheapGatesFirst := setupEvalCLIFixtureTaggedCheapGatesFirst(t, ctx, root, "beta-service", cheapGatesFindings)
 	otherSelected := `["other-bug"]`
 	if err := cheapGatesFirst.db.SetStepRoundSelection(cheapGatesFirst.round.ID, &otherSelected, db.RoundSelectionSourceUser); err != nil {
 		t.Fatal(err)
@@ -716,7 +666,7 @@ func TestEvalSetsDashboardShowsThePipelineBreakdown(t *testing.T) {
 	ctx := context.Background()
 
 	reviewEarlyFindings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
-	reviewEarly := setupEvalCLIFixtureNamed(t, ctx, root, "review-early-repo", reviewEarlyFindings)
+	reviewEarly := setupEvalCLIFixtureNamed(t, ctx, root, "alpha-service", reviewEarlyFindings)
 	selected := `["real-bug"]`
 	if err := reviewEarly.db.SetStepRoundSelection(reviewEarly.round.ID, &selected, db.RoundSelectionSourceUser); err != nil {
 		t.Fatal(err)
@@ -726,7 +676,7 @@ func TestEvalSetsDashboardShowsThePipelineBreakdown(t *testing.T) {
 	}
 
 	cheapGatesFindings := `{"findings":[{"id":"other-bug","severity":"warning","file":"main.go","line":3,"description":"other bug","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"minor","risk_scope":"source-or-external"}`
-	cheapGatesFirst := setupEvalCLIFixtureTaggedCheapGatesFirst(t, ctx, root, "cheap-gates-repo", cheapGatesFindings)
+	cheapGatesFirst := setupEvalCLIFixtureTaggedCheapGatesFirst(t, ctx, root, "beta-service", cheapGatesFindings)
 	otherSelected := `["other-bug"]`
 	if err := cheapGatesFirst.db.SetStepRoundSelection(cheapGatesFirst.round.ID, &otherSelected, db.RoundSelectionSourceUser); err != nil {
 		t.Fatal(err)
@@ -742,8 +692,73 @@ func TestEvalSetsDashboardShowsThePipelineBreakdown(t *testing.T) {
 	if !strings.Contains(out, "Pipeline layouts") {
 		t.Fatalf("sets output = %q, want the pipeline breakdown block", out)
 	}
-	if !strings.Contains(out, "review-early") || !strings.Contains(out, "cheap-gates-first") {
-		t.Fatalf("sets output = %q, want both pipeline layouts listed", out)
+	// The row shape, not the bare version string: a repository name or a
+	// warning mentioning a layout would satisfy a substring match on its own.
+	for _, want := range []string{"1  review-early · 1 gold", "1  cheap-gates-first · 1 gold"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("sets output = %q, want the breakdown row %q", out, want)
+		}
+	}
+}
+
+// The --pipeline filter on eval sets and eval run has to change what those
+// commands actually operate on, not just parse.
+func TestEvalPipelineFilterNarrowsWhatSetsAndRunOperateOn(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NM_HOME", root)
+	chdir(t, t.TempDir())
+	ctx := context.Background()
+
+	reviewEarlyFindings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
+	reviewEarly := setupEvalCLIFixtureNamed(t, ctx, root, "alpha-service", reviewEarlyFindings)
+	selected := `["real-bug"]`
+	if err := reviewEarly.db.SetStepRoundSelection(reviewEarly.round.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCmd("eval", "capture", reviewEarly.run.ID); err != nil {
+		t.Fatalf("eval capture (review-early): %v\n%s", err, out)
+	}
+
+	cheapGatesFindings := `{"findings":[{"id":"other-bug","severity":"warning","file":"main.go","line":3,"description":"other bug","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"minor","risk_scope":"source-or-external"}`
+	cheapGatesFirst := setupEvalCLIFixtureTaggedCheapGatesFirst(t, ctx, root, "beta-service", cheapGatesFindings)
+	otherSelected := `["other-bug"]`
+	if err := cheapGatesFirst.db.SetStepRoundSelection(cheapGatesFirst.round.ID, &otherSelected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCmd("eval", "capture", cheapGatesFirst.run.ID); err != nil {
+		t.Fatalf("eval capture (cheap-gates-first): %v\n%s", err, out)
+	}
+
+	unfiltered, err := executeCmd("eval", "sets")
+	if err != nil {
+		t.Fatalf("eval sets: %v\n%s", err, unfiltered)
+	}
+	if want := strings.TrimRight(metricStatsLine("Cases", "2", ""), " "); !strings.Contains(unfiltered, want) {
+		t.Fatalf("eval sets = %q, want the unfiltered diversified line %q", unfiltered, want)
+	}
+
+	filtered, err := executeCmd("eval", "sets", "--pipeline", "review-early")
+	if err != nil {
+		t.Fatalf("eval sets --pipeline review-early: %v\n%s", err, filtered)
+	}
+	if want := strings.TrimRight(metricStatsLine("Cases", "1", ""), " "); !strings.Contains(filtered, want) {
+		t.Fatalf("eval sets --pipeline review-early = %q, want the diversified line narrowed to %q", filtered, want)
+	}
+
+	installFakeCLIReviewAgent(t, root, reviewEarlyFindings)
+	run, err := executeCmd("eval", "run", "--cases", "labeled", "--candidate", "claude,model=test", "--repeats", "1", "--pipeline", "review-early")
+	if err != nil {
+		t.Fatalf("eval run --pipeline review-early: %v\n%s", err, run)
+	}
+	if !strings.Contains(run, "replaying 1 case(s)") {
+		t.Fatalf("eval run --pipeline review-early = %q, want it to plan the one review-early case", run)
+	}
+	unfilteredRun, err := executeCmd("eval", "run", "--cases", "labeled", "--candidate", "claude,model=test", "--repeats", "1")
+	if err != nil {
+		t.Fatalf("eval run: %v\n%s", err, unfilteredRun)
+	}
+	if !strings.Contains(unfilteredRun, "replaying 2 case(s)") {
+		t.Fatalf("eval run = %q, want both cases planned without a filter", unfilteredRun)
 	}
 }
 
@@ -789,16 +804,39 @@ func TestEvalSetsSelfScoreWarnsWhenTheSetSpansTwoPipelineLayouts(t *testing.T) {
 			{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 1, GoldCases: 1},
 		},
 		// Unfiltered, so the scored population is the whole set.
-		ScoredPipelines: []eval.PipelineCountRow{
-			{PipelineVersion: eval.PipelineReviewEarly, Cases: 1, GoldCases: 1},
-			{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 1, GoldCases: 1},
-		},
+		ScoredLayouts: 2,
 	}})
 	if !strings.Contains(out, "not comparable") {
 		t.Fatalf("sets output = %q, want the self-score to be marked not comparable across layouts", out)
 	}
 	if !strings.Contains(out, "2 pipeline layouts") {
 		t.Fatalf("sets output = %q, want the caveat to name how many layouts the set spans", out)
+	}
+}
+
+// renderBoxLine silently cuts a line wider than the box content width, so the
+// cap detail has to fit at every pin count rather than only at the small ones
+// a fixture happens to use. "cap none" is the long branch.
+func TestEvalCapDetailFitsTheBox(t *testing.T) {
+	for _, pins := range []int{0, 9, 32, 999, 9999} {
+		for _, capValue := range []int{0, 32, 9999} {
+			line := metricStatsLine("Cases", strconv.Itoa(pins), evalCapDetail(pins, capValue))
+			if width := lipgloss.Width(line); width > evalCompositionContentWidth {
+				t.Fatalf("cap line at pins=%d cap=%d is %d columns wide, want at most %d: %q", pins, capValue, width, evalCompositionContentWidth, line)
+			}
+		}
+	}
+}
+
+// The dashboard must show the whole cap detail, not a prefix of it.
+func TestEvalSetsDashboardRendersTheCapDetailUntruncated(t *testing.T) {
+	out := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name: "diversified", Cases: 4, GoldCases: 4, PinCount: 999, Cap: 0,
+		SelfScore: eval.EvaluationSummary{Labeled: 4},
+	}})
+	want := strings.TrimRight(metricStatsLine("Cases", "4", evalCapDetail(999, 0)), " ")
+	if !strings.Contains(out, want) {
+		t.Fatalf("sets dashboard = %q, want the complete cap line %q rather than a truncated one", out, want)
 	}
 }
 
@@ -811,9 +849,7 @@ func TestEvalSetsSelfScoreCarriesNoCaveatForASingleLayout(t *testing.T) {
 		Pipelines: []eval.PipelineCountRow{
 			{PipelineVersion: eval.PipelineReviewEarly, Cases: 2, GoldCases: 2},
 		},
-		ScoredPipelines: []eval.PipelineCountRow{
-			{PipelineVersion: eval.PipelineReviewEarly, Cases: 2, GoldCases: 2},
-		},
+		ScoredLayouts: 1,
 	}})
 	if strings.Contains(out, "not comparable") {
 		t.Fatalf("sets output = %q, want no comparability caveat for a single layout", out)
@@ -852,9 +888,9 @@ func TestEvalSetsDashboardKeepsTheCaveatSilentForAFilteredSingleLayoutScore(t *t
 	}
 	filtered := eval.SetSummary{
 		Name: "diversified", Cases: 20, GoldCases: 20, TruePositive: 20, Cap: 32, PinCount: 30,
-		SelfScore:       eval.EvaluationSummary{Total: 20, Labeled: 20, TruePositive: 20},
-		Pipelines:       both,
-		ScoredPipelines: []eval.PipelineCountRow{{PipelineVersion: eval.PipelineReviewEarly, Cases: 20, GoldCases: 20}},
+		SelfScore:     eval.EvaluationSummary{Total: 20, Labeled: 20, TruePositive: 20},
+		Pipelines:     both,
+		ScoredLayouts: 1,
 	}
 	out := renderEvalSetsDashboard([]eval.SetSummary{filtered})
 	if strings.Contains(out, "not comparable") {
@@ -865,7 +901,7 @@ func TestEvalSetsDashboardKeepsTheCaveatSilentForAFilteredSingleLayoutScore(t *t
 	}
 
 	unfiltered := filtered
-	unfiltered.ScoredPipelines = both
+	unfiltered.ScoredLayouts = 2
 	if !strings.Contains(renderEvalSetsDashboard([]eval.SetSummary{unfiltered}), "not comparable") {
 		t.Fatal("sets dashboard printed no caveat for a score that really does span two layouts")
 	}

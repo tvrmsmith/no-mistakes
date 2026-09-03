@@ -10,10 +10,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// evalPipelineFlagUsage is shared verbatim across eval run, eval sets, and
-// eval report: the three commands filter the same tag the same way, and a
-// wording mismatch between them would read as three different flags.
-const evalPipelineFlagUsage = "limit to one pipeline layout: review-early, cheap-gates-first, or any (default any)"
+// addEvalPipelineFlag registers the --pipeline filter on eval run, eval sets,
+// and eval report. The three commands filter the same tag the same way, and a
+// wording or default mismatch between them would read as three different flags.
+func addEvalPipelineFlag(cmd *cobra.Command, raw *string) {
+	cmd.Flags().StringVar(raw, "pipeline", "", "limit to one pipeline layout: review-early, cheap-gates-first, or any (default any)")
+}
 
 // newEvalCmd deliberately does not call trackCommand. Eval cases and candidate
 // results are local code data, so this command surface has no remote telemetry
@@ -214,7 +216,7 @@ func newEvalRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cases, "cases", "", "case set: all, labeled (finding-level gold), diversified (official gold-only holdout), or tune")
 	cmd.Flags().StringVar(&candidateRaw, "candidate", "", eval.CandidateUsage())
 	cmd.Flags().IntVar(&repeats, "repeats", 3, "replays per case (minimum 1)")
-	cmd.Flags().StringVar(&pipelineRaw, "pipeline", "", evalPipelineFlagUsage)
+	addEvalPipelineFlag(cmd, &pipelineRaw)
 	_ = cmd.MarkFlagRequired("cases")
 	_ = cmd.MarkFlagRequired("candidate")
 	return cmd
@@ -251,7 +253,7 @@ func newEvalSetsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh-diversified", false, "rebuild the official diversified pin set from current gold")
-	cmd.Flags().StringVar(&pipelineRaw, "pipeline", "", evalPipelineFlagUsage)
+	addEvalPipelineFlag(cmd, &pipelineRaw)
 	return cmd
 }
 
@@ -275,11 +277,11 @@ func newEvalReportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprint(cmd.OutOrStdout(), eval.RenderReport(reports))
+			fmt.Fprint(cmd.OutOrStdout(), eval.RenderReportForPipeline(reports, pipeline))
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&pipelineRaw, "pipeline", "", evalPipelineFlagUsage)
+	addEvalPipelineFlag(cmd, &pipelineRaw)
 	return cmd
 }
 

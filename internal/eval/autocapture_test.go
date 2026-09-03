@@ -167,6 +167,73 @@ func TestAutoCaptureStillEvictsUnpinnedCasesAfterMaterializingThePins(t *testing
 	}
 }
 
+// One case directory this build cannot read must not veto retention. Nothing
+// repairs such a case, and Prune is what would eventually reclaim it, so a
+// strict listing here would leave the corpus growing past its cap forever.
+// Planning over the readable gold keeps both halves working.
+func TestAutoCaptureStillPinsAndPrunesWithAnUnreadableCaseDirectory(t *testing.T) {
+	ctx := context.Background()
+	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+	defer sourceDB.Close()
+
+	seed, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "old-gold", fingerprint: "repo-gold", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("old"),
+		roundFindings:   goldRound("old"),
+	})
+	writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "filler", fingerprint: "repo-gold", capturedAt: 2, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		roundFindings:   findingsJSON(findingSpec{ID: "f1", Severity: "error", File: "main.go", Line: 1, Description: "f1", Action: "ask-user"}),
+	})
+	unreadable := writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "unreadable", fingerprint: "repo-broken", capturedAt: 3, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		roundFindings:   findingsJSON(findingSpec{ID: "f2", Severity: "error", File: "main.go", Line: 1, Description: "f2", Action: "ask-user"}),
+	})
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unreadable.Dir, "manifest.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, 2, autoCaptureDefaultDiversifiedSize)
+	if err != nil {
+		t.Fatalf("AutoCapture error = %v, want an unreadable case tolerated on the retention path", err)
+	}
+	if result.PinWarning != "" {
+		t.Fatalf("AutoCapture pin warning = %q, want the readable gold pinned anyway", result.PinWarning)
+	}
+	if result.Pruned == 0 {
+		t.Fatal("AutoCapture pruned nothing, want the cap enforced despite the unreadable case")
+	}
+
+	store, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	pinned := map[string]bool{}
+	for _, pin := range mustDiversifiedPinRows(t, store) {
+		pinned[pin.CaseID] = true
+	}
+	if !pinned["old-gold"] {
+		t.Fatalf("pin table = %v, want the readable gold case pinned", pinned)
+	}
+	if !caseRowExists(t, store, "old-gold") {
+		t.Fatal("the pinned gold case was evicted while enforcing the cap")
+	}
+	if caseRowExists(t, store, "filler") {
+		t.Fatal("the oldest unprotected case survived the cap, so retention is still vetoed")
+	}
+}
+
 // The prune is the half that destroys evidence, so it runs only once the pins
 // that protect that evidence exist. A materialization failure leaves the corpus
 // one pass over its retention target rather than evicting an unprotected
@@ -183,17 +250,16 @@ func TestAutoCaptureSkipsThePruneWhenThePinsCannotBeMaterialized(t *testing.T) {
 	writeSyntheticCase(t, seed, syntheticCaseSpec{
 		id: "old-holdout", fingerprint: "repo-holdout", capturedAt: 1, changedLines: 10,
 		pipelineVersion: PipelineReviewEarly,
-		roundFindings:   findingsJSON(findingSpec{ID: "f1", Severity: "error", File: "main.go", Line: 1, Description: "f1", Action: "ask-user"}),
+		gold:            goldSpec("holdout"),
+		roundFindings:   goldRound("holdout"),
 	})
-	unreadable := writeSyntheticCase(t, seed, syntheticCaseSpec{
-		id: "unreadable", fingerprint: "repo-broken", capturedAt: 2, changedLines: 10,
-		pipelineVersion: PipelineReviewEarly,
-		roundFindings:   findingsJSON(findingSpec{ID: "f2", Severity: "error", File: "main.go", Line: 1, Description: "f2", Action: "ask-user"}),
-	})
-	if err := seed.Close(); err != nil {
+	// Refusing the pin write at the database is the one failure mode that hits
+	// materialization and nothing else, so the assertion below is about
+	// AutoCapture's ordering rather than about whichever error got it there.
+	if _, err := seed.db.Exec(`CREATE TRIGGER refuse_pins BEFORE INSERT ON diversified_pins BEGIN SELECT RAISE(ABORT, 'pin write refused'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(unreadable.Dir, "manifest.json"), []byte("{not json"), 0o644); err != nil {
+	if err := seed.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,8 +330,28 @@ func TestAutoCaptureUnderTheCapDoesNotPin(t *testing.T) {
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer sourceDB.Close()
 
-	if _, err := AutoCapture(ctx, p, sourceDB, run.ID, 50, autoCaptureDefaultDiversifiedSize); err != nil {
+	// Gold that WOULD be pinned if the pass materialized anything, so an empty
+	// pin table proves the under-cap early return rather than an empty corpus.
+	seed, err := Open(p.EvalDir())
+	if err != nil {
 		t.Fatal(err)
+	}
+	writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "pinnable-gold", fingerprint: "repo-gold", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("pinnable"),
+		roundFindings:   goldRound("pinnable"),
+	})
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, 50, autoCaptureDefaultDiversifiedSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Skipped || result.Captured != 1 || result.PinWarning != "" {
+		t.Fatalf("AutoCapture result = %+v, want one captured case and no pin warning", result)
 	}
 
 	store, err := Open(p.EvalDir())

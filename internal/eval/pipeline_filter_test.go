@@ -39,7 +39,7 @@ func TestListCasesForPipelineNarrowsToOneLayout(t *testing.T) {
 		t.Fatalf("ListCasesForPipeline(cheap-gates-first) = %v, want [c]", got)
 	}
 
-	any, err := store.ListCasesForPipeline("all", PipelineAny)
+	unfiltered, err := store.ListCasesForPipeline("all", PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +47,11 @@ func TestListCasesForPipelineNarrowsToOneLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(caseIDs(any), caseIDs(all)) {
-		t.Fatalf("ListCasesForPipeline(any) = %v, want the same order and IDs as ListCases(all) = %v", caseIDs(any), caseIDs(all))
+	if !reflect.DeepEqual(caseIDs(unfiltered), caseIDs(all)) {
+		t.Fatalf("ListCasesForPipeline(any) = %v, want the same order and IDs as ListCases(all) = %v", caseIDs(unfiltered), caseIDs(all))
 	}
-	if len(any) != 3 {
-		t.Fatalf("ListCasesForPipeline(any) = %d cases, want 3", len(any))
+	if len(unfiltered) != 3 {
+		t.Fatalf("ListCasesForPipeline(any) = %d cases, want 3", len(unfiltered))
 	}
 }
 
@@ -84,6 +84,9 @@ func TestListCasesForPipelineDoesNotDisturbTheDiversifiedPins(t *testing.T) {
 		t.Fatal(err)
 	}
 	pinsBefore := mustDiversifiedPinRows(t, store)
+	if len(pinsBefore) == 0 {
+		t.Fatal("no diversified pin exists to protect, so this test would pass vacuously")
+	}
 
 	filtered, err := store.ListCasesForPipeline("diversified", PipelineCheapGatesFirst)
 	if err != nil {
@@ -190,9 +193,8 @@ func TestInspectSetsForPipelineNarrowsTheFiguresAndKeepsTheWholeBreakdown(t *tes
 	if !reflect.DeepEqual(all.Pipelines, wantPipelines) {
 		t.Fatalf("filtered all.Pipelines = %#v, want the unfiltered breakdown %#v", all.Pipelines, wantPipelines)
 	}
-	wantScored := []PipelineCountRow{{PipelineVersion: PipelineCheapGatesFirst, Cases: 1, GoldCases: 1}}
-	if !reflect.DeepEqual(all.ScoredPipelines, wantScored) {
-		t.Fatalf("filtered all.ScoredPipelines = %#v, want only the scored layout %#v", all.ScoredPipelines, wantScored)
+	if all.ScoredLayouts != 1 {
+		t.Fatalf("filtered all.ScoredLayouts = %d, want only the scored layout counted", all.ScoredLayouts)
 	}
 }
 
@@ -233,8 +235,55 @@ func TestInspectSetsForPipelineScopesTheScoredBreakdownToTheFilter(t *testing.T)
 	if len(diversified.Pipelines) != 2 {
 		t.Fatalf("diversified.Pipelines = %#v, want both layouts in the breakdown", diversified.Pipelines)
 	}
-	if len(diversified.ScoredPipelines) != 1 || diversified.ScoredPipelines[0].PipelineVersion != PipelineReviewEarly {
-		t.Fatalf("diversified.ScoredPipelines = %#v, want only the filtered layout", diversified.ScoredPipelines)
+	if diversified.ScoredLayouts != 1 {
+		t.Fatalf("diversified.ScoredLayouts = %d, want only the filtered layout counted", diversified.ScoredLayouts)
+	}
+}
+
+// The caveat counts layouts over the population the score folded, and an
+// unlabeled case is folded into nothing. Counting it warned that a single-layout
+// score spanned two layouts.
+func TestInspectSetsCountsScoredLayoutsOverTheGoldBearingCasesOnly(t *testing.T) {
+	store := openEvalStore(t)
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: "review-early-gold", fingerprint: "repo-a", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            []FindingGold{{ID: "g1", Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: "g1", Severity: "error", Action: "auto-fix"}},
+		roundFindings:   findingsJSON(findingSpec{ID: "g1", Severity: "error", File: "main.go", Line: 1, Description: "g1", Action: "auto-fix"}),
+	})
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: "cheap-gates-first-unlabeled", fingerprint: "repo-b", capturedAt: 2, changedLines: 10,
+		pipelineVersion: PipelineCheapGatesFirst,
+	})
+
+	all := mustSetSummary(t, store, "all")
+	if all.Cases != 2 || len(all.Pipelines) != 2 {
+		t.Fatalf("all summary = %d case(s) across %d layout(s), want both cases and both layouts present", all.Cases, len(all.Pipelines))
+	}
+	if all.ScoredLayouts != 1 {
+		t.Fatalf("all.ScoredLayouts = %d, want 1: the unlabeled case contributes nothing to the self-score", all.ScoredLayouts)
+	}
+}
+
+// The eval run caveat is the same rule on the other surface: an evaluation with
+// no gold is not folded into the score, so its layout must not raise the
+// not-comparable warning either.
+func TestPipelineLayoutsInEvaluationsCountsTheScoredReplaysOnly(t *testing.T) {
+	evaluations := []Evaluation{
+		{PipelineVersion: PipelineReviewEarly, Status: "completed", HasFindingGold: true, GoldCount: 1, TruePositive: 1},
+		{PipelineVersion: PipelineCheapGatesFirst, Status: "completed"},
+	}
+	if got := PipelineLayoutsInEvaluations(evaluations); got != 1 {
+		t.Fatalf("PipelineLayoutsInEvaluations = %d, want 1: the unscored replay contributes nothing", got)
+	}
+	if summary := SummarizeEvaluations(evaluations); summary.Labeled != 1 {
+		t.Fatalf("SummarizeEvaluations folded %d labeled replay(s), want the layout count to describe exactly those", summary.Labeled)
+	}
+	// A failed replay still carries its gold into the score as false negatives,
+	// so its layout does belong in the count.
+	withFailedGold := append(evaluations, Evaluation{PipelineVersion: PipelineCheapGatesFirst, Status: "failed", HasFindingGold: true, GoldCount: 1})
+	if got := PipelineLayoutsInEvaluations(withFailedGold); got != 2 {
+		t.Fatalf("PipelineLayoutsInEvaluations = %d, want 2: a failed replay with gold is scored", got)
 	}
 }
 
@@ -367,6 +416,66 @@ func TestMarkFrontierNeverComparesAcrossPipelineVersions(t *testing.T) {
 	markFrontier(reports)
 	if !reports[0].OnFrontier || !reports[1].OnFrontier {
 		t.Fatalf("rows on different pipeline versions dominated each other: %#v", reports)
+	}
+}
+
+// "the filter matched nothing" and "nothing exists" need different fixes, and
+// all three surfaces (eval sets, eval report, eval run) say so the same way.
+func TestFilteredEmptyResultsNameTheFilterRatherThanAnEmptyCorpus(t *testing.T) {
+	store := openEvalStore(t)
+	writeSyntheticCase(t, store, syntheticCaseSpec{
+		id: "review-early-gold", fingerprint: "repo-a", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            []FindingGold{{ID: "g1", Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: "g1", Severity: "error", Action: "auto-fix"}},
+		roundFindings:   findingsJSON(findingSpec{ID: "g1", Severity: "error", File: "main.go", Line: 1, Description: "g1", Action: "auto-fix"}),
+	})
+
+	summaries, err := InspectSetsForPipeline(store, PipelineCheapGatesFirst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, summary := range summaries {
+		if summary.Name != "diversified" {
+			continue
+		}
+		if !strings.Contains(summary.Warning, "has no case tagged cheap-gates-first") {
+			t.Fatalf("diversified warning = %q, want it to name the filter rather than report missing gold", summary.Warning)
+		}
+	}
+
+	reports, err := ReportForPipeline(store, PipelineCheapGatesFirst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := RenderReportForPipeline(reports, PipelineCheapGatesFirst)
+	if !strings.Contains(rendered, "no candidate replay tagged cheap-gates-first recorded yet") {
+		t.Fatalf("report = %q, want the empty result to name the filter", rendered)
+	}
+	if unfiltered := RenderReportForPipeline(nil, PipelineAny); !strings.Contains(unfiltered, "no candidate replays recorded yet") {
+		t.Fatalf("unfiltered report = %q, want the plain empty message", unfiltered)
+	}
+}
+
+// The diversified warning must still report missing gold when no filter is
+// narrowing anything, so the filter-aware branch cannot swallow it.
+func TestUnfilteredEmptyDiversifiedStillReportsMissingGold(t *testing.T) {
+	store := openEvalStore(t)
+	writeSyntheticCase(t, store, syntheticCaseSpec{id: "unlabeled", fingerprint: "repo-a", capturedAt: 1, changedLines: 10, pipelineVersion: PipelineReviewEarly})
+
+	diversified := mustSetSummary(t, store, "diversified")
+	if !strings.Contains(diversified.Warning, "no labeled gold") {
+		t.Fatalf("diversified warning = %q, want the missing-gold message", diversified.Warning)
+	}
+}
+
+// CurrentPipelineVersion derives a step's order from its index in
+// types.AllSteps(). That is only correct while types.StepName.Order() agrees
+// with that index, and the two live in different packages.
+func TestAllStepsIndexMatchesTheDeclaredStepOrder(t *testing.T) {
+	for i, name := range types.AllSteps() {
+		if got := name.Order(); got != i+1 {
+			t.Fatalf("types.AllSteps()[%d] = %q with Order() %d, want %d: CurrentPipelineVersion reads the index as the order", i, name, got, i+1)
+		}
 	}
 }
 

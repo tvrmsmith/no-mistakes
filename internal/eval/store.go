@@ -298,19 +298,32 @@ func filterCasesByPipeline(cases []Case, version PipelineVersion) []Case {
 }
 
 // ensureDiversifiedPinsForRetention materializes the diversified pin set so
-// Prune's pin protection has pins to protect. Prune skips diversified-pinned
-// cases, but only ListCases("diversified"|"tune") and RefreshDiversified ever
-// write that table, so a machine that only collects automatically would reach
-// the cap with an empty pin table and evict the pre-reorder baseline the tag
-// exists to keep. The work is bounded to the pass that can actually evict
-// something: no cap, or a corpus still inside it, materializes nothing.
-func (s *Store) ensureDiversifiedPinsForRetention(maxCases int) error {
+// Prune's pin protection has pins to protect: only ListCases("diversified"|
+// "tune") and RefreshDiversified write that table, so a machine that only
+// collects automatically would reach the cap with an empty pin table. The work
+// is bounded to the pass that can actually evict something: no cap, or a corpus
+// still inside it, materializes nothing.
+//
+// It plans over the READABLE gold rather than going through ListCases, and
+// takes the corpus lock while it writes. Both differences matter on this path:
+// ListCases fails on the first unloadable case directory, and this is the only
+// caller that must survive one, or a single corrupt manifest would veto
+// retention forever (nothing repairs such a case, and Prune is what would have
+// evicted it). Every other ListCases caller still fails loudly on an
+// unsupported manifest. The lock keeps an automatic pass from re-planning the
+// holdout underneath an in-flight replay that reserved it.
+func (s *Store) ensureDiversifiedPinsForRetention(ctx context.Context, maxCases int) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("eval registry is closed")
 	}
 	if maxCases <= 0 {
 		return nil
 	}
+	unlock, err := lockCorpus(ctx, s.root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	var total int
 	if err := s.db.QueryRow(`SELECT count(*) FROM cases`).Scan(&total); err != nil {
 		return fmt.Errorf("count eval cases: %w", err)
@@ -318,8 +331,42 @@ func (s *Store) ensureDiversifiedPinsForRetention(maxCases int) error {
 	if total <= maxCases {
 		return nil
 	}
-	_, err := s.ListCases("diversified")
+	gold, err := s.readableLabeledCases()
+	if err != nil {
+		return err
+	}
+	_, err = s.materializeDiversifiedPins(gold, false)
 	return err
+}
+
+// readableLabeledCases is labeledCases over the cases that still load. A case
+// directory this build cannot read carries no gold it can pin, so skipping it
+// is the same answer ListCases would give if the row were gone - except that
+// retention keeps working and Prune can reclaim the unreadable case itself.
+func (s *Store) readableLabeledCases() ([]Case, error) {
+	rows, err := s.db.Query(`SELECT path FROM cases ORDER BY captured_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list eval cases: %w", err)
+	}
+	defer rows.Close()
+	var gold []Case
+	for rows.Next() {
+		var dir string
+		if err := rows.Scan(&dir); err != nil {
+			return nil, fmt.Errorf("scan eval case: %w", err)
+		}
+		c, err := loadCase(dir)
+		if err != nil {
+			continue
+		}
+		if c.Labels.HasGold() {
+			gold = append(gold, c)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list eval cases: %w", err)
+	}
+	return gold, nil
 }
 
 // RefreshDiversified rebuilds the official pin set from current gold.
@@ -536,16 +583,11 @@ func (s *Store) pinCount() (int, error) {
 // somebody spent, and a cohort in an eval report pins the exact case IDs it
 // compared, so reclaiming one would silently invalidate a published comparison.
 //
-// It never removes a diversified-pinned case either. Those pins are the
-// held-out official set, and oldest-first eviction aims straight at them
-// whenever the corpus stops being homogeneous: after the cheap gates move ahead
-// of review, every newly captured case carries the new PipelineVersion tag
-// while the pre-reorder population only ages, so an unprotected cap would
-// delete exactly the baseline that tag exists to keep comparable.
-//
-// When protected cases alone exceed the cap the corpus stays over it rather than
-// deleting that evidence - the cap is a retention target, not a promise to
-// reach a number.
+// It never removes a diversified-pinned case either, because oldest-first
+// eviction aims straight at the held-out set once the corpus stops being
+// homogeneous. When protected cases alone exceed the cap the corpus stays over
+// it rather than deleting that evidence: the cap is a retention target, not a
+// promise to reach a number. See docs/src/content/docs/reference/eval.md.
 func (s *Store) Prune(ctx context.Context, maxCases int) (int, error) {
 	if s == nil || s.db == nil {
 		return 0, fmt.Errorf("eval registry is closed")

@@ -62,10 +62,7 @@ func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID str
 		return AutoCaptureResult{}, err
 	}
 	result := AutoCaptureResult{Captured: len(cases)}
-	// Prune protects diversified-pinned cases, and this is the only collection
-	// path a machine that never runs `eval sets` by hand takes, so the pins are
-	// materialized here before the cap is enforced.
-	if pinErr := store.ensureDiversifiedPinsForRetention(maxCases); pinErr != nil {
+	if pinErr := store.ensureDiversifiedPinsForRetention(ctx, maxCases); pinErr != nil {
 		result.PinWarning = pinErr.Error()
 		return result, nil
 	}

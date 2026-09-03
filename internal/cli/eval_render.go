@@ -26,14 +26,7 @@ const (
 // the headline: its size, gold composition, and the instant self-score of the
 // recorded reviews against their own gold. The other sets are a compact
 // footnote. Everything shown comes from InspectSets, which reads only local
-// registry rows and captured files - no replay, agent, or network.
-// pipelineLayoutSpanWarning is the one wording both score boxes use when the
-// population they folded into a single number spans more than one pipeline
-// layout. Two copies of the sentence would drift on the first reword.
-func pipelineLayoutSpanWarning(layouts int) string {
-	return sYellow.Render(fmt.Sprintf("    ⚠ spans %d pipeline layouts: not comparable as one score", layouts))
-}
-
+// registry rows and captured files, no replay, agent, or network.
 func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 	byName := map[string]eval.SetSummary{}
 	for _, summary := range summaries {
@@ -47,11 +40,7 @@ func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 	// The pin count is corpus-wide and says so: under `eval sets --pipeline X`
 	// the Cases figure beside it is one layout's share of those same pins, and
 	// an unlabeled "pins 32" next to "Cases 3" reads as pins having been lost.
-	capDetail := fmt.Sprintf("pins %d corpus-wide · cap %d", diversified.PinCount, diversified.Cap)
-	if diversified.Cap == 0 {
-		capDetail = fmt.Sprintf("pins %d corpus-wide · cap none (one gold case per stratum)", diversified.PinCount)
-	}
-	lines = append(lines, metricStatsLine("Cases", strconv.Itoa(diversified.Cases), capDetail))
+	lines = append(lines, metricStatsLine("Cases", strconv.Itoa(diversified.Cases), evalCapDetail(diversified.PinCount, diversified.Cap)))
 	goldFindings := diversified.TruePositive + diversified.FalseNegative + diversified.FalsePositive
 	lines = append(lines, metricStatsLine("Gold findings", strconv.Itoa(goldFindings), fmt.Sprintf("across %d gold case(s)", diversified.GoldCases)))
 	if goldFindings > 0 {
@@ -65,11 +54,11 @@ func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 	} else {
 		lines = append(lines, evalScoreLines(diversified.SelfScore)...)
 		// The self-score folds the SCORED cases into one number, so the caveat
-		// reads ScoredPipelines rather than the unfiltered Pipelines below.
-		// Under `eval sets --pipeline X` the breakdown still shows both layouts
-		// while the score covers one of them, and warning there would flag a
-		// score the filter has already made comparable.
-		if layouts := len(diversified.ScoredPipelines); layouts > 1 {
+		// reads ScoredLayouts rather than the unfiltered Pipelines below. Under
+		// `eval sets --pipeline X` the breakdown still shows both layouts while
+		// the score covers one of them, and warning there would flag a score the
+		// filter has already made comparable.
+		if layouts := diversified.ScoredLayouts; layouts > 1 {
 			lines = append(lines, pipelineLayoutSpanWarning(layouts))
 		}
 	}
@@ -108,6 +97,24 @@ func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 	lines = append(lines, sDim.Render("  local-only: cases, gold, and scores never leave this machine"))
 	lines = append(lines, "")
 	return renderTitledBox(" eval case sets ", evalBoxWidth, lines)
+}
+
+// pipelineLayoutSpanWarning is the one wording both score boxes use when the
+// population they folded into a single number spans more than one pipeline
+// layout. Two copies of the sentence would drift on the first reword.
+func pipelineLayoutSpanWarning(layouts int) string {
+	return sYellow.Render(fmt.Sprintf("    ⚠ spans %d pipeline layouts: not comparable as one score", layouts))
+}
+
+// evalCapDetail is the detail half of the diversified Cases line. metricStatsLine
+// spends 27 columns on its label and value, so the text here has to stay inside
+// what is left of the box content width at any pin count, or renderBoxLine cuts
+// the end of it off. TestEvalCapDetailFitsTheBox holds that bound.
+func evalCapDetail(pinCount, cap int) string {
+	if cap == 0 {
+		return fmt.Sprintf("pins %d corpus-wide · cap none (1 per stratum)", pinCount)
+	}
+	return fmt.Sprintf("pins %d corpus-wide · cap %d", pinCount, cap)
 }
 
 // compositionLines renders the stratum table. The repository column is sized

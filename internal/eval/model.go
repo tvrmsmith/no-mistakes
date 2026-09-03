@@ -383,6 +383,13 @@ func harmonicMean(a, b float64) float64 {
 	return 2 * a * b / (a + b)
 }
 
+// hasScoredGold reports whether SummarizeEvaluations folds this evaluation into
+// its numbers. A failed replay still counts when it carries gold, because its
+// gold becomes false negatives. Anything else contributes only to Total.
+func (e Evaluation) hasScoredGold() bool {
+	return e.HasFindingGold || e.GoldCount > 0
+}
+
 // SummarizeEvaluations scores finding-level gold only. Unmatched candidate
 // findings stay pending. A replay with no gold is unlabeled, not a pass.
 func SummarizeEvaluations(evaluations []Evaluation) EvaluationSummary {
@@ -399,7 +406,7 @@ func SummarizeEvaluations(evaluations []Evaluation) EvaluationSummary {
 		if evaluation.TokensReported {
 			summary.TokensReported++
 		}
-		hasFindingGold := evaluation.HasFindingGold || evaluation.GoldCount > 0
+		hasFindingGold := evaluation.hasScoredGold()
 		if evaluation.Status != "completed" {
 			summary.Failures++
 			if hasFindingGold {
