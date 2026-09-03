@@ -29,6 +29,15 @@ func countCaseRows(t *testing.T, store *Store) int {
 	return n
 }
 
+func pinnedCaseIDs(t *testing.T, store *Store) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, pin := range mustDiversifiedPinRows(t, store) {
+		out[pin.CaseID] = true
+	}
+	return out
+}
+
 func caseRowExists(t *testing.T, store *Store, id string) bool {
 	t.Helper()
 	var n int
@@ -66,7 +75,7 @@ func TestAutoCaptureProtectsAPinnedPreReorderCaseFromTheCap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := AutoCapture(ctx, p, sourceDB, run.ID, 1, autoCaptureDefaultDiversifiedSize)
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 1, DiversifiedSize: autoCaptureDefaultDiversifiedSize})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +150,7 @@ func TestAutoCaptureStillEvictsUnpinnedCasesAfterMaterializingThePins(t *testing
 		t.Fatal(err)
 	}
 
-	result, err := AutoCapture(ctx, p, sourceDB, run.ID, 2, autoCaptureDefaultDiversifiedSize)
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 2, DiversifiedSize: autoCaptureDefaultDiversifiedSize})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +212,7 @@ func TestAutoCaptureStillPinsAndPrunesWithAnUnreadableCaseDirectory(t *testing.T
 		t.Fatal(err)
 	}
 
-	result, err := AutoCapture(ctx, p, sourceDB, run.ID, 2, autoCaptureDefaultDiversifiedSize)
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 2, DiversifiedSize: autoCaptureDefaultDiversifiedSize})
 	if err != nil {
 		t.Fatalf("AutoCapture error = %v, want an unreadable case tolerated on the retention path", err)
 	}
@@ -231,6 +240,142 @@ func TestAutoCaptureStillPinsAndPrunesWithAnUnreadableCaseDirectory(t *testing.T
 	}
 	if caseRowExists(t, store, "filler") {
 		t.Fatal("the oldest unprotected case survived the cap, so retention is still vetoed")
+	}
+}
+
+// An unreadable case that is ALREADY pinned is the dangerous half of the same
+// tolerance: skipping it while re-planning would rewrite the pin table without
+// it, which takes it out of Prune's protection and lets oldest-first eviction
+// delete a held-out case nobody can inspect to notice. Its pin row holds
+// everything the table needs, so it is carried forward instead.
+func TestAutoCaptureKeepsThePinOfAnAlreadyPinnedCaseThatBecomesUnreadable(t *testing.T) {
+	ctx := context.Background()
+	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+	defer sourceDB.Close()
+
+	seed, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	holdout := writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "pinned-holdout", fingerprint: "repo-holdout", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		gold:            goldSpec("holdout"),
+		roundFindings:   goldRound("holdout"),
+	})
+	for i := 1; i <= 2; i++ {
+		writeSyntheticCase(t, seed, syntheticCaseSpec{
+			id: "filler-" + strconv.Itoa(i), fingerprint: "repo-holdout", capturedAt: int64(1 + i), changedLines: 10,
+			pipelineVersion: PipelineReviewEarly,
+			roundFindings:   findingsJSON(findingSpec{ID: "f" + strconv.Itoa(i), Severity: "error", File: "main.go", Line: 1, Description: "filler", Action: "ask-user"}),
+		})
+	}
+	// Pin it the ordinary way, before anything is broken, so the test is about
+	// a live pin surviving rather than about one being created.
+	if _, err := seed.RefreshDiversified(); err != nil {
+		t.Fatal(err)
+	}
+	if !pinnedCaseIDs(t, seed)["pinned-holdout"] {
+		t.Fatal("setup did not pin the holdout case, so the regression cannot be observed")
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A build that cannot read a manifest it wrote earlier is the real shape of
+	// this: the case is intact on disk, this binary just cannot load it.
+	if err := os.WriteFile(filepath.Join(holdout.Dir, "manifest.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 2, DiversifiedSize: autoCaptureDefaultDiversifiedSize})
+	if err != nil {
+		t.Fatalf("AutoCapture error = %v, want the unreadable pinned case tolerated", err)
+	}
+	if result.PinWarning != "" {
+		t.Fatalf("AutoCapture pin warning = %q, want the pins materialized", result.PinWarning)
+	}
+
+	store, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if !pinnedCaseIDs(t, store)["pinned-holdout"] {
+		t.Fatal("the pin of the unreadable holdout case was released, so nothing protected it from the cap")
+	}
+	if !caseRowExists(t, store, "pinned-holdout") {
+		t.Fatal("the pinned holdout case was evicted after becoming unreadable")
+	}
+}
+
+// The staged deletions and the expired replay reservations owe nothing to the
+// pins, so a failed pin write must not strand them: a half-deleted case
+// directory and a lease nobody holds both survive every later pass otherwise.
+func TestAutoCaptureReclaimsAbandonedStateEvenWhenThePinsFail(t *testing.T) {
+	ctx := context.Background()
+	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+	defer sourceDB.Close()
+
+	seed, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranded := writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "half-deleted", fingerprint: "repo-stranded", capturedAt: 1, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		roundFindings:   findingsJSON(findingSpec{ID: "f1", Severity: "error", File: "main.go", Line: 1, Description: "f1", Action: "ask-user"}),
+	})
+	reserved := writeSyntheticCase(t, seed, syntheticCaseSpec{
+		id: "expired-lease", fingerprint: "repo-stranded", capturedAt: 2, changedLines: 10,
+		pipelineVersion: PipelineReviewEarly,
+		roundFindings:   findingsJSON(findingSpec{ID: "f2", Severity: "error", File: "main.go", Line: 1, Description: "f2", Action: "ask-user"}),
+	})
+	// A crash between staging a deletion and finishing it leaves exactly this.
+	if _, err := seed.db.Exec(`INSERT INTO pending_case_deletions (id, path, repo_fingerprint) VALUES (?, ?, ?)`, stranded.ID, stranded.Dir, "repo-stranded"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.db.Exec(`DELETE FROM cases WHERE id = ?`, stranded.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.db.Exec(`INSERT INTO replay_case_reservations (session_id, case_id, reserved_until) VALUES (?, ?, ?)`, "dead-session", reserved.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.db.Exec(`CREATE TRIGGER refuse_pins BEFORE INSERT ON diversified_pins BEGIN SELECT RAISE(ABORT, 'pin write refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 1, DiversifiedSize: autoCaptureDefaultDiversifiedSize})
+	if err != nil {
+		t.Fatalf("AutoCapture error = %v, want the capture to succeed despite the pin failure", err)
+	}
+	if result.PinWarning == "" {
+		t.Fatal("AutoCapture pin warning is empty, want the failed materialization surfaced")
+	}
+
+	if _, err := os.Stat(stranded.Dir); !os.IsNotExist(err) {
+		t.Fatalf("stat of the half-deleted case directory = %v, want it removed even though the pins failed", err)
+	}
+	store, err := Open(p.EvalDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var pending int
+	if err := store.db.QueryRow(`SELECT count(*) FROM pending_case_deletions`).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("pending deletions = %d, want the staged deletion finished", pending)
+	}
+	var leases int
+	if err := store.db.QueryRow(`SELECT count(*) FROM replay_case_reservations`).Scan(&leases); err != nil {
+		t.Fatal(err)
+	}
+	if leases != 0 {
+		t.Fatalf("replay reservations = %d, want the expired lease released", leases)
 	}
 }
 
@@ -263,7 +408,7 @@ func TestAutoCaptureSkipsThePruneWhenThePinsCannotBeMaterialized(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := AutoCapture(ctx, p, sourceDB, run.ID, 1, autoCaptureDefaultDiversifiedSize)
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 1, DiversifiedSize: autoCaptureDefaultDiversifiedSize})
 	if err != nil {
 		t.Fatalf("AutoCapture error = %v, want the capture to succeed despite the pin failure", err)
 	}
@@ -309,7 +454,7 @@ func TestAutoCaptureHonorsTheConfiguredDiversifiedSize(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := AutoCapture(ctx, p, sourceDB, run.ID, 2, 1); err != nil {
+	if _, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 2, DiversifiedSize: 1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -346,7 +491,7 @@ func TestAutoCaptureUnderTheCapDoesNotPin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := AutoCapture(ctx, p, sourceDB, run.ID, 50, autoCaptureDefaultDiversifiedSize)
+	result, err := AutoCapture(ctx, p, sourceDB, run.ID, Retention{MaxCases: 50, DiversifiedSize: autoCaptureDefaultDiversifiedSize})
 	if err != nil {
 		t.Fatal(err)
 	}

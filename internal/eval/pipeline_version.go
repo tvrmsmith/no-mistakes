@@ -51,8 +51,8 @@ type orderedStep struct {
 // before review means the cheap gates ran first. A run that recorded review but
 // no cheap gate is partial evidence rather than none, so it resolves the
 // conservative way too, to the pre-reorder layout: a review-only step set
-// (a demo pipeline, a --skip of every gate, an eval-miss ingest) must never be
-// stamped with whatever layout the capturing binary happens to build.
+// (a demo pipeline, a --skip of every gate) must never be stamped with
+// whatever layout the capturing binary happens to build.
 func pipelineVersionFromOrderedSteps(steps []orderedStep, fallback PipelineVersion) PipelineVersion {
 	reviewOrder := 0
 	haveReview := false

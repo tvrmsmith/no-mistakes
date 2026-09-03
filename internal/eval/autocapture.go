@@ -25,6 +25,18 @@ type AutoCaptureResult struct {
 	PinWarning string
 }
 
+// Retention is what one automatic pass is allowed to keep. The two numbers are
+// both case counts and mean opposite things, so they are named rather than
+// positional: transposing them silently re-plans the official holdout at the
+// retention cap and bounds the corpus at the holdout size.
+type Retention struct {
+	// MaxCases bounds the whole corpus. Zero or less keeps every case.
+	MaxCases int
+	// DiversifiedSize caps the held-out diversified set. Zero means no cap
+	// beyond one case per stratum.
+	DiversifiedSize int
+}
+
 // AutoCapture freezes one finished run's review passes into the local corpus,
 // materializes the diversified pins the retention cap has to protect, and then
 // enforces that cap. The cap is enforced only once those pins exist, so a
@@ -40,7 +52,7 @@ type AutoCaptureResult struct {
 // The caller owns the timeout and the decision to run at all. This function
 // owns nothing of the pipeline: it opens its own registry, does its work, and
 // closes it, so a failure here cannot reach the run that triggered it.
-func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID string, maxCases, diversifiedSize int) (AutoCaptureResult, error) {
+func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID string, retention Retention) (AutoCaptureResult, error) {
 	if p == nil || database == nil {
 		return AutoCaptureResult{}, fmt.Errorf("eval auto-capture requires paths and a database")
 	}
@@ -52,7 +64,7 @@ func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID str
 	// The configured cap has to be applied before anything here resolves a set:
 	// materializing the pins re-plans the whole holdout, so planning it at the
 	// package default would silently resize the operator's official set.
-	store.SetDiversifiedSize(diversifiedSize)
+	store.SetDiversifiedSize(retention.DiversifiedSize)
 
 	cases, err := Capture(ctx, store, p, database, runID)
 	if err != nil {
@@ -62,11 +74,17 @@ func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID str
 		return AutoCaptureResult{}, err
 	}
 	result := AutoCaptureResult{Captured: len(cases)}
-	if pinErr := store.ensureDiversifiedPinsForRetention(ctx, maxCases); pinErr != nil {
+	// The housekeeping runs before the pin gate because it owes nothing to the
+	// pins: a staged deletion left half-finished and an expired reservation
+	// both have to be reclaimed even on a pass that never reaches the cap.
+	if err := store.sweepAbandonedStateLocking(ctx); err != nil {
+		return result, err
+	}
+	if pinErr := store.ensureDiversifiedPinsForRetention(ctx, retention.MaxCases); pinErr != nil {
 		result.PinWarning = pinErr.Error()
 		return result, nil
 	}
-	pruned, err := store.Prune(ctx, maxCases)
+	pruned, err := store.Prune(ctx, retention.MaxCases)
 	result.Pruned = pruned
 	if err != nil {
 		return result, err

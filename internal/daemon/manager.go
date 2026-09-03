@@ -1678,7 +1678,10 @@ func (m *RunManager) autoCaptureEvalCase(ctx context.Context, cfg *config.Config
 	ctx, cancel := context.WithTimeout(ctx, evalAutoCaptureTimeout)
 	defer cancel()
 
-	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, cfg.Eval.MaxCases, cfg.Eval.DiversifiedSize)
+	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, eval.Retention{
+		MaxCases:        cfg.Eval.MaxCases,
+		DiversifiedSize: cfg.Eval.DiversifiedSize,
+	})
 	switch {
 	case err != nil:
 		slog.Warn("failed to collect eval case", "run_id", runID, "error", err)

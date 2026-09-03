@@ -468,8 +468,8 @@ func TestEvalRunPipelineFlagRejectsAnUnknownLayout(t *testing.T) {
 // The --pipeline flag's usage string must read identically on every command
 // that carries it, so an operator learns the flag once.
 func TestEvalPipelineFlagUsageIsIdenticalOnEveryCommand(t *testing.T) {
-	const want = "limit to one pipeline layout: review-early, cheap-gates-first, or any (default any)"
 	root := newEvalCmd()
+	usage := map[string]string{}
 	for _, name := range []string{"run", "sets", "report"} {
 		sub, _, err := root.Find([]string{name})
 		if err != nil {
@@ -479,9 +479,15 @@ func TestEvalPipelineFlagUsageIsIdenticalOnEveryCommand(t *testing.T) {
 		if flag == nil {
 			t.Fatalf("eval %s has no --pipeline flag", name)
 		}
-		if flag.Usage != want {
-			t.Fatalf("eval %s --pipeline usage = %q, want %q", name, flag.Usage, want)
-		}
+		usage[name] = flag.Usage
+	}
+	// Compared to each other rather than to a copy of the text: the wording is
+	// free to change, the three commands disagreeing about it is the bug.
+	if usage["sets"] != usage["run"] || usage["report"] != usage["run"] {
+		t.Fatalf("--pipeline usage differs between commands: %#v", usage)
+	}
+	if usage["run"] == "" {
+		t.Fatal("--pipeline carries no usage text on any command")
 	}
 }
 
@@ -828,15 +834,45 @@ func TestEvalCapDetailFitsTheBox(t *testing.T) {
 	}
 }
 
-// The dashboard must show the whole cap detail, not a prefix of it.
+// The dashboard must show the whole cap detail, not a prefix of it, and it must
+// say the pin count is corpus-wide: under `eval sets --pipeline X` the Cases
+// figure beside it counts one layout's share, so a bare "pins 999" next to
+// "Cases 4" reads as pins having been lost. The literal is spelled out here
+// rather than derived from evalCapDetail, which would pass on any wording.
 func TestEvalSetsDashboardRendersTheCapDetailUntruncated(t *testing.T) {
 	out := renderEvalSetsDashboard([]eval.SetSummary{{
 		Name: "diversified", Cases: 4, GoldCases: 4, PinCount: 999, Cap: 0,
 		SelfScore: eval.EvaluationSummary{Labeled: 4},
 	}})
-	want := strings.TrimRight(metricStatsLine("Cases", "4", evalCapDetail(999, 0)), " ")
+	want := strings.TrimRight(metricStatsLine("Cases", "4", "pins 999 corpus-wide · cap none (1 per stratum)"), " ")
 	if !strings.Contains(out, want) {
 		t.Fatalf("sets dashboard = %q, want the complete cap line %q rather than a truncated one", out, want)
+	}
+
+	capped := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name: "diversified", Cases: 4, GoldCases: 4, PinCount: 999, Cap: 32,
+		SelfScore: eval.EvaluationSummary{Labeled: 4},
+	}})
+	if wantCapped := strings.TrimRight(metricStatsLine("Cases", "4", "pins 999 corpus-wide · cap 32"), " "); !strings.Contains(capped, wantCapped) {
+		t.Fatalf("sets dashboard = %q, want the capped detail %q", capped, wantCapped)
+	}
+}
+
+// The layout breakdown is computed over the WHOLE set while the Cases and
+// Composition figures above it honor the filter, so it has to say which
+// population it describes or its rows read as contradicting the count.
+func TestEvalSetsDashboardLabelsThePipelineBreakdownAsWholeSet(t *testing.T) {
+	out := renderEvalSetsDashboard([]eval.SetSummary{{
+		Name: "diversified", Cases: 1, GoldCases: 1,
+		SelfScore: eval.EvaluationSummary{Labeled: 1},
+		Pipelines: []eval.PipelineCountRow{
+			{PipelineVersion: eval.PipelineReviewEarly, Cases: 1, GoldCases: 1},
+			{PipelineVersion: eval.PipelineCheapGatesFirst, Cases: 5, GoldCases: 5},
+		},
+		ScoredLayouts: 1,
+	}})
+	if !strings.Contains(out, "Pipeline layouts (whole set)") {
+		t.Fatalf("sets dashboard = %q, want the layout breakdown labeled as covering the whole set", out)
 	}
 }
 

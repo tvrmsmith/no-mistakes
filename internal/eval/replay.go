@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -123,7 +124,7 @@ func (s *Store) prepareReplay(ctx context.Context, opts ReplayOptions) ([]Case, 
 	}
 	if len(cases) == 0 {
 		if opts.Pipeline != PipelineAny {
-			return nil, Session{}, fmt.Errorf("case set %q has no case tagged %s", opts.Set, opts.Pipeline)
+			return nil, Session{}, errors.New(filterMissMessage(opts.Set, opts.Pipeline))
 		}
 		return nil, Session{}, fmt.Errorf("case set %q is empty", opts.Set)
 	}

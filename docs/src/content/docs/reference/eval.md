@@ -92,7 +92,7 @@ Cases from the same repository share one local Git object pool under `<NM_HOME>/
 
 An `eval.diversified_size` larger than `eval.max_cases` is allowed and is not a misconfiguration: the holdout is protected evidence, so the corpus deliberately sits above the retention target rather than deleting held-out cases to reach a disk figure. If you want the target actually reached, keep `eval.diversified_size` below `eval.max_cases`.
 
-An unreadable case directory (a corrupt manifest, or one written by a newer build) does not stop retention. The pins are planned over the cases that still load, so the cap keeps being enforced and the unreadable case is itself eligible for eviction. Every other eval command still fails loudly on an unsupported version.
+An unreadable case directory (a corrupt manifest, or one written by a newer build) does not stop retention. The pins are planned over the cases that still load, so the cap keeps being enforced and an unreadable case that holds no pin is itself eligible for eviction. A case that is already pinned into the holdout keeps its pin while it is unreadable, so becoming unreadable never turns held-out evidence into the next thing the cap deletes. Every other eval command still fails loudly on an unsupported version.
 
 Because the objects live in the pool rather than inside each case, a case directory is not a portable archive: copying it elsewhere does not carry the code it replays.
 

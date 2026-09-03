@@ -284,15 +284,15 @@ func TestReportTwiceRendersIdentically(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := Report(store)
+	first, err := ReportForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Report(store)
+	second, err := ReportForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := RenderReport(second), RenderReport(first); got != want {
+	if got, want := renderReportAny(second), renderReportAny(first); got != want {
 		t.Fatalf("report changed between identical reads:\nfirst: %s\nsecond: %s", want, got)
 	}
 }

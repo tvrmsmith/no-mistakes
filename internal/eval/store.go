@@ -331,32 +331,42 @@ func (s *Store) ensureDiversifiedPinsForRetention(ctx context.Context, maxCases 
 	if total <= maxCases {
 		return nil
 	}
-	gold, err := s.readableLabeledCases()
+	gold, unreadable, err := s.readableLabeledCases()
 	if err != nil {
 		return err
 	}
-	_, err = s.materializeDiversifiedPins(gold, false)
+	_, err = s.materializeDiversifiedPins(gold, false, unreadable)
 	return err
 }
 
-// readableLabeledCases is labeledCases over the cases that still load. A case
-// directory this build cannot read carries no gold it can pin, so skipping it
-// is the same answer ListCases would give if the row were gone - except that
-// retention keeps working and Prune can reclaim the unreadable case itself.
-func (s *Store) readableLabeledCases() ([]Case, error) {
-	rows, err := s.db.Query(`SELECT path FROM cases ORDER BY captured_at, id`)
+// readableLabeledCases is labeledCases over the cases that still load, plus the
+// ids of the cases that did not. A case directory this build cannot read
+// carries no gold it can pin, so skipping it is the same answer ListCases would
+// give if the row were gone - except that retention keeps working and Prune can
+// reclaim the unreadable case itself.
+//
+// The unreadable ids matter because they are the one input that separates "this
+// case lost its gold" from "this build cannot read this case right now". The
+// first legitimately releases a pin; the second must not, or a build bump that
+// makes several pinned manifests unreadable would strip their pins, drop them
+// out of Prune's NOT EXISTS guard, and delete the held-out cases as the oldest
+// unevaluated ones.
+func (s *Store) readableLabeledCases() ([]Case, map[string]bool, error) {
+	rows, err := s.db.Query(`SELECT id, path FROM cases ORDER BY captured_at, id`)
 	if err != nil {
-		return nil, fmt.Errorf("list eval cases: %w", err)
+		return nil, nil, fmt.Errorf("list eval cases: %w", err)
 	}
 	defer rows.Close()
 	var gold []Case
+	unreadable := map[string]bool{}
 	for rows.Next() {
-		var dir string
-		if err := rows.Scan(&dir); err != nil {
-			return nil, fmt.Errorf("scan eval case: %w", err)
+		var id, dir string
+		if err := rows.Scan(&id, &dir); err != nil {
+			return nil, nil, fmt.Errorf("scan eval case: %w", err)
 		}
 		c, err := loadCase(dir)
 		if err != nil {
+			unreadable[id] = true
 			continue
 		}
 		if c.Labels.HasGold() {
@@ -364,9 +374,9 @@ func (s *Store) readableLabeledCases() ([]Case, error) {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list eval cases: %w", err)
+		return nil, nil, fmt.Errorf("list eval cases: %w", err)
 	}
-	return gold, nil
+	return gold, unreadable, nil
 }
 
 // RefreshDiversified rebuilds the official pin set from current gold.
@@ -412,14 +422,14 @@ func (s *Store) listCases(set string, refreshDiversified bool) ([]Case, error) {
 	case "labeled":
 		return labeledCases(all), nil
 	case "diversified":
-		pins, err := s.materializeDiversifiedPins(labeledCases(all), refreshDiversified)
+		pins, err := s.materializeDiversifiedPins(labeledCases(all), refreshDiversified, nil)
 		if err != nil {
 			return nil, err
 		}
 		return casesByPinOrder(all, pins), nil
 	case "tune":
 		gold := labeledCases(all)
-		pins, err := s.materializeDiversifiedPins(gold, refreshDiversified)
+		pins, err := s.materializeDiversifiedPins(gold, refreshDiversified, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -440,7 +450,11 @@ func (s *Store) listCases(set string, refreshDiversified bool) ([]Case, error) {
 	}
 }
 
-func (s *Store) materializeDiversifiedPins(gold []Case, refresh bool) ([]diversifiedPin, error) {
+// materializeDiversifiedPins re-plans the pin table from current gold.
+// preservePins names cases the caller could not load, whose pin rows are
+// carried forward untouched rather than released (see readableLabeledCases);
+// a caller that resolved every case passes nil.
+func (s *Store) materializeDiversifiedPins(gold []Case, refresh bool, preservePins map[string]bool) ([]diversifiedPin, error) {
 	existing, err := s.loadDiversifiedPins()
 	if err != nil {
 		return nil, err
@@ -448,7 +462,7 @@ func (s *Store) materializeDiversifiedPins(gold []Case, refresh bool) ([]diversi
 	if refresh {
 		existing = nil
 	}
-	planned := planDiversified(gold, s.diversifiedSize, existing)
+	planned := planDiversified(gold, s.diversifiedSize, existing, preservePins)
 	if err := s.replaceDiversifiedPins(planned); err != nil {
 		return nil, err
 	}
@@ -598,11 +612,8 @@ func (s *Store) Prune(ctx context.Context, maxCases int) (int, error) {
 	}
 	defer unlock()
 
-	if err := s.cleanupPendingCaseDeletions(ctx); err != nil {
+	if err := s.sweepAbandonedState(ctx); err != nil {
 		return 0, err
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM replay_case_reservations WHERE reserved_until <= ?`, time.Now().Unix()); err != nil {
-		return 0, fmt.Errorf("release abandoned eval replay reservations: %w", err)
 	}
 	if maxCases <= 0 {
 		return 0, nil
@@ -661,6 +672,36 @@ ORDER BY c.captured_at, c.id LIMIT ?`, time.Now().Unix(), excess)
 		return pruned, err
 	}
 	return pruned, nil
+}
+
+// sweepAbandonedState finishes the deletions a previous pass staged and
+// releases the replay reservations that have expired. Neither depends on the
+// retention cap or on the diversified pins, so callers that may never reach the
+// cap run it on its own: leaving a half-deleted case directory or an expired
+// reservation on disk because something unrelated failed is its own bug. The
+// caller holds the corpus lock.
+func (s *Store) sweepAbandonedState(ctx context.Context) error {
+	if err := s.cleanupPendingCaseDeletions(ctx); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM replay_case_reservations WHERE reserved_until <= ?`, time.Now().Unix()); err != nil {
+		return fmt.Errorf("release abandoned eval replay reservations: %w", err)
+	}
+	return nil
+}
+
+// sweepAbandonedStateLocking is sweepAbandonedState taking the corpus lock
+// itself, for a caller that does not already hold it.
+func (s *Store) sweepAbandonedStateLocking(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("eval registry is closed")
+	}
+	unlock, err := lockCorpus(ctx, s.root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.sweepAbandonedState(ctx)
 }
 
 func (s *Store) cleanupPendingCaseDeletions(ctx context.Context) error {

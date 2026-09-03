@@ -180,7 +180,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 			Candidate: "codex+test", Status: "completed", HasFindingGold: true, GoldCount: 2,
 			TruePositive: 2, Pending: 1,
 		}})
-		noFPOut := RenderReport([]CandidateReport{{Cohort: "official-holdout", Summary: noFP, RepeatCount: 1}})
+		noFPOut := renderReportAny([]CandidateReport{{Cohort: "official-holdout", Summary: noFP, RepeatCount: 1}})
 		if !strings.Contains(noFPOut, "recall: 100.0%") || !strings.Contains(noFPOut, "F1: withheld") {
 			t.Fatalf("no-FP report = %q, want recall plus withheld F1", noFPOut)
 		}
@@ -193,7 +193,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 			Candidate: "codex+test", Status: "completed", HasFindingGold: true, GoldCount: 2,
 			TruePositive: 2, FalsePositive: 1, FalsePositiveGold: 1,
 		}})
-		withFPOut := RenderReport([]CandidateReport{{Cohort: "official-holdout", Summary: withFP, RepeatCount: 1}})
+		withFPOut := renderReportAny([]CandidateReport{{Cohort: "official-holdout", Summary: withFP, RepeatCount: 1}})
 		if !strings.Contains(withFPOut, "F1:") || strings.Contains(withFPOut, "F1: withheld") {
 			t.Fatalf("FP-gold report = %q, want headline F1", withFPOut)
 		}

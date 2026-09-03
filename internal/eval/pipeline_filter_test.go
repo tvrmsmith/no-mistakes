@@ -344,7 +344,7 @@ func TestReportSplitsTheTwoPipelinePopulations(t *testing.T) {
 	store := openEvalStore(t)
 	writeTwoPipelinePopulationEvaluations(t, store)
 
-	reports, err := Report(store)
+	reports, err := ReportForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestReportReadsAnUntaggedEvaluationAsPreReorder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reports, err := Report(store)
+	reports, err := ReportForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,23 +423,41 @@ func TestMarkFrontierNeverComparesAcrossPipelineVersions(t *testing.T) {
 // all three surfaces (eval sets, eval report, eval run) say so the same way.
 func TestFilteredEmptyResultsNameTheFilterRatherThanAnEmptyCorpus(t *testing.T) {
 	store := openEvalStore(t)
-	writeSyntheticCase(t, store, syntheticCaseSpec{
-		id: "review-early-gold", fingerprint: "repo-a", capturedAt: 1, changedLines: 10,
-		pipelineVersion: PipelineReviewEarly,
-		gold:            []FindingGold{{ID: "g1", Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: "g1", Severity: "error", Action: "auto-fix"}},
-		roundFindings:   findingsJSON(findingSpec{ID: "g1", Severity: "error", File: "main.go", Line: 1, Description: "g1", Action: "auto-fix"}),
-	})
+	// Two gold cases in different strata against a holdout of one, so tune
+	// holds the leftover: with every gold case pinned, tune would be empty for
+	// a reason that has nothing to do with the filter and the arm under test
+	// would never run.
+	store.SetDiversifiedSize(1)
+	for i, fingerprint := range []string{"repo-a", "repo-b"} {
+		id := "review-early-gold-" + strconv.Itoa(i+1)
+		writeSyntheticCase(t, store, syntheticCaseSpec{
+			id: id, fingerprint: fingerprint, capturedAt: int64(i + 1), changedLines: 10,
+			pipelineVersion: PipelineReviewEarly,
+			gold:            []FindingGold{{ID: id, Kind: GoldTruePositive, Source: goldSourceUserFix, File: "main.go", Line: 1, Description: id, Severity: "error", Action: "auto-fix"}},
+			roundFindings:   findingsJSON(findingSpec{ID: id, Severity: "error", File: "main.go", Line: 1, Description: id, Action: "auto-fix"}),
+		})
+	}
+	for _, name := range []string{"diversified", "tune"} {
+		cases, err := store.ListCasesForPipeline(name, PipelineReviewEarly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cases) == 0 {
+			t.Fatalf("set %q is empty before the filter runs, so a filter miss cannot be told apart from it", name)
+		}
+	}
 
 	summaries, err := InspectSetsForPipeline(store, PipelineCheapGatesFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
+	warned := map[string]string{}
 	for _, summary := range summaries {
-		if summary.Name != "diversified" {
-			continue
-		}
-		if !strings.Contains(summary.Warning, "has no case tagged cheap-gates-first") {
-			t.Fatalf("diversified warning = %q, want it to name the filter rather than report missing gold", summary.Warning)
+		warned[summary.Name] = summary.Warning
+	}
+	for _, name := range []string{"diversified", "tune"} {
+		if !strings.Contains(warned[name], "has no case tagged cheap-gates-first") {
+			t.Fatalf("%s warning = %q, want it to name the filter rather than report an empty set", name, warned[name])
 		}
 	}
 
@@ -480,7 +498,7 @@ func TestAllStepsIndexMatchesTheDeclaredStepOrder(t *testing.T) {
 }
 
 func TestRenderReportNamesThePipelineVersion(t *testing.T) {
-	output := RenderReport([]CandidateReport{{
+	output := renderReportAny([]CandidateReport{{
 		PipelineVersion: PipelineReviewEarly,
 		Cohort:          "cohort",
 		Summary:         EvaluationSummary{Candidate: "claude+test", Total: 1, Labeled: 1, TruePositive: 1},

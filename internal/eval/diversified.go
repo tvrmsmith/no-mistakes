@@ -124,7 +124,47 @@ func rankedStrata(gold []Case) (map[string][]Case, []string) {
 	return grouped, keys
 }
 
-func planDiversified(gold []Case, cap int, existing []diversifiedPin) []diversifiedPin {
+// planDiversified plans the holdout from the readable gold. preserve names
+// cases the caller could not load at all: their pin rows are carried forward
+// whatever the gold slice says, because an absent case id otherwise reads as
+// "lost its gold" and releases the pin, and releasing it takes the case out of
+// Prune's protection at exactly the moment nothing else can vouch for it.
+// Carried pins still occupy their seats under the cap, so preserving one costs
+// a seat rather than growing the holdout.
+func planDiversified(gold []Case, capSize int, existing []diversifiedPin, preserve map[string]bool) []diversifiedPin {
+	carried, plannable := splitPreservedPins(existing, preserve)
+	if len(carried) == 0 {
+		return planReadableDiversified(gold, capSize, plannable)
+	}
+	remaining := capSize
+	if capSize > 0 {
+		remaining = capSize - len(carried)
+		if remaining < 0 {
+			remaining = 0
+		}
+	}
+	return append(carried, planReadableDiversified(gold, remaining, plannable)...)
+}
+
+// splitPreservedPins separates the pins whose case the caller could not load
+// from the ones the planner can reason about. A preserved pin holds every
+// column the table needs (case id, stratum, rank, pinned time), so it survives
+// without the case directory being readable.
+func splitPreservedPins(existing []diversifiedPin, preserve map[string]bool) (carried, plannable []diversifiedPin) {
+	if len(preserve) == 0 {
+		return nil, existing
+	}
+	for _, pin := range existing {
+		if preserve[pin.CaseID] {
+			carried = append(carried, pin)
+			continue
+		}
+		plannable = append(plannable, pin)
+	}
+	return carried, plannable
+}
+
+func planReadableDiversified(gold []Case, cap int, existing []diversifiedPin) []diversifiedPin {
 	grouped, keys := rankedStrata(gold)
 	byID := map[string]Case{}
 	for _, c := range gold {

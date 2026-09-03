@@ -29,15 +29,11 @@ type CandidateReport struct {
 	OnFrontier      bool
 }
 
-// Report loads every local evaluation result grouped by candidate. It never
-// contacts a forge, agent provider, telemetry endpoint, or remote case store.
-// It is ReportForPipeline with no pipeline filter.
-func Report(store *Store) ([]CandidateReport, error) {
-	return ReportForPipeline(store, PipelineAny)
-}
-
-// ReportForPipeline narrows the report to one pipeline layout tag.
-// PipelineAny, Report's behavior, groups every evaluation by (pipeline
+// ReportForPipeline loads every local evaluation result grouped by candidate,
+// narrowed to one pipeline layout tag. It never contacts a forge, agent
+// provider, telemetry endpoint, or remote case store.
+//
+// PipelineAny groups every evaluation by (pipeline
 // version, cohort, candidate) rather than filtering: once Review moves
 // relative to the cheap gates, a share of the old gold-labelled findings can
 // no longer occur, so blending the two populations into one row would read as
@@ -262,6 +258,14 @@ type PipelineCountRow struct {
 	GoldCases       int
 }
 
+// filterMissMessage is the one sentence every surface uses for "the set exists,
+// the tag matched nothing in it". Both eval sets and a replay refusal read it,
+// and the two have to say the same thing, because the fix is the same: pick
+// another tag, not capture more cases.
+func filterMissMessage(set string, version PipelineVersion) string {
+	return fmt.Sprintf("case set %q has no case tagged %s", set, version)
+}
+
 // CompositionRow is one stratum bucket of a case set: the same axes the
 // diversified holdout stratifies on.
 type CompositionRow struct {
@@ -275,15 +279,10 @@ type CompositionRow struct {
 	Cases       int
 }
 
-// InspectSets summarizes all logical sets and their diversified mix. It reads
+// InspectSetsForPipeline summarizes all logical sets and their diversified mix,
+// narrowed to one pipeline layout tag (PipelineAny narrows nothing). It reads
 // only local registry rows and captured case files, so it stays instant no
 // matter how expensive a replay of the same sets would be.
-func InspectSets(store *Store) ([]SetSummary, error) {
-	return InspectSetsForPipeline(store, PipelineAny)
-}
-
-// InspectSetsForPipeline is InspectSets narrowed to one pipeline layout tag.
-// InspectSets is this with no filter (PipelineAny).
 func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary, error) {
 	sets := []string{"all", "labeled", "diversified", "tune"}
 	// Resolving a set re-reads every case directory off disk, so "all" is
@@ -322,8 +321,7 @@ func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary
 		}
 		cases := filterCasesByPipeline(resolved, version)
 		// A set that exists but has nothing under the requested tag is a filter
-		// miss, not an empty corpus, and the two need different fixes. The
-		// wording matches prepareReplay's so all three surfaces read alike.
+		// miss, not an empty corpus, and the two need different fixes.
 		filterMissed := version != PipelineAny && len(cases) == 0 && len(resolved) > 0
 		summary := SetSummary{
 			Name:          name,
@@ -337,20 +335,17 @@ func InspectSetsForPipeline(store *Store, version PipelineVersion) ([]SetSummary
 			if n, err := store.pinCount(); err == nil {
 				summary.PinCount = n
 			}
-			switch {
-			case filterMissed:
-				summary.Warning = fmt.Sprintf("case set %q has no case tagged %s", name, version)
-			case len(cases) == 0 && labeledCount == 0:
-				summary.Warning = "diversified is empty: no labeled gold (unlabeled cases are not filled)"
-			}
 		}
-		if name == "tune" {
-			switch {
-			case filterMissed:
-				summary.Warning = fmt.Sprintf("case set %q has no case tagged %s", name, version)
-			case len(cases) == 0 && labeledCount > 0:
-				summary.Warning = "tune is empty; do not fit matcher thresholds on diversified"
-			}
+		// The filter-miss arm is shared, but it stays scoped to the two sets
+		// that warn at all today: "all" and "labeled" report their size and
+		// nothing else, and widening them here would be a separate change.
+		switch {
+		case filterMissed && (name == "diversified" || name == "tune"):
+			summary.Warning = filterMissMessage(name, version)
+		case name == "diversified" && len(cases) == 0 && labeledCount == 0:
+			summary.Warning = "diversified is empty: no labeled gold (unlabeled cases are not filled)"
+		case name == "tune" && len(cases) == 0 && labeledCount > 0:
+			summary.Warning = "tune is empty; do not fit matcher thresholds on diversified"
 		}
 		type compositionKey struct {
 			repoFingerprint string
@@ -524,17 +519,13 @@ func shortFingerprint(value string) string {
 	return value[:12]
 }
 
-// RenderReport is a stable human-readable local comparison. Scores are
-// finding-level. Unmatched candidate findings stay pending and are never
+// RenderReportForPipeline is a stable human-readable local comparison. Scores
+// are finding-level. Unmatched candidate findings stay pending and are never
 // called false positives. A replay with no gold is unlabeled, not a pass.
-func RenderReport(reports []CandidateReport) string {
-	return RenderReportForPipeline(reports, PipelineAny)
-}
-
-// RenderReportForPipeline is RenderReport told which pipeline filter produced
-// the reports, so an empty result says whether the filter matched nothing or
-// nothing was recorded. Those need different fixes, and the caller is the only
-// one who knows which filter ran.
+//
+// It is told which pipeline filter produced the reports, so an empty result
+// says whether the filter matched nothing or nothing was recorded. Those need
+// different fixes, and the caller is the only one who knows which filter ran.
 func RenderReportForPipeline(reports []CandidateReport, version PipelineVersion) string {
 	if len(reports) == 0 {
 		if version != PipelineAny {

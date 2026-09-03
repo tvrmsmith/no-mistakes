@@ -69,7 +69,11 @@ func renderEvalSetsDashboard(summaries []eval.SetSummary) string {
 	}
 	if len(diversified.Pipelines) > 1 {
 		lines = append(lines, "")
-		lines = append(lines, "  Pipeline layouts")
+		// The breakdown describes the whole set, like the pin count above it
+		// and unlike the Cases and Composition figures between them, so it says
+		// so: under `eval sets --pipeline X` its rows otherwise look like they
+		// contradict the filtered count three lines up.
+		lines = append(lines, "  Pipeline layouts (whole set)")
 		for _, row := range diversified.Pipelines {
 			lines = append(lines, fmt.Sprintf("  %4d  %s · %d gold", row.Cases, row.PipelineVersion, row.GoldCases))
 		}
@@ -110,11 +114,11 @@ func pipelineLayoutSpanWarning(layouts int) string {
 // spends 27 columns on its label and value, so the text here has to stay inside
 // what is left of the box content width at any pin count, or renderBoxLine cuts
 // the end of it off. TestEvalCapDetailFitsTheBox holds that bound.
-func evalCapDetail(pinCount, cap int) string {
-	if cap == 0 {
+func evalCapDetail(pinCount, capSize int) string {
+	if capSize == 0 {
 		return fmt.Sprintf("pins %d corpus-wide · cap none (1 per stratum)", pinCount)
 	}
-	return fmt.Sprintf("pins %d corpus-wide · cap %d", pinCount, cap)
+	return fmt.Sprintf("pins %d corpus-wide · cap %d", pinCount, capSize)
 }
 
 // compositionLines renders the stratum table. The repository column is sized

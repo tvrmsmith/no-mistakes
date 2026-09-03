@@ -561,7 +561,7 @@ func TestConfidenceIntervalIncludesFailedLabeledReplays(t *testing.T) {
 }
 
 func TestRenderReportNamesCaseLevelRecallRange(t *testing.T) {
-	output := RenderReport([]CandidateReport{
+	output := renderReportAny([]CandidateReport{
 		{
 			Cohort:     "cohort",
 			Summary:    EvaluationSummary{Candidate: "claude+test", Total: 2, Labeled: 2, TruePositive: 2},
@@ -575,7 +575,7 @@ func TestRenderReportNamesCaseLevelRecallRange(t *testing.T) {
 
 func TestRenderReportKeepsInvalidOnlyScoreWithoutClaimingRecall(t *testing.T) {
 	cost := 10.0
-	output := RenderReport([]CandidateReport{{
+	output := renderReportAny([]CandidateReport{{
 		Cohort:        "cohort",
 		Summary:       EvaluationSummary{Candidate: "claude+test", Total: 1, Labeled: 1, FalsePositive: 1},
 		AverageTokens: &cost,
@@ -761,11 +761,11 @@ func TestCaptureAndReportScoresMatchingCandidateAsTruePositive(t *testing.T) {
 	} else if len(evaluations) != 1 || evaluations[0].TruePositive != 1 || evaluations[0].FalseNegative != 0 || evaluations[0].Pending != 0 {
 		t.Fatalf("replay scores = %#v, want true-positive match on the same issue", evaluations)
 	}
-	reports, err := Report(store)
+	reports, err := ReportForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := RenderReport(reports)
+	output := renderReportAny(reports)
 	if !strings.Contains(output, "true-positive 1, false-negative 0, false-positive 0, pending 0") || !strings.Contains(output, "recall: 100.0%") {
 		t.Fatalf("report = %q, want true-positive recall", output)
 	}
@@ -807,11 +807,11 @@ func TestCaptureAndReportLeavesUnmatchedCandidateFindingsPending(t *testing.T) {
 	} else if len(evaluations) != 1 || evaluations[0].FalsePositive != 0 || evaluations[0].Pending != 1 {
 		t.Fatalf("replay scores = %#v, want unmatched finding queued, not a false-positive", evaluations)
 	}
-	reports, err := Report(store)
+	reports, err := ReportForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := RenderReport(reports)
+	output := renderReportAny(reports)
 	if !strings.Contains(output, "unlabeled / pending") || !strings.Contains(output, "queued unmatched candidate findings: 1") {
 		t.Fatalf("report = %q, want unlabeled pending, not a pass or false-positive", output)
 	}
@@ -1143,9 +1143,15 @@ func mustGit(t *testing.T, ctx context.Context, dir string, args ...string) stri
 	return out
 }
 
+// renderReportAny renders with no pipeline filter, which is what a test about
+// the report's own wording wants.
+func renderReportAny(reports []CandidateReport) string {
+	return RenderReportForPipeline(reports, PipelineAny)
+}
+
 func mustInspectSets(t *testing.T, store *Store) []SetSummary {
 	t.Helper()
-	summaries, err := InspectSets(store)
+	summaries, err := InspectSetsForPipeline(store, PipelineAny)
 	if err != nil {
 		t.Fatal(err)
 	}
