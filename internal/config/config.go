@@ -728,6 +728,60 @@ type Review struct {
 // TestRaw is the YAML representation of test-step settings.
 type TestRaw struct {
 	Evidence EvidenceRaw `yaml:"evidence"`
+	// Units lists the repository's independently testable units. See
+	// TestUnit for why the whole list is trusted-only.
+	Units []TestUnit `yaml:"units"`
+}
+
+// TestUnit is one independently testable part of a repository: a service in a
+// monorepo, a directory of code with its own test command, or the repository
+// itself. Units are what the Test step selects between.
+//
+// Command runs verbatim via sh -c on the daemon host with the maintainer's
+// credentials, exactly like commands.test, so the whole list is honored ONLY
+// from the trusted default-branch copy of .no-mistakes.yaml unless the
+// repository opts in via allow_repo_commands (see EffectiveRepoConfig): a
+// contributor's pushed branch must not be able to inject shell by naming a
+// new unit or repointing an existing one's command.
+type TestUnit struct {
+	// Name identifies the unit in the run log and in the Test step's selection.
+	Name string `yaml:"name"`
+	// Path is the repository-relative directory the unit owns. "." means the
+	// whole repository. A changed file under Path belongs to this unit.
+	Path string `yaml:"path"`
+	// Command is the shell command that tests the unit.
+	Command string `yaml:"command"`
+}
+
+// NormalizeUnitPath is the single owner of a unit path's canonical form: it
+// trims, converts backslashes a Windows daemon host may hand it, maps an empty
+// path to ".", and cleans the result. Validation, the resolved config, and the
+// Test step's changed-file matching all read this same string, so a path like
+// "foo/.." cannot pass a check on one spelling and match on another.
+func NormalizeUnitPath(raw string) string {
+	trimmed := strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
+	if trimmed == "" {
+		return "."
+	}
+	return path.Clean(trimmed)
+}
+
+// ValidateUnitPath rejects a unit path that names an absolute location or
+// resolves outside the repository. It judges the canonical form, so a
+// configured layout and an agent-inferred one are held to one rule against the
+// same string the Test step matches changed files with. The returned message
+// starts with "path " so a caller can prefix it with whatever names the unit.
+func ValidateUnitPath(raw string) error {
+	canonical := NormalizeUnitPath(raw)
+	// The leading-slash check is not redundant with filepath.IsAbs: on Windows
+	// that returns false for "/services/api", and the daemon runs there too.
+	if filepath.IsAbs(canonical) || strings.HasPrefix(canonical, "/") {
+		return fmt.Errorf("path must be repository-relative, got %q", canonical)
+	}
+	if canonical == ".." || strings.HasPrefix(canonical, "../") {
+		return fmt.Errorf("path must stay inside the repository, got %q", canonical)
+	}
+	return nil
 }
 
 // EvidenceRaw is the YAML representation of test-evidence settings.
@@ -759,6 +813,9 @@ type EvidenceRaw struct {
 // Test is the resolved test-step config.
 type Test struct {
 	Evidence Evidence
+	// Units lists the repository's independently testable units, sourced
+	// per TestUnit's trust rules. Nil means no unit layout is configured.
+	Units []TestUnit
 }
 
 // Evidence is the resolved test-evidence config. When StoreInRepo is true, the
@@ -2381,9 +2438,12 @@ func validatePathInstructionGlob(pattern string) error {
 // Non-executing fields (ignore patterns, auto-fix, commit, intent, test) are
 // always taken from the pushed copy, matching prior behavior, since they cannot
 // run arbitrary shell, select a process, or spend the maintainer's CI minutes.
-// Two exceptions live inside them: test.evidence.branch, which names a git ref
-// the daemon pushes to, and auto_fix.min_severity, which is a gate strength
-// rather than an effort bound. Both are trusted-only.
+// Three exceptions live inside them. test.evidence.branch names a git ref the
+// daemon pushes to, and auto_fix.min_severity is a gate strength rather than an
+// effort bound; both are trusted-only unconditionally. test.units is the third
+// and behaves differently from the other two: it runs shell with the
+// maintainer's credentials, so it follows Commands and Agent below, including
+// their allowRepoCommands opt-in.
 func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
 	if pushed == nil {
 		pushed = &RepoConfig{}
@@ -2461,10 +2521,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.Commands = trusted.Commands
 		effective.Agent = trusted.Agent
 		effective.Agents = copyAgents(trusted.Agents)
+		effective.Test.Units = copyTestUnits(trusted.Test.Units)
 	} else {
 		effective.Commands = Commands{}
 		effective.Agent = ""
 		effective.Agents = nil
+		effective.Test.Units = nil
 	}
 	return &effective
 }
@@ -2597,6 +2659,29 @@ func applyTestOverrides(dst *Test, src *TestRaw) {
 			dst.Evidence.Branch = branch
 		}
 	}
+	// A non-empty source list REPLACES dst.Units rather than appending, so
+	// applying the repo copy after the global copy (see Merge) does not merge
+	// two layouts into one - a repository's list is a complete layout, not an
+	// addition to whatever the global config named.
+	if len(src.Units) > 0 {
+		dst.Units = copyTestUnits(src.Units)
+		for i := range dst.Units {
+			dst.Units[i].Name = strings.TrimSpace(dst.Units[i].Name)
+			dst.Units[i].Command = strings.TrimSpace(dst.Units[i].Command)
+			dst.Units[i].Path = NormalizeUnitPath(dst.Units[i].Path)
+		}
+	}
+}
+
+// copyTestUnits deep-copies a unit list so the resolved config never aliases
+// a caller's slice or its trusted-copy source.
+func copyTestUnits(units []TestUnit) []TestUnit {
+	if len(units) == 0 {
+		return nil
+	}
+	out := make([]TestUnit, len(units))
+	copy(out, units)
+	return out
 }
 
 // applyEvidenceStorageOverrides applies the global-only local-storage half of
@@ -2712,6 +2797,34 @@ func validateTestRaw(test TestRaw) error {
 	}
 	if test.Evidence.MaxRuns != nil && *test.Evidence.MaxRuns < 0 {
 		return fmt.Errorf("test.evidence.max_runs must be 0 (keep every run) or greater, got %d", *test.Evidence.MaxRuns)
+	}
+	// test.units is honored only from the trusted copy (see TestUnit), but
+	// like branch and local_root above this also validates the PUSHED copy:
+	// a branch carrying an invalid layout has to fail before it merges.
+	seen := make(map[string]bool, len(test.Units))
+	for i, unit := range test.Units {
+		name := strings.TrimSpace(unit.Name)
+		if name == "" {
+			return fmt.Errorf("test.units[%d].name is required", i)
+		}
+		if strings.TrimSpace(unit.Command) == "" {
+			return fmt.Errorf("test.units[%d].command is required (unit %q)", i, name)
+		}
+		// The Test step matches changed files against the canonical form of
+		// this path, so validation judges that exact string through the same
+		// owner the step reads. Checking a differently spelled value let
+		// "\services\api" through on Windows, where filepath.IsAbs is false and
+		// there is no leading slash, and it reported a rejected path back in a
+		// spelling the step never matches on. Canonicalization does not narrow
+		// what a maintainer may name: "api/.." resolves to "." and owns the
+		// whole repository, which is a layout they are free to declare.
+		if err := ValidateUnitPath(unit.Path); err != nil {
+			return fmt.Errorf("test.units[%d].%w", i, err)
+		}
+		if seen[name] {
+			return fmt.Errorf("test.units has duplicate unit name %q", name)
+		}
+		seen[name] = true
 	}
 	return nil
 }

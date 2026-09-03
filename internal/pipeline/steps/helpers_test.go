@@ -105,6 +105,11 @@ func ensureGitRepoTemplate(t *testing.T) {
 		run("init")
 		run("config", "user.name", "test")
 		run("config", "user.email", "test@test.com")
+		// git init inherits the developer's global config, so a machine that
+		// signs every commit makes this fixture depend on a signing agent
+		// being unlocked. Every copy of the template carries this local
+		// override, so gitCmd's later commits are unsigned too.
+		run("config", "commit.gpgsign", "false")
 		run("checkout", "-b", "main")
 
 		os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base content"), 0o644)

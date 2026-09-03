@@ -49,12 +49,19 @@ func mergeEnv(extra []string) []string {
 	if len(extra) == 0 {
 		return nil
 	}
-	merged := make([]string, 0, len(os.Environ())+len(extra))
+	return mergeEnvOnto(os.Environ(), extra)
+}
+
+// mergeEnvOnto applies extra as overrides onto base, keeping base's order for
+// entries extra does not touch and appending any override whose key base
+// lacks.
+func mergeEnvOnto(base, extra []string) []string {
+	merged := make([]string, 0, len(base)+len(extra))
 	overrides := make(map[string]string, len(extra))
 	for _, entry := range extra {
 		overrides[envKey(entry)] = entry
 	}
-	for _, entry := range os.Environ() {
+	for _, entry := range base {
 		key := envKey(entry)
 		if override, ok := overrides[key]; ok {
 			merged = append(merged, override)
@@ -293,6 +300,56 @@ func runShellCommand(ctx context.Context, dir, cmdStr string) (string, int, erro
 
 func runStepShellCommand(sctx *pipeline.StepContext, cmdStr string) (string, int, error) {
 	return runShellCommandWithProcessEnv(sctx.Ctx, sctx.WorkDir, stepEnvironment(sctx), cmdStr)
+}
+
+// Test command environment contract. Every discovered test command receives
+// the base commit it validates against and the changed-file set, so a command
+// can scope itself the same way discovery did.
+const (
+	envTestBaseSHA          = "NO_MISTAKES_BASE_SHA"
+	envTestChangedFiles     = "NO_MISTAKES_CHANGED_FILES"
+	envTestChangedFileCount = "NO_MISTAKES_CHANGED_FILE_COUNT"
+)
+
+// maxChangedFilesEnvBytes bounds NO_MISTAKES_CHANGED_FILES. A single
+// environment variable has a platform limit, and a very large diff can exceed
+// it, which makes the whole exec fail with a message about the test command
+// rather than about the variable that was too big.
+const maxChangedFilesEnvBytes = 96 * 1024
+
+// changedFilesEnvValue renders the changed-file list for
+// NO_MISTAKES_CHANGED_FILES and reports how many paths it left out.
+//
+// The value is newline separated, so a path that itself contains a newline
+// cannot be represented in it and is omitted rather than splitting into two
+// bogus paths for the consuming command. A list past the byte bound is dropped
+// whole rather than truncated into a half path. Either way
+// NO_MISTAKES_CHANGED_FILE_COUNT still reports the true total, so a command can
+// tell an omission from a genuinely small diff.
+func changedFilesEnvValue(changed []string) (value string, omitted int) {
+	usable := make([]string, 0, len(changed))
+	for _, path := range changed {
+		if strings.ContainsAny(path, "\n\r") {
+			continue
+		}
+		usable = append(usable, path)
+	}
+	value = strings.Join(usable, "\n")
+	if len(value) > maxChangedFilesEnvBytes {
+		return "", len(changed)
+	}
+	return value, len(changed) - len(usable)
+}
+
+// runStepShellCommandEnv runs a step's shell command with extra environment on
+// top of stepEnvironment.
+func runStepShellCommandEnv(sctx *pipeline.StepContext, cmdStr string, extra []string) (string, int, error) {
+	base := stepEnvironment(sctx)
+	if base == nil {
+		base = os.Environ()
+	}
+	env := mergeEnvOnto(base, extra)
+	return runShellCommandWithProcessEnv(sctx.Ctx, sctx.WorkDir, env, cmdStr)
 }
 
 func runShellCommandWithEnv(ctx context.Context, dir string, env []string, cmdStr string) (string, int, error) {

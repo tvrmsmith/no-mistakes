@@ -204,7 +204,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 		return e.failRun(run, repo, fmt.Errorf("create log dir: %w", err))
 	}
 
-	e.initializeRunScopes(run.ID)
+	e.initializeRunScopes(run.ID, false)
 
 	// Create step result records in DB
 	stepRecords := make(map[types.StepName]*db.StepResult)
@@ -288,10 +288,23 @@ func (e *Executor) prepareRestart(runID string, name types.StepName, currentInde
 	return index, nil
 }
 
-func (e *Executor) initializeRunScopes(runID string) {
+// initializeRunScopes creates the run-scoped session and shared-result holders
+// this execution uses. A fresh run starts both empty; a recovered run restores
+// the shared half from the run row, so the resumed Test step reuses the unit
+// layout it already paid a discovery agent pass for instead of paying a second
+// cold pass.
+func (e *Executor) initializeRunScopes(runID string, recovered bool) {
 	sessionsEnabled := e.config != nil && e.config.SessionReuse && e.agent != nil
 	e.sessions = NewRunSessions(e.db, runID, e.agent, sessionsEnabled)
-	e.shared = &RunShared{}
+	var store RunSharedStore
+	if e.db != nil {
+		store = e.db
+	}
+	if recovered {
+		e.shared = RestoreRunShared(store, runID)
+		return
+	}
+	e.shared = NewRunShared(store, runID)
 }
 
 type stepExecutionState struct {
@@ -362,7 +375,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return e.failRun(run, repo, fmt.Errorf("create log dir: %w", err))
 	}
-	e.initializeRunScopes(run.ID)
+	e.initializeRunScopes(run.ID, true)
 
 	parkStart := time.Unix(*run.AwaitingAgentSince, 0)
 	duration := recoveredStepDuration(gate.stepResult)

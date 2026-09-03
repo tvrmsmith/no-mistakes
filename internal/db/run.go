@@ -1034,6 +1034,33 @@ func (d *DB) GetRunCIRerunState(id string) (string, error) {
 	return state.String, nil
 }
 
+// GetRunTestDiscovery returns the Test step's persisted unit discovery for a
+// run, or the empty string when the run never discovered units. The payload is
+// opaque here: the pipeline owns its shape, and the database only guarantees
+// that what was written survives a restart.
+func (d *DB) GetRunTestDiscovery(id string) (string, error) {
+	var state sql.NullString
+	err := d.sql.QueryRow(`SELECT test_discovery FROM runs WHERE id = ?`, id).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get run test discovery: %w", err)
+	}
+	return state.String, nil
+}
+
+// SetRunTestDiscovery persists the Test step's unit discovery for a run, so a
+// run recovered after a daemon restart reuses the layout instead of paying a
+// second cold discovery agent pass.
+func (d *DB) SetRunTestDiscovery(id, state string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET test_discovery = ?, updated_at = ? WHERE id = ?`, state, now(), id)
+	if err != nil {
+		return fmt.Errorf("set run test discovery: %w", err)
+	}
+	return nil
+}
+
 // SetRunCIRerunState persists the CI step's rerun budget. The CI step calls
 // this before asking the provider to re-run a check, so a crash between the
 // reservation and the request costs the budget instead of handing the recovered

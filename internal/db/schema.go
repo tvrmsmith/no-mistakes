@@ -192,6 +192,14 @@ var migrationStatements = []string{
 	// compares it against the plan the resuming binary would run; NULL means a
 	// legacy row whose layout cannot be proven compatible.
 	`ALTER TABLE runs ADD COLUMN step_plan TEXT`,
+	// The Test step's discovered unit layout, its selection, the changed-file
+	// fingerprint they were derived from, and the run's under-selection fault
+	// count. It is durable so a run recovered after a daemon restart reuses the
+	// layout instead of paying a second cold discovery agent pass, and so the
+	// guard that parks a repeat under-selection survives the restart too. The
+	// value lives on the run row, so it dies with the run and nothing carries
+	// across runs. NULL means this run never discovered units.
+	`ALTER TABLE runs ADD COLUMN test_discovery TEXT`,
 	// Branch synchronization provenance is intentionally nullable. Historical
 	// rows stay unbound because mutable head_sha cannot prove a successful push.
 	`ALTER TABLE runs ADD COLUMN submitted_head_sha TEXT`,
