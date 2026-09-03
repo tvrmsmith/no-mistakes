@@ -42,10 +42,15 @@ var testDiscoverySchema = json.RawMessage(`{
 
 // changedFilesFingerprint returns a stable key for a changed-file set, so a
 // cached discovery is reused only for the set it was derived from.
+//
+// The separator is NUL, the one byte a git path cannot contain, and the same
+// byte changedPathList splits the diff payload on. A newline separator made
+// {"a\nb"} and {"a", "b"} hash alike, so a run could reuse a layout and a
+// selection derived from a different diff.
 func changedFilesFingerprint(changed []string) string {
 	sorted := append([]string{}, changed...)
 	sort.Strings(sorted)
-	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -161,6 +166,14 @@ func validateDiscovery(d *pipeline.TestDiscovery) error {
 		}
 		if d.Units[i].Command == "" {
 			return fmt.Errorf("discovered unit %q has no test command", d.Units[i].Name)
+		}
+		// An absolute or repository-escaping path owns no repository-relative
+		// changed file, so the unit is never selected and under-selection never
+		// names it either: the run would report green having never run its
+		// command. config.ValidateUnitPath is the rule a configured layout is
+		// held to, so both halves judge one rule.
+		if err := config.ValidateUnitPath(d.Units[i].Path); err != nil {
+			return fmt.Errorf("discovered unit %q %w", d.Units[i].Name, err)
 		}
 		// Name is how execution addresses a unit, so a repeated name hides
 		// every unit after the first: the selection resolves to the first,
@@ -285,7 +298,13 @@ Task:
 - Examine the repository and identify every independently testable unit.
 - For each unit, report its name, its path, and the command that tests it.
 - Select the units the changed files above touch.
-- Do not run any test now. Only report the layout and the selection.`,
+- Do not run any test now. Only report the layout and the selection.
+
+Rules for the command you report:
+- Each command must scope itself to the changed files under its unit. Local Test is targeted validation of this change; remote CI owns broad regression.
+- A command must NOT be the complete repository test suite, even when the unit is the repository itself. Name the specific test targets, directories, packages, or selectors the changed files reach.
+- The command runs with NO_MISTAKES_BASE_SHA set to the base commit and NO_MISTAKES_CHANGED_FILES set to the newline-separated changed paths, with NO_MISTAKES_CHANGED_FILE_COUNT carrying the true total. Read those variables in the command when that is how a unit's runner takes a target list.
+- A command that walks the whole repository is wrong even if it passes, because it spends the run's budget on work remote CI repeats.`,
 			sctx.Run.Branch,
 			baseSHA,
 			sctx.Run.HeadSHA,

@@ -102,8 +102,19 @@ Previous test findings to address:
 		return nil, err
 	}
 
-	tested := []string{}
+	var covered []config.TestUnit
 	ran := map[string]bool{}
+
+	// tested renders the durable record a reviewer reads on the outcome and in
+	// the PR body. It names the unit beside its command, because the command
+	// alone does not say which unit it covered and two units may share one.
+	tested := func() []string {
+		entries := make([]string, 0, len(covered))
+		for _, unit := range covered {
+			entries = append(entries, unit.Name+": "+unit.Command)
+		}
+		return entries
+	}
 
 	// parkForMaintainer stops the step at a gate with one error finding rather
 	// than failing the run, the posture every unusable discovery answer takes:
@@ -118,7 +129,7 @@ Previous test findings to address:
 				Action:      types.ActionAskUser,
 				Description: description,
 			}},
-			Tested: tested,
+			Tested: tested(),
 		}
 		findingsJSON, _ := json.Marshal(findings)
 		return &pipeline.StepOutcome{
@@ -195,7 +206,7 @@ Previous test findings to address:
 		if runErr != nil {
 			return nil, fmt.Errorf("run test command: %w", runErr)
 		}
-		tested = append(tested, unit.Command)
+		covered = append(covered, unit)
 		if exitCode == 0 {
 			return nil, nil
 		}
@@ -210,7 +221,7 @@ Previous test findings to address:
 				Description: description,
 			}},
 			Summary: projectedOutput,
-			Tested:  tested,
+			Tested:  tested(),
 		}
 		findingsJSON, _ := json.Marshal(findings)
 		return &pipeline.StepOutcome{
@@ -305,10 +316,10 @@ Previous test findings to address:
 		evidenceOpening := "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself."
 		existingTestsRule := "- Look for existing tests that would generate sufficient evidence. If they exist, run the smallest relevant set that proves the requested intent."
 		baselineSection := ""
-		if len(tested) > 0 {
-			quoted := make([]string, len(tested))
-			for i, cmd := range tested {
-				quoted[i] = "`" + cmd + "`"
+		if len(covered) > 0 {
+			quoted := make([]string, len(covered))
+			for i, unit := range covered {
+				quoted[i] = unit.Name + " (`" + unit.Command + "`)"
 			}
 			baselineSection = fmt.Sprintf("\nThe selected test units already ran to completion and passed in this attempt: %s\n", strings.Join(quoted, ", "))
 			evidenceOpening = "You are validating a code change whose selected test units have already run in this attempt. Read and judge those results rather than running them again."
@@ -387,8 +398,8 @@ Rules:
 				findings = Findings{Summary: result.Text}
 			}
 		}
-		if len(tested) > 0 {
-			findings.Tested = append(append([]string{}, tested...), findings.Tested...)
+		if len(covered) > 0 {
+			findings.Tested = append(tested(), findings.Tested...)
 		}
 
 		needsApproval := hasBlockingFindings(findings.Items)
@@ -422,7 +433,7 @@ Rules:
 	if sctx.Fixing && len(newTestsFromFix) > 0 {
 		findings := Findings{
 			Summary: "tests passed, but agent wrote new test files",
-			Tested:  tested,
+			Tested:  tested(),
 		}
 		for _, f := range newTestsFromFix {
 			findings.Items = append(findings.Items, Finding{
@@ -441,7 +452,7 @@ Rules:
 	}
 
 	sctx.Log("all tests passed")
-	findingsJSON, _ := json.Marshal(Findings{Tested: tested})
+	findingsJSON, _ := json.Marshal(Findings{Tested: tested()})
 	return &pipeline.StepOutcome{Findings: string(findingsJSON), FixSummary: fixSummary}, nil
 }
 

@@ -380,6 +380,77 @@ func TestChangedFilesEnvValue_OmitsWhatItCannotRepresent(t *testing.T) {
 	}
 }
 
+// TestDiscoverTestUnits_UnitPathOutsideTheRepositoryIsRejected covers the
+// silent-green hole: such a unit owns no repository-relative changed file, so
+// nothing selects it and under-selection cannot name it either.
+func TestDiscoverTestUnits_UnitPathOutsideTheRepositoryIsRejected(t *testing.T) {
+	cases := map[string]string{
+		"/services/api":   `path must be repository-relative, got "/services/api"`,
+		"../shared":       `path must stay inside the repository, got "../shared"`,
+		"services/../../": `path must stay inside the repository, got ".."`,
+	}
+	for unitPath, wantSuffix := range cases {
+		t.Run(unitPath, func(t *testing.T) {
+			ag := discoveryAgent(t, `{
+				"units": [{"name": "api", "path": `+jsonString(t, unitPath)+`, "command": "go test ./..."}],
+				"selected": []
+			}`)
+			sctx := discoveryTestContext(t, ag)
+
+			_, err := discoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"services/api/main.go"})
+			want := `discovered unit "api" ` + wantSuffix
+			if err == nil || err.Error() != want {
+				t.Fatalf("err = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+// TestChangedFilesFingerprint_SeparatesPathsThatContainANewline pins the cache
+// key against the collision a newline separator allowed: a git path may carry a
+// newline, so {"a\nb"} and {"a", "b"} hashed alike and one changed set reused
+// the other's layout and selection.
+func TestChangedFilesFingerprint_SeparatesPathsThatContainANewline(t *testing.T) {
+	one := changedFilesFingerprint([]string{"a\nb"})
+	two := changedFilesFingerprint([]string{"a", "b"})
+	if one == two {
+		t.Fatalf("two different changed sets share fingerprint %s", one)
+	}
+	if got := changedFilesFingerprint([]string{"b", "a"}); got != two {
+		t.Errorf("fingerprint depends on order: %s vs %s", got, two)
+	}
+}
+
+// TestDiscoveryPrompt_BoundsTheInferredCommandToTheChangedPaths reads the
+// prompt the step delivers to the discovery agent, the generated interface that
+// carries the targeted-validation product boundary. An unbounded prompt is how
+// the default path reintroduces the complete local suite remote CI owns.
+func TestDiscoveryPrompt_BoundsTheInferredCommandToTheChangedPaths(t *testing.T) {
+	ag := discoveryAgent(t, `{
+		"units": [{"name": "api", "path": "services/api", "command": "go test ./services/api/..."}],
+		"selected": ["api"]
+	}`)
+	sctx := discoveryTestContext(t, ag)
+
+	if _, err := discoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"services/api/main.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.calls) != 1 {
+		t.Fatalf("agent calls = %d, want 1 discovery pass", len(ag.calls))
+	}
+	prompt := ag.calls[0].Prompt
+	for _, want := range []string{
+		"scope itself to the changed files",
+		"must NOT be the complete repository test suite",
+		envTestChangedFiles,
+		envTestBaseSHA,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("discovery prompt missing %q, got:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestDiscoverTestUnits_SelectedUnknownUnitIsAnError(t *testing.T) {
 	ag := discoveryAgent(t, `{
 		"units": [{"name": "api", "path": "services/api", "command": "go test"}],

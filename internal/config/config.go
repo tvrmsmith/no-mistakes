@@ -766,6 +766,24 @@ func NormalizeUnitPath(raw string) string {
 	return path.Clean(trimmed)
 }
 
+// ValidateUnitPath rejects a unit path that names an absolute location or
+// resolves outside the repository. It judges the canonical form, so a
+// configured layout and an agent-inferred one are held to one rule against the
+// same string the Test step matches changed files with. The returned message
+// starts with "path " so a caller can prefix it with whatever names the unit.
+func ValidateUnitPath(raw string) error {
+	canonical := NormalizeUnitPath(raw)
+	// The leading-slash check is not redundant with filepath.IsAbs: on Windows
+	// that returns false for "/services/api", and the daemon runs there too.
+	if filepath.IsAbs(canonical) || strings.HasPrefix(canonical, "/") {
+		return fmt.Errorf("path must be repository-relative, got %q", canonical)
+	}
+	if canonical == ".." || strings.HasPrefix(canonical, "../") {
+		return fmt.Errorf("path must stay inside the repository, got %q", canonical)
+	}
+	return nil
+}
+
 // EvidenceRaw is the YAML representation of test-evidence settings.
 // Pointer fields distinguish "not set" (nil) from explicit zero/false values.
 type EvidenceRaw struct {
@@ -2793,20 +2811,15 @@ func validateTestRaw(test TestRaw) error {
 			return fmt.Errorf("test.units[%d].command is required (unit %q)", i, name)
 		}
 		// The Test step matches changed files against the canonical form of
-		// this path, so validate that exact string. Checking a differently
-		// spelled value let "\services\api" through on Windows, where
-		// filepath.IsAbs is false and there is no leading slash, and let
-		// "api/.." through everywhere, which cleans to "." and owns the whole
-		// repository rather than the one directory the maintainer named.
-		unitPath := NormalizeUnitPath(unit.Path)
-		// The leading-slash check is not redundant with filepath.IsAbs: on
-		// Windows that returns false for "/services/api", and the daemon runs
-		// there too.
-		if filepath.IsAbs(unitPath) || strings.HasPrefix(unitPath, "/") {
-			return fmt.Errorf("test.units[%d].path must be repository-relative, got %q", i, unitPath)
-		}
-		if unitPath == ".." || strings.HasPrefix(unitPath, "../") {
-			return fmt.Errorf("test.units[%d].path must stay inside the repository, got %q", i, unitPath)
+		// this path, so validation judges that exact string through the same
+		// owner the step reads. Checking a differently spelled value let
+		// "\services\api" through on Windows, where filepath.IsAbs is false and
+		// there is no leading slash, and it reported a rejected path back in a
+		// spelling the step never matches on. Canonicalization does not narrow
+		// what a maintainer may name: "api/.." resolves to "." and owns the
+		// whole repository, which is a layout they are free to declare.
+		if err := ValidateUnitPath(unit.Path); err != nil {
+			return fmt.Errorf("test.units[%d].%w", i, err)
 		}
 		if seen[name] {
 			return fmt.Errorf("test.units has duplicate unit name %q", name)

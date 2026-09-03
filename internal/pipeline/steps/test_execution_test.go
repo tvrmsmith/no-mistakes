@@ -190,7 +190,10 @@ func decodeFindings(t *testing.T, payload string) Findings {
 	return findings
 }
 
-func TestTestStep_GreenOutcomeNamesTheUnitCommandsItRan(t *testing.T) {
+// TestTestStep_GreenOutcomeNamesTheUnitsItCovered pins the durable record a
+// reviewer reads on the outcome and in the PR body. Two units share one command
+// here, which is the case a command-only record cannot tell apart.
+func TestTestStep_GreenOutcomeNamesTheUnitsItCovered(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	apiCmd := markerCommand(filepath.Join(t.TempDir(), "api.done"))
@@ -199,6 +202,7 @@ func TestTestStep_GreenOutcomeNamesTheUnitCommandsItRan(t *testing.T) {
 
 	units := []config.TestUnit{
 		{Name: "api", Path: "services/api", Command: apiCmd},
+		{Name: "api-contract", Path: "services/api", Command: apiCmd},
 		{Name: "web", Path: "services/web", Command: "exit 0"},
 	}
 	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
@@ -209,8 +213,14 @@ func TestTestStep_GreenOutcomeNamesTheUnitCommandsItRan(t *testing.T) {
 		t.Fatal(err)
 	}
 	tested := decodeFindings(t, outcome.Findings).Tested
-	if len(tested) != 1 || tested[0] != apiCmd {
-		t.Fatalf("Tested = %v, want [%s]", tested, apiCmd)
+	want := []string{"api: " + apiCmd, "api-contract: " + apiCmd}
+	if len(tested) != len(want) {
+		t.Fatalf("Tested = %v, want %v", tested, want)
+	}
+	for i := range want {
+		if tested[i] != want[i] {
+			t.Fatalf("Tested = %v, want %v", tested, want)
+		}
 	}
 }
 
@@ -457,6 +467,187 @@ func TestTestStep_UnderSelectionExpandsRunsTheMissingUnitAndLogsBoth(t *testing.
 	}
 }
 
+// TestTestStep_ExpandedSelectionIsReusedByTheNextAttemptInTheSameRun proves the
+// re-cache after an expansion is load-bearing. Without it the second attempt
+// rediscovers the same under-selecting layout, raises a second scope fault, and
+// parks instead of running.
+func TestTestStep_ExpandedSelectionIsReusedByTheNextAttemptInTheSameRun(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+	markerDir := t.TempDir()
+	apiMarker := filepath.Join(markerDir, "api.done")
+	webMarker := filepath.Join(markerDir, "web.done")
+
+	f, err := os.OpenFile(filepath.Join(dir, "services", "web", "main.go"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("// changed\n")
+	f.Close()
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "change web too")
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+
+	newAgent := func() *mockAgent {
+		return &mockAgent{
+			name: "test",
+			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+				if !isDiscoveryCall(opts) {
+					return &agent.Result{Output: json.RawMessage(`{"items":[]}`)}, nil
+				}
+				out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, markerCommand(apiMarker)) + `},{"name":"web","path":"services/web","command":` + jsonString(t, markerCommand(webMarker)) + `}],"selected":["api"]}`
+				return &agent.Result{Output: json.RawMessage(out)}, nil
+			},
+		}
+	}
+
+	first := unitTestContext(t, newAgent(), dir, baseSHA, headSHA, nil)
+	if _, err := (&TestStep{}).Execute(first); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(apiMarker)
+	os.Remove(webMarker)
+
+	second := unitTestContext(t, newAgent(), dir, baseSHA, headSHA, nil)
+	second.Shared = first.Shared
+	lines := capturingLog(second)
+	outcome, err := (&TestStep{}).Execute(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.NeedsApproval {
+		t.Fatalf("second attempt parked, expected it to reuse the expanded selection: %s", outcome.Findings)
+	}
+	log := joinedLog(*lines)
+	if strings.Contains(log, "test scope fault") {
+		t.Errorf("second attempt raised another scope fault, got:\n%s", log)
+	}
+	if !fileExists(apiMarker) || !fileExists(webMarker) {
+		t.Error("second attempt did not run both units of the expanded selection")
+	}
+}
+
+// TestTestStep_UnitCommandSeesTheStepEnvironment covers the layering in
+// runStepShellCommandEnv: the changed-file variables ride on top of the step's
+// own environment rather than replacing it, and the package's fake-CLI
+// convention depends on that step-scoped PATH reaching the command.
+func TestTestStep_UnitCommandSeesTheStepEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the command reads the variables through POSIX shell interpolation")
+	}
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+	outFile := filepath.Join(t.TempDir(), "env.out")
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+
+	units := []config.TestUnit{
+		{Name: "api", Path: "services/api", Command: `printf '%s\n' "$NM_STEP_MARKER" "$PATH" "$NO_MISTAKES_BASE_SHA" "$NO_MISTAKES_CHANGED_FILES" "$NO_MISTAKES_CHANGED_FILE_COUNT" > ` + outFile},
+	}
+	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
+	stepPath := t.TempDir()
+	sctx.Env = []string{"NM_STEP_MARKER=step-scoped", "PATH=" + stepPath + string(os.PathListSeparator) + os.Getenv("PATH")}
+
+	if _, err := (&TestStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	for _, want := range []string{"step-scoped", stepPath, baseSHA, "services/api/main.go", "1"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("unit command environment missing %q, got:\n%s", want, got)
+		}
+	}
+}
+
+// TestTestStep_ChangedFileCountStaysTheTrueTotalWhenAPathIsOmitted covers the
+// published contract that lets a command tell an omitted list from a small
+// diff. A path carrying a newline cannot ride in the variable, so the value
+// drops it while the count still reports every changed path.
+func TestTestStep_ChangedFileCountStaysTheTrueTotalWhenAPathIsOmitted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a newline in a filename is not creatable on Windows")
+	}
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+	outFile := filepath.Join(t.TempDir(), "env.out")
+
+	odd := filepath.Join(dir, "services", "api", "we\nird.go")
+	if err := os.WriteFile(odd, []byte("package api\n"), 0o644); err != nil {
+		t.Skipf("this filesystem rejects a newline in a filename: %v", err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "add an oddly named file")
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+
+	units := []config.TestUnit{
+		{Name: "api", Path: "services/api", Command: `printf '%s\n' "$NO_MISTAKES_CHANGED_FILES" > ` + outFile + `; printf 'count=%s\n' "$NO_MISTAKES_CHANGED_FILE_COUNT" >> ` + outFile},
+	}
+	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
+	lines := capturingLog(sctx)
+
+	if _, err := (&TestStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "count=2") {
+		t.Errorf("count should report both changed paths, got:\n%s", got)
+	}
+	if strings.Contains(got, "ird.go") {
+		t.Errorf("the unrepresentable path should be omitted from the value, got:\n%s", got)
+	}
+	if log := joinedLog(*lines); !strings.Contains(log, "omits 1 of 2 changed paths") {
+		t.Errorf("log missing the omission line, got:\n%s", log)
+	}
+}
+
+// TestTestStep_FixModeRunsTheUnitOfAnUntrackedRepairFile covers the repair a
+// `git diff` alone cannot see. Writing a new test file is the common repair, so
+// a fix-mode changed set that reads tracked files only leaves the repaired
+// unit unselected and the attempt reports green without running it.
+func TestTestStep_FixModeRunsTheUnitOfAnUntrackedRepairFile(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+	markerDir := t.TempDir()
+	apiMarker := filepath.Join(markerDir, "api.done")
+	webMarker := filepath.Join(markerDir, "web.done")
+
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			added := filepath.Join(dir, "services", "web", "added_test.go")
+			if err := os.WriteFile(added, []byte("package web\n"), 0o644); err != nil {
+				return nil, err
+			}
+			return &agent.Result{Output: json.RawMessage(`{"summary":"add the missing web test"}`)}, nil
+		},
+	}
+	units := []config.TestUnit{
+		{Name: "api", Path: "services/api", Command: markerCommand(apiMarker)},
+		{Name: "web", Path: "services/web", Command: markerCommand(webMarker)},
+	}
+	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, units)
+	sctx.Fixing = true
+
+	if _, err := (&TestStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(apiMarker) {
+		t.Error("api marker not created, expected the changed unit to run in fix mode")
+	}
+	if !fileExists(webMarker) {
+		t.Error("web marker not created, expected the unit of the untracked repair file to run")
+	}
+}
+
 // runStore is an in-memory stand-in for the run row's discovery column, so a
 // restart can be modelled without a database.
 type runStore struct {
@@ -574,8 +765,8 @@ func TestTestStep_SecondScopeFaultInOneRunParks(t *testing.T) {
 	// The api unit already ran and passed, so the park still names what it
 	// covered rather than reporting an empty scope.
 	findings := decodeFindings(t, outcome.Findings)
-	if len(findings.Tested) != 1 || findings.Tested[0] != markerCommand(apiMarker) {
-		t.Errorf("park Tested = %v, want the api unit's command", findings.Tested)
+	if len(findings.Tested) != 1 || findings.Tested[0] != "api: "+markerCommand(apiMarker) {
+		t.Errorf("park Tested = %v, want the api unit and its command", findings.Tested)
 	}
 }
 

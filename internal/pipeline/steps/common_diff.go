@@ -105,6 +105,11 @@ func matchIgnorePattern(file, pattern string) bool {
 // paths changed since baseSHA alone in fix mode (the fix commit stacked on
 // top of an already-diffed head), or the paths changed between baseSHA and
 // headSHA otherwise. Mirrors the changed-file read in ReviewStep.Execute.
+//
+// Fix mode also reads the untracked paths. `git diff` reports modified tracked
+// files only, and writing a brand-new test file is the common repair, so
+// leaving those out let a repair land in a unit nothing selected and the
+// attempt report green without ever running that unit's command.
 func changedPathsSince(ctx context.Context, workDir, baseSHA, headSHA string, fixing bool) ([]string, error) {
 	args := []string{"diff", "--name-only", "-z", "--no-renames"}
 	if fixing {
@@ -116,7 +121,26 @@ func changedPathsSince(ctx context.Context, workDir, baseSHA, headSHA string, fi
 	if err != nil {
 		return nil, fmt.Errorf("get changed files: %w", err)
 	}
-	return changedPathList(changedFiles), nil
+	changed := changedPathList(changedFiles)
+	if !fixing {
+		return changed, nil
+	}
+	untracked, err := git.Run(ctx, workDir, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("get untracked files: %w", err)
+	}
+	seen := make(map[string]bool, len(changed))
+	for _, path := range changed {
+		seen[path] = true
+	}
+	for _, path := range changedPathList(untracked) {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		changed = append(changed, path)
+	}
+	return changed, nil
 }
 
 // changedPathList splits a NUL-delimited `git diff --name-only -z` payload,

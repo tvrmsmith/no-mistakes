@@ -430,8 +430,7 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 	if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("evidence findings JSON: %s", outcome.Findings)
-	if len(findings.Tested) != 2 || findings.Tested[0] != testCmd || findings.Tested[1] != "manual screenshot review" {
+	if len(findings.Tested) != 2 || findings.Tested[0] != "repository: "+testCmd || findings.Tested[1] != "manual screenshot review" {
 		t.Fatalf("expected baseline command and agent-tested evidence to be recorded, got %+v", findings.Tested)
 	}
 }
