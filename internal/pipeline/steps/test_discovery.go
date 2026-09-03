@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	gopath "path"
 	"sort"
 	"strings"
 
@@ -61,20 +60,12 @@ func unitOwnsPath(unit config.TestUnit, path string) bool {
 	return normalizedPath == unitPath || strings.HasPrefix(normalizedPath, unitPath+"/")
 }
 
-// normalizeUnitPath slash-normalises a unit path and maps an empty path to
-// ".", the same normalisation applyTestOverrides gives the config path, so a
-// unit that owns everything can be spelled either way.
-//
-// It also cleans the result, because unitOwnsPath compares strings: without
-// cleaning, "services/api/" and "./services/api" match neither a changed file
-// under them nor the prefix built from them, so the unit would own nothing and
-// its tests would silently never run.
+// normalizeUnitPath is config.NormalizeUnitPath, the single owner of a unit
+// path's canonical form. An agent-inferred path goes through the same function
+// a configured one does, so validation, the resolved config, and the matching
+// below all judge one string.
 func normalizeUnitPath(path string) string {
-	trimmed := toSlashPath(strings.TrimSpace(path))
-	if trimmed == "" {
-		return "."
-	}
-	return gopath.Clean(trimmed)
+	return config.NormalizeUnitPath(path)
 }
 
 // toSlashPath normalises path separators without importing path/filepath
@@ -151,12 +142,12 @@ func parkOnDiscoveryResult(err error) error {
 }
 
 // validateDiscovery rejects a layout the execution half cannot act on, and
-// normalises the layout it accepts in place (d.Units and d.Selected are
-// trimmed, and unit paths are cleaned) so the caller's discovery is the one
-// execution then runs. A discovery failure parks rather than passing, so every
+// normalises the layout it accepts in place (names and commands are trimmed,
+// unit paths take their canonical form, and the selection is deduplicated) so
+// the caller's discovery is the one execution then runs. A discovery failure parks rather than passing, so every
 // rejection here has to name what is wrong precisely enough for a maintainer
 // to fix it.
-func validateDiscovery(d pipeline.TestDiscovery) error {
+func validateDiscovery(d *pipeline.TestDiscovery) error {
 	if len(d.Units) == 0 {
 		return errors.New("discovery returned no test units")
 	}
@@ -181,12 +172,24 @@ func validateDiscovery(d pipeline.TestDiscovery) error {
 		}
 		known[d.Units[i].Name] = true
 	}
-	for i, name := range d.Selected {
-		d.Selected[i] = strings.TrimSpace(name)
-		if !known[d.Selected[i]] {
-			return fmt.Errorf("discovery selected unknown unit %q", d.Selected[i])
+	// The selection is deduplicated here rather than tolerated downstream,
+	// because execution logs one line per selected name before it runs
+	// anything: a name listed twice would claim an audited scope of two units
+	// while only one command ever runs.
+	deduped := make([]string, 0, len(d.Selected))
+	chosen := map[string]bool{}
+	for _, name := range d.Selected {
+		name = strings.TrimSpace(name)
+		if !known[name] {
+			return fmt.Errorf("discovery selected unknown unit %q", name)
 		}
+		if chosen[name] {
+			continue
+		}
+		chosen[name] = true
+		deduped = append(deduped, name)
 	}
+	d.Selected = deduped
 	return nil
 }
 
@@ -206,7 +209,7 @@ func discoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []str
 			Selected: selectUnitsForPaths(units, changed),
 			Source:   "config",
 		}
-		if err := validateDiscovery(d); err != nil {
+		if err := validateDiscovery(&d); err != nil {
 			return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
 		}
 		return d, nil
@@ -218,7 +221,7 @@ func discoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []str
 			Selected: []string{"repository"},
 			Source:   "command",
 		}
-		if err := validateDiscovery(d); err != nil {
+		if err := validateDiscovery(&d); err != nil {
 			return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
 		}
 		return d, nil
@@ -235,7 +238,7 @@ func discoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []str
 	if err != nil {
 		return pipeline.TestDiscovery{}, err
 	}
-	if err := validateDiscovery(d); err != nil {
+	if err := validateDiscovery(&d); err != nil {
 		return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
 	}
 	sctx.Shared.SetTestDiscovery(fingerprint, d)

@@ -328,20 +328,32 @@ func TestTestStep_FixModeRunsOnlyTheChangedUnitsCommand(t *testing.T) {
 	markerDir := t.TempDir()
 	apiMarker := filepath.Join(markerDir, "api.done")
 	webMarker := filepath.Join(markerDir, "web.done")
+	docsMarker := filepath.Join(markerDir, "docs.done")
 
-	// Fix mode diffs against the base alone, so the repair commit and the
-	// original change are both in the changed set.
 	headSHA := changeUnitFile(t, dir, "services/api/main.go")
 
+	// Fix mode diffs against the base alone, so the repair agent's own
+	// uncommitted edit joins the changed set and its unit gets selected. A diff
+	// of baseSHA..headSHA would miss it and leave the repair untested.
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			repaired := filepath.Join(dir, "services", "web", "main.go")
+			f, err := os.OpenFile(repaired, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				return nil, err
+			}
+			defer f.Close()
+			if _, err := f.WriteString("// repaired\n"); err != nil {
+				return nil, err
+			}
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix the api test"}`)}, nil
 		},
 	}
 	units := []config.TestUnit{
 		{Name: "api", Path: "services/api", Command: markerCommand(apiMarker)},
 		{Name: "web", Path: "services/web", Command: markerCommand(webMarker)},
+		{Name: "docs", Path: "docs", Command: markerCommand(docsMarker)},
 	}
 	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, units)
 	sctx.Fixing = true
@@ -357,8 +369,11 @@ func TestTestStep_FixModeRunsOnlyTheChangedUnitsCommand(t *testing.T) {
 	if !fileExists(apiMarker) {
 		t.Error("api marker not created, expected the changed unit to run in fix mode")
 	}
-	if fileExists(webMarker) {
-		t.Error("web marker created, expected the untouched unit not to run in fix mode")
+	if !fileExists(webMarker) {
+		t.Error("web marker not created, expected the unit the repair touched to run in fix mode")
+	}
+	if fileExists(docsMarker) {
+		t.Error("docs marker created, expected the untouched unit not to run in fix mode")
 	}
 }
 
@@ -556,13 +571,18 @@ func TestTestStep_SecondScopeFaultInOneRunParks(t *testing.T) {
 	if fileExists(webMarker) {
 		t.Error("web marker created, expected the run to park instead of running the missing unit")
 	}
+	// The api unit already ran and passed, so the park still names what it
+	// covered rather than reporting an empty scope.
+	findings := decodeFindings(t, outcome.Findings)
+	if len(findings.Tested) != 1 || findings.Tested[0] != markerCommand(apiMarker) {
+		t.Errorf("park Tested = %v, want the api unit's command", findings.Tested)
+	}
 }
 
 // TestTestStep_RunsEachUnitExactlyOncePerAttempt drives a selection that names
-// the same unit twice, which is the reachable way a unit could run twice:
-// discovery validates every selected name against the layout but does not
-// de-duplicate the selection, so only the per-attempt ran set stops the second
-// visit from re-running the command.
+// the same unit twice, which is the reachable way a unit could run twice.
+// Discovery deduplicates the selection, so the command runs once and the audit
+// log names the unit once instead of claiming a scope of two.
 func TestTestStep_RunsEachUnitExactlyOncePerAttempt(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
@@ -574,11 +594,15 @@ func TestTestStep_RunsEachUnitExactlyOncePerAttempt(t *testing.T) {
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if !isDiscoveryCall(opts) {
+				return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
+			}
 			out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, appendCommand) + `},{"name":"web","path":"services/web","command":"exit 0"}],"selected":["api","api"]}`
 			return &agent.Result{Output: json.RawMessage(out)}, nil
 		},
 	}
 	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
+	logLines := capturingLog(sctx)
 
 	step := &TestStep{}
 	if _, err := step.Execute(sctx); err != nil {
@@ -592,6 +616,13 @@ func TestTestStep_RunsEachUnitExactlyOncePerAttempt(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(string(content), "\r\n"), "\n")
 	if len(lines) != 1 {
 		t.Fatalf("expected exactly one run, got %d: %v", len(lines), lines)
+	}
+	log := joinedLog(*logLines)
+	if got := strings.Count(log, "unit api:"); got != 1 {
+		t.Errorf("audit log names unit api %d times, want 1, got:\n%s", got, log)
+	}
+	if !strings.Contains(log, "selected test units (agent): api\n") && !strings.HasSuffix(log, "selected test units (agent): api") {
+		t.Errorf("audit log did not report a deduplicated selection, got:\n%s", log)
 	}
 }
 

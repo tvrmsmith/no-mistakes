@@ -753,6 +753,19 @@ type TestUnit struct {
 	Command string `yaml:"command"`
 }
 
+// NormalizeUnitPath is the single owner of a unit path's canonical form: it
+// trims, converts backslashes a Windows daemon host may hand it, maps an empty
+// path to ".", and cleans the result. Validation, the resolved config, and the
+// Test step's changed-file matching all read this same string, so a path like
+// "foo/.." cannot pass a check on one spelling and match on another.
+func NormalizeUnitPath(raw string) string {
+	trimmed := strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
+	if trimmed == "" {
+		return "."
+	}
+	return path.Clean(trimmed)
+}
+
 // EvidenceRaw is the YAML representation of test-evidence settings.
 // Pointer fields distinguish "not set" (nil) from explicit zero/false values.
 type EvidenceRaw struct {
@@ -2637,10 +2650,7 @@ func applyTestOverrides(dst *Test, src *TestRaw) {
 		for i := range dst.Units {
 			dst.Units[i].Name = strings.TrimSpace(dst.Units[i].Name)
 			dst.Units[i].Command = strings.TrimSpace(dst.Units[i].Command)
-			dst.Units[i].Path = strings.TrimSpace(dst.Units[i].Path)
-			if dst.Units[i].Path == "" {
-				dst.Units[i].Path = "."
-			}
+			dst.Units[i].Path = NormalizeUnitPath(dst.Units[i].Path)
 		}
 	}
 }
@@ -2782,20 +2792,21 @@ func validateTestRaw(test TestRaw) error {
 		if strings.TrimSpace(unit.Command) == "" {
 			return fmt.Errorf("test.units[%d].command is required (unit %q)", i, name)
 		}
-		// The Test step matches changed files against a slash-normalised copy
-		// of this path, so validate the same string it will match. Checking the
-		// raw value instead let "\services\api" through on Windows, where
-		// filepath.IsAbs is false and there is no leading slash, and the step
-		// then matched "/services/api", which owns nothing.
-		path := strings.ReplaceAll(strings.TrimSpace(unit.Path), "\\", "/")
+		// The Test step matches changed files against the canonical form of
+		// this path, so validate that exact string. Checking a differently
+		// spelled value let "\services\api" through on Windows, where
+		// filepath.IsAbs is false and there is no leading slash, and let
+		// "api/.." through everywhere, which cleans to "." and owns the whole
+		// repository rather than the one directory the maintainer named.
+		unitPath := NormalizeUnitPath(unit.Path)
 		// The leading-slash check is not redundant with filepath.IsAbs: on
 		// Windows that returns false for "/services/api", and the daemon runs
 		// there too.
-		if filepath.IsAbs(path) || strings.HasPrefix(path, "/") {
-			return fmt.Errorf("test.units[%d].path must be repository-relative, got %q", i, path)
+		if filepath.IsAbs(unitPath) || strings.HasPrefix(unitPath, "/") {
+			return fmt.Errorf("test.units[%d].path must be repository-relative, got %q", i, unitPath)
 		}
-		if path == ".." || strings.HasPrefix(path, "../") || strings.Contains(path, "/../") {
-			return fmt.Errorf("test.units[%d].path must stay inside the repository, got %q", i, path)
+		if unitPath == ".." || strings.HasPrefix(unitPath, "../") {
+			return fmt.Errorf("test.units[%d].path must stay inside the repository, got %q", i, unitPath)
 		}
 		if seen[name] {
 			return fmt.Errorf("test.units has duplicate unit name %q", name)

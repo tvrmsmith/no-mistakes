@@ -102,16 +102,24 @@ Previous test findings to address:
 		return nil, err
 	}
 
+	tested := []string{}
+	ran := map[string]bool{}
+
 	// parkForMaintainer stops the step at a gate with one error finding rather
 	// than failing the run, the posture every unusable discovery answer takes:
 	// a maintainer fixes the configuration or the inferred layout and resumes.
+	// It carries whatever already ran this attempt, so a park that follows a
+	// green unit still names what it covered.
 	parkForMaintainer := func(description string) (*pipeline.StepOutcome, error) {
 		sctx.Log(description)
-		findings := Findings{Items: []Finding{{
-			Severity:    types.FindingSeverityError,
-			Action:      types.ActionAskUser,
-			Description: description,
-		}}}
+		findings := Findings{
+			Items: []Finding{{
+				Severity:    types.FindingSeverityError,
+				Action:      types.ActionAskUser,
+				Description: description,
+			}},
+			Tested: tested,
+		}
 		findingsJSON, _ := json.Marshal(findings)
 		return &pipeline.StepOutcome{
 			NeedsApproval: true,
@@ -140,8 +148,6 @@ Previous test findings to address:
 	}
 
 	multiUnit := len(discovery.Units) > 1
-	tested := []string{}
-	ran := map[string]bool{}
 
 	// Resolve every selected name against the layout before running anything.
 	// A name with no unit behind it has no command to run, and executing an
@@ -156,12 +162,13 @@ Previous test findings to address:
 		selectedUnits = append(selectedUnits, unit)
 	}
 
-	sctx.Log(fmt.Sprintf("selected test units (%s): %s", discovery.Source, strings.Join(discovery.Selected, ", ")))
-	for _, unit := range selectedUnits {
-		sctx.Log(fmt.Sprintf("unit %s: %s", unit.Name, unit.Command))
-	}
 	if len(discovery.Selected) == 0 {
-		sctx.Log("no test units selected for the changed files")
+		sctx.Log(fmt.Sprintf("no test units selected for the changed files (%s)", discovery.Source))
+	} else {
+		sctx.Log(fmt.Sprintf("selected test units (%s): %s", discovery.Source, strings.Join(discovery.Selected, ", ")))
+		for _, unit := range selectedUnits {
+			sctx.Log(fmt.Sprintf("unit %s: %s", unit.Name, unit.Command))
+		}
 	}
 
 	changedFilesEnv, omittedChangedFiles := changedFilesEnvValue(changed)
@@ -240,7 +247,12 @@ Previous test findings to address:
 
 		expanded := discovery
 		expanded.Selected = append(append([]string{}, discovery.Selected...), missingNames...)
-		sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), expanded)
+		// Only the agent source reads the cache back; discoverTestUnits derives
+		// the config and command selections fresh every time, so re-caching
+		// them would write a record nothing consults.
+		if discovery.Source == "agent" {
+			sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), expanded)
+		}
 		discovery = expanded
 
 		for _, unit := range missing {
@@ -272,9 +284,12 @@ Previous test findings to address:
 		if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create test evidence dir: %w", err)
 		}
-		if len(discovery.Selected) == 0 {
-			sctx.Log("no test command configured, asking agent to run tests...")
-		} else {
+		switch {
+		case len(discovery.Selected) == 0:
+			sctx.Log("no test units selected, asking agent to run tests...")
+		case discovery.Source == "agent":
+			sctx.Log("test units were inferred, asking agent to gather test evidence...")
+		default:
 			sctx.Log("user intent available, asking agent to gather test evidence...")
 		}
 		reassessHistory := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + testguidance.Rule

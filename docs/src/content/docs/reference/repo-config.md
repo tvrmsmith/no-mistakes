@@ -129,7 +129,7 @@ This per-repo `agent` value, including every fallback entry, is still read from 
 
 ### allow_repo_commands
 
-Opt in to honoring the code-executing selection fields (`commands.{test,lint,format}` and `agent`) from a contributor's pushed branch instead of the trusted default-branch copy.
+Opt in to honoring the code-executing selection fields (`commands.{test,lint,format}`, `test.units`, and `agent`) from a contributor's pushed branch instead of the trusted default-branch copy.
 
 | | |
 | --- | --- |
@@ -236,8 +236,9 @@ Explicit **targeted** local test command. Run via the platform shell - `sh -c` o
 Broad regression belongs in remote CI and remains mandatory before a PR is ready; do not put a complete-suite walk here just to mirror CI.
 no-mistakes does not guess whether an arbitrary shell string is "too broad" - the contract is documented and dogfooded, not enforced with language- or filename-specific heuristics.
 
-When set, the test step runs this exact command first as the baseline and checks the exit code.
-When empty, the agent detects and runs the smallest relevant tests itself (and is instructed never to run the complete repository suite).
+When set and [`test.units`](#testunits) is empty, the test step runs this exact command first as the baseline and checks the exit code.
+A configured `test.units` layout wins outright, and `commands.test` is then not used at all; discovery logs the selected units and their commands so the run names what it covered.
+When both are empty, the agent detects and runs the smallest relevant tests itself (and is instructed never to run the complete repository suite).
 When user intent is available, the agent may still run after a successful baseline command to gather evidence-oriented validation, still under the same targeted-validation contract.
 
 `commands.test` collapses the whole repository into one implicit test unit. For a monorepo with several independently testable services, see [`test.units`](#testunits), which lets the test step select and run only the units a change touches.
@@ -536,7 +537,7 @@ Declare the repository's independently testable units, so the test step selects 
 | `test.units[].path` | `string` | `.` |
 | `test.units[].command` | `string` | Required |
 
-Each unit is a service, package, or the repository itself. `path` is the repository-relative directory the unit owns; a changed file under `path` belongs to that unit. `path` defaults to `.`, meaning the unit owns the whole repository.
+Each unit is a service, a directory of code with its own test command, or the repository itself. `path` is the repository-relative directory the unit owns; a changed file under `path` belongs to that unit. `path` defaults to `.`, meaning the unit owns the whole repository.
 
 `command` runs verbatim via the platform shell, exactly like `commands.test`, and should cover the unit, integration, and service-isolation test tiers for that unit. End-to-end tests stay in CI; do not put them in a unit command.
 
@@ -548,7 +549,7 @@ The command receives three environment variables so it can scope itself the same
 | `NO_MISTAKES_CHANGED_FILES` | The changed paths, one per line |
 | `NO_MISTAKES_CHANGED_FILE_COUNT` | How many paths the run changed |
 
-`NO_MISTAKES_CHANGED_FILES` cannot represent every path. A path containing a newline is omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. `NO_MISTAKES_CHANGED_FILE_COUNT` always reports the true total, so a command can detect the gap by comparing the count with the number of lines it read.
+`NO_MISTAKES_CHANGED_FILES` separates paths with a newline, because an environment variable cannot carry a NUL. A path containing a newline or a carriage return is therefore omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. `NO_MISTAKES_CHANGED_FILE_COUNT` always reports the true total, so a command can detect the gap by comparing the count with the number of lines it read.
 
 `command` runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so the whole `test.units` list is honored only from the trusted default-branch copy of this file unless the repository opts in via `allow_repo_commands: true` - see [`allow_repo_commands`](#allow_repo_commands). A contributor's pushed branch cannot inject shell by naming a new unit or repointing an existing one's command.
 

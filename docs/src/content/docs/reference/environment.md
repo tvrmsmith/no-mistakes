@@ -293,7 +293,7 @@ Set by no-mistakes, not read from it. Every unit test command receives this as t
 
 Set by no-mistakes, not read from it. Every unit test command receives this as the run's changed paths, one per line.
 
-It cannot represent every path. A path containing a newline is omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. Compare the line count with `NO_MISTAKES_CHANGED_FILE_COUNT` to detect either case.
+Paths are newline-separated, because an environment variable cannot carry a NUL. A path containing a newline or a carriage return is therefore omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. Compare the line count with `NO_MISTAKES_CHANGED_FILE_COUNT` to detect either case.
 
 |         |          |
 | ------- | -------- |

@@ -20,8 +20,10 @@ import (
 
 // oneRepositoryUnitLayout answers the discovery pass with a single unit whose
 // command does nothing, so a test that cares only about the evidence pass gets
-// past discovery without asserting anything about it.
-const oneRepositoryUnitLayout = `{"units":[{"name":"repository","path":".","command":"true"}],"selected":["repository"]}`
+// past discovery without asserting anything about it. The command is "exit 0"
+// rather than "true" because the daemon runs a unit command through cmd.exe on
+// Windows, where "true" is not a command and the unit would fail the step.
+const oneRepositoryUnitLayout = `{"units":[{"name":"repository","path":".","command":"exit 0"}],"selected":["repository"]}`
 
 // isDiscoveryCall reports whether an agent invocation is the discovery pass.
 // It keys on the schema rather than on prompt text so a prompt rewrite does
