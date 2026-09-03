@@ -644,7 +644,7 @@ func TestStartRunAbortsWhenItCannotPersistTheSkipSet(t *testing.T) {
 	}
 
 	runID, err := manager.startRun(context.Background(), repo, "main", head, refreshTestZeroSHA, "test",
-		[]types.StepName{types.StepPush, types.StepPR}, "")
+		[]types.StepName{types.StepPush, types.StepPR}, "", "")
 	if err == nil {
 		t.Fatal("start run should fail when the requested skip set cannot be persisted")
 	}

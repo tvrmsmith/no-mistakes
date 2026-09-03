@@ -1205,7 +1205,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		runID, err := mgr.HandleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent)
+		runID, err := mgr.HandleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent, p.PRBaseBranch)
 		if err != nil {
 			return nil, err
 		}
@@ -1341,6 +1341,7 @@ func runToInfo(d *db.DB, r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 		Error:              r.Error,
 		CIReady:            r.CIReadyAt != nil,
 		CIReadyNoCI:        r.CIReadyNoCI,
+		PRBaseBranch:       r.PRBaseBranch,
 		AwaitingAgent:      r.AwaitingAgentSince != nil,
 		AwaitingAgentSince: r.AwaitingAgentSince,
 		CreatedAt:          r.CreatedAt,
@@ -1349,7 +1350,11 @@ func runToInfo(d *db.DB, r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 	if len(steps) > 0 {
 		info.Steps = make([]ipc.StepResultInfo, 0, len(steps))
 		for _, s := range steps {
-			info.Steps = append(info.Steps, stepToInfo(d, s))
+			stepInfo := stepToInfo(d, s)
+			info.Steps = append(info.Steps, stepInfo)
+			if info.CIOverrideReason == "" && stepInfo.OverrideReason != "" {
+				info.CIOverrideReason = stepInfo.OverrideReason
+			}
 		}
 	}
 	return info
@@ -1371,6 +1376,9 @@ func stepToInfo(d *db.DB, s *db.StepResult) ipc.StepResultInfo {
 		LastActivityAt: s.LastActivityAt,
 		LastActivity:   s.LastActivity,
 		AgentPID:       s.AgentPID,
+	}
+	if s.OverrideReason != nil {
+		info.OverrideReason = *s.OverrideReason
 	}
 	if s.AutoFixLimit != nil {
 		info.AutoFixLimit = *s.AutoFixLimit

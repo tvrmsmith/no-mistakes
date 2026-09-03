@@ -101,13 +101,15 @@ An active run on another branch does not block starting validation for the curre
 no-mistakes axi run --intent "the user's goal"
 no-mistakes axi run --intent "the user's goal" --skip test,lint
 no-mistakes axi run --intent "the user's goal" --yes
+no-mistakes axi run --intent "the user's goal" --base-branch epic/foo
 ```
 
-| Flag          | Type     | Default | Description                                                      |
-| ------------- | -------- | ------- | ---------------------------------------------------------------- |
-| `--intent`    | `string` | (none)  | What the user set out to accomplish; required to start a new run |
-| `-y`, `--yes` | `bool`   | `false` | Auto-resolve every gate until a decision point or outcome        |
-| `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip                           |
+| Flag            | Type     | Default | Description                                                                                          |
+| --------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `--intent`      | `string` | (none)  | What the user set out to accomplish; required to start a new run                                     |
+| `-y`, `--yes`   | `bool`   | `false` | Auto-resolve every gate until a decision point or outcome                                            |
+| `--skip`        | `string` | (none)  | Comma-separated pipeline steps to skip                                                               |
+| `--base-branch` | `string` | (none)  | Integration branch for this run only; overrides [`pr.base_branch`](/no-mistakes/reference/repo-config/#prbase_branch) |
 
 `--intent` is not a description of the diff.
 It is the user's goal or request, and no-mistakes uses it verbatim instead of transcript inference.
@@ -115,6 +117,8 @@ Err on the side of completeness: include the goal, important decisions and trade
 When starting a new run, `axi run` refuses the default branch and uncommitted working trees with actionable errors instead of auto-branching or auto-committing.
 Reattaching to an in-flight run does not require `--intent`.
 A fresh run started without it is refused with the `branch_sync` object attached, so a branch the pipeline pushed commits to reports its `next_action` in the same output; when that action is a synchronization one, the refusal also names the command to run first.
+`--base-branch` is persisted on the run so rebase, PR, and CI honor it after resume.
+Reattaching with a `--base-branch` that differs from the active run's stored target is refused rather than silently discarded; omit the flag to reattach, or abort the active run first.
 Reattachment accepts either the run's immutable submitted head or its current pipeline head, so pipeline-created fix commits do not detach an unchanged submitting worktree.
 When neither identity matches, `axi run` keeps the fresh-run path but refuses a gate push while `branch_sync` says the pipeline still owns the branch.
 That refusal returns the complete structured state and its `continue_active_run` or `recover_custody` next action instead of a raw Git non-fast-forward.
@@ -134,7 +138,8 @@ If that PR later falls behind the default branch or hits a merge conflict, do no
 The monitor auto-rebases onto the base, resolves actual conflicts, revalidates from Review because rebasing cannot prove continuity with the reviewed head, and re-pushes the branch through Push; a PR that is merely behind but clean needs no command.
 Use `no-mistakes rerun` only after that monitor is no longer running, such as a closed PR, aborted or superseded run, idle timeout, or exhausted CI auto-fix attempts.
 When the dead run left pipeline commits your clone lacks, run `no-mistakes axi sync` before the rerun, not after: the rerun's own pending run carries no push binding, so synchronization is refused until it ends.
-Successful outcomes (`checks-passed` and `passed`) also carry `help` instructions telling the agent to summarize the run.
+Successful outcomes (`checks-passed`, `passed`, and `passed-with-override`) also carry `help` instructions telling the agent to summarize the run.
+`passed-with-override` is a completed run whose CI approval gate was approved by a human while a live check was still failing; it stays a success but reads distinctly from a genuinely green `passed`, and its `help` names the failure the operator approved past.
 When the pipeline applied fixes, they include a `fixes` table and a `help` instruction to acknowledge the misses and list those fixes for the user's review.
 
 ## no-mistakes axi respond

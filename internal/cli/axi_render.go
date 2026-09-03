@@ -127,6 +127,11 @@ type runView struct {
 	// the top-level parked signal in the run object.
 	AwaitingAgentSince *int64
 	Steps              []stepView
+	// CIOverrideReason is non-empty when a human approved past a still-failing
+	// live check (see pipeline.ApprovalOverrideVerifier). outcomeForRun uses
+	// it to keep a deliberate override from reading identically to a
+	// genuinely green run in agent-facing output.
+	CIOverrideReason string
 }
 
 func runViewFromIPC(r *ipc.RunInfo) runView {
@@ -138,6 +143,7 @@ func runViewFromIPC(r *ipc.RunInfo) runView {
 		CIReady:            r.CIReady,
 		CIReadyNoCI:        r.CIReadyNoCI,
 		AwaitingAgentSince: r.AwaitingAgentSince,
+		CIOverrideReason:   r.CIOverrideReason,
 	}
 	if r.PRURL != nil {
 		rv.PRURL = *r.PRURL
@@ -201,6 +207,13 @@ func runViewFromDB(r *db.Run, steps []*db.StepResult) runView {
 		}
 		if s.FindingsJSON != nil {
 			sv.FindingsJSON = *s.FindingsJSON
+		}
+		// Mirror executor.runOverrideReason / RunInfo.CIOverrideReason: the run's
+		// override reason is the first step that recorded one. Without this the
+		// DB-backed status path reads a passed-with-override run as a plain pass,
+		// disagreeing with the live IPC path and outcomeForRun.
+		if rv.CIOverrideReason == "" && s.OverrideReason != nil && *s.OverrideReason != "" {
+			rv.CIOverrideReason = *s.OverrideReason
 		}
 		rv.Steps = append(rv.Steps, sv)
 	}
