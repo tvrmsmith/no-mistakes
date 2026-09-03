@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -323,6 +326,17 @@ func shortenDrainReclassify(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { drainReclassifyInterval = prev })
 }
 
+// withDrainLoopHooks installs the wait-loop and finish-delivery seams for one
+// test and restores them afterwards.
+func withDrainLoopHooks(t *testing.T, iteration, delivered func()) {
+	t.Helper()
+	prevIteration, prevDelivered := drainWaitIterationHook, drainFinishDeliveredHook
+	drainWaitIterationHook, drainFinishDeliveredHook = iteration, delivered
+	t.Cleanup(func() {
+		drainWaitIterationHook, drainFinishDeliveredHook = prevIteration, prevDelivered
+	})
+}
+
 // TestDrain_ActiveCIStepWithoutPRURLIsNotCut pins the pr_url half of the CI
 // classification. The CI step row is already running while the step builds
 // its forge host and before it bails out with "no PR URL found", and a drain
@@ -628,49 +642,158 @@ func TestDrain_InitiallyParkedRunThatUnparksIsWaitedOn(t *testing.T) {
 	}
 }
 
-// TestDrain_WaitEndingWithoutTheDeadlineDoesNotBlameTheDeadline pins the
-// reason on the third way out of the wait: every run it was still waiting on
-// finished, while a run it had released is working again. No deadline fired
-// there, and claiming one sends the operator to raise --drain-timeout for a
-// problem raising it cannot fix.
-func TestDrain_WaitEndingWithoutTheDeadlineDoesNotBlameTheDeadline(t *testing.T) {
-	// No tick fires during this drain, so the released run is still released
-	// when the last waited run finishes and the wait runs out of work.
+// TestDrain_GateAnsweredWithNothingLeftToWaitOnIsNotAbandoned covers the run
+// an operator answers in the window between two reclassify ticks, when the
+// last run the drain was still waiting on finishes. Running out of runs to
+// wait on is not the same as the work being over: that answered run is doing
+// real git and agent work again, and the shutdown behind this drain is about
+// to kill it. The drain waits it out like any other in-flight run instead.
+//
+// No tick fires during this drain, so the re-admission can only come from the
+// pass the drain makes before it declares the wait finished.
+func TestDrain_GateAnsweredWithNothingLeftToWaitOnIsNotAbandoned(t *testing.T) {
 	shortenDrainReclassify(t, time.Hour)
 	m, database, repo := newDrainTestManager(t)
-	parked, _, _ := registerFakeRun(t, m, database, repo, "parked")
+	parked, parkedCtx, _ := registerFakeRun(t, m, database, repo, "parked")
 	parkRunAwaitingAgent(t, database, parked)
+	// registerFakeRun's done channels are unbuffered, so a send completes
+	// exactly when Drain's funnel goroutine receives it. Those goroutines
+	// start after classification, so the first send proves the parked run was
+	// already classified as exempt, and the gate is answered before the second
+	// send empties the wait. No sleep, and answering early fails the test
+	// rather than passing it.
+	_, _, controlDone := registerFakeRun(t, m, database, repo, "control")
 	_, _, workingDone := registerFakeRun(t, m, database, repo, "working")
 
+	const deadline = 2 * time.Second
 	unparkErr := make(chan error, 1)
 	go func() {
-		// Margin for the drain to classify the parked run as exempt first. Too
-		// short and the drain waits the unparked run out to its 30s deadline
-		// instead, which the elapsed check below fails on.
-		time.Sleep(100 * time.Millisecond)
-		// The operator answers the gate, then the other run finishes and the
-		// wait has nothing left to wait on.
-		err := database.CompleteRunAwaitingAgent(parked.ID, 100)
-		unparkErr <- err
-		close(workingDone)
+		controlDone <- struct{}{}
+		if err := database.CompleteRunAwaitingAgent(parked.ID, 0); err != nil {
+			unparkErr <- err
+			return
+		}
+		workingDone <- struct{}{}
+		unparkErr <- nil
 	}()
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 30*time.Second)
+	report := m.Drain(context.Background(), deadline)
 	elapsed := time.Since(start)
 
 	if err := <-unparkErr; err != nil {
 		t.Fatalf("unpark the run: %v", err)
 	}
-	if elapsed >= 10*time.Second {
-		t.Fatalf("Drain took %v, want it to return once nothing was left to wait on", elapsed)
+	if elapsed < deadline {
+		t.Fatalf("Drain returned after %v, want it to wait on the answered run %s until the %v deadline", elapsed, parked.ID, deadline)
+	}
+	if !containsRunID(report.Waited, parked.ID) {
+		t.Fatalf("Waited = %v, want the answered run %s back in the wait", report.Waited, parked.ID)
 	}
 	entry, ok := findInterrupted(report.Interrupted, parked.ID)
-	if !ok {
-		t.Fatalf("Interrupted = %v, want an entry for the resumed run %s", report.Interrupted, parked.ID)
+	if !ok || entry.Reason != ipc.DrainInterruptedDeadline {
+		t.Fatalf("Interrupted = %v, want a %s entry for the answered run %s", report.Interrupted, ipc.DrainInterruptedDeadline, parked.ID)
 	}
-	if entry.Reason != ipc.DrainInterruptedShutdown {
-		t.Fatalf("Interrupted entry reason = %s, want %s: the %v deadline never fired", entry.Reason, ipc.DrainInterruptedShutdown, 30*time.Second)
+	if cause := context.Cause(parkedCtx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil: Drain never cancels a run it waited on", cause)
+	}
+}
+
+// TestDrain_RunThatParksAfterTheLastTickIsNotReportedAsCut covers the run that
+// parks at a gate between the final reclassify tick and the deadline. Shutdown
+// applies the same predicate moments later, sees it parked, and preserves it
+// for the next start to resume, so a report calling it forcibly stopped
+// contradicts what actually happens to it and exits nonzero over it.
+func TestDrain_RunThatParksAfterTheLastTickIsNotReportedAsCut(t *testing.T) {
+	// No tick fires, so nothing exempts the run before the deadline does.
+	shortenDrainReclassify(t, time.Hour)
+	m, database, repo := newDrainTestManager(t)
+	run, runCtx, _ := registerFakeRun(t, m, database, repo, "feature")
+	_, _, controlDone := registerFakeRun(t, m, database, repo, "control")
+
+	parkErr := make(chan error, 1)
+	go func() {
+		// Completes when the funnel receives it, which proves the drain
+		// already classified this run as ordinary in-flight work.
+		controlDone <- struct{}{}
+		parkErr <- parkRunAwaitingAgentErr(database, run)
+	}()
+
+	report := m.Drain(context.Background(), time.Second)
+
+	if err := <-parkErr; err != nil {
+		t.Fatalf("park the run: %v", err)
+	}
+	if entry, ok := findInterrupted(report.Interrupted, run.ID); ok {
+		t.Fatalf("Interrupted = %v, want no entry for run %s, which the shutdown preserves and the next start resumes", entry, run.ID)
+	}
+	if containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want it to exclude the parked run %s", report.Waited, run.ID)
+	}
+	if cause := context.Cause(runCtx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil", cause)
+	}
+}
+
+// TestDrain_CompletionsAlreadyDeliveredWhenTheDaemonStopsAreCredited covers a
+// burst of runs finishing just as a SIGTERM or a concurrent stop lands. The
+// wait loop reads one completion per pass, so the rest sit in the funnel's
+// channel when the shutdown signal ends the wait. Reporting those as stopped
+// mid-flight tells the operator that a drain which did its whole job finished
+// nothing, and exits nonzero over it.
+func TestDrain_CompletionsAlreadyDeliveredWhenTheDaemonStopsAreCredited(t *testing.T) {
+	shortenDrainReclassify(t, time.Hour)
+	m, database, repo := newDrainTestManager(t)
+
+	const finishers = 3
+	ids := make([]string, 0, finishers)
+	for i := range finishers {
+		run, _, done := registerFakeRun(t, m, database, repo, fmt.Sprintf("done-%d", i))
+		ids = append(ids, run.ID)
+		close(done)
+	}
+	// One run that never finishes, so the wait cannot end on its own.
+	blocker, _, _ := registerFakeRun(t, m, database, repo, "blocker")
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	deliveries := make(chan struct{}, finishers)
+	var once sync.Once
+	withDrainLoopHooks(t,
+		func() {
+			once.Do(func() {
+				close(entered)
+				<-release
+			})
+		},
+		func() { deliveries <- struct{}{} },
+	)
+
+	reports := make(chan DrainReport, 1)
+	go func() { reports <- m.Drain(context.Background(), 30*time.Second) }()
+
+	// The wait loop is held before its first pass, so nothing has consumed a
+	// completion yet; waiting on the delivery hook proves all three are in the
+	// channel before the shutdown signal ends the wait.
+	<-entered
+	for range finishers {
+		<-deliveries
+	}
+	m.signalShutdown()
+	close(release)
+
+	report := <-reports
+	for _, id := range ids {
+		if !containsRunID(report.Finished, id) {
+			t.Fatalf("Finished = %v, want it to contain %s, which finished before the daemon stopped", report.Finished, id)
+		}
+		if entry, ok := findInterrupted(report.Interrupted, id); ok {
+			t.Fatalf("Interrupted = %v, want no entry for %s", entry, id)
+		}
+	}
+	entry, ok := findInterrupted(report.Interrupted, blocker.ID)
+	if !ok || entry.Reason != ipc.DrainInterruptedShutdown {
+		t.Fatalf("Interrupted = %v, want a %s entry for the run that never finished", report.Interrupted, ipc.DrainInterruptedShutdown)
 	}
 }
 
@@ -991,13 +1114,20 @@ func TestDrain_ExemptRunThatFinishesIsReportedFinished(t *testing.T) {
 // shutdown's wait receives it. The first send proves the preserve decision is
 // already made, and the gate is answered before the second send releases the
 // wait.
+//
+// The sweep belongs to the shutdown behind a drain, so the drain runs first.
 func TestShutdown_PreservedRunThatLeavesItsGateIsCancelled(t *testing.T) {
 	m, database, repo := newDrainTestManager(t)
-	parked, parkedCtx, _ := registerFakeRun(t, m, database, repo, "parked")
+	parked, parkedCtx, parkedDone := registerFakeRun(t, m, database, repo, "parked")
 	if err := database.UpdateRunStatus(parked.ID, types.RunRunning); err != nil {
 		t.Fatal(err)
 	}
 	parkRunAwaitingAgent(t, database, parked)
+
+	// Drained first, and with nothing but the parked run registered: a drain
+	// leaves a funnel goroutine on every run it saw, and one of those would
+	// receive the control sends below instead of the shutdown wait.
+	m.Drain(context.Background(), time.Millisecond)
 
 	// Shutdown waits on its cancelled runs in sorted run-ID order.
 	firstRun, _, firstDone := registerFakeRun(t, m, database, repo, "control-a")
@@ -1011,6 +1141,8 @@ func TestShutdown_PreservedRunThatLeavesItsGateIsCancelled(t *testing.T) {
 		firstDone <- struct{}{}
 		unparked <- database.CompleteRunAwaitingAgent(parked.ID, 0)
 		secondDone <- struct{}{}
+		// The sweep waits on what it cancels, the way the main wait does.
+		close(parkedDone)
 	}()
 
 	m.Shutdown()
@@ -1025,5 +1157,140 @@ func TestShutdown_PreservedRunThatLeavesItsGateIsCancelled(t *testing.T) {
 	}
 	if context.Cause(parkedCtx) == nil {
 		t.Fatal("a preserved run that left its gate during shutdown was not cancelled, so it kept working while the process exited")
+	}
+}
+
+// TestShutdown_PlainStopKeepsARunThatLeavesItsGate is the other half: an
+// ordinary `daemon stop` promises nothing about in-flight runs and has always
+// preserved a parked one for the next start. A drain hands the operator a
+// report and owes it the truth, so the sweep belongs to that path alone; here
+// the run survives the stop untouched and stays resumable.
+func TestShutdown_PlainStopKeepsARunThatLeavesItsGate(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	parked, parkedCtx, _ := registerFakeRun(t, m, database, repo, "parked")
+	if err := database.UpdateRunStatus(parked.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	parkRunAwaitingAgent(t, database, parked)
+
+	firstRun, _, firstDone := registerFakeRun(t, m, database, repo, "control-a")
+	secondRun, _, secondDone := registerFakeRun(t, m, database, repo, "control-b")
+	if firstRun.ID > secondRun.ID {
+		firstDone, secondDone = secondDone, firstDone
+	}
+
+	unparked := make(chan error, 1)
+	go func() {
+		firstDone <- struct{}{}
+		unparked <- database.CompleteRunAwaitingAgent(parked.ID, 0)
+		secondDone <- struct{}{}
+	}()
+
+	start := time.Now()
+	m.Shutdown()
+	elapsed := time.Since(start)
+
+	select {
+	case err := <-unparked:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("the gate was never answered; the control runs did not sequence the shutdown")
+	}
+	if cause := context.Cause(parkedCtx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil: a plain stop preserves a run that leaves its gate", cause)
+	}
+	if elapsed >= 10*time.Second {
+		t.Fatalf("Shutdown took %v, want a plain stop to skip the drain's second wait entirely", elapsed)
+	}
+	after, err := database.GetRun(parked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != types.RunRunning {
+		t.Fatalf("run status = %s, want %s so the next start can pick it up", after.Status, types.RunRunning)
+	}
+}
+
+// closeRecordingAgent is a no-op agent that remembers whether it was closed.
+type closeRecordingAgent struct {
+	agent.Agent
+	closed atomic.Bool
+}
+
+func (a *closeRecordingAgent) Close() error {
+	a.closed.Store(true)
+	return a.Agent.Close()
+}
+
+// TestRefuseStartedRun_ReleasesEverythingTheRunAlreadyBuilt covers the run the
+// refuse-new-runs latch turns away at registration, after startRun already
+// resolved its agent. The pipeline goroutine that normally owns that teardown
+// never launches, so nothing else closes the agent's subprocesses or the
+// subscribers an attached TUI is waiting on, and the row must not read as a
+// pipeline failure for work that never ran.
+func TestRefuseStartedRun_ReleasesEverythingTheRunAlreadyBuilt(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, err := database.InsertRun(repo.ID, "feature", "deadbeef", "cafef00d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := subscribeDrained(t, m, run.ID)
+	defer sub.Close()
+
+	ag := &closeRecordingAgent{Agent: agent.NewNoop()}
+	_, cancel := context.WithCancelCause(context.Background())
+	refusal := fmt.Errorf("daemon is shutting down")
+
+	m.refuseStartedRun(run.ID, ag, cancel, refusal)
+
+	if !ag.closed.Load() {
+		t.Fatal("the refused run's agent was never closed, so its subprocesses outlive the run")
+	}
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	for {
+		event, ok := sub.Next(ctx)
+		if !ok {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("the subscriber was never closed; it waits on a run that can no longer emit (last event %+v)", event)
+		}
+	}
+	after, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != types.RunCancelled {
+		t.Fatalf("run status = %s, want %s: nothing of the pipeline ran, so a failure is a false report", after.Status, types.RunCancelled)
+	}
+}
+
+// TestDrainedAndAlive_SeparatesARecoverableDaemonFromAnExitingOne pins the two
+// refusing states apart. An ordinary stop refuses runs on its way out and
+// needs no operator; only a drain_only whose service-manager exit never landed
+// does, and that is the one `daemon status` offers a restart for.
+func TestDrainedAndAlive_SeparatesARecoverableDaemonFromAnExitingOne(t *testing.T) {
+	m, _, _ := newDrainTestManager(t)
+
+	if m.RefusingNewRuns() || m.DrainedAndAlive() {
+		t.Fatalf("a fresh manager reports RefusingNewRuns=%v DrainedAndAlive=%v, want both false", m.RefusingNewRuns(), m.DrainedAndAlive())
+	}
+
+	m.Shutdown()
+
+	if !m.RefusingNewRuns() {
+		t.Fatal("a daemon that is shutting down still reports that it accepts runs")
+	}
+	if m.DrainedAndAlive() {
+		t.Fatal("an ordinary stop reported the drained-and-alive state, so `daemon status` tells the operator to restart a daemon that is already exiting")
+	}
+
+	m.MarkDrainedAlive()
+
+	if !m.DrainedAndAlive() {
+		t.Fatal("a drain_only that left the process running did not report the state an operator has to recover from")
 	}
 }

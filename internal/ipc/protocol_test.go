@@ -549,9 +549,14 @@ func TestShutdownWireIsAdditiveForOldPeers(t *testing.T) {
 			want:  `{"status":"ok"}`,
 		},
 		{
-			name:  "a drained daemon says so",
+			name:  "a daemon that is stopping on its own reports only the refusal",
 			value: HealthResult{Status: "ok", Drained: true},
 			want:  `{"status":"ok","drained":true}`,
+		},
+		{
+			name:  "a drained daemon waiting on a service manager says both",
+			value: HealthResult{Status: "ok", Drained: true, DrainedAlive: true},
+			want:  `{"status":"ok","drained":true,"drained_alive":true}`,
 		},
 	}
 

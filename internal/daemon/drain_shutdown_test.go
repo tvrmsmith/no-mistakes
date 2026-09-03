@@ -753,6 +753,12 @@ func TestShutdown_DrainOnlyDrainsWithoutExiting(t *testing.T) {
 	if !health.Drained {
 		t.Fatalf("health = %+v, want Drained: a daemon left alive by drain_only accepts nothing", health)
 	}
+	// The narrower bit, and the one `daemon status` offers a restart for. An
+	// ordinary stop sets Drained too and needs no operator; only this state
+	// lasts until somebody acts on it.
+	if !health.DrainedAlive {
+		t.Fatalf("health = %+v, want DrainedAlive: only this tells an operator the daemon is stuck rather than exiting", health)
+	}
 
 	// Still refusing work: a drained daemon that kept serving must not accept
 	// a push in the meantime.

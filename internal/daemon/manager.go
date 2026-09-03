@@ -54,6 +54,12 @@ type RunManager struct {
 	// refuses every push forever, so this is what lets `daemon status` and
 	// the refusal message name the state and its recovery command.
 	drainedAlive atomic.Bool
+	// drained records that a Drain ran on this manager. A drain hands the
+	// operator a report of what happened to every in-flight run, so the
+	// shutdown behind it owes that report the truth about a run that leaves
+	// its gate on the way out. An ordinary stop makes no such promise and
+	// keeps its untouched preserve-and-resume behavior.
+	drained atomic.Bool
 	// shutdownCh is closed by Shutdown BEFORE it cancels a single run, so a
 	// Drain running concurrently learns the daemon is going away rather than
 	// watching the runs shutdown just killed close their done channels and
@@ -1176,8 +1182,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	done := make(chan struct{})
 	if !m.registerActiveRun(run.ID, executor, cancel, done) {
 		refusal := m.refuseNewRunError()
-		cancel(refusal)
-		m.db.UpdateRunError(run.ID, refusal.Error())
+		m.refuseStartedRun(run.ID, ag, cancel, refusal)
 		trackStartFailure("daemon_shutdown")
 		return "", refusal
 	}
@@ -1452,6 +1457,18 @@ var drainReclassifyInterval = 5 * time.Second
 // a seam here.
 var drainBeforeReportHook func()
 
+// drainWaitIterationHook runs at the top of every pass of Drain's wait loop,
+// and drainFinishDeliveredHook runs once the funnel has handed a completion to
+// the wait loop's channel. Both nil outside tests. What the report says about
+// a run that finished just as the daemon shut down turns on the order of those
+// two events, and neither is observable from outside Drain, so a test that
+// pins that order needs the loop held at a known point while the completions
+// it is racing are provably in the channel.
+var (
+	drainWaitIterationHook   func()
+	drainFinishDeliveredHook func()
+)
+
 // isCIMonitorRun reports whether a run is parked in its CI monitor: it has a
 // PR URL, a running step_results row for types.StepCI, and no running row for
 // any OTHER step name. The PR URL matters: the CI step row is already running
@@ -1513,6 +1530,26 @@ func (m *RunManager) registerActiveRun(runID string, executor *pipeline.Executor
 	return true
 }
 
+// refuseStartedRun releases everything startRun built for a run the
+// refuse-new-runs latch turned away at registration. Normally the pipeline
+// goroutine's deferred teardown owns this, and that goroutine never launches
+// here: the agent's subprocesses would stay alive, and a subscriber (an
+// attached TUI) would wait on a run that can no longer emit anything.
+//
+// The row lands cancelled rather than failed. Nothing of the pipeline ran, so
+// reporting a failure would put a red run in front of a contributor for work
+// the daemon deliberately declined to start.
+func (m *RunManager) refuseStartedRun(runID string, ag agent.Agent, cancel context.CancelCauseFunc, refusal error) {
+	cancel(refusal)
+	if ag != nil {
+		ag.Close()
+	}
+	m.closeSubscribers(runID)
+	if err := m.db.UpdateRunErrorStatus(runID, refusal.Error(), types.RunCancelled); err != nil {
+		slog.Warn("failed to record a refused run as cancelled", "run_id", runID, "error", err)
+	}
+}
+
 // runParkedAtGate reports whether a run is currently parked at an approval
 // gate. A DB read that fails answers false: the caller then treats the run as
 // ordinary in-flight work, which is the safe reading for both callers (Drain
@@ -1552,6 +1589,7 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 	// un-drain path, and startRun's shuttingDown check must see this
 	// immediately for every push that arrives after Drain begins.
 	m.shuttingDown.Store(true)
+	m.drained.Store(true)
 
 	m.mu.Lock()
 	cancels := make(map[string]context.CancelCauseFunc, len(m.cancels))
@@ -1611,10 +1649,14 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 	// Fan every done channel into one funnel so the deadline/ctx race can be
 	// expressed as a single select, without reflect.Select over a dynamic set.
 	finishedCh := make(chan string, len(entries))
+	delivered := drainFinishDeliveredHook
 	for _, e := range entries {
 		go func(e *drainWaitEntry) {
 			<-e.done
 			finishedCh <- e.runID
+			if delivered != nil {
+				delivered()
+			}
 		}(e)
 	}
 
@@ -1654,13 +1696,75 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 		released[id] = false
 		remaining++
 	}
+	// creditQueuedFinishes banks every completion the funnel has already
+	// delivered. The wait loop reads one message per iteration, so a shutdown
+	// arriving behind a burst of completions would otherwise walk away from
+	// runs that did finish and report them as stopped mid-flight.
+	creditQueuedFinishes := func() {
+		for {
+			select {
+			case id := <-finishedCh:
+				release(id)
+				finished[id] = true
+			default:
+				return
+			}
+		}
+	}
+	// reclassifyEntries re-reads every unfinished run: one can park at a gate
+	// or enter its CI monitor after the drain begins, and one released as
+	// parked can have its gate answered and go back to real work.
+	reclassifyEntries := func() {
+		for _, id := range order {
+			e := entries[id]
+			if finished[id] || e.ci {
+				continue
+			}
+			run, err := m.db.GetRun(id)
+			if err != nil || run == nil {
+				continue
+			}
+			if run.AwaitingAgentSince != nil {
+				if !e.exempt {
+					e.exempt = true
+					release(id)
+				}
+				continue
+			}
+			if e.exempt {
+				// The operator answered the gate and the run is working
+				// again. Exemption is not a latch: leaving it set would
+				// let a run the stop later kills appear in none of
+				// Waited, Finished, or Interrupted.
+				e.exempt = false
+				readmit(id)
+			}
+			if isCIMonitorRun(m.db, run) {
+				m.cutDrainedCIMonitor(e, cancels, &report)
+			}
+		}
+	}
 	for _, id := range order {
 		if entries[id].exempt {
 			release(id)
 		}
 	}
 waitLoop:
-	for remaining > 0 {
+	for {
+		if drainWaitIterationHook != nil {
+			drainWaitIterationHook()
+		}
+		if remaining == 0 {
+			// Running out of runs to wait on is not the same as the work
+			// being over: a run released as parked may have had its gate
+			// answered since the last tick, and it is back to real git and
+			// agent work that the stop after this drain would kill. Ask
+			// reality once more before declaring the wait finished.
+			reclassifyEntries()
+			if remaining == 0 {
+				break waitLoop
+			}
+		}
 		// Checked before the blocking select, not only inside it: once the
 		// daemon starts shutting down, the runs it cancels close their done
 		// channels, and a uniform select could take those as work that
@@ -1668,6 +1772,7 @@ waitLoop:
 		// answer whenever both are ready.
 		select {
 		case <-m.shutdownCh:
+			creditQueuedFinishes()
 			unfinishedReason = ipc.DrainInterruptedShutdown
 			endedByShutdown = true
 			break waitLoop
@@ -1678,6 +1783,7 @@ waitLoop:
 			// Shutdown() closes this before it cancels anything, so a drain
 			// racing a signal or a concurrent stop reports the runs it was
 			// waiting on as stopped mid-flight rather than as finished.
+			creditQueuedFinishes()
 			unfinishedReason = ipc.DrainInterruptedShutdown
 			endedByShutdown = true
 			break waitLoop
@@ -1685,36 +1791,7 @@ waitLoop:
 			release(id)
 			finished[id] = true
 		case <-reclassify.C:
-			// A run can park at a gate or enter its CI monitor after the
-			// drain begins; neither can be allowed to hold the deadline.
-			for _, id := range order {
-				e := entries[id]
-				if finished[id] || e.ci {
-					continue
-				}
-				run, err := m.db.GetRun(id)
-				if err != nil || run == nil {
-					continue
-				}
-				if run.AwaitingAgentSince != nil {
-					if !e.exempt {
-						e.exempt = true
-						release(id)
-					}
-					continue
-				}
-				if e.exempt {
-					// The operator answered the gate and the run is working
-					// again. Exemption is not a latch: leaving it set would
-					// let a run the stop later kills appear in none of
-					// Waited, Finished, or Interrupted.
-					e.exempt = false
-					readmit(id)
-				}
-				if isCIMonitorRun(m.db, run) {
-					m.cutDrainedCIMonitor(e, cancels, &report)
-				}
-			}
+			reclassifyEntries()
 		case <-deadlineTimer.C:
 			unfinishedReason = ipc.DrainInterruptedDeadline
 			break waitLoop
@@ -1723,6 +1800,7 @@ waitLoop:
 			// concurrent stop). The runs left over were not cut by the
 			// deadline, and telling the operator they were would point them at
 			// --drain-timeout for a problem raising it cannot fix.
+			creditQueuedFinishes()
 			unfinishedReason = ipc.DrainInterruptedShutdown
 			endedByShutdown = true
 			break waitLoop
@@ -1756,10 +1834,14 @@ waitLoop:
 			default:
 			}
 		}
-		if e.exempt && m.runParkedAtGate(id) {
-			// Still parked: released from the wait and, like a run parked
-			// before the drain began, left for Shutdown()'s
-			// preserve-and-resume path.
+		if !finished[id] && m.runParkedAtGate(id) {
+			// Parked: left for Shutdown()'s preserve-and-resume path, which
+			// applies this same predicate moments later. Asked of every
+			// unfinished run rather than only the ones a reclassify tick
+			// already exempted, because a run that parks between the last
+			// tick and the end of the wait is preserved and resumed all the
+			// same, and reporting it as forcibly stopped contradicts what
+			// happens to it.
 			continue
 		}
 		// An entry exempted mid-drain but no longer parked is reported like
@@ -1884,7 +1966,9 @@ func (m *RunManager) Shutdown() {
 		slog.Warn("timed out waiting for runs to finish during shutdown")
 	}
 
-	m.cancelUnparkedPreservedRuns(preservedIDs, cancels, dones)
+	if m.drained.Load() {
+		m.cancelUnparkedPreservedRuns(preservedIDs, cancels, dones)
+	}
 }
 
 // cancelUnparkedPreservedRuns catches a run that left its gate after Shutdown
@@ -1894,6 +1978,12 @@ func (m *RunManager) Shutdown() {
 // resumes real git and agent work on a run nothing is waiting for. Preserving
 // a parked run is the point; letting one run on unsupervised into process exit
 // is not, so anything no longer parked here is cancelled like any other run.
+//
+// Reserved for the shutdown behind a drain. That drain already told the
+// operator what became of every in-flight run, and this keeps that report
+// true. An ordinary `daemon stop` promises nothing of the sort and keeps its
+// original behavior, where a run that unparks on the way out survives the stop
+// and the next start resumes it.
 func (m *RunManager) cancelUnparkedPreservedRuns(preservedIDs []string, cancels map[string]context.CancelCauseFunc, dones map[string]chan struct{}) {
 	late := make([]chan struct{}, 0, len(preservedIDs))
 	for _, id := range preservedIDs {
@@ -1933,11 +2023,18 @@ func (m *RunManager) MarkDrainedAlive() {
 	m.drainedAlive.Store(true)
 }
 
-// RefusingNewRuns reports whether the daemon has stopped accepting runs, which
-// a health check surfaces so an operator can tell a drained daemon apart from
-// a working one.
+// RefusingNewRuns reports whether the daemon has stopped accepting runs. Any
+// stop sets this, including an ordinary one that is about to exit on its own,
+// so it describes the daemon's answer to a push and nothing more.
 func (m *RunManager) RefusingNewRuns() bool {
 	return m.shuttingDown.Load()
+}
+
+// DrainedAndAlive reports the one refusing state an operator has to act on: a
+// drain_only whose service-manager exit never landed. Unlike RefusingNewRuns
+// this is never true of a daemon that is simply on its way out.
+func (m *RunManager) DrainedAndAlive() bool {
+	return m.drainedAlive.Load()
 }
 
 // refuseNewRunError explains why a push was turned away. A drained-and-alive

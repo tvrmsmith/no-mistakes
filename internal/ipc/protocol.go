@@ -249,13 +249,16 @@ type AdmitPushResult struct {
 }
 
 // HealthResult confirms the daemon is alive. Drained says it is alive but no
-// longer accepting runs, either because a stop is in progress or because a
-// drain_only request left it running for a service manager that has not yet
-// stopped it. Omitted for a healthy daemon so an old CLI reading a bare
-// {"status":"ok"} sees nothing new.
+// longer accepting runs, which covers an ordinary stop that is still waiting
+// out its runs as well as a drain. DrainedAlive is the narrower state that
+// needs an operator: a drain_only request finished and the service manager
+// that owns the exit has not performed it, so the daemon refuses every run
+// until someone restarts it. Both are omitted for a healthy daemon so an old
+// CLI reading a bare {"status":"ok"} sees nothing new.
 type HealthResult struct {
-	Status  string `json:"status"`
-	Drained bool   `json:"drained,omitempty"`
+	Status       string `json:"status"`
+	Drained      bool   `json:"drained,omitempty"`
+	DrainedAlive bool   `json:"drained_alive,omitempty"`
 }
 
 // ShutdownResult confirms shutdown was initiated. Drained, Finished, and

@@ -525,21 +525,29 @@ func IsRunning(p *paths.Paths) (bool, error) {
 	return daemonHealthCheck(p)
 }
 
-// IsDrained reports whether a live daemon has stopped accepting new runs. A
+// DrainStatus is what a live daemon reports about accepting runs.
+// RefusingNewRuns covers every stop in progress; DrainedAlive is the narrower
+// state an operator has to recover from with a restart.
+type DrainStatus struct {
+	RefusingNewRuns bool
+	DrainedAlive    bool
+}
+
+// ReadDrainStatus asks a live daemon whether it is still accepting runs. A
 // daemon that cannot be reached is not drained, it is gone, so every dial or
-// call failure answers false.
-func IsDrained(p *paths.Paths) (bool, error) {
+// call failure answers the zero status alongside the error.
+func ReadDrainStatus(p *paths.Paths) (DrainStatus, error) {
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
-		return false, err
+		return DrainStatus{}, err
 	}
 	defer client.Close()
 
 	var result ipc.HealthResult
 	if err := client.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &result, ipc.DefaultDialTimeout); err != nil {
-		return false, err
+		return DrainStatus{}, err
 	}
-	return result.Drained, nil
+	return DrainStatus{RefusingNewRuns: result.Drained, DrainedAlive: result.DrainedAlive}, nil
 }
 
 func daemonIsRunningViaIPC(p *paths.Paths) (bool, error) {
@@ -615,6 +623,13 @@ func StopWithOptions(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
 	preDrain := opts.Drain && managedServiceInstalled(p)
 	if preDrain {
 		outcome, drainErr = requestDrain(p, opts)
+		if drainErr != nil {
+			// The service manager's own stop carries no drain semantics, so
+			// running it now would cancel outright the very runs --drain was
+			// invoked to protect, with no way left to retry. Leave the daemon
+			// alone instead and let the operator decide.
+			return outcome, fmt.Errorf("%w; the daemon was left running and its in-flight runs were not touched, so retry the drain or stop it without --drain", drainRequestError(drainErr))
+		}
 	}
 
 	if managed, err := stopManagedService(p); managed {

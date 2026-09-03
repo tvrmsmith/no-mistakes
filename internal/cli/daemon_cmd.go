@@ -19,11 +19,11 @@ import (
 )
 
 var (
-	daemonRun         = daemon.Run
-	daemonStartFn     = daemon.Start
-	daemonStopFn      = daemon.StopWithOptions
-	daemonIsRunningFn = daemon.IsRunning
-	daemonIsDrainedFn = daemon.IsDrained
+	daemonRun           = daemon.Run
+	daemonStartFn       = daemon.Start
+	daemonStopFn        = daemon.StopWithOptions
+	daemonIsRunningFn   = daemon.IsRunning
+	daemonDrainStatusFn = daemon.ReadDrainStatus
 )
 
 // defaultDrainTimeout is the CLI-side default for `--drain-timeout`, applied
@@ -592,14 +592,24 @@ func newDaemonStatusCmd() *cobra.Command {
 					if pid > 0 {
 						suffix = " " + sDim.Render(fmt.Sprintf("(pid %d)", pid))
 					}
-					// A drained daemon answers health but starts nothing. Say
-					// so: otherwise the only symptom an operator sees is every
-					// push being refused by a daemon this command called
-					// running.
-					if drained, _ := daemonIsDrainedFn(p); drained {
+					// A daemon that answers health can still be starting
+					// nothing. Say which: otherwise the only symptom an
+					// operator sees is every push being refused by a daemon
+					// this command called running. Only a drain_only whose
+					// service-manager exit never landed earns the recovery
+					// line; an ordinary stop is on its way out and needs no
+					// operator.
+					drain, drainErr := daemonDrainStatusFn(p)
+					switch {
+					case drainErr != nil:
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running%s\n", sGreen.Render("●"), suffix)
+						fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", sDim.Render(fmt.Sprintf("could not read whether it is still accepting runs: %v", drainErr)))
+					case drain.DrainedAlive:
 						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon drained, not accepting new runs%s\n", sYellow.Render("●"), suffix)
 						fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", sDim.Render("run `no-mistakes daemon restart` to accept runs again"))
-					} else {
+					case drain.RefusingNewRuns:
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopping, not accepting new runs%s\n", sYellow.Render("●"), suffix)
+					default:
 						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running%s\n", sGreen.Render("●"), suffix)
 					}
 				} else {

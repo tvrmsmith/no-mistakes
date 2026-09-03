@@ -1055,7 +1055,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 	}
 
 	srv.Handle(ipc.MethodHealth, func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		return &ipc.HealthResult{Status: "ok", Drained: mgr.RefusingNewRuns()}, nil
+		return &ipc.HealthResult{Status: "ok", Drained: mgr.RefusingNewRuns(), DrainedAlive: mgr.DrainedAndAlive()}, nil
 	})
 
 	var draining atomic.Bool

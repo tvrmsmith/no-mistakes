@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -711,42 +712,54 @@ func TestDrainLifecycleInvocationIsDistinguishableInTheCLILog(t *testing.T) {
 	}
 }
 
-// TestDaemonStatusReportsADrainedDaemon covers the state a managed-service
-// drain can leave behind: the drain finished, the daemon deliberately stayed
-// alive for its service manager to stop, and that stop never landed. The
-// process answers health, so "daemon running" is true and useless; every push
-// is refused and nothing in the status said why.
+// TestDaemonStatusReportsADrainedDaemon covers the states a stop can leave
+// behind. A drain on a managed install finishes and deliberately keeps the
+// daemon alive for its service manager to stop; when that stop never lands the
+// process answers health, so "daemon running" is true and useless. An ordinary
+// stop refuses runs too, but it is exiting on its own and needs no operator.
 func TestDaemonStatusReportsADrainedDaemon(t *testing.T) {
 	t.Setenv("NM_HOME", t.TempDir())
 
 	tests := []struct {
-		name    string
-		drained bool
-		want    string
-		absent  string
+		name   string
+		status daemon.DrainStatus
+		err    error
+		want   string
+		absent string
 	}{
 		{
-			name:    "a working daemon",
-			drained: false,
-			want:    "daemon running",
-			absent:  "drained",
+			name:   "a working daemon",
+			want:   "daemon running",
+			absent: "not accepting new runs",
 		},
 		{
-			name:    "a drained daemon",
-			drained: true,
-			want:    "daemon drained, not accepting new runs",
-			absent:  "daemon running",
+			name:   "a drained daemon waiting on a service manager",
+			status: daemon.DrainStatus{RefusingNewRuns: true, DrainedAlive: true},
+			want:   "daemon drained, not accepting new runs",
+			absent: "daemon running",
+		},
+		{
+			name:   "a daemon that is stopping on its own",
+			status: daemon.DrainStatus{RefusingNewRuns: true},
+			want:   "daemon stopping, not accepting new runs",
+			absent: "daemon restart",
+		},
+		{
+			name:   "health that could not be read",
+			err:    errors.New("dial: connection refused"),
+			want:   "could not read whether it is still accepting runs",
+			absent: "not accepting new runs\n",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			prevRunning, prevDrained := daemonIsRunningFn, daemonIsDrainedFn
+			prevRunning, prevDrained := daemonIsRunningFn, daemonDrainStatusFn
 			daemonIsRunningFn = func(*paths.Paths) (bool, error) { return true, nil }
-			daemonIsDrainedFn = func(*paths.Paths) (bool, error) { return tc.drained, nil }
+			daemonDrainStatusFn = func(*paths.Paths) (daemon.DrainStatus, error) { return tc.status, tc.err }
 			t.Cleanup(func() {
 				daemonIsRunningFn = prevRunning
-				daemonIsDrainedFn = prevDrained
+				daemonDrainStatusFn = prevDrained
 			})
 
 			out, err := executeCmd("daemon", "status")
@@ -768,12 +781,14 @@ func TestDaemonStatusReportsADrainedDaemon(t *testing.T) {
 func TestDaemonStatusOnADrainedDaemonNamesTheRecovery(t *testing.T) {
 	t.Setenv("NM_HOME", t.TempDir())
 
-	prevRunning, prevDrained := daemonIsRunningFn, daemonIsDrainedFn
+	prevRunning, prevDrained := daemonIsRunningFn, daemonDrainStatusFn
 	daemonIsRunningFn = func(*paths.Paths) (bool, error) { return true, nil }
-	daemonIsDrainedFn = func(*paths.Paths) (bool, error) { return true, nil }
+	daemonDrainStatusFn = func(*paths.Paths) (daemon.DrainStatus, error) {
+		return daemon.DrainStatus{RefusingNewRuns: true, DrainedAlive: true}, nil
+	}
 	t.Cleanup(func() {
 		daemonIsRunningFn = prevRunning
-		daemonIsDrainedFn = prevDrained
+		daemonDrainStatusFn = prevDrained
 	})
 
 	out, err := executeCmd("daemon", "status")
