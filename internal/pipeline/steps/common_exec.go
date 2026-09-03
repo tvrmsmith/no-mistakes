@@ -306,9 +306,40 @@ func runStepShellCommand(sctx *pipeline.StepContext, cmdStr string) (string, int
 // the base commit it validates against and the changed-file set, so a command
 // can scope itself the same way discovery did.
 const (
-	envTestBaseSHA      = "NO_MISTAKES_BASE_SHA"
-	envTestChangedFiles = "NO_MISTAKES_CHANGED_FILES"
+	envTestBaseSHA          = "NO_MISTAKES_BASE_SHA"
+	envTestChangedFiles     = "NO_MISTAKES_CHANGED_FILES"
+	envTestChangedFileCount = "NO_MISTAKES_CHANGED_FILE_COUNT"
 )
+
+// maxChangedFilesEnvBytes bounds NO_MISTAKES_CHANGED_FILES. A single
+// environment variable has a platform limit, and a very large diff can exceed
+// it, which makes the whole exec fail with a message about the test command
+// rather than about the variable that was too big.
+const maxChangedFilesEnvBytes = 96 * 1024
+
+// changedFilesEnvValue renders the changed-file list for
+// NO_MISTAKES_CHANGED_FILES and reports how many paths it left out.
+//
+// The value is newline separated, so a path that itself contains a newline
+// cannot be represented in it and is omitted rather than splitting into two
+// bogus paths for the consuming command. A list past the byte bound is dropped
+// whole rather than truncated into a half path. Either way
+// NO_MISTAKES_CHANGED_FILE_COUNT still reports the true total, so a command can
+// tell an omission from a genuinely small diff.
+func changedFilesEnvValue(changed []string) (value string, omitted int) {
+	usable := make([]string, 0, len(changed))
+	for _, path := range changed {
+		if strings.ContainsAny(path, "\n\r") {
+			continue
+		}
+		usable = append(usable, path)
+	}
+	value = strings.Join(usable, "\n")
+	if len(value) > maxChangedFilesEnvBytes {
+		return "", len(changed)
+	}
+	return value, len(changed) - len(usable)
+}
 
 // runStepShellCommandEnv runs a step's shell command with extra environment on
 // top of stepEnvironment.

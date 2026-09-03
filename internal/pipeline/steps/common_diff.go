@@ -104,7 +104,7 @@ func matchIgnorePattern(file, pattern string) bool {
 // changedPathsSince returns the changed-file set a step should act on: the
 // paths changed since baseSHA alone in fix mode (the fix commit stacked on
 // top of an already-diffed head), or the paths changed between baseSHA and
-// headSHA otherwise. Mirrors the changed-file read at review.go:158-168.
+// headSHA otherwise. Mirrors the changed-file read in ReviewStep.Execute.
 func changedPathsSince(ctx context.Context, workDir, baseSHA, headSHA string, fixing bool) ([]string, error) {
 	args := []string{"diff", "--name-only", "-z", "--no-renames"}
 	if fixing {

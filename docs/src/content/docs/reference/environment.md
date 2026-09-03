@@ -282,21 +282,32 @@ When set to a disabling value, telemetry stays off even if a runtime or embedded
 
 ## `NO_MISTAKES_BASE_SHA`
 
-Set by no-mistakes, not read from it. Every [`test.units`](/no-mistakes/reference/repo-config/#testunits) command receives this as the base commit the run is validating against, so the command can scope itself the same way discovery did.
+Set by no-mistakes, not read from it. Every unit test command receives this as the base commit the run is validating against, so the command can scope itself the same way discovery did. That covers a [`test.units`](/no-mistakes/reference/repo-config/#testunits) command and a [`commands.test`](/no-mistakes/reference/repo-config/#commandstest) command alike, since discovery treats the latter as one implicit `repository` unit.
 
 |         |          |
 | ------- | -------- |
 | Type    | `string` |
-| Default | (n/a; always set for a `test.units` command) |
+| Default | (n/a; always set for a unit test command) |
 
 ## `NO_MISTAKES_CHANGED_FILES`
 
-Set by no-mistakes, not read from it. Every [`test.units`](/no-mistakes/reference/repo-config/#testunits) command receives this as the run's changed paths, one per line.
+Set by no-mistakes, not read from it. Every unit test command receives this as the run's changed paths, one per line.
+
+It cannot represent every path. A path containing a newline is omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. Compare the line count with `NO_MISTAKES_CHANGED_FILE_COUNT` to detect either case.
 
 |         |          |
 | ------- | -------- |
 | Type    | `string` |
-| Default | (n/a; always set for a `test.units` command) |
+| Default | (n/a; always set for a unit test command) |
+
+## `NO_MISTAKES_CHANGED_FILE_COUNT`
+
+Set by no-mistakes, not read from it. Every unit test command receives this as the number of paths the run changed. It is the true total even when `NO_MISTAKES_CHANGED_FILES` could not carry them all.
+
+|         |          |
+| ------- | -------- |
+| Type    | `int`    |
+| Default | (n/a; always set for a unit test command) |
 
 ## Environment the daemon sees
 

@@ -1,6 +1,9 @@
 package pipeline
 
 import (
+	"encoding/json"
+	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
@@ -41,13 +44,41 @@ func (d TestDiscovery) copy() TestDiscovery {
 	return out
 }
 
-// RunShared carries in-memory run-scoped results one step hands to a later
-// step in the same run. It lives on the executor for the run's lifetime and
-// is never persisted: on any process boundary the consuming step simply
-// falls back to doing its own work.
+// RunSharedStore is the durable half of RunShared: the run row that outlives
+// the process. Only the Test step's discovery uses it, and the payload is
+// opaque to the store.
+type RunSharedStore interface {
+	GetRunTestDiscovery(id string) (string, error)
+	SetRunTestDiscovery(id, state string) error
+}
+
+// testDiscoveryRecord is the persisted shape of the Test step's discovery. It
+// is a private wire format between RunShared and the run row, so no other
+// package decodes it.
+type testDiscoveryRecord struct {
+	Fingerprint string            `json:"fingerprint"`
+	Units       []config.TestUnit `json:"units"`
+	Selected    []string          `json:"selected"`
+	Source      string            `json:"source"`
+	ScopeFaults int               `json:"scope_faults"`
+}
+
+// RunShared carries run-scoped results one step hands to a later step in the
+// same run. It lives on the executor for the run's lifetime.
+//
+// Most of it is in-memory only: on any process boundary the consuming step
+// falls back to doing its own work. The Test step's discovery is the
+// exception. It writes through to the run row so a daemon restart resumes with
+// the layout it already paid an agent pass for, and the row dies with the run,
+// so nothing carries across runs.
 type RunShared struct {
 	mu               sync.Mutex
 	housekeepingLint *HousekeepingLintResult
+	// store and runID address the run row the test discovery writes through
+	// to. Both are empty for a RunShared built without a store, which keeps
+	// discovery purely in-memory.
+	store RunSharedStore
+	runID string
 	// testDiscovery and its fingerprint cache the Test step's discovery result
 	// for the run. Unlike housekeepingLint, this is read, not consumed: a
 	// daemon restart re-enters the Test step and must reuse the discovered
@@ -59,10 +90,78 @@ type RunShared struct {
 	testScopeFaults int
 }
 
+// NewRunShared returns the run-scoped results holder a fresh run starts with.
+// It is empty, and its test discovery writes through to the run row.
+func NewRunShared(store RunSharedStore, runID string) *RunShared {
+	return &RunShared{store: store, runID: runID}
+}
+
+// RestoreRunShared returns the run-scoped results holder a recovered run
+// resumes with: the housekeeping half is empty, and the Test step's discovery
+// is read back from the run row so the resumed run reuses the layout instead
+// of paying a second cold agent pass.
+//
+// A read or decode failure only costs that reuse, so it warns and returns an
+// empty holder rather than refusing the resume.
+func RestoreRunShared(store RunSharedStore, runID string) *RunShared {
+	s := NewRunShared(store, runID)
+	if store == nil || runID == "" {
+		return s
+	}
+	payload, err := store.GetRunTestDiscovery(runID)
+	if err != nil {
+		slog.Warn("could not read this run's test discovery, the Test step will discover again", "run", runID, "error", err)
+		return s
+	}
+	if strings.TrimSpace(payload) == "" {
+		return s
+	}
+	var record testDiscoveryRecord
+	if err := json.Unmarshal([]byte(payload), &record); err != nil {
+		slog.Warn("could not decode this run's test discovery, the Test step will discover again", "run", runID, "error", err)
+		return s
+	}
+	s.testScopeFaults = record.ScopeFaults
+	if record.Fingerprint != "" && len(record.Units) > 0 {
+		stored := TestDiscovery{Units: record.Units, Selected: record.Selected, Source: record.Source}.copy()
+		s.testDiscovery = &stored
+		s.testDiscoveryFingerprint = record.Fingerprint
+	}
+	return s
+}
+
+// persistTestDiscoveryLocked writes the discovery half of the run's shared
+// state through to the run row. The caller holds s.mu.
+//
+// The write is best-effort. Losing it costs a recovered run one cold discovery
+// pass and one expansion's worth of patience, which is strictly better than
+// failing a run over a cache.
+func (s *RunShared) persistTestDiscoveryLocked() {
+	if s.store == nil || s.runID == "" {
+		return
+	}
+	record := testDiscoveryRecord{ScopeFaults: s.testScopeFaults}
+	if s.testDiscovery != nil {
+		record.Fingerprint = s.testDiscoveryFingerprint
+		record.Units = s.testDiscovery.Units
+		record.Selected = s.testDiscovery.Selected
+		record.Source = s.testDiscovery.Source
+	}
+	payload, err := json.Marshal(record)
+	if err != nil {
+		slog.Warn("could not encode this run's test discovery", "run", s.runID, "error", err)
+		return
+	}
+	if err := s.store.SetRunTestDiscovery(s.runID, string(payload)); err != nil {
+		slog.Warn("could not persist this run's test discovery", "run", s.runID, "error", err)
+	}
+}
+
 // SetTestDiscovery caches a discovery under a fingerprint of the changed-file
-// set it was derived from, replacing any previous entry. A later Set with a
-// different fingerprint (the changed-file set moved, most likely because a
-// fix round added a commit) discards the stale entry along with it.
+// set it was derived from, replacing any previous entry, and writes it through
+// to the run row. A later Set with a different fingerprint (the changed-file
+// set moved, most likely because a fix round added a commit) discards the
+// stale entry along with it.
 func (s *RunShared) SetTestDiscovery(fingerprint string, d TestDiscovery) {
 	if s == nil {
 		return
@@ -72,6 +171,7 @@ func (s *RunShared) SetTestDiscovery(fingerprint string, d TestDiscovery) {
 	stored := d.copy()
 	s.testDiscovery = &stored
 	s.testDiscoveryFingerprint = fingerprint
+	s.persistTestDiscoveryLocked()
 }
 
 // TestDiscovery returns the cached discovery when it was derived from the
@@ -103,6 +203,7 @@ func (s *RunShared) NoteTestScopeFault() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.testScopeFaults++
+	s.persistTestDiscoveryLocked()
 	return s.testScopeFaults
 }
 

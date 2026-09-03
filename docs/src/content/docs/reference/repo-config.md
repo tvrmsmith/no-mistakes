@@ -540,12 +540,15 @@ Each unit is a service, package, or the repository itself. `path` is the reposit
 
 `command` runs verbatim via the platform shell, exactly like `commands.test`, and should cover the unit, integration, and service-isolation test tiers for that unit. End-to-end tests stay in CI; do not put them in a unit command.
 
-The command receives two environment variables so it can scope itself the same way discovery did:
+The command receives three environment variables so it can scope itself the same way discovery did. A `commands.test` command receives them too, since discovery treats it as one implicit `repository` unit.
 
 | Variable | Value |
 | --- | --- |
 | `NO_MISTAKES_BASE_SHA` | The base commit the run is validating against |
 | `NO_MISTAKES_CHANGED_FILES` | The changed paths, one per line |
+| `NO_MISTAKES_CHANGED_FILE_COUNT` | How many paths the run changed |
+
+`NO_MISTAKES_CHANGED_FILES` cannot represent every path. A path containing a newline is omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. `NO_MISTAKES_CHANGED_FILE_COUNT` always reports the true total, so a command can detect the gap by comparing the count with the number of lines it read.
 
 `command` runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so the whole `test.units` list is honored only from the trusted default-branch copy of this file unless the repository opts in via `allow_repo_commands: true` - see [`allow_repo_commands`](#allow_repo_commands). A contributor's pushed branch cannot inject shell by naming a new unit or repointing an existing one's command.
 

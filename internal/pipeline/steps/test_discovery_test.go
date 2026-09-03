@@ -23,6 +23,10 @@ func TestUnitOwnsPath(t *testing.T) {
 		{"unit owns its own path exactly", config.TestUnit{Path: "services/api"}, "services/api", true},
 		{"unit does not own a sibling with a shared prefix", config.TestUnit{Path: "services/api"}, "services/apiary/main.go", false},
 		{"unit does not own an unrelated path", config.TestUnit{Path: "services/api"}, "services/web/main.go", false},
+		{"trailing slash still owns the unit's files", config.TestUnit{Path: "services/api/"}, "services/api/main.go", true},
+		{"dot prefix still owns the unit's files", config.TestUnit{Path: "./services/api"}, "services/api/main.go", true},
+		{"backslash path still owns the unit's files", config.TestUnit{Path: `services\api`}, "services/api/main.go", true},
+		{"trailing slash does not widen to a sibling", config.TestUnit{Path: "services/api/"}, "services/apiary/main.go", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -282,6 +286,97 @@ func TestDiscoverTestUnits_UnitWithNoCommandIsAnError(t *testing.T) {
 	want := `discovered unit "api" has no test command`
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
+	}
+}
+
+// TestDiscoverTestUnits_DuplicateUnitNameIsAnError pins the reason a repeated
+// name cannot be tolerated: findTestUnit resolves a name to the first unit
+// carrying it, so the second unit's command would never run while
+// under-selection saw the name as already selected, and the run would report
+// green having never tested it.
+func TestDiscoverTestUnits_DuplicateUnitNameIsAnError(t *testing.T) {
+	ag := discoveryAgent(t, `{
+		"units": [
+			{"name": "api", "path": "services/api", "command": "go test ./services/api/..."},
+			{"name": "api", "path": "services/api-v2", "command": "go test ./services/api-v2/..."}
+		],
+		"selected": ["api"]
+	}`)
+	sctx := discoveryTestContext(t, ag)
+
+	_, err := discoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"services/api/main.go"})
+	want := `discovery returned duplicate unit name "api"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+}
+
+func TestDiscoverTestUnits_SelectedNameIsTrimmedBeforeItIsResolved(t *testing.T) {
+	ag := discoveryAgent(t, `{
+		"units": [{"name": "api", "path": "services/api", "command": "go test ./services/api/..."}],
+		"selected": ["  api  "]
+	}`)
+	sctx := discoveryTestContext(t, ag)
+
+	d, err := discoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"services/api/main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Selected) != 1 || d.Selected[0] != "api" {
+		t.Fatalf("Selected = %q, want [api]", d.Selected)
+	}
+}
+
+func TestDiscoverTestUnits_UncleanUnitPathStillSelectsItsChangedFiles(t *testing.T) {
+	ag := discoveryAgent(t, `{
+		"units": [{"name": "api", "path": "services/api/", "command": "go test ./services/api/..."}],
+		"selected": []
+	}`)
+	sctx := discoveryTestContext(t, ag)
+
+	d, err := discoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"services/api/main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Units[0].Path != "services/api" {
+		t.Fatalf("Path = %q, want the cleaned path", d.Units[0].Path)
+	}
+	missing := underSelectedUnits(d.Units, []string{"services/api/main.go"}, d.Selected)
+	if len(missing) != 1 || missing[0].Name != "api" {
+		t.Fatalf("under-selected = %+v, want [api]: an uncleaned path owns nothing and goes untested", missing)
+	}
+}
+
+func TestFindTestUnit_ReportsAMissInsteadOfAnEmptyUnit(t *testing.T) {
+	units := []config.TestUnit{{Name: "api", Path: "services/api", Command: "go test ./..."}}
+	if _, ok := findTestUnit(units, "ghost"); ok {
+		t.Fatal("findTestUnit vouched for a unit that is not in the layout")
+	}
+	unit, ok := findTestUnit(units, "api")
+	if !ok || unit.Command != "go test ./..." {
+		t.Fatalf("findTestUnit(api) = %+v, %v", unit, ok)
+	}
+}
+
+func TestChangedFilesEnvValue_OmitsWhatItCannotRepresent(t *testing.T) {
+	value, omitted := changedFilesEnvValue([]string{"a.go", "we\nird.go", "b.go"})
+	if value != "a.go\nb.go" {
+		t.Fatalf("value = %q, want the two representable paths", value)
+	}
+	if omitted != 1 {
+		t.Fatalf("omitted = %d, want 1", omitted)
+	}
+
+	big := make([]string, 0, 20000)
+	for i := 0; i < 20000; i++ {
+		big = append(big, "some/reasonably/long/path/to/a/file/number.go")
+	}
+	value, omitted = changedFilesEnvValue(big)
+	if value != "" {
+		t.Fatalf("an oversized list should be dropped whole, got %d bytes", len(value))
+	}
+	if omitted != len(big) {
+		t.Fatalf("omitted = %d, want %d", omitted, len(big))
 	}
 }
 

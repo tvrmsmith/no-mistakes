@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	gopath "path"
 	"sort"
 	"strings"
 
@@ -63,12 +64,17 @@ func unitOwnsPath(unit config.TestUnit, path string) bool {
 // normalizeUnitPath slash-normalises a unit path and maps an empty path to
 // ".", the same normalisation applyTestOverrides gives the config path, so a
 // unit that owns everything can be spelled either way.
+//
+// It also cleans the result, because unitOwnsPath compares strings: without
+// cleaning, "services/api/" and "./services/api" match neither a changed file
+// under them nor the prefix built from them, so the unit would own nothing and
+// its tests would silently never run.
 func normalizeUnitPath(path string) string {
-	path = toSlashPath(strings.TrimSpace(path))
-	if path == "" {
+	trimmed := toSlashPath(strings.TrimSpace(path))
+	if trimmed == "" {
 		return "."
 	}
-	return path
+	return gopath.Clean(trimmed)
 }
 
 // toSlashPath normalises path separators without importing path/filepath
@@ -144,9 +150,12 @@ func parkOnDiscoveryResult(err error) error {
 	return discoveryResultError{err: err}
 }
 
-// validateDiscovery rejects a layout the execution half cannot act on. A
-// discovery failure parks rather than passing, so every rejection here has to
-// name what is wrong precisely enough for a maintainer to fix it.
+// validateDiscovery rejects a layout the execution half cannot act on, and
+// normalises the layout it accepts in place (d.Units and d.Selected are
+// trimmed, and unit paths are cleaned) so the caller's discovery is the one
+// execution then runs. A discovery failure parks rather than passing, so every
+// rejection here has to name what is wrong precisely enough for a maintainer
+// to fix it.
 func validateDiscovery(d pipeline.TestDiscovery) error {
 	if len(d.Units) == 0 {
 		return errors.New("discovery returned no test units")
@@ -162,11 +171,20 @@ func validateDiscovery(d pipeline.TestDiscovery) error {
 		if d.Units[i].Command == "" {
 			return fmt.Errorf("discovered unit %q has no test command", d.Units[i].Name)
 		}
+		// Name is how execution addresses a unit, so a repeated name hides
+		// every unit after the first: the selection resolves to the first,
+		// under-selection sees the name as already selected, and the run
+		// reports green having never tested the others. config.validateTestRaw
+		// rejects the same collision in a configured layout.
+		if known[d.Units[i].Name] {
+			return fmt.Errorf("discovery returned duplicate unit name %q", d.Units[i].Name)
+		}
 		known[d.Units[i].Name] = true
 	}
-	for _, name := range d.Selected {
-		if !known[name] {
-			return fmt.Errorf("discovery selected unknown unit %q", name)
+	for i, name := range d.Selected {
+		d.Selected[i] = strings.TrimSpace(name)
+		if !known[d.Selected[i]] {
+			return fmt.Errorf("discovery selected unknown unit %q", d.Selected[i])
 		}
 	}
 	return nil
@@ -250,7 +268,7 @@ func discoverTestUnitsViaAgent(sctx *pipeline.StepContext, baseSHA string, chang
 		Prompt: fmt.Sprintf(
 			`Derive this repository's independently testable units and the command that tests each one.
 
-A unit is a service, package, or the repository itself. "path" is the repository-relative directory the unit owns; use "." for the whole repository. The command must cover the unit, integration, and service-isolation test tiers for that unit, and must NOT run end-to-end tests, which remote CI owns.
+A unit is a service, a directory of code with its own test command, or the repository itself. "path" is the repository-relative directory the unit owns; use "." for the whole repository. The command must cover the unit, integration, and service-isolation test tiers for that unit, and must NOT run end-to-end tests, which remote CI owns.
 
 Context:
 - branch: %s

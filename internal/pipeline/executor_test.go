@@ -205,7 +205,7 @@ func TestExecutor_RecoveredRevalidationPreservesSkippedStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
-	exec.initializeRunScopes(run.ID)
+	exec.initializeRunScopes(run.ID, false)
 
 	if err := exec.executeRecoveredRemainder(context.Background(), run, repo, t.TempDir(), t.TempDir(), 0, true); err != nil {
 		t.Fatalf("executeRecoveredRemainder() error = %v", err)

@@ -733,9 +733,9 @@ type TestRaw struct {
 	Units []TestUnit `yaml:"units"`
 }
 
-// TestUnit is one independently testable component of a repository: a service
-// in a monorepo, a package, or the repository itself. Units are what the Test
-// step selects between.
+// TestUnit is one independently testable part of a repository: a service in a
+// monorepo, a directory of code with its own test command, or the repository
+// itself. Units are what the Test step selects between.
 //
 // Command runs verbatim via sh -c on the daemon host with the maintainer's
 // credentials, exactly like commands.test, so the whole list is honored ONLY
@@ -2782,7 +2782,12 @@ func validateTestRaw(test TestRaw) error {
 		if strings.TrimSpace(unit.Command) == "" {
 			return fmt.Errorf("test.units[%d].command is required (unit %q)", i, name)
 		}
-		path := strings.TrimSpace(unit.Path)
+		// The Test step matches changed files against a slash-normalised copy
+		// of this path, so validate the same string it will match. Checking the
+		// raw value instead let "\services\api" through on Windows, where
+		// filepath.IsAbs is false and there is no leading slash, and the step
+		// then matched "/services/api", which owns nothing.
+		path := strings.ReplaceAll(strings.TrimSpace(unit.Path), "\\", "/")
 		// The leading-slash check is not redundant with filepath.IsAbs: on
 		// Windows that returns false for "/services/api", and the daemon runs
 		// there too.

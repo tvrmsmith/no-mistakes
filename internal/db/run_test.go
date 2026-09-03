@@ -1021,6 +1021,51 @@ func TestRunSkippedStepsRoundTripAndDefaultEmpty(t *testing.T) {
 	}
 }
 
+func TestRunTestDiscoveryRoundTripAndDefaultEmpty(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/discovery-project", "git@github.com:user/discovery-project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+
+	fresh, err := d.GetRunTestDiscovery(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh != "" {
+		t.Fatalf("new run test discovery = %q, want empty", fresh)
+	}
+
+	const state = `{"fingerprint":"fp","units":[{"name":"api","path":"services/api","command":"go test"}],"selected":["api"],"source":"agent","scope_faults":1}`
+	if err := d.SetRunTestDiscovery(run.ID, state); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetRunTestDiscovery(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != state {
+		t.Fatalf("test discovery = %q, want %q", got, state)
+	}
+
+	// The value belongs to one run row, so a second run in the same repository
+	// starts with nothing to reuse.
+	other, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+	otherState, err := d.GetRunTestDiscovery(other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherState != "" {
+		t.Fatalf("second run test discovery = %q, want empty", otherState)
+	}
+
+	missing, err := d.GetRunTestDiscovery("no-such-run")
+	if err != nil {
+		t.Fatalf("unknown run: %v", err)
+	}
+	if missing != "" {
+		t.Fatalf("unknown run test discovery = %q, want empty", missing)
+	}
+}
+
 func TestRunStepPlanRoundTripAndDefaultEmpty(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/plan-project", "git@github.com:user/plan-project.git", "main")

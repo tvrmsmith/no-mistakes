@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,22 +102,10 @@ Previous test findings to address:
 		return nil, err
 	}
 
-	discovery, err := discoverTestUnits(sctx, baseSHA, changed)
-	if err != nil {
-		// A discovery failure parks rather than returning a Go error: a
-		// returned error would fail the run outright, while the acceptance
-		// criterion here is that an unreadable or invalid layout parks for a
-		// maintainer to fix the configuration or the inferred command.
-		//
-		// The exception is a failure to reach the discovery agent at all
-		// (budget expiry, transport error). Parking there would hold the run
-		// at a gate on an agent that never answered, so it fails the run like
-		// every other agent invocation in this step.
-		var resultErr discoveryResultError
-		if !errors.As(err, &resultErr) {
-			return nil, err
-		}
-		description := fmt.Sprintf("test unit discovery failed: %v", err)
+	// parkForMaintainer stops the step at a gate with one error finding rather
+	// than failing the run, the posture every unusable discovery answer takes:
+	// a maintainer fixes the configuration or the inferred layout and resumes.
+	parkForMaintainer := func(description string) (*pipeline.StepOutcome, error) {
 		sctx.Log(description)
 		findings := Findings{Items: []Finding{{
 			Severity:    types.FindingSeverityError,
@@ -132,17 +121,52 @@ Previous test findings to address:
 		}, nil
 	}
 
+	discovery, err := discoverTestUnits(sctx, baseSHA, changed)
+	if err != nil {
+		// A discovery failure parks rather than returning a Go error: a
+		// returned error would fail the run outright, while the acceptance
+		// criterion here is that an unreadable or invalid layout parks for a
+		// maintainer to fix the configuration or the inferred command.
+		//
+		// The exception is a failure to reach the discovery agent at all
+		// (budget expiry, transport error). Parking there would hold the run
+		// at a gate on an agent that never answered, so it fails the run like
+		// every other agent invocation in this step.
+		var resultErr discoveryResultError
+		if !errors.As(err, &resultErr) {
+			return nil, err
+		}
+		return parkForMaintainer(fmt.Sprintf("test unit discovery failed: %v", err))
+	}
+
 	multiUnit := len(discovery.Units) > 1
 	tested := []string{}
 	ran := map[string]bool{}
 
-	sctx.Log(fmt.Sprintf("selected test units (%s): %s", discovery.Source, strings.Join(discovery.Selected, ", ")))
+	// Resolve every selected name against the layout before running anything.
+	// A name with no unit behind it has no command to run, and executing an
+	// empty command would exit 0 and report the unit as tested, so an
+	// unresolvable selection parks instead.
+	selectedUnits := make([]config.TestUnit, 0, len(discovery.Selected))
 	for _, name := range discovery.Selected {
-		unit := findTestUnit(discovery.Units, name)
+		unit, ok := findTestUnit(discovery.Units, name)
+		if !ok {
+			return parkForMaintainer(fmt.Sprintf("test unit discovery selected %q, which is not in the discovered unit layout", name))
+		}
+		selectedUnits = append(selectedUnits, unit)
+	}
+
+	sctx.Log(fmt.Sprintf("selected test units (%s): %s", discovery.Source, strings.Join(discovery.Selected, ", ")))
+	for _, unit := range selectedUnits {
 		sctx.Log(fmt.Sprintf("unit %s: %s", unit.Name, unit.Command))
 	}
 	if len(discovery.Selected) == 0 {
 		sctx.Log("no test units selected for the changed files")
+	}
+
+	changedFilesEnv, omittedChangedFiles := changedFilesEnvValue(changed)
+	if omittedChangedFiles > 0 {
+		sctx.Log(fmt.Sprintf("%s omits %d of %d changed paths; %s carries the true total", envTestChangedFiles, omittedChangedFiles, len(changed), envTestChangedFileCount))
 	}
 
 	// runUnit runs one unit's command exactly once per attempt, tracked by
@@ -157,7 +181,8 @@ Previous test findings to address:
 		ran[unit.Name] = true
 		env := []string{
 			envTestBaseSHA + "=" + baseSHA,
-			envTestChangedFiles + "=" + strings.Join(changed, "\n"),
+			envTestChangedFiles + "=" + changedFilesEnv,
+			envTestChangedFileCount + "=" + strconv.Itoa(len(changed)),
 		}
 		output, exitCode, runErr := runStepShellCommandEnv(sctx, unit.Command, env)
 		if runErr != nil {
@@ -190,8 +215,7 @@ Previous test findings to address:
 		}, nil
 	}
 
-	for _, name := range discovery.Selected {
-		unit := findTestUnit(discovery.Units, name)
+	for _, unit := range selectedUnits {
 		if outcome, runErr := runUnit(unit); outcome != nil || runErr != nil {
 			return outcome, runErr
 		}
@@ -208,19 +232,7 @@ Previous test findings to address:
 			// unreliable, not merely incomplete this once: expanding again
 			// would keep papering over a systematic miss, so this parks for
 			// a maintainer instead of running the missing units.
-			sctx.Log("second test scope fault in this run, parking")
-			findings := Findings{Items: []Finding{{
-				Severity:    types.FindingSeverityError,
-				Action:      types.ActionAskUser,
-				Description: fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")),
-			}}}
-			findingsJSON, _ := json.Marshal(findings)
-			return &pipeline.StepOutcome{
-				NeedsApproval: true,
-				AutoFixable:   false,
-				Findings:      string(findingsJSON),
-				FixSummary:    fixSummary,
-			}, nil
+			return parkForMaintainer(fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")))
 		}
 
 		sctx.Log(fmt.Sprintf("test scope fault: original selection %s", strings.Join(discovery.Selected, ", ")))
@@ -242,8 +254,15 @@ Previous test findings to address:
 	// repository that configured neither test.units nor commands.test got a
 	// full evidence pass before this step split, and discovery answering "here
 	// is a command" says nothing about whether the change's intent is visibly
-	// satisfied. A configured layout stays as it was: evidence only when the
-	// run carries user intent.
+	// satisfied. So the pass runs on three disjuncts: discovery selected no
+	// unit, discovery inferred the layout itself, or the run carries user
+	// intent. A configured layout with a non-empty selection still gets the
+	// pass only for intent.
+	//
+	// Whenever the selected units' commands already ran, the pass reads and
+	// judges those results instead of running tests again, so every unit's
+	// command still runs exactly once per attempt and the pass never widens
+	// past the selection.
 	useEvidenceAgent := len(discovery.Selected) == 0 || discovery.Source == "agent" || cleanedUserIntent(sctx) != ""
 	if useEvidenceAgent {
 		evidenceDir := testEvidenceDir(sctx)
@@ -263,18 +282,27 @@ Previous test findings to address:
 		if sctx.Config.Test.Evidence.StoreInRepo {
 			evidenceGuidance = fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; they are published to the repository's %s branch automatically and linked from the PR: %s", sctx.Config.Test.Evidence.Branch, evidenceDir)
 		}
-		configuredTestCommand := ""
+		// The opening instruction and the existing-tests rule both swap once
+		// the selected units' commands have already run this attempt: telling
+		// the agent to "run the smallest relevant tests yourself" there would
+		// run those same suites a second time, and nothing in the evidence
+		// prompt bounds it to the selection.
+		evidenceOpening := "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself."
+		existingTestsRule := "- Look for existing tests that would generate sufficient evidence. If they exist, run the smallest relevant set that proves the requested intent."
+		baselineSection := ""
 		if len(tested) > 0 {
 			quoted := make([]string, len(tested))
 			for i, cmd := range tested {
 				quoted[i] = "`" + cmd + "`"
 			}
-			configuredTestCommand = fmt.Sprintf("\nConfigured test command already ran successfully as baseline: %s\n", strings.Join(quoted, ", "))
+			baselineSection = fmt.Sprintf("\nThe selected test units already ran to completion and passed in this attempt: %s\n", strings.Join(quoted, ", "))
+			evidenceOpening = "You are validating a code change whose selected test units have already run in this attempt. Read and judge those results rather than running them again."
+			existingTestsRule = "- The selected units' test commands above already ran and passed. Treat their results as the baseline, do NOT run them again, and do NOT run tests for any unit outside that selection. Spend this pass on evidence those commands do not produce."
 		}
 		evidenceCtx, cancelEvidence, evidenceTimeout := testAgentContext(sctx)
 		result, err := sctx.RunAgentContext(evidenceCtx, agent.RunOpts{
 			Prompt: fmt.Sprintf(
-				`You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself.
+				`%s
 
 Context:
 - branch: %s
@@ -294,7 +322,7 @@ Task:
 %s
 - Do not move, commit, or modify source files only to make evidence linkable. Record local evidence file paths exactly where you created them.
 - Only use command output as an artifact when that output directly demonstrates the end-user experience or requested behavior. Generic pass/fail, coverage, or clean-worktree output is not sufficient evidence.
-- Look for existing tests that would generate sufficient evidence. If they exist, run the smallest relevant set that proves the requested intent.
+%s
 - Do NOT run the complete repository test suite. Local Test is targeted validation of the requested intent; remote CI owns broad regression and remains mandatory before a PR is ready.
 - Never treat "do not run everything" as permission to run nothing: if no targeted automated test can establish the intent, write or improve a focused test, perform manual verification with evidence, or report a warning finding that sufficient targeted evidence is not possible.
 - If no existing test produces sufficient evidence, write or improve a focused test so that it does.
@@ -318,11 +346,13 @@ Rules:
 - Do NOT report passing tests (whether existing or new), test counts, coverage summaries, or other non-actionable information.
 - If all tests pass and there are no issues, return an empty findings array.
 - Set action to "ask-user" for missing-evidence warning findings and only otherwise when a test failure seems desired and you question the author's intent of having the test in the first place. Set action to "auto-fix" for objective test failures that can be safely fixed. Set action to "no-op" for informational notes.%s`,
+				evidenceOpening,
 				sctx.Run.Branch,
 				baseSHA,
 				sctx.Run.HeadSHA,
-				configuredTestCommand,
+				baselineSection,
 				evidenceGuidance,
+				existingTestsRule,
 				reassessHistory,
 			),
 			CWD:        sctx.WorkDir,
@@ -409,17 +439,18 @@ func testAgentContext(sctx *pipeline.StepContext) (context.Context, context.Canc
 	return ctx, cancel, timeout
 }
 
-// findTestUnit returns the unit named name from units, or a zero-value unit
-// if no such unit is present. Discovery validates every selected name against
-// its own layout (see validateDiscovery), so a miss here would mean a caller
-// looked up a name discovery never vouched for.
-func findTestUnit(units []config.TestUnit, name string) config.TestUnit {
+// findTestUnit returns the unit named name from units and whether the layout
+// has one. Discovery validates every selected name against its own layout (see
+// validateDiscovery), so a miss means a caller looked up a name discovery never
+// vouched for; the caller parks on that rather than substituting a unit with no
+// command, which would exit 0 and report the unit as tested.
+func findTestUnit(units []config.TestUnit, name string) (config.TestUnit, bool) {
 	for _, unit := range units {
 		if unit.Name == name {
-			return unit
+			return unit, true
 		}
 	}
-	return config.TestUnit{Name: name}
+	return config.TestUnit{}, false
 }
 
 var errTestAgentTimeout = errors.New("test agent timeout")

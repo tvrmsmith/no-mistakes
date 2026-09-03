@@ -690,6 +690,45 @@ func TestValidateTestRaw_UnitsRejectDuplicateName(t *testing.T) {
 	}
 }
 
+func TestApplyTestOverrides_ARepositoryLayoutReplacesTheGlobalOne(t *testing.T) {
+	dst := testDefaults()
+	applyTestOverrides(&dst, &TestRaw{Units: []TestUnit{
+		{Name: "global-a", Path: "a", Command: "go test ./a/..."},
+		{Name: "global-b", Path: "b", Command: "go test ./b/..."},
+	}})
+	applyTestOverrides(&dst, &TestRaw{Units: []TestUnit{
+		{Name: "repo-only", Path: "c", Command: "go test ./c/..."},
+	}})
+
+	if len(dst.Units) != 1 || dst.Units[0].Name != "repo-only" {
+		t.Fatalf("Units = %+v, want only the repository layout", dst.Units)
+	}
+}
+
+func TestApplyTestOverrides_AnEmptyLayoutKeepsWhatIsAlreadyResolved(t *testing.T) {
+	dst := testDefaults()
+	applyTestOverrides(&dst, &TestRaw{Units: []TestUnit{
+		{Name: "api", Path: "services/api", Command: "go test ./services/api/..."},
+	}})
+	applyTestOverrides(&dst, &TestRaw{})
+
+	if len(dst.Units) != 1 || dst.Units[0].Name != "api" {
+		t.Fatalf("Units = %+v, want the earlier layout kept", dst.Units)
+	}
+}
+
+func TestApplyTestOverrides_DoesNotAliasTheSourceUnits(t *testing.T) {
+	dst := testDefaults()
+	src := &TestRaw{Units: []TestUnit{{Name: "api", Path: "services/api", Command: "go test"}}}
+	applyTestOverrides(&dst, src)
+
+	src.Units[0].Command = "rm -rf /"
+
+	if dst.Units[0].Command != "go test" {
+		t.Fatalf("Units[0].Command = %q, want the resolved copy to be independent", dst.Units[0].Command)
+	}
+}
+
 func TestApplyTestOverrides_UnitsDefaultPathToDot(t *testing.T) {
 	dst := testDefaults()
 	src := &TestRaw{Units: []TestUnit{

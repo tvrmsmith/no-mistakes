@@ -1,10 +1,13 @@
 package pipeline
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 )
+
+var errTestStoreUnavailable = errors.New("store unavailable")
 
 func TestRunShared_TestDiscoveryIsReusedNotConsumed(t *testing.T) {
 	s := &RunShared{}
@@ -77,6 +80,119 @@ func TestRunShared_NoteTestScopeFaultCounts(t *testing.T) {
 	}
 	if got := s.NoteTestScopeFault(); got != 3 {
 		t.Fatalf("third call = %d, want 3", got)
+	}
+}
+
+// fakeSharedStore is an in-memory stand-in for the run row, so the write-back
+// and the restore can be exercised without a database.
+type fakeSharedStore struct {
+	rows     map[string]string
+	getErr   error
+	setErr   error
+	setCalls int
+}
+
+func newFakeSharedStore() *fakeSharedStore {
+	return &fakeSharedStore{rows: map[string]string{}}
+}
+
+func (f *fakeSharedStore) GetRunTestDiscovery(id string) (string, error) {
+	if f.getErr != nil {
+		return "", f.getErr
+	}
+	return f.rows[id], nil
+}
+
+func (f *fakeSharedStore) SetRunTestDiscovery(id, state string) error {
+	f.setCalls++
+	if f.setErr != nil {
+		return f.setErr
+	}
+	f.rows[id] = state
+	return nil
+}
+
+func TestRestoreRunShared_ResumesWithTheDiscoveryTheRunAlreadyPaidFor(t *testing.T) {
+	store := newFakeSharedStore()
+	units := []config.TestUnit{{Name: "api", Path: "services/api", Command: "go test ./services/api/..."}}
+
+	started := NewRunShared(store, "run-1")
+	started.SetTestDiscovery("fp", TestDiscovery{Units: units, Selected: []string{"api"}, Source: "agent"})
+	started.NoteTestScopeFault()
+
+	resumed := RestoreRunShared(store, "run-1")
+	got, ok := resumed.TestDiscovery("fp")
+	if !ok {
+		t.Fatal("a resumed run did not find the discovery its earlier process stored")
+	}
+	if len(got.Units) != 1 || got.Units[0].Command != "go test ./services/api/..." {
+		t.Fatalf("restored units = %+v", got.Units)
+	}
+	if len(got.Selected) != 1 || got.Selected[0] != "api" || got.Source != "agent" {
+		t.Fatalf("restored selection = %v, source = %q", got.Selected, got.Source)
+	}
+	// The fault the earlier process saw still counts, so the next one parks
+	// rather than expanding a second time.
+	if count := resumed.NoteTestScopeFault(); count != 2 {
+		t.Fatalf("resumed scope faults = %d, want 2", count)
+	}
+}
+
+func TestRestoreRunShared_DoesNotReuseADiscoveryFromAnotherChangedFileSet(t *testing.T) {
+	store := newFakeSharedStore()
+	NewRunShared(store, "run-1").SetTestDiscovery("fp-old", TestDiscovery{
+		Units:    []config.TestUnit{{Name: "api", Path: "services/api", Command: "go test"}},
+		Selected: []string{"api"},
+		Source:   "agent",
+	})
+
+	if _, ok := RestoreRunShared(store, "run-1").TestDiscovery("fp-new"); ok {
+		t.Fatal("a resumed run reused a discovery derived from a different changed-file set")
+	}
+}
+
+func TestRestoreRunShared_UnreadableStateStillResumesWithAnEmptyCache(t *testing.T) {
+	store := newFakeSharedStore()
+	store.rows["run-1"] = "{not json"
+
+	resumed := RestoreRunShared(store, "run-1")
+	if _, ok := resumed.TestDiscovery("fp"); ok {
+		t.Fatal("ok = true from an undecodable payload")
+	}
+	if count := resumed.NoteTestScopeFault(); count != 1 {
+		t.Fatalf("scope faults = %d, want a fresh count", count)
+	}
+}
+
+func TestRestoreRunShared_UnreadableStoreStillResumesWithAnEmptyCache(t *testing.T) {
+	store := newFakeSharedStore()
+	store.getErr = errTestStoreUnavailable
+
+	if _, ok := RestoreRunShared(store, "run-1").TestDiscovery("fp"); ok {
+		t.Fatal("ok = true when the store could not be read")
+	}
+}
+
+func TestRunShared_APersistenceFailureDoesNotBreakTheRun(t *testing.T) {
+	store := newFakeSharedStore()
+	store.setErr = errTestStoreUnavailable
+
+	s := NewRunShared(store, "run-1")
+	s.SetTestDiscovery("fp", TestDiscovery{Units: []config.TestUnit{{Name: "api", Path: ".", Command: "go test"}}, Selected: []string{"api"}, Source: "agent"})
+
+	if _, ok := s.TestDiscovery("fp"); !ok {
+		t.Fatal("the in-memory cache should still answer when the write fails")
+	}
+	if store.setCalls != 1 {
+		t.Fatalf("set calls = %d, want 1", store.setCalls)
+	}
+}
+
+func TestRunShared_WithoutAStoreStaysInMemory(t *testing.T) {
+	s := NewRunShared(nil, "")
+	s.SetTestDiscovery("fp", TestDiscovery{Units: []config.TestUnit{{Name: "api", Path: ".", Command: "go test"}}, Selected: []string{"api"}, Source: "agent"})
+	if _, ok := s.TestDiscovery("fp"); !ok {
+		t.Fatal("ok = false, want the in-memory cache to answer")
 	}
 }
 

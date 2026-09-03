@@ -395,7 +395,7 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 		"Demonstrate the user intent working end-to-end in a way consistent with how an end user would actually experience it",
 		"Prefer product-level artifacts",
 		"Only use command output as an artifact when that output directly demonstrates the end-user experience or requested behavior",
-		"Configured test command already ran successfully as baseline",
+		"The selected test units already ran to completion and passed in this attempt",
 		testCmd,
 		"The \"testing_summary\" must account for the complete test step: baseline commands that already ran, automated tests, manual or evidence-producing checks, artifacts gathered, and the overall result",
 		"screenshots, GIFs, videos, rendered UI, CLI transcripts",
@@ -513,7 +513,10 @@ func TestTestStep_InitialAgent_TargetedValidationContract(t *testing.T) {
 
 	assertTestQualityRulePrompt(t, prompt)
 	for _, want := range []string{
-		"run the smallest relevant tests yourself",
+		// The discovered unit's command already ran, so this pass judges its
+		// result instead of repeating it. The unbaselined opening is pinned by
+		// TestTestStep_ConfiguredLayoutOwningNoChangedFileFallsBackToTheEvidenceAgent.
+		"Read and judge those results rather than running them again",
 		"Do NOT run the complete repository test suite",
 		"Local Test is targeted validation of the requested intent",
 		"remote CI owns broad regression and remains mandatory before a PR is ready",
