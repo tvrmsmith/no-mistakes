@@ -218,6 +218,8 @@ Also check `<gate-path>/notify-push.log`. The hook now appends daemon notificati
 
 Both receive hooks talk to the daemon over `~/.no-mistakes/socket`. If the daemon is not running, pre-receive admission fails closed and the push is rejected before any gate ref changes. Start the daemon and push again.
 
+A daemon that answers but refuses the push because it was drained and never stopped is a different case: the refusal says to run `no-mistakes daemon restart`, and [Starting and stopping](/no-mistakes/concepts/daemon/#starting-and-stopping) owns why that state exists.
+
 If the gate is older, re-running `no-mistakes init` or restarting the daemon also reapplies hook-path isolation when Git supports `config --worktree`.
 That protects the gate hook if a tool such as Husky wrote `core.hookspath` into shared git config from inside a linked worktree. [Crash recovery](/no-mistakes/concepts/daemon/#crash-recovery) owns the gate validation and migration rules used during restart.
 
