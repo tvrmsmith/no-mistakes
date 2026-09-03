@@ -58,6 +58,37 @@ func TestStepNameOrder(t *testing.T) {
 	}
 }
 
+// TestStepNameOrderAgreesWithAllSteps catches a duplicate entry in allSteps and
+// a future re-divergence of AllSteps and Order. The absolute 1..9 values stay
+// pinned by TestStepNameOrder.
+func TestStepNameOrderAgreesWithAllSteps(t *testing.T) {
+	for i, step := range AllSteps() {
+		want := i + 1
+		if got := step.Order(); got != want {
+			t.Errorf("%q.Order() = %d, want %d from its position in AllSteps()", step, got, want)
+		}
+	}
+	for _, step := range []StepName{"", "unknown", "babysit"} {
+		if got := step.Order(); got != 0 {
+			t.Errorf("%q.Order() = %d, want 0 for a step outside AllSteps()", step, got)
+		}
+	}
+}
+
+func TestAllStepsReturnsACopy(t *testing.T) {
+	a, b := AllSteps(), AllSteps()
+	if len(a) == 0 || len(b) == 0 {
+		t.Fatalf("AllSteps() returned an empty slice")
+	}
+	a[0] = StepName("mutated")
+	if b[0] != StepIntent {
+		t.Errorf("mutating one AllSteps() result changed another: b[0] = %q, want %q", b[0], StepIntent)
+	}
+	if got := AllSteps()[0]; got != StepIntent {
+		t.Errorf("mutating an AllSteps() result changed a later call: got %q, want %q", got, StepIntent)
+	}
+}
+
 func TestStepNameUnmarshalJSON_LegacyBabysit(t *testing.T) {
 	var step StepName
 	if err := json.Unmarshal([]byte(`"babysit"`), &step); err != nil {
