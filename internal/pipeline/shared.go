@@ -93,6 +93,9 @@ type RunShared struct {
 	// commit produced, so a later round of that step committing an identical
 	// tree is recognised as churn rather than progress.
 	restartTrees map[types.StepName]string
+	// residue records, per step, the worktree state that step's current round
+	// parked over instead of committing.
+	residue map[types.StepName]ValidationResidue
 }
 
 // NewRunShared returns the run-scoped results holder a fresh run starts with.
@@ -210,6 +213,68 @@ func (s *RunShared) NoteTestScopeFault() int {
 	s.testScopeFaults++
 	s.persistTestDiscoveryLocked()
 	return s.testScopeFaults
+}
+
+// ValidationResidue is the exact worktree state a certifying step's round
+// refused to commit, as that step read it from git at the moment it raised the
+// gate. Approving the gate destroys these paths and only these paths.
+type ValidationResidue struct {
+	// Modified are tracked paths that differ from HEAD; discard restores them.
+	Modified []string
+	// Untracked are untracked non-ignored paths; discard deletes them.
+	Untracked []string
+}
+
+// SetValidationResidue records what a step's residue park enumerated, and by
+// recording it marks the round as parked for residue.
+//
+// The record is what discard acts on. Reading the paths back out of the parked
+// gate's findings instead put the decision in the review agent's hands: a
+// finding ID is a free-form agent-supplied string, so a round that returned an
+// ordinary finding with a residue-shaped ID and a file it merely commented on
+// could have that file reverted the moment a human approved the gate.
+func (s *RunShared) SetValidationResidue(step types.StepName, residue ValidationResidue) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.residue == nil {
+		s.residue = make(map[types.StepName]ValidationResidue)
+	}
+	s.residue[step] = residue
+}
+
+// ValidationResidue reports what a step's current round parked over. The
+// second result is false when the round did not park for residue at all, which
+// is what keeps an ordinary approval of an ordinary gate from destroying
+// anything.
+//
+// It is in-memory like the rest of RunShared, so a daemon restart forgets it
+// and approving the recovered gate discards nothing, leaving the leftovers for
+// the next validation step's exit commit. Forgetting the record can only fail
+// towards touching no files, never towards deleting one nothing recorded.
+func (s *RunShared) ValidationResidue(step types.StepName) (ValidationResidue, bool) {
+	if s == nil {
+		return ValidationResidue{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	residue, ok := s.residue[step]
+	return residue, ok
+}
+
+// ClearValidationResidue forgets a step's record. Every round of a validation
+// step clears its own before it starts, so a record only ever describes the
+// round that is parked right now: a later round that committed those paths, or
+// exited clean, leaves nothing for an approval to act on.
+func (s *RunShared) ClearValidationResidue(step types.StepName) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.residue, step)
 }
 
 // LastRestartTree returns the tree a step's previous restart-triggering commit

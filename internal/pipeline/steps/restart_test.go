@@ -283,7 +283,7 @@ func TestReviewStep_DiscardApprovalResidue(t *testing.T) {
 	sctx.Run.HeadSHA = strings.TrimSpace(gitCmd(t, dir, "rev-parse", "HEAD"))
 	before := commitCount(t, dir)
 
-	parked := residueFindingsJSON(t, []string{"feature.txt"}, []string{"scratch.txt"})
+	recordResidue(sctx, []string{"feature.txt"}, []string{"scratch.txt"})
 
 	// The gate is raised, and only then does a human edit the worktree.
 	edited := filepath.Join(dir, "base.txt")
@@ -294,7 +294,7 @@ func TestReviewStep_DiscardApprovalResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, parked); err != nil {
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx); err != nil {
 		t.Fatalf("DiscardApprovalResidue() error = %v", err)
 	}
 
@@ -326,9 +326,22 @@ func TestReviewStep_DiscardApprovalResidue(t *testing.T) {
 	}
 }
 
-// residueFindingsJSON builds the gate payload a residue park writes, so the
-// discard test drives the same contract the executor hands the step.
-func residueFindingsJSON(t *testing.T, modified, untracked []string) string {
+// recordResidue writes the path list a residue park records, so a discard test
+// drives the same trusted state the executor's approval path reads.
+func recordResidue(sctx *pipeline.StepContext, modified, untracked []string) {
+	if sctx.Shared == nil {
+		sctx.Shared = &pipeline.RunShared{}
+	}
+	sctx.Shared.SetValidationResidue(types.StepReview, pipeline.ValidationResidue{
+		Modified:  modified,
+		Untracked: untracked,
+	})
+}
+
+// residueShapedFindings is the payload a review agent can write on its own: no-op
+// items carrying the same IDs and files the residue park uses. Nothing about it
+// is trusted, so discard must ignore it entirely.
+func residueShapedFindings(t *testing.T, modified, untracked []string) string {
 	t.Helper()
 	var findings Findings
 	for i, file := range modified {
@@ -386,7 +399,7 @@ func TestReviewStep_DiscardApprovalResidueTreatsRecordedPathsAsNames(t *testing.
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Run.HeadSHA = headSHA
 
-	parked := residueFindingsJSON(t, []string{bracketed}, []string{globbed})
+	recordResidue(sctx, []string{bracketed}, []string{globbed})
 
 	// The neighbours arrive after the park, so nothing ruled on them. Each is
 	// matched by one of the recorded names read as a pattern: notes*.txt by the
@@ -398,7 +411,7 @@ func TestReviewStep_DiscardApprovalResidueTreatsRecordedPathsAsNames(t *testing.
 		t.Fatal(err)
 	}
 
-	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, parked); err != nil {
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx); err != nil {
 		t.Fatalf("DiscardApprovalResidue() error = %v", err)
 	}
 
@@ -454,17 +467,17 @@ func TestRunValidationStep_ParkedResidueRecordsBothHalvesOfARename(t *testing.T)
 		t.Fatal("NeedsApproval = false, want the certifying step parked over its residue")
 	}
 
-	recordedModified, _, err := recordedResidue(parked.Findings)
-	if err != nil {
-		t.Fatalf("recordedResidue() error = %v", err)
+	recorded, ok := sctx.Shared.ValidationResidue(types.StepReview)
+	if !ok {
+		t.Fatal("the park recorded no residue, want the paths it refused to commit")
 	}
 	for _, want := range []string{"feature.txt", "renamed.txt"} {
-		if !slices.Contains(recordedModified, want) {
-			t.Fatalf("park recorded %v, want both halves of the rename including %q", recordedModified, want)
+		if !slices.Contains(recorded.Modified, want) {
+			t.Fatalf("park recorded %v, want both halves of the rename including %q", recorded.Modified, want)
 		}
 	}
 
-	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, parked.Findings); err != nil {
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx); err != nil {
 		t.Fatalf("DiscardApprovalResidue() error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "feature.txt")); err != nil {
@@ -478,19 +491,46 @@ func TestRunValidationStep_ParkedResidueRecordsBothHalvesOfARename(t *testing.T)
 // TestReviewStep_DiscardApprovalResidueLeavesANonResidueGateAlone covers every
 // other gate the certifying step raises. Those record no residue, so discard
 // has nothing to remove and must not reach for the worktree at all.
+//
+// The findings here are the attack: Finding.ID is a free-form string the review
+// agent writes and NormalizeFindings keeps verbatim, so an ordinary round can
+// return no-op items spelled exactly like a residue park's and name any file it
+// likes. Approving that round is an ordinary approval, and it must destroy
+// nothing.
 func TestReviewStep_DiscardApprovalResidueLeavesANonResidueGateAlone(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+
+	forged := residueShapedFindings(t, []string{"feature.txt"}, []string{"scratch.txt"})
+	round, err := runValidationStep(sctx, types.StepReview, func(*pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		return &pipeline.StepOutcome{
+			NeedsApproval:         true,
+			Findings:              forged,
+			ReviewApprovedHeadSHA: headSHA,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if !round.NeedsApproval {
+		t.Fatal("NeedsApproval = false, want the round's own gate")
+	}
+
+	// The round exited clean, so the files below are a human's work during the
+	// park. Nothing recorded them.
 	tracked := filepath.Join(dir, "feature.txt")
 	if err := os.WriteFile(tracked, []byte("uncommitted work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	blocking := `{"findings":[{"id":"review-1","severity":"error","action":"ask-user","description":"blocking"}],"summary":"1 issue"}`
-	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, blocking); err != nil {
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx); err != nil {
 		t.Fatalf("DiscardApprovalResidue() error = %v", err)
 	}
 	got, err := os.ReadFile(tracked)
@@ -499,6 +539,9 @@ func TestReviewStep_DiscardApprovalResidueLeavesANonResidueGateAlone(t *testing.
 	}
 	if string(got) != "uncommitted work\n" {
 		t.Fatalf("tracked file = %q, want it untouched by a gate that recorded no residue", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "scratch.txt")); err != nil {
+		t.Fatalf("untracked file named only by the agent's findings was destroyed: %v", err)
 	}
 }
 
@@ -584,11 +627,11 @@ func TestRunValidationStep_ParkedResidueIsWhatDiscardRemoves(t *testing.T) {
 		t.Fatal("NeedsApproval = false, want the certifying step parked over its residue")
 	}
 
-	recordedModified, recordedUntracked, err := recordedResidue(parked.Findings)
-	if err != nil {
-		t.Fatalf("recordedResidue() error = %v", err)
+	residue, ok := sctx.Shared.ValidationResidue(types.StepReview)
+	if !ok {
+		t.Fatal("the park recorded no residue, want the paths it refused to commit")
 	}
-	recorded := append(append([]string{}, recordedModified...), recordedUntracked...)
+	recorded := append(append([]string{}, residue.Modified...), residue.Untracked...)
 	// git reports the embedded repository with a trailing slash, and discard
 	// has to cope with the directory spelling it was actually handed.
 	for _, want := range []string{accented, quoted, backslashed, embedded + "/"} {
@@ -597,7 +640,7 @@ func TestRunValidationStep_ParkedResidueIsWhatDiscardRemoves(t *testing.T) {
 		}
 	}
 
-	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx, parked.Findings); err != nil {
+	if err := (&ReviewStep{}).DiscardApprovalResidue(sctx); err != nil {
 		t.Fatalf("DiscardApprovalResidue() error = %v", err)
 	}
 	restored, err := os.ReadFile(tracked)

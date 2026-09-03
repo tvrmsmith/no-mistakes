@@ -185,8 +185,8 @@ func (s *ReviewStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 // is the step that records the review-approved head, so it parks rather than
 // committing when it exits with an unclean worktree; approving that gate means
 // discard the leftovers and continue under the certification that stands.
-func (s *ReviewStep) DiscardApprovalResidue(sctx *pipeline.StepContext, findingsJSON string) error {
-	return discardValidationResidue(sctx, s.Name(), findingsJSON)
+func (s *ReviewStep) DiscardApprovalResidue(sctx *pipeline.StepContext) error {
+	return discardValidationResidue(sctx, s.Name())
 }
 
 func (s *ReviewStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {

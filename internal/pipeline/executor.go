@@ -101,29 +101,31 @@ func (e *Executor) SetSkippedSteps(steps []types.StepName) {
 	}
 }
 
-// adoptRecordedSkips rebuilds the skip set from the run's own step rows. The
-// set a run started with lives only in the executor that started it: the
-// daemon calls SetSkippedSteps when it launches a run and nothing persists the
-// list, so an executor built to resume a recovered run knows nothing about it
-// and every restart decision that reads e.skips would come out differently
-// after a daemon restart than before one. The skipped step rows are the
-// durable record of the same decision, and they are what both Execute and
-// executeRecoveredRemainder already walk past, so reading them back makes a
-// resumed run refuse or drop a restart into a skipped boundary exactly as the
-// original run would have.
-func (e *Executor) adoptRecordedSkips(runID string) error {
-	results, err := e.db.GetStepsByRun(runID)
-	if err != nil {
-		return fmt.Errorf("read recovered step statuses: %w", err)
+// adoptRecordedSkips restores the operator's skip set onto an executor built
+// to resume a recovered run. The set a run started with otherwise lives only
+// in the executor that started it, so every decision reading e.skips would
+// come out differently after a daemon restart than before one.
+//
+// It reads runs.skipped_steps, the list the daemon wrote when the run started,
+// and never infers the set from step rows. A step row says skipped for three
+// different reasons (the operator's list, a human answering skip at a gate, a
+// step declaring itself skipped) and, worse, says nothing at all about a step
+// the run had not reached yet: a run parked at a document gate has a pending
+// Push row whether or not the operator passed --skip push, so inference would
+// turn the deliberate --skip review --skip push decline into a hard failure.
+func (e *Executor) adoptRecordedSkips(run *db.Run) error {
+	if run == nil {
+		return nil
 	}
-	for _, result := range results {
-		if result.Status != types.StepStatusSkipped {
-			continue
-		}
-		if e.skips == nil {
-			e.skips = make(map[types.StepName]bool, len(results))
-		}
-		e.skips[result.StepName] = true
+	steps := run.SkippedSteps
+	if len(steps) == 0 {
+		return nil
+	}
+	if e.skips == nil {
+		e.skips = make(map[types.StepName]bool, len(steps))
+	}
+	for _, step := range steps {
+		e.skips[step] = true
 	}
 	return nil
 }
@@ -527,7 +529,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	if err := ValidateRecoveredRun(e.db, run, e.steps); err != nil {
 		return err
 	}
-	if err := e.adoptRecordedSkips(run.ID); err != nil {
+	if err := e.adoptRecordedSkips(run); err != nil {
 		return err
 	}
 	gate, err := e.recoveredGate(run.ID)
@@ -657,7 +659,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	switch response.action {
 	case types.ActionApprove:
 		e.recordDeclinedRound(gate.lastRoundID, gate.findings, gate.step.Name(), gate.round)
-		if err := e.discardApprovalResidue(gate.step, reconcileCtx, gate.findings); err != nil {
+		if err := e.discardApprovalResidue(gate.step, reconcileCtx); err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
 		if err := completeRecoveredGate(); err != nil {
@@ -815,7 +817,11 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 			continue
 		}
 		// The resumed executor carries the run's persisted skip set, so a step
-		// the operator excluded stays excluded across a daemon stop.
+		// the operator excluded stays excluded across a daemon stop. A skipped
+		// step is still pending here whenever the run parked before reaching
+		// it, so its row cannot answer this and the restored set has to:
+		// running it anyway would publish a run the operator asked not to
+		// publish, and would falsify the premise the declined restart rests on.
 		if e.skips[e.steps[index].Name()] {
 			if err := e.markRecoveredStepSkipped(run, repo, result, e.steps[index].Name()); err != nil {
 				return e.failRun(run, repo, err, ctx)
@@ -1356,7 +1362,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// Approved - execution already frozen in executionMS, reset phaseStart
 			// so the done label computes no additional elapsed.
 			e.recordDeclinedRound(currentRoundID, outcome.Findings, stepName, roundNum)
-			if err := e.discardApprovalResidue(step, sctx, outcome.Findings); err != nil {
+			if err := e.discardApprovalResidue(step, sctx); err != nil {
 				return false, "", err
 			}
 			phaseStart = time.Now()
@@ -1464,18 +1470,23 @@ done:
 // discardApprovalResidue is what both ActionApprove sites route
 // through. A step that parked over work it deliberately refused to commit
 // (ApprovalResidueDiscarder) clears that work here, because approving such a
-// gate means discard. The parked gate's own findings go with it: they name the
-// paths the park recorded, and discard is scoped to exactly those, so a file
-// edited while the run sat parked survives unless the park recorded that same
-// path. Every step that does not implement
-// the interface is unaffected, and a gate that recorded no residue does
-// nothing.
-func (e *Executor) discardApprovalResidue(step Step, sctx *StepContext, findingsJSON string) error {
+// gate means discard.
+//
+// The trigger is the run's own record of what that step parked over, never the
+// gate's findings. Review raises ordinary gates far more often than residue
+// ones, and its findings are agent-authored, so keying a destructive git
+// restore on their contents let an ordinary approval delete whatever files the
+// agent had named. Every step that does not implement the interface is
+// unaffected, and so is every round that recorded no residue.
+func (e *Executor) discardApprovalResidue(step Step, sctx *StepContext) error {
 	discarder, ok := step.(ApprovalResidueDiscarder)
 	if !ok {
 		return nil
 	}
-	if err := discarder.DiscardApprovalResidue(sctx, findingsJSON); err != nil {
+	if _, parked := e.shared.ValidationResidue(step.Name()); !parked {
+		return nil
+	}
+	if err := discarder.DiscardApprovalResidue(sctx); err != nil {
 		return fmt.Errorf("discard approval residue for step %s: %w", step.Name(), err)
 	}
 	return nil

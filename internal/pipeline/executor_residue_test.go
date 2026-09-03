@@ -13,28 +13,35 @@ import (
 
 // residueDiscardingStep is a mockStep that also implements
 // ApprovalResidueDiscarder, so these tests can exercise the executor's
-// ActionApprove discard path without a real worktree. It records every call
-// and the findings it was handed.
+// ActionApprove discard path without a real worktree. Its round records residue
+// on RunShared exactly as a real residue park does, unless parksClean is set,
+// and it counts every discard call.
 type residueDiscardingStep struct {
 	*mockStep
-	mu       sync.Mutex
-	calls    int
-	findings []string
-	err      error
+	parksClean bool
+	mu         sync.Mutex
+	calls      int
+	err        error
 }
 
-func (r *residueDiscardingStep) DiscardApprovalResidue(_ *StepContext, findingsJSON string) error {
+func (r *residueDiscardingStep) Execute(sctx *StepContext) (*StepOutcome, error) {
+	if !r.parksClean {
+		sctx.Shared.SetValidationResidue(r.Name(), ValidationResidue{Modified: []string{"feature.txt"}})
+	}
+	return r.mockStep.Execute(sctx)
+}
+
+func (r *residueDiscardingStep) DiscardApprovalResidue(_ *StepContext) error {
 	r.mu.Lock()
 	r.calls++
-	r.findings = append(r.findings, findingsJSON)
 	r.mu.Unlock()
 	return r.err
 }
 
-func (r *residueDiscardingStep) observed() (int, []string) {
+func (r *residueDiscardingStep) observed() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.calls, append([]string(nil), r.findings...)
+	return r.calls
 }
 
 const residueGateFindings = `{"findings":[{"id":"residue-tracked-1","severity":"warning","action":"no-op","file":"feature.txt","description":"left modified"}]}`
@@ -64,12 +71,42 @@ func TestExecutor_ApproveDiscardsResidue(t *testing.T) {
 		t.Fatal("executor did not complete after approval")
 	}
 
-	calls, findings := step.observed()
-	if calls != 1 {
+	if calls := step.observed(); calls != 1 {
 		t.Fatalf("DiscardApprovalResidue calls = %d, want exactly 1", calls)
 	}
-	if !strings.Contains(findings[0], "residue-tracked-1") {
-		t.Fatalf("discarder findings = %q, want the parked gate's own findings", findings[0])
+}
+
+// TestExecutor_ApproveWithoutARecordedParkDiscardsNothing pins the gate on the
+// call. Finding.ID is free-form agent text, so a round that parked for its own
+// reasons can carry items spelled like a residue park's; only the record the
+// step wrote from git decides, and a round that wrote none means an ordinary
+// approval touches no files.
+func TestExecutor_ApproveWithoutARecordedParkDiscardsNothing(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	step := &residueDiscardingStep{
+		mockStep:   newApprovalStep(types.StepReview, residueGateFindings),
+		parksClean: true,
+	}
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+
+	waitForStepStatus(t, database, run.ID, step.Name(), types.StepStatusAwaitingApproval)
+	if err := exec.Respond(step.Name(), types.ActionApprove, nil); err != nil {
+		t.Fatalf("Respond(approve) error = %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not complete after approval")
+	}
+
+	if calls := step.observed(); calls != 0 {
+		t.Fatalf("DiscardApprovalResidue calls = %d, want 0 for a gate that recorded no residue", calls)
 	}
 }
 
@@ -112,11 +149,15 @@ func TestExecutor_ApproveDiscardFailureFailsTheRun(t *testing.T) {
 	}
 }
 
-// TestExecutor_ApproveDiscardsResidueOnTheRecoveredPath exercises the OTHER
-// ActionApprove site, the daemon-restart recovery path in Resume. It hands the
-// discarder a copied reconcileCtx rather than the live StepContext, so it is a
-// genuinely separate wiring that the live-path test above cannot cover.
-func TestExecutor_ApproveDiscardsResidueOnTheRecoveredPath(t *testing.T) {
+// TestExecutor_RecoveredGateApprovalDiscardsNothing covers the OTHER
+// ActionApprove site, the daemon-restart recovery path in Resume. The record of
+// what a park refused to commit lives on RunShared, which a new process rebuilds
+// empty, so the recovered gate has no recorded list and approving it removes
+// nothing; the leftovers ride into the next validation step's exit commit, which
+// is what happened before the residue gate existed. Forgetting the record can
+// only fail towards touching no files, never towards deleting one nothing
+// recorded, and that direction is what this pins.
+func TestExecutor_RecoveredGateApprovalDiscardsNothing(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
 		t.Fatal(err)
@@ -172,12 +213,8 @@ func TestExecutor_ApproveDiscardsResidueOnTheRecoveredPath(t *testing.T) {
 		t.Fatal("resumed executor did not complete after approval")
 	}
 
-	calls, seen := step.observed()
-	if calls != 1 {
-		t.Fatalf("recovered-path DiscardApprovalResidue calls = %d, want exactly 1", calls)
-	}
-	if !strings.Contains(seen[0], "residue-tracked-1") {
-		t.Fatalf("recovered-path discarder findings = %q, want the parked gate's own findings", seen[0])
+	if calls := step.observed(); calls != 0 {
+		t.Fatalf("recovered-path DiscardApprovalResidue calls = %d, want 0 with no recorded residue", calls)
 	}
 }
 
@@ -206,7 +243,7 @@ func TestExecutor_OnlyApprovalDiscardsResidue(t *testing.T) {
 		t.Fatal("executor did not complete after the skip")
 	}
 
-	if calls, _ := step.observed(); calls != 0 {
+	if calls := step.observed(); calls != 0 {
 		t.Fatalf("DiscardApprovalResidue calls = %d, want 0 for a skipped gate", calls)
 	}
 }

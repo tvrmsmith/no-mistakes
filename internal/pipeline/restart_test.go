@@ -275,9 +275,9 @@ func TestExecutor_RestartIntoASkippedBoundary(t *testing.T) {
 // executor the daemon built for it, so a resumed run that read it from nowhere
 // would rewind into the skipped boundary, walk straight past its skipped row
 // back to the requesting step, and repeat that forever while the certification
-// stays NULL. The skipped step rows are the durable record of the same
-// decision, so the resumed run must reach the same verdict the original would
-// have.
+// stays NULL. The run row carries the operator's list, so the resumed run must
+// reach the same verdict the original would have. Push is live here, so the run
+// still publishes and the missing certification has to fail it by name.
 func TestExecutor_RestartIntoASkippedBoundaryAfterDaemonRestart(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
@@ -301,6 +301,9 @@ func TestExecutor_RestartIntoASkippedBoundaryAfterDaemonRestart(t *testing.T) {
 
 	// The run the daemon lost: review skipped, test parked at its gate, the
 	// rest still pending.
+	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepReview}); err != nil {
+		t.Fatal(err)
+	}
 	skipped, err := database.InsertStepResult(run.ID, types.StepReview)
 	if err != nil {
 		t.Fatal(err)
@@ -376,6 +379,119 @@ func TestExecutor_RestartIntoASkippedBoundaryAfterDaemonRestart(t *testing.T) {
 	}
 	if after.RestartCount != 0 {
 		t.Fatalf("restart count = %d, want the refused restart to write nothing", after.RestartCount)
+	}
+}
+
+// TestExecutor_DeclinedRestartAfterDaemonRestart is the other half of the
+// recovered verdict, and the one a step-row reading gets wrong. Push is pending
+// in the step rows whether the operator skipped it or the run simply has not
+// reached it, so inferring the skip set from those rows reads --skip review
+// --skip push as "push is live" and turns a decline into a hard failure exactly
+// where the documented validate-without-publishing mode should keep running.
+// The run row says both are skipped, so the resumed run drops the restart and
+// finishes.
+func TestExecutor_DeclinedRestartAfterDaemonRestart(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepReview, types.StepPush}); err != nil {
+		t.Fatal(err)
+	}
+
+	documentCalls := 0
+	pushCalls := 0
+	steps := []Step{
+		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+			return &StepOutcome{}, nil
+		}},
+		newApprovalStep(types.StepTest, blockingFindingsJSON),
+		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
+			documentCalls++
+			return &StepOutcome{RestartFrom: types.StepReview}, nil
+		}},
+		&adaptiveCallStep{name: types.StepPush, fn: func(*StepContext) (*StepOutcome, error) {
+			pushCalls++
+			return &StepOutcome{}, nil
+		}},
+	}
+
+	skipped, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteStepWithStatus(skipped.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	gate, err := database.InsertStepResult(run.ID, types.StepTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.StartStep(gate.ID); err != nil {
+		t.Fatal(err)
+	}
+	findings := blockingFindingsJSON
+	if err := database.SetStepFindings(gate.ID, findings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.InsertStepRound(gate.ID, 1, "initial", &findings, nil, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatusWithDuration(gate.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []types.StepName{types.StepDocument, types.StepPush} {
+		if _, err := database.InsertStepResult(run.ID, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run, err = database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, steps, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Resume(context.Background(), run, repo, t.TempDir()) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var respondErr error
+	for time.Now().Before(deadline) {
+		if respondErr = exec.Respond(types.StepTest, types.ActionApprove, nil); respondErr == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if respondErr != nil {
+		t.Fatalf("Respond(approve) error = %v", respondErr)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Resume() error = %v, want the declined restart to let the run continue", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("resumed run never finished, so the restart is rewinding into the skipped boundary")
+	}
+	if documentCalls != 1 {
+		t.Fatalf("document ran %d times, want exactly 1", documentCalls)
+	}
+	if pushCalls != 0 {
+		t.Fatalf("push ran %d times, want the skipped step never executed", pushCalls)
+	}
+	after, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != types.RunCompleted {
+		t.Fatalf("run status = %q, want the run to complete with the restart dropped", after.Status)
+	}
+	if after.RestartCount != 0 {
+		t.Fatalf("restart count = %d, want the dropped restart to write nothing", after.RestartCount)
 	}
 }
 

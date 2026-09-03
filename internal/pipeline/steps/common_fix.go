@@ -246,6 +246,7 @@ func runValidationStep(
 ) (*pipeline.StepOutcome, error) {
 	headBefore := sctx.Run.HeadSHA
 	agentsBefore := sctx.AgentInvocations()
+	sctx.Shared.ClearValidationResidue(name)
 
 	outcome, err := inner(sctx)
 	if err != nil {
@@ -464,6 +465,7 @@ func residueGateOutcome(sctx *pipeline.StepContext, name types.StepName, outcome
 	if err != nil {
 		return nil, fmt.Errorf("render %s residue findings: %w", name, err)
 	}
+	sctx.Shared.SetValidationResidue(name, pipeline.ValidationResidue{Modified: modified, Untracked: untracked})
 	sctx.Log(fmt.Sprintf("%s examined %s but left these files uncommitted; parking instead of committing over its own certification: modified %s, untracked %s",
 		name, sctx.Run.HeadSHA, describePaths(modified), describePaths(untracked)))
 	outcome.AutoFixable = false
@@ -505,32 +507,6 @@ func worktreeResidue(ctx context.Context, workDir string) (modified, untracked [
 	return modified, untracked, nil
 }
 
-// recordedResidue reads back the paths a residue park enumerated, split into
-// the tracked and untracked lists it wrote as residue-tracked-N and
-// residue-untracked-N findings. A gate carrying neither kind - any other gate
-// the certifying step raises - yields two empty lists.
-func recordedResidue(findingsJSON string) (modified, untracked []string, err error) {
-	if findingsJSON == "" {
-		return nil, nil, nil
-	}
-	var findings Findings
-	if err := json.Unmarshal([]byte(findingsJSON), &findings); err != nil {
-		return nil, nil, fmt.Errorf("parse parked residue findings: %w", err)
-	}
-	for _, item := range findings.Items {
-		if item.File == "" {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(item.ID, "residue-tracked-"):
-			modified = append(modified, item.File)
-		case strings.HasPrefix(item.ID, "residue-untracked-"):
-			untracked = append(untracked, item.File)
-		}
-	}
-	return modified, untracked, nil
-}
-
 // discardValidationResidue removes exactly the paths the residue park recorded:
 // tracked ones are restored from HEAD, untracked ones are deleted, and
 // gitignored output is left alone.
@@ -541,12 +517,19 @@ func recordedResidue(findingsJSON string) (modified, untracked []string, err err
 // the tree happens to hold at approval time would destroy it. So this touches
 // the enumerated paths and nothing else, and a gate that recorded no residue
 // leaves the worktree untouched.
-func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName, findingsJSON string) error {
-	modified, untracked, err := recordedResidue(findingsJSON)
-	if err != nil {
-		return fmt.Errorf("read %s residue gate: %w", name, err)
+//
+// The list comes from what the step itself read out of git when it raised the
+// gate, held on RunShared. It used to be re-derived from the parked findings,
+// which handed the choice of files to destroy to the review agent, since a
+// finding ID is whatever the agent wrote.
+func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName) error {
+	residue, ok := sctx.Shared.ValidationResidue(name)
+	if !ok {
+		return nil
 	}
+	modified, untracked := residue.Modified, residue.Untracked
 	if len(modified) == 0 && len(untracked) == 0 {
+		sctx.Shared.ClearValidationResidue(name)
 		return nil
 	}
 	if len(modified) > 0 {
@@ -577,6 +560,7 @@ func discardValidationResidue(sctx *pipeline.StepContext, name types.StepName, f
 	if err := assertResidueGone(sctx, name, modified, untracked); err != nil {
 		return err
 	}
+	sctx.Shared.ClearValidationResidue(name)
 	sctx.Log(fmt.Sprintf("discarded %s residue; the existing certification stands: restored %s, removed %s",
 		name, describePaths(modified), describePaths(untracked)))
 	return nil

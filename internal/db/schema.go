@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS runs (
     awaiting_agent_since INTEGER,
     parked_ms            INTEGER,
     restart_count        INTEGER NOT NULL DEFAULT 0,
+    skipped_steps        TEXT,
     created_at           INTEGER NOT NULL,
     updated_at           INTEGER NOT NULL
 );

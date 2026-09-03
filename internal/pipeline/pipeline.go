@@ -238,10 +238,12 @@ type ApprovalGateReconciler interface {
 // review-approved head (Review today, whatever certifies after issues #7/#8).
 // The step that certifies must not modify the tree it certifies, so when it
 // exits with an unclean worktree it parks instead of committing: nothing is
-// destroyed and the existing certification is untouched. The gate's own
-// findings are what enumerate the leftovers, one item per path. The gate diff
-// shows only the tracked modifications among them, since it is a git diff
-// against the worktree and untracked files never appear in one.
+// destroyed and the existing certification is untouched. The gate's findings
+// describe the leftovers to a human, one item per path, while the paths discard
+// acts on come from RunShared.ValidationResidue, which the step wrote from git
+// when it raised the gate. The gate diff shows only the tracked modifications
+// among them, since it is a git diff against the worktree and untracked files
+// never appear in one.
 //
 // That gate has two answers. Approving means "discard", and the executor calls
 // this so the step removes exactly the leftovers the park recorded before the
@@ -249,16 +251,17 @@ type ApprovalGateReconciler interface {
 // instead means "keep": the step's own fix round commits the residue and
 // re-reviews the new head, so that answer needs no hook here.
 //
-// findingsJSON is the parked gate's own findings, and it is what says which
-// paths the park recorded. Discard is scoped to those paths because a human or
-// a driving agent may edit the worktree while the run is parked, and a blanket
-// reset over whatever the tree holds at approval time would destroy work
-// nobody ruled on. The guarantee is exactly that scope: a file outside the
-// recorded list survives, and an edit made during the park to a file that IS
-// on the list goes with the rest of that path's contents.
+// Discard is scoped to the recorded paths because a human or a driving agent
+// may edit the worktree while the run is parked, and a blanket reset over
+// whatever the tree holds at approval time would destroy work nobody ruled on.
+// The guarantee is exactly that scope: a file outside the recorded list
+// survives, and an edit made during the park to a file that IS on the list
+// goes with the rest of that path's contents. The executor calls this only for
+// a round that actually recorded residue, so approving any other gate the same
+// step raises touches no files whatever its findings say.
 //
 // It is fail-closed. A discard that cannot complete leaves an uncommitted tree
 // a later step would commit unjudged, so the error fails the run.
 type ApprovalResidueDiscarder interface {
-	DiscardApprovalResidue(sctx *StepContext, findingsJSON string) error
+	DiscardApprovalResidue(sctx *StepContext) error
 }
