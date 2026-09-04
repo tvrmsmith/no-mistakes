@@ -196,8 +196,12 @@ func withClaudeStreamDetail(msg string, stream *claudeStream) string {
 //
 // buf, abort, and report are guarded by mu because they are written here and
 // read from runOnce after stderrWG.Wait().
-func scanClaudeStderr(started *nativeAgentCommand, mu *sync.Mutex, buf *[]byte, abort *error, report *string, bypass bool) {
-	scanner := bufio.NewScanner(started.stderr)
+//
+// stderr and abortProcess are parameters rather than a *nativeAgentCommand so
+// the scan-failure and drain behavior can be driven from a reader a test
+// controls; the live caller passes the command's own stderr pipe and teardown.
+func scanClaudeStderr(stderr io.Reader, abortProcess func(), mu *sync.Mutex, buf *[]byte, abort *error, report *string, bypass bool) {
+	scanner := bufio.NewScanner(stderr)
 	scanner.Buffer(make([]byte, 0, 64*1024), claudeScannerMaxTokenSize)
 	var acc bytes.Buffer
 	for scanner.Scan() {
@@ -217,8 +221,7 @@ func scanClaudeStderr(started *nativeAgentCommand, mu *sync.Mutex, buf *[]byte, 
 				*abort = abortErr
 			}
 			mu.Unlock()
-			started.closePipes()
-			started.terminate()
+			abortProcess()
 			continue
 		}
 		category := warning.Category
@@ -240,7 +243,7 @@ func scanClaudeStderr(started *nativeAgentCommand, mu *sync.Mutex, buf *[]byte, 
 	// it is how the biting-warning abort closes the pipes on purpose.
 	if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
 		fmt.Fprintf(&acc, "[stderr scan stopped: %v; remainder unparsed]\n", err)
-		_, _ = io.Copy(&acc, started.stderr)
+		_, _ = io.Copy(&acc, stderr)
 	}
 	mu.Lock()
 	*buf = acc.Bytes()
@@ -341,7 +344,10 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	stderrWG.Add(1)
 	go func() {
 		defer stderrWG.Done()
-		scanClaudeStderr(started, &trustMu, &stderrBuf, &trustAbort, &trustReport, bypass)
+		scanClaudeStderr(started.stderr, func() {
+			started.closePipes()
+			started.terminate()
+		}, &trustMu, &stderrBuf, &trustAbort, &trustReport, bypass)
 	}()
 
 	var usage TokenUsage

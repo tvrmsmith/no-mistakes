@@ -848,6 +848,16 @@ func TestClaudeStdinHelper(t *testing.T) {
 		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceFixture)
 		emitClaudeHelperResult()
 		return
+	case "untrusted-allow-then-additional-directories":
+		// The production shape: Claude Code prints one console.error per
+		// discarded category, so an inert permissions.allow line routinely
+		// arrives before the permissions.additionalDirectories line that does
+		// bite. The successful result event afterwards makes the abort the only
+		// thing that can produce a failure.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceFixture)
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		emitClaudeHelperResult()
+		return
 	case "untrusted-bites-then-exit-nonzero":
 		// The likely production shape: the adapter's own abort SIGTERMs the
 		// process, so wait() returns an error. The trust abort must still be

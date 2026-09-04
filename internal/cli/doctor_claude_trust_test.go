@@ -34,6 +34,13 @@ func setupDoctorTrustEnvWithoutDatabase(t *testing.T) *paths.Paths {
 // setupDoctorTrustEnv additionally creates the database and registers
 // repoCount repositories, so repoCount == 0 means an existing database with an
 // empty repos table rather than no database at all.
+//
+// Each gate directory is created on disk and the returned paths are
+// canonicalized, which is the production shape: claudetrust.CanonicalWorkspace
+// realpaths through filepath.EvalSymlinks, and EvalSymlinks fails (leaving the
+// raw path untouched) only while the directory is absent. On macOS the
+// t.TempDir root /var/folders resolves to /private/var/folders, so a suite that
+// left the directory absent would compare raw spellings doctor never prints.
 func setupDoctorTrustEnv(t *testing.T, repoCount int) (gatePaths []string) {
 	t.Helper()
 	p := setupDoctorTrustEnvWithoutDatabase(t)
@@ -48,7 +55,10 @@ func setupDoctorTrustEnv(t *testing.T, repoCount int) (gatePaths []string) {
 		if _, err := d.InsertRepoWithID(ids[i], "/work/"+ids[i], "https://example.com/"+ids[i]+".git", "main"); err != nil {
 			t.Fatalf("InsertRepoWithID(%q) error = %v", ids[i], err)
 		}
-		gatePaths = append(gatePaths, p.RepoDir(ids[i]))
+		if err := os.MkdirAll(p.RepoDir(ids[i]), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", p.RepoDir(ids[i]), err)
+		}
+		gatePaths = append(gatePaths, claudetrust.CanonicalWorkspace(p.RepoDir(ids[i])))
 	}
 	return gatePaths
 }
@@ -309,46 +319,8 @@ func TestDoctorClaudeTrust_ReportsTheCanonicalGatePath(t *testing.T) {
 	}
 }
 
-// TestDoctorClaudeTrust_UnmigratedDatabaseOmitsCheck covers the cost of
-// reading read-only: a database written by an older build is missing a column
-// GetRepos names, which is the ordinary state between an upgrade and the next
-// writer's migrations. It must not surface as an alarming "cannot list gate
-// repositories" warning. The check is driven directly rather than through the
-// doctor command, because doctor's own "database" row opens the file for write
-// and would migrate it before this check ever reads it.
-func TestDoctorClaudeTrust_UnmigratedDatabaseOmitsCheck(t *testing.T) {
-	setupDoctorTrustEnv(t, 2)
-	p, err := paths.New()
-	if err != nil {
-		t.Fatalf("paths.New() error = %v", err)
-	}
-	sqlDB, err := sql.Open("sqlite", p.DB())
-	if err != nil {
-		t.Fatalf("sql.Open() error = %v", err)
-	}
-	if _, err := sqlDB.Exec(`ALTER TABLE repos DROP COLUMN fork_url`); err != nil {
-		sqlDB.Close()
-		t.Fatalf("drop fork_url: %v", err)
-	}
-	if err := sqlDB.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	binDir := t.TempDir()
-	writeDoctorStubBinary(t, binDir, "claude")
-	t.Setenv("PATH", binDir)
-
-	var reported []string
-	record := func(label, detail string) { reported = append(reported, label+" "+detail) }
-	doctorClaudeWorkspaceTrust(p, record, record)
-
-	if len(reported) != 0 {
-		t.Errorf("doctorClaudeWorkspaceTrust reported %v, want nothing for a database one migration behind", reported)
-	}
-}
-
-// A genuine read failure is still reported: the migration-lag exemption must
-// not swallow every GetRepos error.
+// A read failure of the repo table is reported rather than silently skipped:
+// with the gate list unknown, staying quiet would read as "nothing to check".
 func TestDoctorClaudeTrust_UnreadableRepoTableIsReported(t *testing.T) {
 	setupDoctorTrustEnv(t, 2)
 	p, err := paths.New()

@@ -28,6 +28,12 @@ const untrustedWorkspaceFixture = `Ignoring 8 permissions.allow entries from .cl
 const untrustedWorkspaceAdditionalDirectoriesFixture = `Ignoring 1 permissions.additionalDirectories entry from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["/Users/trevor.smith/.no-mistakes/repos/871d740473c0.git"].hasTrustDialogAccepted: true in /Users/trevor.smith/.claude.json.
 `
 
+// untrustedWorkspaceOtherGateFixture is a second biting warning naming a
+// different workspace, so a test can tell which of two biting lines produced
+// the abort.
+const untrustedWorkspaceOtherGateFixture = `Ignoring 1 permissions.additionalDirectories entry from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["/Users/trevor.smith/.no-mistakes/repos/000000000000.git"].hasTrustDialogAccepted: true in /Users/trevor.smith/.claude.json.
+`
+
 // wantRemedySubstring is the exact remedy text the assignment pins, derived
 // from claudetrust.Remedy for the workspace path shared by both fixtures
 // above.
@@ -216,6 +222,29 @@ func TestClaudeAgent_UntrustedWorkspaceWinsOverAMissingResult(t *testing.T) {
 	}
 	if !errors.Is(err, errClaudeWorkspaceUntrusted) {
 		t.Fatalf("error %v does not wrap errClaudeWorkspaceUntrusted", err)
+	}
+}
+
+// TestClaudeAgent_InertWarningThenBitingWarningAborts is the run-level form of
+// the multi-line shape: Claude Code prints one console.error per discarded
+// category, so the inert permissions.allow line arrives first and the
+// permissions.additionalDirectories line that bites arrives after it, followed
+// by a successful result event. The run must still abort with the remedy.
+func TestClaudeAgent_InertWarningThenBitingWarningAborts(t *testing.T) {
+	t.Setenv("NM_CLAUDE_STDIN_HELPER", "untrusted-allow-then-additional-directories")
+	t.Setenv("CLAUDE_CONFIG_DIR", newClaudeConfigDir(t))
+	a := newClaudeStdinHelperAgent(t)
+
+	res, err := a.runOnce(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+
+	if res != nil {
+		t.Fatalf("result = %+v, want nil: the later biting warning must win over the parsed success", res)
+	}
+	if !errors.Is(err, errClaudeWorkspaceUntrusted) {
+		t.Fatalf("error %v does not wrap errClaudeWorkspaceUntrusted", err)
+	}
+	if !strings.Contains(err.Error(), wantRemedySubstring) {
+		t.Fatalf("error %q missing remedy substring %q", err, wantRemedySubstring)
 	}
 }
 
