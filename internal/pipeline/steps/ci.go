@@ -601,7 +601,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
 						if repair.Revalidate {
-							return &pipeline.StepOutcome{RestartFrom: types.StepReview}, nil
+							return &pipeline.StepOutcome{RestartFrom: pipeline.RestartBoundary}, nil
 						}
 						// The repair was published, so the monitor stays on
 						// this run and waits for the provider to re-run the
@@ -647,7 +647,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
 						if repair.Revalidate {
-							return &pipeline.StepOutcome{RestartFrom: types.StepReview}, nil
+							return &pipeline.StepOutcome{RestartFrom: pipeline.RestartBoundary}, nil
 						}
 						// The repair was published, so the monitor stays on
 						// this run and waits for the provider to re-run the

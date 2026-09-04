@@ -600,6 +600,7 @@ For empty `commands.lint`, the document step's combined housekeeping pass also a
 | Field               | Type  | Default | Description                                                                                 |
 | ------------------- | ----- | ------- | ------------------------------------------------------------------------------------------- |
 | `auto_fix.rebase`   | `int` | `3`     | Rebase conflict auto-fix attempts                                                           |
+| `auto_fix.format`   | `int` | `3`     | Formatter failure auto-fix attempts                                                         |
 | `auto_fix.review`   | `int` | `0`     | Review finding auto-fix attempts                                                            |
 | `auto_fix.test`     | `int` | `3`     | Test failure auto-fix attempts                                                              |
 | `auto_fix.document` | `int` | `3`     | Not used by the automatic document pass                                                     |

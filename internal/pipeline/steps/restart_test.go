@@ -58,8 +58,8 @@ func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 		wantRestart types.StepName
 		wantCommits int
 	}{
-		{name: "agent_docs", agentRan: true, dirtyPath: "README.md", wantRestart: types.StepReview, wantCommits: 1},
-		{name: "agent_code", agentRan: true, dirtyPath: "main.go", wantRestart: types.StepReview, wantCommits: 1},
+		{name: "agent_docs", agentRan: true, dirtyPath: "README.md", wantRestart: pipeline.RestartBoundary, wantCommits: 1},
+		{name: "agent_code", agentRan: true, dirtyPath: "main.go", wantRestart: pipeline.RestartBoundary, wantCommits: 1},
 		{name: "tool_docs", agentRan: false, dirtyPath: "README.md", wantRestart: "", wantCommits: 1},
 		{name: "tool_code", agentRan: false, dirtyPath: "main.go", wantRestart: "", wantCommits: 1},
 		{name: "agent_no_write", agentRan: true, dirtyPath: "", wantRestart: "", wantCommits: 0},
@@ -762,8 +762,8 @@ func TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn(t *testing.T)
 		return outcome
 	}
 
-	if got := run().RestartFrom; got != types.StepReview {
-		t.Fatalf("first round RestartFrom = %q, want %q", got, types.StepReview)
+	if got := run().RestartFrom; got != pipeline.RestartBoundary {
+		t.Fatalf("first round RestartFrom = %q, want %q", got, pipeline.RestartBoundary)
 	}
 	// Undo the first commit's content so the second round has something to
 	// commit whose result is the very tree the first round already produced.
@@ -837,8 +837,8 @@ func TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn(t *testing.T)
 	if progressed.NeedsApproval {
 		t.Fatal("NeedsApproval = true, want the gate cleared once the tree changed")
 	}
-	if progressed.RestartFrom != types.StepReview {
-		t.Fatalf("RestartFrom = %q, want %q once the step produced a different tree", progressed.RestartFrom, types.StepReview)
+	if progressed.RestartFrom != pipeline.RestartBoundary {
+		t.Fatalf("RestartFrom = %q, want %q once the step produced a different tree", progressed.RestartFrom, pipeline.RestartBoundary)
 	}
 }
 
@@ -893,7 +893,11 @@ func TestValidationStep_ExecuteRoutesThroughTheSharedExitHelper(t *testing.T) {
 				t.Fatalf("Execute() error = %v", err)
 			}
 
-			if tc.step.Name() == pipeline.RestartBoundary {
+			// Review is the certifying step, not the restart boundary; the
+			// "must not modify what it certifies" rule is tied to being the
+			// certifier, so it keys off Review by name here regardless of
+			// which step the restart boundary is.
+			if tc.step.Name() == types.StepReview {
 				if !outcome.NeedsApproval {
 					t.Fatalf("NeedsApproval = false, want the certifying step parked over its residue; findings=%s", outcome.Findings)
 				}

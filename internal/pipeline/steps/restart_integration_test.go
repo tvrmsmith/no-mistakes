@@ -18,12 +18,16 @@ import (
 
 // TestAgentCommitRestartsValidationEndToEnd joins the two halves the other
 // restart tests cover separately: the shared exit helper in this package and
-// the executor seam in internal/pipeline. It drives the real Review and
-// Document steps through a real executor over a real git repository, so the
-// whole observable chain runs once - the document agent edits the worktree,
-// the helper commits that edit and attributes it to the agent, the executor
-// rewinds to Review, and the run ends with a certification covering the
-// post-restart head and a restart recorded on the run row.
+// the executor seam in internal/pipeline. It drives the real Format, Review,
+// and Document steps through a real executor over a real git repository, so
+// the whole observable chain runs once - the document agent edits the
+// worktree, the helper commits that edit and attributes it to the agent, the
+// executor rewinds to Format, and the run ends with a certification covering
+// the post-restart head and a restart recorded on the run row.
+//
+// The slice carries Format because it is the restart boundary: an executor
+// whose steps do not include the boundary rejects the restart outright, which
+// is the executor's guard rather than anything about this scenario.
 func TestAgentCommitRestartsValidationEndToEnd(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -49,7 +53,7 @@ func TestAgentCommitRestartsValidationEndToEnd(t *testing.T) {
 	}}
 
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
-	steps := []pipeline.Step{&ReviewStep{}, &DocumentStep{}}
+	steps := []pipeline.Step{&FormatStep{}, &ReviewStep{}, &DocumentStep{}}
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, steps, nil)
 
 	headBefore := strings.TrimSpace(gitCmd(t, dir, "rev-parse", "HEAD"))
@@ -82,7 +86,7 @@ func TestAgentCommitRestartsValidationEndToEnd(t *testing.T) {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "pipeline: review -> document (real steps, real executor, real git repo %s)\n\n", dir)
+	fmt.Fprintf(&b, "pipeline: format -> review -> document (real steps, real executor, real git repo %s)\n\n", dir)
 	fmt.Fprintf(&b, "head before run: %s\n", headBefore[:8])
 	fmt.Fprintln(&b, "agent turns, in order:")
 	for _, turn := range turns {

@@ -41,14 +41,15 @@ func evidenceUnavailable(cause error) error {
 // RestartBoundary is the step a restart re-enters validation at, the first
 // step of the validation region.
 //
-// On today's unreordered pipeline Review holds both roles the region has: it
-// is the boundary and it is the certifier that records the review-approved
-// head, so the region is a single step. That is why the boundary step cannot
-// restart into itself - it would re-enter the same step whose commit triggered
-// the restart, and nothing further along would ever judge the result. Issues
-// #7/#8 separate the two roles by adding Format and making it the boundary,
-// leaving Review the certifier at the far end of a multi-step region.
-const RestartBoundary types.StepName = types.StepReview
+// Format is the boundary and Review is the certifier at the far end of the
+// region, so different steps hold the two roles the region needs. A restart
+// re-enters at Format, and Review still judges the result before it reaches
+// Push. That is also why the boundary step cannot restart into itself: it
+// would re-enter the same step whose commit triggered the restart.
+//
+// Issue #8 still owns the rest of the reorder, moving Lint and Test ahead of
+// Review and removing the push-time formatter backstop.
+const RestartBoundary types.StepName = types.StepFormat
 
 // CommitsOwnWorkAtExit reports whether a step routes its exit through the
 // validation helper that commits an unclean worktree, which is what makes the
@@ -61,7 +62,7 @@ const RestartBoundary types.StepName = types.StepReview
 // presented as it.
 func CommitsOwnWorkAtExit(name types.StepName) bool {
 	switch name {
-	case types.StepReview, types.StepTest, types.StepDocument, types.StepLint:
+	case types.StepFormat, types.StepReview, types.StepTest, types.StepDocument, types.StepLint:
 		return true
 	default:
 		return false

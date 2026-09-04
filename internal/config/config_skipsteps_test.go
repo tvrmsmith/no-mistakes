@@ -45,6 +45,16 @@ func TestLoadRepoFromBytes_SkipSteps(t *testing.T) {
 	})
 }
 
+func TestNormalizeSkipSteps_AcceptsFormat(t *testing.T) {
+	got, err := normalizeSkipSteps([]types.StepName{types.StepFormat})
+	if err != nil {
+		t.Fatalf("normalizeSkipSteps: %v", err)
+	}
+	if !slices.Equal(got, []types.StepName{types.StepFormat}) {
+		t.Fatalf("normalizeSkipSteps = %v, want [format]", got)
+	}
+}
+
 func TestEffectiveRepoConfig_SkipStepsTrustedOnly(t *testing.T) {
 	pushed := &RepoConfig{SkipSteps: []types.StepName{types.StepReview, types.StepTest}}
 

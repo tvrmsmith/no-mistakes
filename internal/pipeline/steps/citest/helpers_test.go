@@ -9,7 +9,6 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps/internal/stepstest"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // TestEveryShortTimeoutTestPinsTheClock guards this package against the flake
@@ -38,7 +37,7 @@ func assertCIRestartsValidation(t *testing.T, outcome *pipeline.StepOutcome, err
 	if err != nil {
 		t.Fatalf("CI repair returned error: %v", err)
 	}
-	if outcome == nil || outcome.RestartFrom != types.StepReview {
-		t.Fatalf("CI repair outcome = %#v, want restart from review", outcome)
+	if outcome == nil || outcome.RestartFrom != pipeline.RestartBoundary {
+		t.Fatalf("CI repair outcome = %#v, want restart from %s", outcome, pipeline.RestartBoundary)
 	}
 }

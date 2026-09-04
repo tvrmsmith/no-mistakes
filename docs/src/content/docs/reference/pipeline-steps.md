@@ -6,7 +6,7 @@ description: Reference for each step in the validation pipeline.
 This is the per-step reference. For the overview and rationale, see [Pipeline](/no-mistakes/concepts/pipeline/). For the fix loop, see [Auto-Fix Loop](/no-mistakes/concepts/auto-fix/).
 
 ```text
-intent → rebase → review → test → document → lint → push → pr → ci
+intent → rebase → format → review → test → document → lint → push → pr → ci
 ```
 
 Each step can produce findings, request approval, trigger auto-fix, or apply safe fixes during its own pass. Steps that encounter fatal errors stop the pipeline. Steps can also be pre-skipped when starting a run, skipped by the user, or skipped automatically by the pipeline.
@@ -26,9 +26,9 @@ Review flags every newly added violation and requires same-pattern tests encount
 
 ## Validation restart
 
-Review, Test, Document, and Lint share one exit path. When a round leaves the worktree unclean, that step commits the leftovers itself, and the commit is attributed to whoever produced it.
+Format, Review, Test, Document, and Lint share one exit path. When a round leaves the worktree unclean, that step commits the leftovers itself, and the commit is attributed to whoever produced it.
 
-A commit made in a round that invoked an agent is agent-authored: nothing has judged it, so the run re-enters validation from Review, and the run's review approval is revoked in the same write that records the new head. Review, Test, Document, and Lint then run again against that head. A commit a deterministic tool produced, such as a formatter rewriting whitespace, carries nothing new to judge and restarts nothing.
+A commit made in a round that invoked an agent is agent-authored: nothing has judged it, so the run re-enters validation from Format, and the run's review approval is revoked in the same write that records the new head. Format, Review, Test, Document, and Lint then run again against that head. A commit a deterministic tool produced, such as a formatter rewriting whitespace, carries nothing new to judge and restarts nothing.
 
 A re-entry is not a fix round. The re-entered step receives the previous round's findings as context, and per-step auto-fix budgets do not refill across a restart, so a step cannot buy more attempts by restarting.
 
@@ -37,9 +37,9 @@ Restarts are not capped. Two guards make a loop visible instead:
 - A step that commits the same tree its own previous restart already produced parks with an `ask-user` finding naming the step and the tree instead of restarting again. Approve to ship it under the review that already stands, fix to run that step once more, or abort.
 - Each run counts its restarts. `no-mistakes axi status` renders that count as `restarts`, annotated once it passes an advisory soft cap of 5. The cap only annotates; it never blocks or limits a run.
 
-Review is both the restart boundary and the step that records the review-approved head, and the step that certifies must not modify the tree it certifies. A review round that records an approved head and still leaves the worktree unclean therefore commits nothing: it parks and lists what was left behind, tracked modifications as warnings and untracked non-ignored files as informational notes. Approving discards exactly the paths that gate recorded and keeps the certification; fixing commits them through Review's own fix round and re-reviews the resulting head. Every item is `no-op`, so an unattended `--yes` run discards and reports. A daemon restart forgets the recorded paths, so approving the recovered gate discards nothing and leaves the leftovers for the next validation step's exit commit.
+Format is the restart boundary and Review is the step that records the review-approved head, and the step that certifies must not modify the tree it certifies. A review round that records an approved head and still leaves the worktree unclean therefore commits nothing: it parks and lists what was left behind, tracked modifications as warnings and untracked non-ignored files as informational notes. Approving discards exactly the paths that gate recorded and keeps the certification; fixing commits them through Review's own fix round and re-reviews the resulting head. Every item is `no-op`, so an unattended `--yes` run discards and reports. A daemon restart forgets the recorded paths, so approving the recovered gate discards nothing and leaves the leftovers for the next validation step's exit commit.
 
-A run that skipped Review never rewinds into it, because that would re-mark Review skipped and walk straight back to the requesting step. With Push live the run fails, naming both steps, since Push would otherwise refuse three steps later on the missing certification. With Push skipped too - the validate-without-publishing mode of `--skip review,push` - the restart request is dropped with a log naming both steps and the run continues; the round's own findings and approval gate are unaffected. A run resumed after a daemon restart reaches the same verdict, because the run records the operator's skip list when it starts.
+A run that skipped Format never rewinds into it, because that would re-mark Format skipped and walk straight back to the requesting step. With Push live the run fails, naming both steps, since Push would otherwise refuse three steps later on the missing certification. With Push skipped too - the validate-without-publishing mode of `--skip format,push` - the restart request is dropped with a log naming both steps and the run continues; the round's own findings and approval gate are unaffected. A run resumed after a daemon restart reaches the same verdict, because the run records the operator's skip list when it starts.
 
 ## Finding decision history
 
@@ -89,6 +89,21 @@ The integration branch used below is the [PR base branch](/no-mistakes/reference
 - Bounds the conflict-repair agent with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
 
 **Auto-fix:** when enabled, the agent resolves conflict markers, stages files, and runs `git rebase --continue` in a non-interactive Git environment so Git accepts the existing commit message instead of opening an editor. The prompt includes user intent when available. Manual fix rounds also include any per-conflict user notes, any selected user-authored findings from the TUI or AXI interface, and sanitized prior-round history in the prompt. The Rebase step does not synthesize a fix commit subject; `git rebase --continue` preserves the rebased commits' subjects.
+
+**Default auto-fix limit:** `3`.
+
+## Format
+
+Runs the repository's configured formatter, moved here from the Push step so formatting is visible as its own outcome. Push still runs the same formatter as a backstop; a later change removes that backstop once the reorder guarantees Format runs ahead of it.
+
+**Behavior:**
+
+- If `commands.format` is set: runs it via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows). Non-zero exit produces a `warning` finding naming the exit code.
+- If `commands.format` is empty: passes without running anything. Unlike Lint, there is no agent fallback: formatting is a mechanical transform a tool either provides or does not.
+
+**Approval:** a non-zero formatter exit pauses for approval and is eligible for the fix loop.
+
+**Auto-fix:** the agent makes the smallest correct fix so the formatter can parse the source, without refactoring beyond that, then the formatter re-runs.
 
 **Default auto-fix limit:** `3`.
 

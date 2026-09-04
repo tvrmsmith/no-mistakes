@@ -553,6 +553,7 @@ type AutoFixRaw struct {
 	Test     *int `yaml:"test"`
 	Review   *int `yaml:"review"`
 	Document *int `yaml:"document"`
+	Format   *int `yaml:"format"`
 	CI       *int `yaml:"ci"`
 	Babysit  *int `yaml:"babysit"`
 	Rebase   *int `yaml:"rebase"`
@@ -617,6 +618,7 @@ type AutoFix struct {
 	Test     int
 	Review   int
 	Document int
+	Format   int
 	CI       int
 	Rebase   int
 	// MinSeverity bounds automatic fixing to findings at or above this
@@ -2850,6 +2852,7 @@ func autoFixDefaults() AutoFix {
 		Test:     3,
 		Review:   0,
 		Document: 3,
+		Format:   3,
 		CI:       3,
 		Rebase:   3,
 		// Info findings are advisory. Fixing them automatically costs a fix
@@ -2905,6 +2908,9 @@ func applyAutoFixOverrides(dst *AutoFix, src *AutoFixRaw) {
 	if src.Document != nil {
 		dst.Document = *src.Document
 	}
+	if src.Format != nil {
+		dst.Format = *src.Format
+	}
 	if src.CI != nil {
 		dst.CI = *src.CI
 	}
@@ -2930,6 +2936,8 @@ func (c *Config) AutoFixLimit(step types.StepName) int {
 		return c.AutoFix.Review
 	case types.StepDocument:
 		return c.AutoFix.Document
+	case types.StepFormat:
+		return c.AutoFix.Format
 	case types.StepCI:
 		return c.AutoFix.CI
 	case types.StepRebase:

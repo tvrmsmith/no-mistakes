@@ -54,6 +54,7 @@ func validateCommitRaw(raw CommitRaw) error {
 		types.StepTest,
 		types.StepDocument,
 		types.StepLint,
+		types.StepFormat,
 	} {
 		if _, err := (Commit{FixMessage: *raw.FixMessage}).RenderFixMessage(step, "apply fixes"); err != nil {
 			return err

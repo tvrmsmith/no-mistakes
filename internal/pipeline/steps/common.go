@@ -132,6 +132,7 @@ func AllSteps() []pipeline.Step {
 	return []pipeline.Step{
 		&IntentStep{},
 		&RebaseStep{},
+		&FormatStep{},
 		&ReviewStep{},
 		&TestStep{},
 		&DocumentStep{},

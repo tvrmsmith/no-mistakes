@@ -14,7 +14,6 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // ciRepairFixture is one CI monitor run wired to a real git worktree, a real
@@ -152,8 +151,8 @@ func TestCIStep_RevalidateRepairsPolicySelectsRepairDelivery(t *testing.T) {
 			// commitRepair, not the whole monitor loop: the delivery decision
 			// is what this table is about, and driving Execute here spends a
 			// provider poll and several subprocesses per case for nothing.
-			// TestCIStep_MonitorRestartsAtReviewForAHeldRepair covers the
-			// monitor turning Revalidate into RestartFrom.
+			// TestCIStep_MonitorRestartsAtTheValidationBoundaryForAHeldRepair
+			// covers the monitor turning Revalidate into RestartFrom.
 			repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 			if err != nil {
 				t.Fatalf("CI repair returned error: %v\nlog:\n%s", err, f.log())
@@ -513,9 +512,9 @@ func TestCIStep_ManualRepairFollowsTheSamePolicy(t *testing.T) {
 			if f.localHead(t) == f.headSHA {
 				t.Fatal("the manual repair commit was never created")
 			}
-			gotRestart := outcome != nil && outcome.RestartFrom == types.StepReview
+			gotRestart := outcome != nil && outcome.RestartFrom == pipeline.RestartBoundary
 			if gotRestart != tc.wantRestart {
-				t.Errorf("RestartFrom review = %v, want %v (outcome %#v)", gotRestart, tc.wantRestart, outcome)
+				t.Errorf("RestartFrom %s = %v, want %v (outcome %#v)", pipeline.RestartBoundary, gotRestart, tc.wantRestart, outcome)
 			}
 			if moved := f.remoteHead(t) != f.headSHA; moved != tc.wantRemoteMoved {
 				t.Errorf("remote advanced = %v, want %v", moved, tc.wantRemoteMoved)
@@ -582,15 +581,15 @@ func TestCIStep_FailedRevalidationWriteDoesNotAdvanceTheLiveHead(t *testing.T) {
 // monitor loop. This one test pays for it once, to pin the remaining wiring:
 // the monitor turns a held repair into a restart at Review, and states the
 // policy in force before it does anything.
-func TestCIStep_MonitorRestartsAtReviewForAHeldRepair(t *testing.T) {
+func TestCIStep_MonitorRestartsAtTheValidationBoundaryForAHeldRepair(t *testing.T) {
 	t.Parallel()
 	f := newCIRepairFixture(t, true, writeCIFix)
 	outcome, err := f.run(t)
 	if err != nil {
 		t.Fatalf("CI step returned error: %v\nlog:\n%s", err, f.log())
 	}
-	if outcome == nil || outcome.RestartFrom != types.StepReview {
-		t.Fatalf("outcome = %#v, want a restart from Review", outcome)
+	if outcome == nil || outcome.RestartFrom != pipeline.RestartBoundary {
+		t.Fatalf("outcome = %#v, want a restart from %s", outcome, pipeline.RestartBoundary)
 	}
 	if !strings.Contains(f.log(), "CI repair policy:") {
 		t.Errorf("CI step did not report its repair policy; log:\n%s", f.log())

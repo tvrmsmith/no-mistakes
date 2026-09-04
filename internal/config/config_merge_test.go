@@ -179,6 +179,21 @@ func TestMerge_AutoFixRepoOverridesGlobal(t *testing.T) {
 	}
 }
 
+func TestAutoFixLimit_FormatDefaultsToThree(t *testing.T) {
+	global := &GlobalConfig{}
+	repo := &RepoConfig{}
+	cfg := Merge(global, repo)
+	if got := cfg.AutoFixLimit(types.StepFormat); got != 3 {
+		t.Errorf("AutoFixLimit(format) = %d, want 3 (default)", got)
+	}
+
+	repo = &RepoConfig{AutoFix: AutoFixRaw{Format: intPtr(1)}}
+	cfg = Merge(global, repo)
+	if got := cfg.AutoFixLimit(types.StepFormat); got != 1 {
+		t.Errorf("AutoFixLimit(format) = %d, want 1 (repo override)", got)
+	}
+}
+
 func TestAutoFixLimit(t *testing.T) {
 	cfg := &Config{
 		AutoFix: AutoFix{Lint: 5, Test: 2, Review: 0, Document: 1, CI: 3, Rebase: 4},

@@ -1498,6 +1498,8 @@ func stepDisplayName(name types.StepName) string {
 	switch name {
 	case types.StepRebase:
 		return "Rebase"
+	case types.StepFormat:
+		return "Format"
 	case types.StepReview:
 		return "Review"
 	case types.StepTest:
