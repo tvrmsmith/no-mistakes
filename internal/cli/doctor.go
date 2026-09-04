@@ -298,7 +298,14 @@ func doctorClaudeWorkspaceTrust(p *paths.Paths, ok, warn func(string, string)) {
 	defer d.Close()
 	repos, err := d.GetRepos()
 	if err != nil {
-		warn(label, fmt.Sprintf("cannot list gate repositories (%v)", err))
+		// Reading read-only means doctor no longer migrates, so a database one
+		// upgrade behind is missing a column this query names. That is the
+		// ordinary state between an upgrade and the daemon's next write, not a
+		// condition an operator can act on, so it stays as quiet as the
+		// missing-database case above.
+		if !schemaNotMigrated(err) {
+			warn(label, fmt.Sprintf("cannot list gate repositories (%v)", err))
+		}
 		return
 	}
 	if len(repos) == 0 {
@@ -342,6 +349,17 @@ func doctorClaudeWorkspaceTrust(p *paths.Paths, ok, warn func(string, string)) {
 	}
 	report(label, fmt.Sprintf("%s%d %s untrusted: %s; %s",
 		prefix, len(untrusted), gateRepoNoun(len(untrusted)), strings.Join(untrusted, ", "), remedy))
+}
+
+// schemaNotMigrated reports whether err is SQLite complaining that a table or
+// column a query names does not exist, which is how a database written by an
+// older build reads before the next writer runs its migrations.
+func schemaNotMigrated(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no such column") || strings.Contains(msg, "no such table")
 }
 
 // gateRepoNoun pluralizes "gate repository" for doctorClaudeWorkspaceTrust's detail lines.

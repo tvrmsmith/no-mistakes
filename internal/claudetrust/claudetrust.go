@@ -100,6 +100,13 @@ type rawConfig struct {
 // or within a project entry, are ignored rather than rejected. Project keys
 // are canonicalized on load, so Trusted/Untrusted can compare canonically
 // without redoing the filesystem work on every lookup.
+//
+// Two raw keys can canonicalize to the same path - a stale /tmp/x beside a
+// realpath'd /private/tmp/x, or an NFD key beside its NFC twin - and Go's map
+// iteration order is random, so the collapse ORs rather than overwrites.
+// Collapsing duplicates prefers trust: one accepted entry is decisive, and
+// without it a false entry could win at random and make doctor flap between
+// trusted and untrusted across runs against an unchanged config.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -116,7 +123,8 @@ func Load(path string) (*Config, error) {
 
 	projects := make(map[string]bool, len(raw.Projects))
 	for workspace, entry := range raw.Projects {
-		projects[CanonicalWorkspace(workspace)] = entry.HasTrustDialogAccepted
+		key := CanonicalWorkspace(workspace)
+		projects[key] = projects[key] || entry.HasTrustDialogAccepted
 	}
 	return &Config{present: true, projects: projects}, nil
 }
@@ -200,13 +208,31 @@ func ParseUntrustedWorkspaceStderr(line string) (Warning, bool) {
 		return Warning{}, false
 	}
 	var w Warning
-	if m := untrustedWorkspaceCategory.FindStringSubmatch(line); m != nil {
-		w.Category = canonicalCategories[strings.ToLower(m[1])]
-	}
+	w.Category = worstCategory(line)
 	if m := untrustedWorkspacePath.FindStringSubmatch(line); m != nil {
 		w.Workspace = m[1]
 	}
 	return w, true
+}
+
+// worstCategory returns the canonical category of the dropped setting a line
+// names, or "" when it names none. A line is free to name more than one - the
+// template varies between Claude Code versions - and reporting whichever came
+// first would let a leading permissions.allow hide a permissions.additionalDirectories
+// beside it, withholding the abort for exactly the category the fail-fast
+// exists to catch, so the biting category wins whenever it appears.
+func worstCategory(line string) string {
+	category := ""
+	for _, m := range untrustedWorkspaceCategory.FindAllStringSubmatch(line, -1) {
+		canonical := canonicalCategories[strings.ToLower(m[1])]
+		if canonical == CategoryAdditionalDirectories {
+			return canonical
+		}
+		if category == "" {
+			category = canonical
+		}
+	}
+	return category
 }
 
 // BitesUnderBypass reports whether this dropped category still costs the run

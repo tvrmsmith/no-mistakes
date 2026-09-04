@@ -258,6 +258,77 @@ func TestParseUntrustedWorkspaceStderr_CaseVariedAdditionalDirectoriesStillBites
 	}
 }
 
+// A single line naming two dropped categories must report the one that bites
+// under bypass, whichever order they appear in: reporting the first would
+// withhold the abort the fail-fast exists for.
+func TestParseUntrustedWorkspaceStderr_MultipleCategoriesPrefersTheBitingOne(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{
+			"additionalDirectories second",
+			`Ignoring 8 permissions.allow and 1 permissions.additionalDirectories entries from .claude/settings.json: this workspace has not been trusted.`,
+		},
+		{
+			"additionalDirectories first",
+			`Ignoring 1 permissions.additionalDirectories and 8 permissions.allow entries from .claude/settings.json: this workspace has not been trusted.`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, ok := ParseUntrustedWorkspaceStderr(tt.line)
+			if !ok {
+				t.Fatal("ParseUntrustedWorkspaceStderr() ok = false, want true")
+			}
+			if w.Category != CategoryAdditionalDirectories {
+				t.Errorf("Category = %q, want %q", w.Category, CategoryAdditionalDirectories)
+			}
+			if !w.BitesUnderBypass() {
+				t.Error("BitesUnderBypass() = false, want true when additionalDirectories is among the dropped categories")
+			}
+		})
+	}
+}
+
+// Two raw keys that canonicalize to the same path must resolve to trusted when
+// either one is accepted. Map iteration order is random, so a last-writer-wins
+// collapse made this verdict flap between runs against an unchanged config.
+func TestLoad_DuplicateCanonicalKeysPreferTrust(t *testing.T) {
+	// Two spellings of one absent path: CanonicalWorkspace leaves an
+	// unresolvable path alone but still cleans it, so both collapse to the same
+	// key without depending on the filesystem's own normalization.
+	lookup := "/no-such-root/871d740473c0.git"
+	variant := "/no-such-root//./871d740473c0.git"
+
+	for _, tt := range []struct {
+		name     string
+		accepted string
+		refused  string
+	}{
+		{"accepted entry written first", lookup, variant},
+		{"accepted entry written second", variant, lookup},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, `{"projects":{`+
+				`"`+jsonEscape(tt.accepted)+`":{"hasTrustDialogAccepted":true},`+
+				`"`+jsonEscape(tt.refused)+`":{"hasTrustDialogAccepted":false}}}`)
+
+			// Repeated because the defect was random map iteration order, so a
+			// single pass could pass by luck.
+			for i := 0; i < 50; i++ {
+				c, err := Load(path)
+				if err != nil {
+					t.Fatalf("Load() error = %v", err)
+				}
+				if !c.Trusted(lookup) {
+					t.Fatalf("Trusted(%q) = false on iteration %d, want true: one accepted entry is decisive", lookup, i)
+				}
+			}
+		})
+	}
+}
+
 func TestRemedy_WorkspaceAndConfigPathGiven(t *testing.T) {
 	got := Remedy("/x/y.git", "/home/o/.claude.json")
 	want := `run claude interactively in /x/y.git once and accept the trust dialog, or set projects["/x/y.git"].hasTrustDialogAccepted to true in /home/o/.claude.json`
