@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -820,5 +821,36 @@ func TestApplyTestOverrides_UnitsDefaultPathToDot(t *testing.T) {
 	}
 	if dst.Units[1].Path != "services/api" {
 		t.Errorf("Units[1].Path = %q, want trimmed %q", dst.Units[1].Path, "services/api")
+	}
+}
+
+func TestLoadRepoConfig_RestartExemptPathsRoundTrip(t *testing.T) {
+	cfg, err := LoadRepoFromBytes([]byte("restart:\n  exempt_paths:\n    - \"docs/**\"\n    - \"*.md\"\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []string{"docs/**", "*.md"}
+	if !slices.Equal(cfg.Restart.ExemptPaths, want) {
+		t.Fatalf("Restart.ExemptPaths = %v, want %v", cfg.Restart.ExemptPaths, want)
+	}
+}
+
+func TestLoadRepoConfig_RestartExemptPathsRejectsInvalidGlob(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("restart:\n  exempt_paths:\n    - \"docs/[\"\n"))
+	if err == nil {
+		t.Fatal("expected error for invalid restart.exempt_paths glob, got nil")
+	}
+	if !strings.Contains(err.Error(), "restart.exempt_paths") {
+		t.Fatalf("error = %v, want it to name restart.exempt_paths", err)
+	}
+}
+
+func TestLoadRepoConfig_RestartExemptPathsRejectsBlankPattern(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("restart:\n  exempt_paths:\n    - \"   \"\n"))
+	if err == nil {
+		t.Fatal("expected error for blank restart.exempt_paths entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "restart.exempt_paths") {
+		t.Fatalf("error = %v, want it to name restart.exempt_paths", err)
 	}
 }

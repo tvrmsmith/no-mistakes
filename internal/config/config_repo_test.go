@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -421,6 +422,60 @@ func TestEffectiveRepoConfig_AutoFixMinSeverityTrustedOnly(t *testing.T) {
 	}
 	if withoutTrusted.AutoFix.Review != pushedReview {
 		t.Fatalf("auto_fix.review without a trusted copy = %d, want the pushed %d", withoutTrusted.AutoFix.Review, pushedReview)
+	}
+}
+
+// TestEffectiveRepoConfig_RestartExemptPathsTrustedOnly pins restart.exempt_paths
+// as trusted-only regardless of allow_repo_commands: widening the list to "**"
+// disables the restart rule entirely, so a pushed branch must never set it.
+func TestEffectiveRepoConfig_RestartExemptPathsTrustedOnly(t *testing.T) {
+	pushed := &RepoConfig{}
+	pushed.Restart.ExemptPaths = []string{"**"}
+	trusted := &RepoConfig{}
+	trusted.Restart.ExemptPaths = []string{"docs/**"}
+
+	effective := EffectiveRepoConfig(pushed, trusted, false)
+	if !slices.Equal(effective.Restart.ExemptPaths, []string{"docs/**"}) {
+		t.Fatalf("Restart.ExemptPaths = %v, want the trusted %v", effective.Restart.ExemptPaths, []string{"docs/**"})
+	}
+
+	// allow_repo_commands opts in to pushed commands and agent selection, never
+	// to widening a gate strength.
+	optedIn := EffectiveRepoConfig(pushed, trusted, true)
+	if !slices.Equal(optedIn.Restart.ExemptPaths, []string{"docs/**"}) {
+		t.Fatalf("Restart.ExemptPaths with allow_repo_commands = %v, want the trusted %v", optedIn.Restart.ExemptPaths, []string{"docs/**"})
+	}
+
+	// No trusted copy means nil, so Merge falls back to the built-in default
+	// rather than the pushed value.
+	withoutTrusted := EffectiveRepoConfig(pushed, nil, true)
+	if withoutTrusted.Restart.ExemptPaths != nil {
+		t.Fatalf("Restart.ExemptPaths without a trusted copy = %v, want nil", withoutTrusted.Restart.ExemptPaths)
+	}
+}
+
+func TestMerge_RestartExemptPathsDefaultsWhenUnset(t *testing.T) {
+	repo := &RepoConfig{}
+	cfg := Merge(DefaultGlobalConfig(), repo)
+
+	if !slices.Equal(cfg.Restart.ExemptPaths, DefaultRestartExemptPaths) {
+		t.Fatalf("Restart.ExemptPaths = %v, want the built-in default %v", cfg.Restart.ExemptPaths, DefaultRestartExemptPaths)
+	}
+
+	before := slices.Clone(DefaultRestartExemptPaths)
+	cfg.Restart.ExemptPaths[0] = "mutated"
+	if !slices.Equal(DefaultRestartExemptPaths, before) {
+		t.Fatalf("mutating the resolved list changed DefaultRestartExemptPaths: %v", DefaultRestartExemptPaths)
+	}
+}
+
+func TestMerge_RestartExemptPathsEmptyListMeansNoExemption(t *testing.T) {
+	repo := &RepoConfig{}
+	repo.Restart.ExemptPaths = []string{}
+	cfg := Merge(DefaultGlobalConfig(), repo)
+
+	if len(cfg.Restart.ExemptPaths) != 0 {
+		t.Fatalf("Restart.ExemptPaths = %v, want empty, not the built-in default", cfg.Restart.ExemptPaths)
 	}
 }
 
