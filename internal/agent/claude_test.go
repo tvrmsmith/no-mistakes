@@ -751,6 +751,23 @@ func newClaudeStdinHelperAgentPinningPermissionMode(t *testing.T) *claudeAgent {
 	}
 }
 
+// newClaudeStdinHelperAgentWithExtraArgs is newClaudeStdinHelperAgent with
+// operator-supplied claude flags appended after the "--" that separates go
+// test's own flags from the args the real claude CLI would see.
+func newClaudeStdinHelperAgentWithExtraArgs(t *testing.T, pinned ...string) *claudeAgent {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("current test executable: %v", err)
+	}
+	extra := append([]string{"-test.run=^TestClaudeStdinHelper$", "--"}, pinned...)
+	return &claudeAgent{
+		bin:                    exe,
+		extraArgs:              extra,
+		disableProjectSettings: true,
+	}
+}
+
 func TestClaudeStdinHelper(t *testing.T) {
 	mode := os.Getenv("NM_CLAUDE_STDIN_HELPER")
 	if mode == "" {
@@ -830,6 +847,17 @@ func TestClaudeStdinHelper(t *testing.T) {
 		// same fixture must still abort.
 		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceFixture)
 		emitClaudeHelperResult()
+		return
+	case "untrusted-bites-then-exit-nonzero":
+		// The likely production shape: the adapter's own abort SIGTERMs the
+		// process, so wait() returns an error. The trust abort must still be
+		// what the caller sees, not "claude exited: signal: terminated".
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		os.Exit(1)
+	case "untrusted-bites-no-result":
+		// A biting warning and then a clean exit that never emits a result
+		// event: the abort must beat "claude returned no result event" too.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
 		return
 	case "unrelated-stderr-fail":
 		// Ordinary stderr noise unrelated to workspace trust: the existing

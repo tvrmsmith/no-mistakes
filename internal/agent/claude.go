@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -229,6 +230,17 @@ func scanClaudeStderr(started *nativeAgentCommand, mu *sync.Mutex, buf *[]byte, 
 			*report = fmt.Sprintf("claude workspace not trusted, %s was discarded (inert under the launched permission bypass): %s", category, remedy)
 		}
 		mu.Unlock()
+	}
+	// The scanner stops early on a read error or a line past its token limit.
+	// The plain io.ReadAll this replaced had neither failure mode, and leaving
+	// the loop here would both truncate the diagnostics the exit error is built
+	// from and stop draining the pipe, so a chatty child blocks on a full pipe
+	// until the run's deadline. Drain the remainder unscanned and record the
+	// scan failure so it reaches the operator. os.ErrClosed is not a failure:
+	// it is how the biting-warning abort closes the pipes on purpose.
+	if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
+		fmt.Fprintf(&acc, "[stderr scan stopped: %v; remainder unparsed]\n", err)
+		_, _ = io.Copy(&acc, started.stderr)
 	}
 	mu.Lock()
 	*buf = acc.Bytes()
@@ -474,19 +486,44 @@ func (a *claudeAgent) buildArgs(schema json.RawMessage, resumeID string) []strin
 	return args
 }
 
-// claudeArgsHaveBypass reports whether the fully-built claude args launch with
-// --dangerously-skip-permissions, which turns off permission checking
-// entirely and makes a dropped permissions.allow/ask/deny entry inert. This
-// checks the args actually passed to exec.CommandContext, not just buildArgs'
-// own default branch, since an operator can pin the flag themselves via
-// extraArgs.
+// claudeArgsHaveBypass reports whether the fully-built claude args launch
+// under permission bypass, which turns off permission checking entirely and
+// makes a dropped permissions.allow/ask/deny entry inert. This checks the args
+// actually passed to exec.CommandContext, not just buildArgs' own default
+// branch, since an operator can pin their own permission flags via extraArgs.
+//
+// Bypass has two spellings and both count: the literal
+// --dangerously-skip-permissions, and --permission-mode bypassPermissions.
+// buildArgs skips its own default flag for ANY pinned --permission-mode, so
+// reading only the literal reports bypass=false for an operator who genuinely
+// pinned bypassPermissions, and the adapter would then hard-abort that working
+// run on an inert allow/ask/deny drop.
 func claudeArgsHaveBypass(args []string) bool {
 	for _, arg := range args {
 		if arg == "--dangerously-skip-permissions" {
 			return true
 		}
 	}
-	return false
+	mode, pinned := claudeArgsPermissionMode(args)
+	return pinned && mode == "bypassPermissions"
+}
+
+// claudeArgsPermissionMode returns the pinned --permission-mode value (last
+// occurrence wins) and whether it was pinned, handling both
+// `--permission-mode <v>` and `--permission-mode=<v>`.
+func claudeArgsPermissionMode(args []string) (string, bool) {
+	value := ""
+	pinned := false
+	for i, arg := range args {
+		if arg == "--permission-mode" && i+1 < len(args) {
+			value = args[i+1]
+			pinned = true
+		} else if strings.HasPrefix(arg, "--permission-mode=") {
+			value = strings.TrimPrefix(arg, "--permission-mode=")
+			pinned = true
+		}
+	}
+	return value, pinned
 }
 
 // claudeUserSetSettingSources reports whether extraArgs pin --setting-sources at

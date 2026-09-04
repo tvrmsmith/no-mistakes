@@ -177,6 +177,140 @@ func TestClaudeAgent_PermissionsAllowAbortsWithoutBypass(t *testing.T) {
 	}
 }
 
+// TestClaudeAgent_UntrustedWorkspaceWinsOverANonZeroExit pins the priority
+// the abort's comment claims and the shape production most often takes: the
+// abort itself SIGTERMs claude, so wait() returns an error. The operator must
+// read the remedy, not "claude exited: signal: terminated".
+func TestClaudeAgent_UntrustedWorkspaceWinsOverANonZeroExit(t *testing.T) {
+	t.Setenv("NM_CLAUDE_STDIN_HELPER", "untrusted-bites-then-exit-nonzero")
+	t.Setenv("CLAUDE_CONFIG_DIR", newClaudeConfigDir(t))
+	a := newClaudeStdinHelperAgent(t)
+
+	res, err := a.runOnce(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+
+	if res != nil {
+		t.Fatalf("result = %+v, want nil on abort", res)
+	}
+	if !errors.Is(err, errClaudeWorkspaceUntrusted) {
+		t.Fatalf("error %v does not wrap errClaudeWorkspaceUntrusted", err)
+	}
+	if !strings.Contains(err.Error(), wantRemedySubstring) {
+		t.Fatalf("error %q missing remedy substring %q", err, wantRemedySubstring)
+	}
+}
+
+// TestClaudeAgent_UntrustedWorkspaceWinsOverAMissingResult is the third
+// outcome the abort has to beat: a clean exit that never emitted a result
+// event, which otherwise reports the undiagnosable "claude returned no result
+// event".
+func TestClaudeAgent_UntrustedWorkspaceWinsOverAMissingResult(t *testing.T) {
+	t.Setenv("NM_CLAUDE_STDIN_HELPER", "untrusted-bites-no-result")
+	t.Setenv("CLAUDE_CONFIG_DIR", newClaudeConfigDir(t))
+	a := newClaudeStdinHelperAgent(t)
+
+	res, err := a.runOnce(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+
+	if res != nil {
+		t.Fatalf("result = %+v, want nil on abort", res)
+	}
+	if !errors.Is(err, errClaudeWorkspaceUntrusted) {
+		t.Fatalf("error %v does not wrap errClaudeWorkspaceUntrusted", err)
+	}
+}
+
+// TestClaudeArgsHaveBypass covers both spellings of permission bypass on the
+// fully-built command line. buildArgs drops its own
+// --dangerously-skip-permissions for ANY pinned --permission-mode, so reading
+// only the literal flag misreports a run pinned to bypassPermissions.
+func TestClaudeArgsHaveBypass(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"default managed flag", []string{"-p", "--dangerously-skip-permissions"}, true},
+		{"no permission flag at all", []string{"-p", "--verbose"}, false},
+		{"pinned bypassPermissions separate value", []string{"--permission-mode", "bypassPermissions", "-p"}, true},
+		{"pinned bypassPermissions equals form", []string{"--permission-mode=bypassPermissions", "-p"}, true},
+		{"pinned acceptEdits", []string{"--permission-mode", "acceptEdits", "-p"}, false},
+		{"pinned plan", []string{"--permission-mode=plan", "-p"}, false},
+		{"last occurrence wins, bypass last", []string{"--permission-mode", "plan", "--permission-mode", "bypassPermissions"}, true},
+		{"last occurrence wins, bypass first", []string{"--permission-mode", "bypassPermissions", "--permission-mode", "plan"}, false},
+		{"trailing --permission-mode with no value", []string{"-p", "--permission-mode"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := claudeArgsHaveBypass(tt.args); got != tt.want {
+				t.Errorf("claudeArgsHaveBypass(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClaudeAgent_OperatorPinnedBypassPermissionsDoesNotAbort is the run-level
+// regression for the same defect: an operator whose agent_args_override pins
+// --permission-mode bypassPermissions is genuinely running under bypass, so a
+// discarded permissions.allow entry is inert and must not kill the run.
+func TestClaudeAgent_OperatorPinnedBypassPermissionsDoesNotAbort(t *testing.T) {
+	t.Setenv("NM_CLAUDE_STDIN_HELPER", "untrusted-allow-with-result")
+	t.Setenv("CLAUDE_CONFIG_DIR", newClaudeConfigDir(t))
+	a := newClaudeStdinHelperAgentWithExtraArgs(t, "--permission-mode", "bypassPermissions")
+
+	var chunks []string
+	res, err := a.runOnce(context.Background(), RunOpts{
+		Prompt:  "review",
+		CWD:     t.TempDir(),
+		OnChunk: func(chunk string) { chunks = append(chunks, chunk) },
+	})
+
+	if err != nil {
+		t.Fatalf("runOnce: %v, want the run to reach its normal outcome under pinned bypass", err)
+	}
+	if res == nil {
+		t.Fatal("result is nil, want the parsed successful result")
+	}
+	if !trustChunkReported(chunks, "permissions.allow") {
+		t.Fatalf("OnChunk chunks %v never reported the discarded permissions.allow warning", chunks)
+	}
+}
+
+// TestClaudeAgent_OperatorPinnedSkipPermissionsDoesNotAbort covers the other
+// way buildArgs' own default disappears: the operator pinned the literal
+// --dangerously-skip-permissions themselves via extraArgs.
+func TestClaudeAgent_OperatorPinnedSkipPermissionsDoesNotAbort(t *testing.T) {
+	t.Setenv("NM_CLAUDE_STDIN_HELPER", "untrusted-allow-with-result")
+	t.Setenv("CLAUDE_CONFIG_DIR", newClaudeConfigDir(t))
+	a := newClaudeStdinHelperAgentWithExtraArgs(t, "--dangerously-skip-permissions")
+
+	var chunks []string
+	res, err := a.runOnce(context.Background(), RunOpts{
+		Prompt:  "review",
+		CWD:     t.TempDir(),
+		OnChunk: func(chunk string) { chunks = append(chunks, chunk) },
+	})
+
+	if err != nil {
+		t.Fatalf("runOnce: %v, want the run to reach its normal outcome", err)
+	}
+	if res == nil {
+		t.Fatal("result is nil, want the parsed successful result")
+	}
+	if !trustChunkReported(chunks, "permissions.allow") {
+		t.Fatalf("OnChunk chunks %v never reported the discarded permissions.allow warning", chunks)
+	}
+}
+
+// trustChunkReported reports whether any chunk carried the named dropped
+// category alongside the remedy.
+func trustChunkReported(chunks []string, category string) bool {
+	for _, c := range chunks {
+		if strings.Contains(c, category) && strings.Contains(c, wantRemedySubstring) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestClaudeAgent_UnrelatedStderrFailureIsUnchanged makes sure the new stderr
 // scanner didn't disturb the existing exit-error path: ordinary stderr noise
 // unrelated to workspace trust still produces "claude exited: ...: <stderr>"

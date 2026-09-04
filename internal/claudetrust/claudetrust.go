@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -146,9 +147,28 @@ func (c *Config) Untrusted(workspaces []string) []string {
 	return untrusted
 }
 
+// The four setting categories Claude Code can discard from an untrusted
+// workspace, in their canonical spelling. Warning.Category always holds one of
+// these or "": the stderr match is case-insensitive, so the capture is folded
+// back to the canonical form and every comparison in this package (and in any
+// caller) is a plain equality against these constants.
+const (
+	CategoryAllow                 = "permissions.allow"
+	CategoryDeny                  = "permissions.deny"
+	CategoryAsk                   = "permissions.ask"
+	CategoryAdditionalDirectories = "permissions.additionalDirectories"
+)
+
+var canonicalCategories = map[string]string{
+	strings.ToLower(CategoryAllow):                 CategoryAllow,
+	strings.ToLower(CategoryDeny):                  CategoryDeny,
+	strings.ToLower(CategoryAsk):                   CategoryAsk,
+	strings.ToLower(CategoryAdditionalDirectories): CategoryAdditionalDirectories,
+}
+
 // Warning is a parsed untrusted-workspace warning.
 type Warning struct {
-	Category  string // "" when the line names none
+	Category  string // canonical category constant, "" when the line names none
 	Workspace string // "" when the line names none
 }
 
@@ -181,7 +201,7 @@ func ParseUntrustedWorkspaceStderr(line string) (Warning, bool) {
 	}
 	var w Warning
 	if m := untrustedWorkspaceCategory.FindStringSubmatch(line); m != nil {
-		w.Category = m[1]
+		w.Category = canonicalCategories[strings.ToLower(m[1])]
 	}
 	if m := untrustedWorkspacePath.FindStringSubmatch(line); m != nil {
 		w.Workspace = m[1]
@@ -201,7 +221,7 @@ func ParseUntrustedWorkspaceStderr(line string) (Warning, bool) {
 // today's behavior, and the doctor preflight already covers the standing
 // condition.
 func (w Warning) BitesUnderBypass() bool {
-	return w.Category == "permissions.additionalDirectories"
+	return w.Category == CategoryAdditionalDirectories
 }
 
 // Remedy renders the operator instruction for an untrusted workspace.

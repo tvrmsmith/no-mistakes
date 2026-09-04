@@ -284,18 +284,28 @@ func doctorClaudeWorkspaceTrust(p *paths.Paths, ok, warn func(string, string)) {
 	if p == nil {
 		return
 	}
-	d, err := db.Open(p.DB())
+	label := fmt.Sprintf("%-14s", "claude trust")
+	// Read-only: doctor reports state, so it must not create the database or
+	// run migrations. A missing file is the fresh-install case the "database"
+	// row above already reports, so it stays silent here.
+	d, err := db.OpenReadOnly(p.DB())
 	if err != nil {
+		if !os.IsNotExist(err) {
+			warn(label, fmt.Sprintf("cannot open database (%v)", err))
+		}
 		return
 	}
 	defer d.Close()
 	repos, err := d.GetRepos()
-	if err != nil || len(repos) == 0 {
+	if err != nil {
+		warn(label, fmt.Sprintf("cannot list gate repositories (%v)", err))
+		return
+	}
+	if len(repos) == 0 {
 		return
 	}
 
 	report := warn
-	label := fmt.Sprintf("%-14s", "claude trust")
 
 	gatePaths := make([]string, 0, len(repos))
 	for _, r := range repos {

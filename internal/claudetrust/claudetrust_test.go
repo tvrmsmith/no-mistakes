@@ -27,6 +27,7 @@ func TestConfigPath_UsesConfigDirWhenFileExists(t *testing.T) {
 func TestConfigPath_FallsBackToHomeWhenConfigDirFileMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 
 	got, err := ConfigPath()
@@ -42,6 +43,7 @@ func TestConfigPath_FallsBackToHomeWhenConfigDirFileMissing(t *testing.T) {
 func TestConfigPath_DefaultsToHomeClaudeJSON(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	got, err := ConfigPath()
@@ -224,16 +226,35 @@ func TestParseUntrustedWorkspaceStderr_NonMatches(t *testing.T) {
 	}
 }
 
-func TestParseUntrustedWorkspaceStderr_CaseInsensitiveMatchPreservesCategoryAndPathCase(t *testing.T) {
+func TestParseUntrustedWorkspaceStderr_CaseInsensitiveMatchCanonicalizesCategoryAndPreservesPathCase(t *testing.T) {
 	line := `IGNORING 8 PERMISSIONS.ALLOW ENTRIES FROM .claude/settings.json: THIS WORKSPACE HAS NOT BEEN TRUSTED. RUN CLAUDE CODE INTERACTIVELY HERE ONCE AND ACCEPT THE TRUST DIALOG, OR SET PROJECTS["/Users/Trevor/repo.git"].hasTrustDialogAccepted: true IN /Users/Trevor/.claude.json.`
 
 	w, ok := ParseUntrustedWorkspaceStderr(line)
 	if !ok {
 		t.Fatal("ParseUntrustedWorkspaceStderr() ok = false, want true")
 	}
-	want := Warning{Category: "PERMISSIONS.ALLOW", Workspace: "/Users/Trevor/repo.git"}
+	want := Warning{Category: CategoryAllow, Workspace: "/Users/Trevor/repo.git"}
 	if w != want {
 		t.Errorf("ParseUntrustedWorkspaceStderr() = %+v, want %+v", w, want)
+	}
+}
+
+// A case-varied additionalDirectories line is the one that must still bite:
+// it is the only category the abort path exists for, and folding the capture
+// to its canonical spelling is what keeps BitesUnderBypass from silently
+// downgrading it to an inert report.
+func TestParseUntrustedWorkspaceStderr_CaseVariedAdditionalDirectoriesStillBitesUnderBypass(t *testing.T) {
+	line := `Ignoring 1 Permissions.AdditionalDirectories entry from .claude/settings.json: this workspace has not been trusted.`
+
+	w, ok := ParseUntrustedWorkspaceStderr(line)
+	if !ok {
+		t.Fatal("ParseUntrustedWorkspaceStderr() ok = false, want true")
+	}
+	if w.Category != CategoryAdditionalDirectories {
+		t.Errorf("Category = %q, want %q", w.Category, CategoryAdditionalDirectories)
+	}
+	if !w.BitesUnderBypass() {
+		t.Error("BitesUnderBypass() = false, want true for a case-varied additionalDirectories drop")
 	}
 }
 

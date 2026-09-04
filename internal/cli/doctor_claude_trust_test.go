@@ -208,6 +208,33 @@ func TestDoctorClaudeTrust_ZeroRepositoriesOmitsCheck(t *testing.T) {
 	}
 }
 
+// TestDoctorClaudeTrust_DoesNotCreateTheDatabase pins that the trust check is
+// read-only. Opening the database for write creates the file and runs every
+// migration, so the "database" row would report "not found (will be created on
+// first use)" on the first doctor run and a created database on the second,
+// purely because doctor itself ran.
+func TestDoctorClaudeTrust_DoesNotCreateTheDatabase(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	setupDoctorTrustEnv(t, 0)
+	p, err := paths.New()
+	if err != nil {
+		t.Fatalf("paths.New() error = %v", err)
+	}
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	if _, err := executeCmd("doctor"); err != nil {
+		t.Fatalf("doctor failed: %v", err)
+	}
+	if _, err := os.Stat(p.DB()); !os.IsNotExist(err) {
+		t.Errorf("os.Stat(%q) error = %v, want a not-exist error: doctor must not create the database", p.DB(), err)
+	}
+}
+
 func TestDoctorClaudeTrust_MalformedConfigIsUnreadable(t *testing.T) {
 	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
 	defer restore()
