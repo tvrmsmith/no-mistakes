@@ -314,9 +314,14 @@ func doctorClaudeWorkspaceTrust(p *paths.Paths, ok, warn func(string, string)) {
 
 	report := warn
 
+	// Canonical, not raw: Claude Code stores and looks up its projects key
+	// realpath'd, so a remedy naming the raw path under a symlinked NM_HOME
+	// steers the operator into writing a key Claude Code never consults, while
+	// claudetrust.Load canonicalizes that same key on the next doctor run and
+	// reports the gate trusted over a still-degraded run.
 	gatePaths := make([]string, 0, len(repos))
 	for _, r := range repos {
-		gatePaths = append(gatePaths, p.RepoDir(r.ID))
+		gatePaths = append(gatePaths, claudetrust.CanonicalWorkspace(p.RepoDir(r.ID)))
 	}
 
 	configPath, err := claudetrust.ConfigPath()

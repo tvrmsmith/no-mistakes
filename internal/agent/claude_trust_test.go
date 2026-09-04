@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -295,6 +296,51 @@ func TestClaudeAgent_OperatorPinnedSkipPermissionsDoesNotAbort(t *testing.T) {
 	if res == nil {
 		t.Fatal("result is nil, want the parsed successful result")
 	}
+	if !trustChunkReported(chunks, "permissions.allow") {
+		t.Fatalf("OnChunk chunks %v never reported the discarded permissions.allow warning", chunks)
+	}
+}
+
+// TestClaudeAgent_NonBitingWarningIsReportedOnTheParseErrorPath covers the
+// other call site of the non-biting report. A run whose event stream is cut
+// short is exactly the run an operator is debugging, so the dropped category
+// must still reach them there, not only on the clean path.
+func TestClaudeAgent_NonBitingWarningIsReportedOnTheParseErrorPath(t *testing.T) {
+	t.Setenv("NM_CLAUDE_STDIN_HELPER", "untrusted-allow-then-hang")
+	t.Setenv("CLAUDE_CONFIG_DIR", newClaudeConfigDir(t))
+	a := newClaudeStdinHelperAgent(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var chunks []string
+	opts := RunOpts{Prompt: "review", CWD: t.TempDir()}
+	opts.OnChunk = func(chunk string) {
+		mu.Lock()
+		chunks = append(chunks, chunk)
+		mu.Unlock()
+		if strings.Contains(chunk, "still working") {
+			cancel()
+		}
+	}
+
+	res, err := a.runOnce(ctx, opts)
+
+	if res != nil {
+		t.Fatalf("result = %+v, want nil for an interrupted stream", res)
+	}
+	if err == nil {
+		t.Fatal("expected the interrupted event stream to fail")
+	}
+	if !strings.Contains(err.Error(), "claude parse events:") {
+		t.Fatalf("error %q did not take the parse-error path", err)
+	}
+	if errors.Is(err, errClaudeWorkspaceUntrusted) {
+		t.Fatalf("error %v aborted on a permissions.allow drop that is inert under bypass", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
 	if !trustChunkReported(chunks, "permissions.allow") {
 		t.Fatalf("OnChunk chunks %v never reported the discarded permissions.allow warning", chunks)
 	}

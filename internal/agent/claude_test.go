@@ -881,6 +881,16 @@ func TestClaudeStdinHelper(t *testing.T) {
 		for {
 			time.Sleep(time.Second)
 		}
+	case "untrusted-allow-then-hang":
+		// A non-biting permissions.allow drop on a run whose event stream never
+		// completes: the fixture goes to stderr, one event goes to stdout so the
+		// caller has a signal to cancel on, and the process then hangs holding
+		// both pipes open so runOnce takes the parse-error path.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceFixture)
+		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"still working"}]}}`+"\n")
+		for {
+			time.Sleep(time.Second)
+		}
 	case "skill":
 		// A claude that invokes one skill: the CLI reports it as a tool_use
 		// content block on the assistant event, which is the only wire the

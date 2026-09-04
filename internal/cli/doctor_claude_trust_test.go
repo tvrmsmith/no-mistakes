@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/claudetrust"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
@@ -247,6 +248,67 @@ func TestDoctorClaudeTrust_DoesNotCreateTheDatabase(t *testing.T) {
 	}
 }
 
+// TestDoctorClaudeTrust_ReportsTheCanonicalGatePath pins which key the
+// operator is told to write. Claude Code stores and looks up its projects key
+// realpath'd, so naming the symlinked spelling steers the operator into
+// writing a key Claude Code never consults - and because claudetrust.Load
+// canonicalizes it, the next doctor run reads that key as trust and reports
+// the gate trusted over a still-degraded run.
+func TestDoctorClaudeTrust_ReportsTheCanonicalGatePath(t *testing.T) {
+	realHome := t.TempDir()
+	linkedHome := filepath.Join(t.TempDir(), "nm-home")
+	if err := os.Symlink(realHome, linkedHome); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	t.Setenv("NM_HOME", linkedHome)
+	t.Setenv("HOME", realHome)
+	t.Setenv("USERPROFILE", realHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	p, err := paths.New()
+	if err != nil {
+		t.Fatalf("paths.New() error = %v", err)
+	}
+	d, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatalf("db.Open() error = %v", err)
+	}
+	if _, err := d.InsertRepoWithID("a", "/work/a", "https://example.com/a.git", "main"); err != nil {
+		d.Close()
+		t.Fatalf("InsertRepoWithID() error = %v", err)
+	}
+	d.Close()
+
+	linkedGate := p.RepoDir("a")
+	if err := os.MkdirAll(linkedGate, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	canonicalGate := claudetrust.CanonicalWorkspace(linkedGate)
+	if canonicalGate == linkedGate {
+		t.Skip("gate path is already canonical on this filesystem")
+	}
+
+	binDir := t.TempDir()
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	var warns []string
+	doctorClaudeWorkspaceTrust(p,
+		func(_, detail string) { t.Errorf("ok reported %q, want the untrusted gate warned instead", detail) },
+		func(_, detail string) { warns = append(warns, detail) },
+	)
+
+	if len(warns) != 1 {
+		t.Fatalf("warn reported %v, want exactly one entry", warns)
+	}
+	if !strings.Contains(warns[0], canonicalGate) {
+		t.Errorf("warn = %q, want it to name the canonical gate path %q", warns[0], canonicalGate)
+	}
+	if strings.Contains(warns[0], linkedGate) {
+		t.Errorf("warn = %q, must not name the symlinked gate path %q: Claude Code never consults that key", warns[0], linkedGate)
+	}
+}
+
 // TestDoctorClaudeTrust_UnmigratedDatabaseOmitsCheck covers the cost of
 // reading read-only: a database written by an older build is missing a column
 // GetRepos names, which is the ordinary state between an upgrade and the next
@@ -309,12 +371,20 @@ func TestDoctorClaudeTrust_UnreadableRepoTableIsReported(t *testing.T) {
 	writeDoctorStubBinary(t, binDir, "claude")
 	t.Setenv("PATH", binDir)
 
-	var reported []string
-	record := func(label, detail string) { reported = append(reported, detail) }
-	doctorClaudeWorkspaceTrust(p, record, record)
+	var oks, warns []string
+	doctorClaudeWorkspaceTrust(p,
+		func(_, detail string) { oks = append(oks, detail) },
+		func(_, detail string) { warns = append(warns, detail) },
+	)
 
-	if len(reported) == 0 {
-		t.Fatal("doctorClaudeWorkspaceTrust reported nothing, want the read failure surfaced")
+	if len(oks) != 0 {
+		t.Errorf("ok reported %v, want nothing: the repo list could not be read", oks)
+	}
+	if len(warns) != 1 {
+		t.Fatalf("warn reported %v, want exactly one entry", warns)
+	}
+	if !strings.Contains(warns[0], "cannot list gate repositories") {
+		t.Errorf("warn = %q, want it to name the failed repository listing", warns[0])
 	}
 }
 
