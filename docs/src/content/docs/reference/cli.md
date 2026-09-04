@@ -457,6 +457,7 @@ Checks:
 - ACP alias default binaries: `cursor-agent` plus `acpx` for `cursor`
 - Effective global agent configuration, reported as `gate validation`; an unavailable configured runner is a failed check because the gate cannot validate without it
 - Every configured [`forge_profiles`](/no-mistakes/reference/global-config/#forge_profiles) entry, reported as `forge <host>`: the profile resolves and validates, its provider CLI is installed, and that CLI is authenticated for the profile's host
+- Claude Code workspace trust, reported as `claude trust`: the registered gate repository paths Claude Code has not accepted its trust dialog for, with the remedy. It appears only when `claude` is on `PATH` and at least one repository is registered, and it only ever warns, because doctor cannot establish the daemon's `HOME`/`CLAUDE_CONFIG_DIR` or each repository's trusted-branch `agent`. [Choosing an Agent](/no-mistakes/guides/agents/#workspace-trust) owns the mechanism and what a dropped entry costs
 
 Uses indicators: `✓` (available), `–` (not found, optional), `✗` (problem detected).
 

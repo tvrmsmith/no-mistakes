@@ -278,6 +278,14 @@ Spawns a `claude` subprocess for each invocation with `--output-format stream-js
 For review-fixer reuse, Claude starts a stream-json session and resumes it with `claude -p --resume <id>`.
 The CLI reports transport failures such as a stalled stream as `API Error:` assistant text on that event stream rather than on stderr, so no-mistakes keeps those lines - only those - and reports them as part of the failure cause, appended to whatever stderr said rather than used only when stderr is empty; a stall then classifies as transient and is retried instead of failing the run without a stated cause.
 
+### Workspace trust
+
+Claude Code discards a repository's project-scoped permission entries (`permissions.allow`, `permissions.ask`, `permissions.deny`, and `permissions.additionalDirectories` from `.claude/settings.json`) when the workspace it resolves has never been through its interactive trust dialog. The workspace it keys on is the bare gate repository under `~/.no-mistakes/repos`, not the run worktree, so trusting your own checkout does not cover the gate.
+
+Under the default `--dangerously-skip-permissions` a dropped `permissions.allow`, `permissions.ask`, or `permissions.deny` entry changes nothing, because permission checking itself is off. Only a dropped `permissions.additionalDirectories` still costs the run, since bypass grants approval rather than extra read roots. When claude's stderr names that category, no-mistakes aborts the invocation immediately with `claude workspace not trusted` and does not retry it, rather than letting a degraded agent spend its whole budget. A dropped category that is inert under the launched flags is reported once on the run log and the run continues.
+
+To grant trust, run `claude` interactively in the gate repository path once and accept the dialog, or set that path's `projects["<gate path>"].hasTrustDialogAccepted` to `true` in `~/.claude.json`. no-mistakes never writes that decision itself. `no-mistakes doctor` reports every registered gate repository that lacks it; see the [`doctor` reference](/no-mistakes/reference/cli/#no-mistakes-doctor).
+
 ## Codex
 
 Spawns a `codex` subprocess for each invocation with `exec --json`. When structured output is requested, no-mistakes also writes a normalized schema file and passes it with `--output-schema`. By default it also adds `--dangerously-bypass-approvals-and-sandbox`, unless you already set your own Codex approval or sandbox flag through `agent_args_override`. Reads JSONL events. Structured output is returned from the final `agent_message` text and uses the common text fallback described above when needed.
