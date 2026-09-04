@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/claudetrust"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -176,6 +177,8 @@ func newDoctorCmd() *cobra.Command {
 					}
 				}
 
+				doctorClaudeWorkspaceTrust(p, ok, warn)
+
 				if !allOK {
 					fmt.Fprintln(w)
 					fmt.Fprintf(w, "  %s\n", sRed.Render("some checks failed"))
@@ -255,6 +258,103 @@ func doctorForgeProfiles(
 		ok(label, fmt.Sprintf("%s authenticated for %s", resolved.Provider, resolved.Host))
 	}
 	return allOK
+}
+
+// doctorClaudeWorkspaceTrust reports every registered gate repository whose
+// path Claude Code has not been through its interactive trust dialog for.
+// Untrusted, Claude Code discards the repo's project-scoped permission
+// entries; internal/claudetrust owns the mechanism and which categories still
+// cost anything under --dangerously-skip-permissions.
+//
+// It never fails doctor, only warns, because doctor cannot determine whether
+// the condition will actually apply to a run. `agent` is a per-repo field read
+// from each repository's trusted default branch, the operator's global is
+// routinely `agent: auto`, and doctor runs in the CLI process while the gate
+// agent runs as a child of the DAEMON, which may hold a different HOME and
+// CLAUDE_CONFIG_DIR and therefore consult a different ~/.claude.json. Failing
+// on a fact this process cannot establish produces false red.
+//
+// It reports nothing at all when claude is absent from PATH or no repositories
+// are registered: both are the ordinary state of an operator this cannot
+// affect.
+func doctorClaudeWorkspaceTrust(p *paths.Paths, ok, warn func(string, string)) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		return
+	}
+	if p == nil {
+		return
+	}
+	label := fmt.Sprintf("%-14s", "claude trust")
+	// Read-only: doctor reports state, so it must not create the database or
+	// run migrations. A missing file is the fresh-install case the "database"
+	// row above already reports, so it stays silent here.
+	d, err := db.OpenReadOnly(p.DB())
+	if err != nil {
+		if !os.IsNotExist(err) {
+			warn(label, fmt.Sprintf("cannot open database (%v)", err))
+		}
+		return
+	}
+	defer d.Close()
+	repos, err := d.GetRepos()
+	if err != nil {
+		warn(label, fmt.Sprintf("cannot list gate repositories (%v)", err))
+		return
+	}
+	if len(repos) == 0 {
+		return
+	}
+
+	report := warn
+
+	// Canonical, not raw: Claude Code stores and looks up its projects key
+	// realpath'd, so a remedy naming the raw path under a symlinked NM_HOME
+	// steers the operator into writing a key Claude Code never consults, while
+	// claudetrust.Load canonicalizes that same key on the next doctor run and
+	// reports the gate trusted over a still-degraded run.
+	gatePaths := make([]string, 0, len(repos))
+	for _, r := range repos {
+		gatePaths = append(gatePaths, claudetrust.CanonicalWorkspace(p.RepoDir(r.ID)))
+	}
+
+	configPath, err := claudetrust.ConfigPath()
+	if err != nil {
+		report(label, fmt.Sprintf("cannot resolve Claude Code config path (%v)", err))
+		return
+	}
+
+	cfg, err := claudetrust.Load(configPath)
+	if err != nil {
+		// Claude Code rewrites this file live, so a parse failure can simply be
+		// a concurrent write rather than a corrupt config. Reported, never fatal.
+		report(label, fmt.Sprintf("unreadable Claude Code config at %s: %s", configPath, err.Error()))
+		return
+	}
+
+	untrusted := cfg.Untrusted(gatePaths)
+	if len(untrusted) == 0 {
+		ok(label, fmt.Sprintf("%d %s trusted", len(gatePaths), gateRepoNoun(len(gatePaths))))
+		return
+	}
+
+	var prefix string
+	if !cfg.Present() {
+		prefix = fmt.Sprintf("no Claude Code config at %s; ", configPath)
+	}
+	remedy := claudetrust.Remedy("", configPath)
+	if len(untrusted) == 1 {
+		remedy = claudetrust.Remedy(untrusted[0], configPath)
+	}
+	report(label, fmt.Sprintf("%s%d %s untrusted: %s; %s",
+		prefix, len(untrusted), gateRepoNoun(len(untrusted)), strings.Join(untrusted, ", "), remedy))
+}
+
+// gateRepoNoun pluralizes "gate repository" for doctorClaudeWorkspaceTrust's detail lines.
+func gateRepoNoun(n int) string {
+	if n == 1 {
+		return "gate repository"
+	}
+	return "gate repositories"
 }
 
 func doctorAgentChecks() []doctorAgentCheck {

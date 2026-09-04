@@ -731,6 +731,43 @@ func newClaudeStdinHelperAgent(t *testing.T) *claudeAgent {
 	}
 }
 
+// newClaudeStdinHelperAgentPinningPermissionMode is newClaudeStdinHelperAgent
+// with an operator-pinned --permission-mode appended after the "--" that
+// separates go test's own flags from the args the real claude CLI would see.
+// claudeUserSetPermissionMode scans the whole extraArgs slice for the flag
+// regardless of position, so buildArgs skips its default
+// --dangerously-skip-permissions exactly as it would for a real operator
+// override, which is the condition under test.
+func newClaudeStdinHelperAgentPinningPermissionMode(t *testing.T) *claudeAgent {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("current test executable: %v", err)
+	}
+	return &claudeAgent{
+		bin:                    exe,
+		extraArgs:              []string{"-test.run=^TestClaudeStdinHelper$", "--", "--permission-mode", "acceptEdits"},
+		disableProjectSettings: true,
+	}
+}
+
+// newClaudeStdinHelperAgentWithExtraArgs is newClaudeStdinHelperAgent with
+// operator-supplied claude flags appended after the "--" that separates go
+// test's own flags from the args the real claude CLI would see.
+func newClaudeStdinHelperAgentWithExtraArgs(t *testing.T, pinned ...string) *claudeAgent {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("current test executable: %v", err)
+	}
+	extra := append([]string{"-test.run=^TestClaudeStdinHelper$", "--"}, pinned...)
+	return &claudeAgent{
+		bin:                    exe,
+		extraArgs:              extra,
+		disableProjectSettings: true,
+	}
+}
+
 func TestClaudeStdinHelper(t *testing.T) {
 	mode := os.Getenv("NM_CLAUDE_STDIN_HELPER")
 	if mode == "" {
@@ -784,6 +821,59 @@ func TestClaudeStdinHelper(t *testing.T) {
 		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"API Error: Stream idle timeout - no chunks received"}]}}`+"\n")
 		_, _ = io.WriteString(os.Stdout, `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"helper-session"}`+"\n")
 		return
+	case "untrusted-then-hang":
+		// permissions.additionalDirectories fixture: the one category that still
+		// costs the run under --dangerously-skip-permissions (bypass grants
+		// approval, not extra read roots), so this must abort even under the
+		// default agent. The helper then hangs far longer than any test should
+		// tolerate, so the test only passes if the adapter aborts on the stderr
+		// line instead of waiting for the process.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		time.Sleep(60 * time.Second)
+	case "untrusted-with-result":
+		// The additionalDirectories fixture (bites even under bypass) arrives
+		// alongside a complete, valid, successful result event: the abort must
+		// still win over a result that otherwise parsed cleanly.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		emitClaudeHelperResult()
+		return
+	case "untrusted-allow-with-result":
+		// permissions.allow fixture: under --dangerously-skip-permissions this
+		// category is inert (permission checking itself is off), so an unpatched
+		// adapter that aborted unconditionally on the warning would regress a
+		// working run. Alongside a successful result, this proves both directions:
+		// under bypass the run must complete normally with the warning reported
+		// through OnChunk, and with a pinned, non-bypassing permission mode the
+		// same fixture must still abort.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceFixture)
+		emitClaudeHelperResult()
+		return
+	case "untrusted-allow-then-additional-directories":
+		// The production shape: Claude Code prints one console.error per
+		// discarded category, so an inert permissions.allow line routinely
+		// arrives before the permissions.additionalDirectories line that does
+		// bite. The successful result event afterwards makes the abort the only
+		// thing that can produce a failure.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceFixture)
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		emitClaudeHelperResult()
+		return
+	case "untrusted-bites-then-exit-nonzero":
+		// The likely production shape: the adapter's own abort SIGTERMs the
+		// process, so wait() returns an error. The trust abort must still be
+		// what the caller sees, not "claude exited: signal: terminated".
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		os.Exit(1)
+	case "untrusted-bites-no-result":
+		// A biting warning and then a clean exit that never emits a result
+		// event: the abort must beat "claude returned no result event" too.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceAdditionalDirectoriesFixture)
+		return
+	case "unrelated-stderr-fail":
+		// Ordinary stderr noise unrelated to workspace trust: the existing
+		// "claude exited: ...: <stderr>" behavior must be unchanged.
+		_, _ = io.WriteString(os.Stderr, "warning: some unrelated deprecation notice\n")
+		os.Exit(1)
 	case "no-result":
 		// A claude that reports a diagnostic on the stream and then exits 0
 		// without ever emitting a result event: nothing failed at the process
@@ -798,6 +888,16 @@ func TestClaudeStdinHelper(t *testing.T) {
 		_, _ = io.WriteString(os.Stderr, "warning: --print is deprecated\n")
 		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"API Error: Stream idle timeout - no chunks received"}]}}`+"\n")
 		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","message":{"content":[{"type":"text","text":"still waiting"}]}}`+"\n")
+		for {
+			time.Sleep(time.Second)
+		}
+	case "untrusted-allow-then-hang":
+		// A non-biting permissions.allow drop on a run whose event stream never
+		// completes: the fixture goes to stderr, one event goes to stdout so the
+		// caller has a signal to cancel on, and the process then hangs holding
+		// both pipes open so runOnce takes the parse-error path.
+		_, _ = io.WriteString(os.Stderr, untrustedWorkspaceFixture)
+		_, _ = io.WriteString(os.Stdout, `{"type":"assistant","session_id":"helper-session","message":{"model":"helper-model","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"still working"}]}}`+"\n")
 		for {
 			time.Sleep(time.Second)
 		}

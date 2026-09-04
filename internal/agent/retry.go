@@ -115,8 +115,14 @@ func cloneSessionRef(session *SessionRef) *SessionRef {
 }
 
 // claudeRetryClassifier retries both transient API errors and the
-// no-structured-output case that the existing loop already handled.
+// no-structured-output case that the existing loop already handled. It never
+// retries errClaudeWorkspaceUntrusted: the condition is a per-workspace trust
+// decision that only the operator can grant, so spending a retry on it would
+// just discard the same permission entries against the same path.
 func claudeRetryClassifier(err error) (string, bool) {
+	if errors.Is(err, errClaudeWorkspaceUntrusted) {
+		return "", false
+	}
 	if errors.Is(err, errNoStructuredOutput) {
 		return "missing structured output", true
 	}

@@ -217,6 +217,17 @@ When `GLAB_CONFIG_DIR` is unset, no-mistakes looks for glab's configured hosts a
 When `GH_CONFIG_DIR` is unset, no-mistakes looks for gh's configured hosts at `$XDG_CONFIG_HOME/gh/hosts.yml`, falling back to `~/.config/gh/hosts.yml` when `XDG_CONFIG_HOME` is unset.
 tea has no CLI-specific override env var (unlike `GLAB_CONFIG_DIR`/`GH_CONFIG_DIR`); no-mistakes always looks for its configured logins at `$XDG_CONFIG_HOME/tea/config.yml`, falling back to `~/.config/tea/config.yml` when `XDG_CONFIG_HOME` is unset. See [Provider Integration](/no-mistakes/guides/provider-integration/#self-hosted-gitea).
 
+## `CLAUDE_CONFIG_DIR`
+
+Directory holding Claude Code's `.claude.json`, consulted when checking gate-repository workspace trust.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` |
+| Default | (none)   |
+
+`no-mistakes doctor` and the Claude adapter's untrusted-workspace remedy read Claude Code's trust decisions from `$CLAUDE_CONFIG_DIR/.claude.json` when that file exists, falling back to `~/.claude.json` otherwise. Both surfaces are read-only; no-mistakes never writes a trust decision into that file. See [Choosing an Agent](/no-mistakes/guides/agents/#workspace-trust).
+
 ## `NO_MISTAKES_UMAMI_HOST`
 
 Override the telemetry collection host.
