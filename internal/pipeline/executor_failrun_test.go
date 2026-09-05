@@ -24,11 +24,6 @@ func TestExecutor_FailRunMapsCancelCauseToStatus(t *testing.T) {
 			wantStatus: types.RunCIMonitorInterrupted,
 		},
 		{
-			name:       "ci monitor interrupted by drain",
-			cause:      types.RunCIMonitorDrainedReason,
-			wantStatus: types.RunCIMonitorInterrupted,
-		},
-		{
 			name:       "plain shutdown is not a ci monitor interruption",
 			cause:      "daemon shutting down",
 			wantStatus: types.RunFailed,

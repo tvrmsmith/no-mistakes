@@ -91,7 +91,7 @@ func TestStepPlanDrifted(t *testing.T) {
 	}
 }
 
-func TestParkedRunNotice(t *testing.T) {
+func TestPreservedRunNotice_ListsEveryPreservedRun(t *testing.T) {
 	awaitingSince := int64(100)
 	one := &db.Run{ID: "run-1", Status: types.RunRunning, Branch: "feature", HeadSHA: "abcdef1234567890", AwaitingAgentSince: &awaitingSince}
 	two := &db.Run{ID: "run-2", Status: types.RunRunning, Branch: "other", HeadSHA: "1234567890abcdef", AwaitingAgentSince: &awaitingSince}
@@ -101,10 +101,10 @@ func TestParkedRunNotice(t *testing.T) {
 	}
 
 	single := GuardDecision{Parked: []*db.Run{one}}.ParkedNotice()
-	if !strings.Contains(single, "1 parked pipeline run will be preserved and resumed when the daemon starts again") {
+	if !strings.Contains(single, "1 pipeline run will be preserved and resumed when the daemon starts again") {
 		t.Errorf("single-run notice = %q, want singular preservation sentence", single)
 	}
-	if !strings.Contains(single, "parked pipeline runs:") {
+	if !strings.Contains(single, "preserved pipeline runs:") {
 		t.Errorf("notice = %q, want its own list caption", single)
 	}
 	if strings.Contains(single, "active pipeline runs:") {
@@ -115,7 +115,7 @@ func TestParkedRunNotice(t *testing.T) {
 	}
 
 	plural := GuardDecision{Parked: []*db.Run{one, two}}.ParkedNotice()
-	if !strings.Contains(plural, "2 parked pipeline runs will be preserved") {
+	if !strings.Contains(plural, "2 pipeline runs will be preserved") {
 		t.Errorf("multi-run notice = %q, want plural preservation sentence", plural)
 	}
 }

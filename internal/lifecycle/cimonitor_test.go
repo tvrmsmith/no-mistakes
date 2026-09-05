@@ -1,0 +1,151 @@
+package lifecycle
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/lifecycle/lifecycletest"
+	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/types"
+)
+
+func monitoringRun(prURL string) *db.Run {
+	run := &db.Run{ID: "ci-run", Status: types.RunRunning}
+	if prURL != "" {
+		run.PRURL = &prURL
+	}
+	return run
+}
+
+func ciSteps(ciStatus types.StepStatus) []*db.StepResult {
+	return []*db.StepResult{
+		{StepName: types.StepReview, Status: types.StepStatusCompleted},
+		{StepName: types.StepPush, Status: types.StepStatusCompleted},
+		{StepName: types.StepCI, Status: ciStatus},
+	}
+}
+
+func TestResumableCIMonitor_LiveMonitorWithAnOpenPRQualifies(t *testing.T) {
+	if !ResumableCIMonitor(monitoringRun("https://github.com/o/r/pull/1"), ciSteps(types.StepStatusRunning)) {
+		t.Error("ResumableCIMonitor(live monitor, open PR) = false, want true")
+	}
+}
+
+func TestResumableCIMonitor_MonitorWithoutAPRURLDoesNot(t *testing.T) {
+	if ResumableCIMonitor(monitoringRun(""), ciSteps(types.StepStatusRunning)) {
+		t.Error("ResumableCIMonitor(no PR URL) = true, want false")
+	}
+	if ResumableCIMonitor(monitoringRun("   "), ciSteps(types.StepStatusRunning)) {
+		t.Error("ResumableCIMonitor(blank PR URL) = true, want false")
+	}
+}
+
+func TestResumableCIMonitor_ACIStepMidRepairDoesNot(t *testing.T) {
+	run := monitoringRun("https://github.com/o/r/pull/1")
+	for _, status := range []types.StepStatus{types.StepStatusFixing, types.StepStatusFixReview, types.StepStatusAwaitingApproval} {
+		if ResumableCIMonitor(run, ciSteps(status)) {
+			t.Errorf("ResumableCIMonitor(ci step %s) = true, want false", status)
+		}
+	}
+}
+
+func TestResumableCIMonitor_AnotherActiveStepDisqualifiesIt(t *testing.T) {
+	steps := append(ciSteps(types.StepStatusRunning), &db.StepResult{StepName: types.StepTest, Status: types.StepStatusRunning})
+	if ResumableCIMonitor(monitoringRun("https://github.com/o/r/pull/1"), steps) {
+		t.Error("ResumableCIMonitor(second active step) = true, want false")
+	}
+}
+
+func TestCIMonitorRun_MatchesTheWiderStatusSetIncludingFixing(t *testing.T) {
+	run := monitoringRun("https://github.com/o/r/pull/1")
+	for _, status := range []types.StepStatus{
+		types.StepStatusRunning,
+		types.StepStatusAwaitingApproval,
+		types.StepStatusFixing,
+		types.StepStatusFixReview,
+	} {
+		if !CIMonitorRun(run, ciSteps(status)) {
+			t.Errorf("CIMonitorRun(ci step %s) = false, want true", status)
+		}
+	}
+	if CIMonitorRun(run, ciSteps(types.StepStatusCompleted)) {
+		t.Error("CIMonitorRun(completed ci step) = true, want false")
+	}
+	if CIMonitorRun(monitoringRun(""), ciSteps(types.StepStatusFixing)) {
+		t.Error("CIMonitorRun(no PR URL) = true, want false")
+	}
+}
+
+func TestCIMonitorRun_StillRequiresCIToBeTheOnlyActiveStep(t *testing.T) {
+	steps := append(ciSteps(types.StepStatusFixing), &db.StepResult{StepName: types.StepReview, Status: types.StepStatusFixReview})
+	if CIMonitorRun(monitoringRun("https://github.com/o/r/pull/1"), steps) {
+		t.Error("CIMonitorRun(review also active) = true, want false")
+	}
+}
+
+// TestExemptFromGuard_ALiveCIMonitorIsPreserved walks the real state DB: a
+// clean stop now preserves a CI monitor as well as a gate park, so the guard
+// must count it exempt instead of blocking.
+func TestExemptFromGuard_ALiveCIMonitorIsPreserved(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	plan := lifecycletest.Plan(types.StepReview, types.StepPush, types.StepCI)
+	lifecycletest.SeedResumableCIMonitorRun(t, p, "/tmp/project", "feature", "https://github.com/o/r/pull/7", plan)
+
+	decision, err := Decide(p, plan, SameBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.Blocking) != 0 || len(decision.Parked) != 1 {
+		t.Fatalf("Decide(live ci monitor) = %d blocking / %d preserved, want 0 / 1", len(decision.Blocking), len(decision.Parked))
+	}
+	if !strings.Contains(decision.ParkedNotice(), "will be preserved and resumed") {
+		t.Errorf("ParkedNotice() = %q, want the preservation promise", decision.ParkedNotice())
+	}
+}
+
+// TestExemptFromGuard_ACIMonitorWithADriftedStepPlanIsNotPreserved proves the
+// plan-drift corroboration applies to the new exemption exactly as it does to
+// a gate park.
+func TestExemptFromGuard_ACIMonitorWithADriftedStepPlanIsNotPreserved(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	plan := lifecycletest.Plan(types.StepReview, types.StepPush, types.StepCI)
+	lifecycletest.SeedResumableCIMonitorRun(t, p, "/tmp/project", "feature", "https://github.com/o/r/pull/7", plan)
+
+	drifted, err := Decide(p, lifecycletest.Plan(types.StepReview, types.StepTest, types.StepPush, types.StepCI), SameBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(drifted.Blocking) != 1 || len(drifted.Parked) != 0 {
+		t.Fatalf("Decide(drifted plan) = %d blocking / %d preserved, want 1 / 0", len(drifted.Blocking), len(drifted.Parked))
+	}
+	if drifted.ParkedNotice() != "" {
+		t.Errorf("ParkedNotice() = %q, want empty", drifted.ParkedNotice())
+	}
+}
+
+// TestPreservedRunNotice_DoesNotCallACIMonitorParked pins the wording: the
+// preserved set now holds runs of two shapes, and only one of them is parked.
+func TestPreservedRunNotice_DoesNotCallACIMonitorParked(t *testing.T) {
+	prURL := "https://github.com/o/r/pull/7"
+	monitor := &db.Run{ID: "run-ci", Status: types.RunRunning, Branch: "feature", HeadSHA: "abcdef1234567890", PRURL: &prURL}
+
+	notice := GuardDecision{Parked: []*db.Run{monitor}}.ParkedNotice()
+	if strings.Contains(notice, "parked") {
+		t.Errorf("notice = %q, must not claim a CI monitor is parked", notice)
+	}
+	if !strings.Contains(notice, "1 pipeline run will be preserved and resumed when the daemon starts again") {
+		t.Errorf("notice = %q, want the singular preservation sentence", notice)
+	}
+	if !strings.Contains(notice, "run-ci") || !strings.Contains(notice, "abcdef12") {
+		t.Errorf("notice = %q, want the preserved run listed", notice)
+	}
+	if strings.Contains(notice, "active pipeline runs:") {
+		t.Errorf("notice = %q, must not reuse the active-run caption", notice)
+	}
+
+	two := GuardDecision{Parked: []*db.Run{monitor, monitor}}.ParkedNotice()
+	if !strings.Contains(two, "2 pipeline runs will be preserved") {
+		t.Errorf("multi-run notice = %q, want plural agreement", two)
+	}
+}

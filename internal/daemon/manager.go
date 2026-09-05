@@ -356,35 +356,53 @@ func boundedRecoveryReason(err error) string {
 }
 
 // rejectUnresumableRun records why an active run could not be resumed. A run
-// that was parked at a gate was promised preservation by the stop that left
-// it, so it must not inherit the blanket "daemon crashed during execution"
-// stamp the generic recovery pass applies: it records the concrete reason
-// instead. Every other active row is left to that pass.
+// at either resume point a clean stop preserves was promised preservation by
+// the stop that left it, so it must not inherit the blanket "daemon crashed
+// during execution" stamp the generic recovery pass applies: it records the
+// concrete reason instead. Every other active row is left to that pass.
 func (m *RunManager) rejectUnresumableRun(run *db.Run, reason error) {
 	slog.Warn("active run cannot be safely resumed", "run_id", run.ID, "error", reason)
 	parked := run.AwaitingAgentSince != nil
+	ciMonitor := false
 	stepRows, err := m.db.GetStepsByRun(run.ID)
 	if err != nil {
 		// The step rows exist to stop a stale marker from over-claiming
 		// preservation; recording a concrete rejection reason over-claims
 		// nothing, so a read failure falls back to the marker rather than
-		// dropping the run into the blanket crash stamp.
+		// dropping the run into the blanket crash stamp. A CI monitor has no
+		// marker to fall back to, so it takes that pass instead.
 		slog.Warn("could not read steps while rejecting an unresumable run; falling back to its parked marker",
 			"run_id", run.ID, "error", err, "records_reason", parked)
 	} else {
 		parked = lifecycle.ParkedAtGate(run, stepRows)
+		ciMonitor = !parked && lifecycle.CIMonitorRun(run, stepRows)
 	}
-	if !parked {
-		return
+	switch {
+	case parked:
+		m.recordRejectionReason(run, types.RunFailed,
+			fmt.Sprintf("run was parked at a gate but could not be resumed: %s", reason))
+	case ciMonitor:
+		// The status is load-bearing, not cosmetic: skipWorktreeCleanup spares
+		// a worktree only for RunCIMonitorInterrupted, and this run's worktree
+		// can hold an unpushed CI auto-fix commit. Recording the reason the
+		// ordinary way would map it to RunFailed and let the orphan sweep
+		// delete that work. The wording says monitoring rather than parked
+		// because nobody was waiting on an operator.
+		m.recordRejectionReason(run, types.RunCIMonitorInterrupted,
+			fmt.Sprintf("run was monitoring CI but could not be resumed: %s", reason))
 	}
-	errMsg := fmt.Sprintf("run was parked at a gate but could not be resumed: %s", reason)
-	failed, err := m.db.FailActiveRunWithReason(run.ID, errMsg)
+}
+
+// recordRejectionReason ends a preserved run that recovery declined, under the
+// terminal status its shape deserves.
+func (m *RunManager) recordRejectionReason(run *db.Run, status types.RunStatus, errMsg string) {
+	ended, err := m.db.EndActiveRunWithStatus(run.ID, status, errMsg)
 	if err != nil {
-		slog.Error("failed to record why a parked run could not be resumed", "run_id", run.ID, "error", err)
+		slog.Error("failed to record why a preserved run could not be resumed", "run_id", run.ID, "error", err)
 		return
 	}
-	if !failed {
-		slog.Warn("parked run was no longer active when its rejection reason was recorded", "run_id", run.ID)
+	if !ended {
+		slog.Warn("preserved run was no longer active when its rejection reason was recorded", "run_id", run.ID)
 	}
 }
 
@@ -437,8 +455,21 @@ func (m *RunManager) parkPreserved(runID string, err error) bool {
 // that establish an adverse fact wrap it in unresumable, so a read added here
 // later waits for a later start instead of costing the run its worktree.
 func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*recoveredRunPlan, error) {
-	if run == nil || run.Status != types.RunRunning || run.AwaitingAgentSince == nil || run.Branch == "" {
-		return nil, unresumable(fmt.Errorf("run is not a parked running run"))
+	if run == nil || run.Status != types.RunRunning || run.Branch == "" {
+		return nil, unresumable(fmt.Errorf("run is not a resumable running run"))
+	}
+	// One step-row read is the whole short-circuit, and it stays ahead of the
+	// repo row and every git call: a run at neither resume point was never
+	// promised preservation, so letting it reach those reads would let one of
+	// them defer it indefinitely instead of leaving it to the crash sweep.
+	// A read that does not complete is not adverse and defers, as everywhere
+	// else on this path.
+	stepRows, err := m.db.GetStepsByRun(run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get steps to classify recovered run: %w", err)
+	}
+	if !lifecycle.ParkedAtGate(run, stepRows) && !lifecycle.ResumableCIMonitor(run, stepRows) {
+		return nil, unresumable(fmt.Errorf("run is neither parked at a gate nor monitoring CI"))
 	}
 	repo, err := m.db.GetRepo(run.RepoID)
 	if err != nil {
@@ -1875,45 +1906,17 @@ var (
 	drainFinishDeliveredHook func()
 )
 
-// isCIMonitorRun reports whether a run is parked in its CI monitor: it has a
-// PR URL, a running step_results row for types.StepCI, and no running row for
-// any OTHER step name. The PR URL matters: the CI step row is already running
-// while the step builds its host and before it bails out with "no PR URL
-// found", and cutting a run there would report a PR that does not exist.
-//
-// The status set is deliberately narrower than db.RecoverStaleRunsExcept's,
-// which also counts awaiting_approval, fixing, and fix_review. That predicate
-// classifies a crashed daemon's leftovers, where nothing is actually
-// executing; here a CI step in fixing or fix_review has a live auto-fix agent
-// partway through a repair, and cutting it throws that work away.
-// awaiting_approval is excluded for the same reason: a genuinely parked run
-// is already released by Drain's AwaitingAgentSince check, so the only
-// reachable state left is the window CompleteRunAwaitingAgent opens in
-// internal/pipeline/executor.go, where the operator has just answered the gate
-// and the step row is still awaiting_approval while the approval is applied.
-// Cutting there throws away an answer the operator already gave. A live
-// monitor's row is running, so nothing legitimate is lost. Such a run is
-// waited on like any other in-flight work, bounded by the drain deadline.
-func isCIMonitorRun(database *db.DB, run *db.Run) bool {
-	if run.PRURL == nil || strings.TrimSpace(*run.PRURL) == "" {
-		return false
-	}
-	steps, err := database.GetStepsByRun(run.ID)
+// liveCIMonitor reports whether a run is sitting in a resumable CI monitor,
+// the second shape a clean stop preserves. A step read that fails answers
+// false, so Drain treats the run as ordinary in-flight work and waits on it,
+// bounded by the deadline, which is the safe reading.
+func (m *RunManager) liveCIMonitor(run *db.Run) bool {
+	steps, err := m.db.GetStepsByRun(run.ID)
 	if err != nil {
 		slog.Warn("drain: failed to read run steps for classification; treating as a normal in-flight run", "run_id", run.ID, "error", err)
 		return false
 	}
-	ciActive := false
-	for _, step := range steps {
-		if step.Status != types.StepStatusRunning {
-			continue
-		}
-		if step.StepName != types.StepCI {
-			return false
-		}
-		ciActive = true
-	}
-	return ciActive
+	return lifecycle.ResumableCIMonitor(run, steps)
 }
 
 // registerActiveRun publishes a run's executor, cancel, and done channel, and
@@ -1956,41 +1959,51 @@ func (m *RunManager) refuseStartedRun(runID string, ag agent.Agent, cancel conte
 	}
 }
 
-// runParkedAtGate reports whether a run is currently parked at an approval
-// gate. A DB read that fails answers false, so Drain treats the run as
-// ordinary in-flight work and waits on it, bounded by the deadline, which is
-// the safe reading.
-func (m *RunManager) runParkedAtGate(runID string) bool {
+// runPreservedByShutdown reports whether a run is at one of the two resume
+// points the coming stop preserves: parked at an approval gate, or sitting in
+// a live CI monitor. Either way the next daemon start picks it up, so the
+// report must not claim the stop cut it off. A DB read that fails answers
+// false, so Drain treats the run as ordinary in-flight work, which is the safe
+// reading.
+func (m *RunManager) runPreservedByShutdown(runID string) bool {
 	run, err := m.db.GetRun(runID)
 	if err != nil {
-		slog.Warn("failed to read run while checking for a gate park; treating it as in-flight", "run_id", runID, "error", err)
+		slog.Warn("failed to read run while checking for a preserved resume point; treating it as in-flight", "run_id", runID, "error", err)
 		return false
 	}
-	return run != nil && run.AwaitingAgentSince != nil
+	if run == nil {
+		return false
+	}
+	steps, err := m.db.GetStepsByRun(runID)
+	if err != nil {
+		slog.Warn("failed to read steps while checking for a preserved resume point; treating it as in-flight", "run_id", runID, "error", err)
+		return false
+	}
+	return lifecycle.ParkedAtGate(run, steps) || lifecycle.ResumableCIMonitor(run, steps)
 }
 
 // drainWaitEntry is one run Drain is waiting on: its done channel, branch (for
-// reporting), whether it was cut short as a CI monitor, and whether it has
-// since parked at a gate and been released from the wait.
+// reporting), and whether it has since reached a preserved resume point and
+// been released from the wait.
 type drainWaitEntry struct {
 	runID  string
 	branch string
 	done   chan struct{}
-	ci     bool
 	exempt bool
 }
 
 // Drain refuses new runs immediately, then waits out the in-flight runs it
-// can: it never waits on a run parked at an approval gate (an operator has to
-// drive that, not time), and it cuts a CI-monitor run short immediately
-// rather than waiting for a PR merge that could take arbitrarily long. It
-// returns once every run it decided to wait on has finished, the daemon
-// starts shutting down (Shutdown's signal, or ctx), or timeout elapses,
-// whichever is first. Shutdown() is still the caller's responsibility
-// afterwards: Drain cancels only the CI-monitor runs it classifies, and
-// Shutdown signals the rest with pipeline.ErrDaemonShutdown, a cause a run
-// parked at a gate keeps its row and worktree through so the next start
-// resumes it.
+// can. It never waits on a run the coming stop preserves: an operator has to
+// drive a gate park, not time, and a CI monitor would hold the drain for a PR
+// merge that can take arbitrarily long. Both are released from the wait and
+// left to Shutdown. It returns once every run it decided to wait on has
+// finished, the daemon starts shutting down (Shutdown's signal, or ctx), or
+// timeout elapses, whichever is first.
+//
+// Drain cancels nothing. Shutdown() is still the caller's responsibility
+// afterwards, and it signals every run with pipeline.ErrDaemonShutdown, a
+// cause a gate park and a live CI monitor both keep their row and worktree
+// through so the next start resumes them.
 func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainReport {
 	// Set first, unconditionally, before any classification: there is no
 	// un-drain path, and startRun's shuttingDown check must see this
@@ -1998,9 +2011,8 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 	m.shuttingDown.Store(true)
 
 	m.mu.Lock()
-	cancels := make(map[string]context.CancelCauseFunc, len(m.cancels))
 	dones := make(map[string]chan struct{}, len(m.dones))
-	for id, cancel := range m.cancels {
+	for id := range m.cancels {
 		done, ok := m.dones[id]
 		if !ok {
 			// Both maps are written under this same lock at every
@@ -2009,7 +2021,6 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 			// reading: Shutdown() still cancels the run either way.
 			continue
 		}
-		cancels[id] = cancel
 		dones[id] = done
 	}
 	m.mu.Unlock()
@@ -2034,15 +2045,14 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 			continue
 		}
 		entry := &drainWaitEntry{runID: id, branch: run.Branch, done: done}
-		if run.AwaitingAgentSince != nil {
-			// Parked at a gate: exempt from the wait from the start, and left
-			// for Shutdown, whose ErrDaemonShutdown cause preserves it for the
-			// next start if it is still parked when the drain ends. It is still entered here so the reclassify
-			// tick can re-admit it: an operator can answer the gate mid-drain,
-			// and a run that resumes must not escape the report entirely.
+		if run.AwaitingAgentSince != nil || m.liveCIMonitor(run) {
+			// At a preserved resume point: exempt from the wait from the start,
+			// and left for Shutdown, whose ErrDaemonShutdown cause preserves it
+			// for the next start if it is still there when the drain ends. It is
+			// still entered here so the reclassify tick can re-admit it: an
+			// operator can answer a gate mid-drain and a monitor can end, and a
+			// run back at real work must not escape the report entirely.
 			entry.exempt = true
-		} else if isCIMonitorRun(m.db, run) {
-			m.cutDrainedCIMonitor(entry, cancels, &report)
 		}
 		entries[id] = entry
 		order = append(order, id)
@@ -2118,19 +2128,19 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 		}
 	}
 	// reclassifyEntries re-reads every unfinished run: one can park at a gate
-	// or enter its CI monitor after the drain begins, and one released as
-	// parked can have its gate answered and go back to real work.
+	// or enter its CI monitor after the drain begins, and one released at
+	// either resume point can go back to real work.
 	reclassifyEntries := func() {
 		for _, id := range order {
 			e := entries[id]
-			if finished[id] || e.ci {
+			if finished[id] {
 				continue
 			}
 			run, err := m.db.GetRun(id)
 			if err != nil || run == nil {
 				continue
 			}
-			if run.AwaitingAgentSince != nil {
+			if run.AwaitingAgentSince != nil || m.liveCIMonitor(run) {
 				if !e.exempt {
 					e.exempt = true
 					release(id)
@@ -2138,15 +2148,12 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 				continue
 			}
 			if e.exempt {
-				// The operator answered the gate and the run is working
-				// again. Exemption is not a latch: leaving it set would
-				// let a run the stop later kills appear in none of
-				// Waited, Finished, or Interrupted.
+				// The operator answered the gate, or the monitor ended, and
+				// the run is working again. Exemption is not a latch: leaving
+				// it set would let a run the stop later kills appear in none
+				// of Waited, Finished, or Interrupted.
 				e.exempt = false
 				readmit(id)
-			}
-			if isCIMonitorRun(m.db, run) {
-				m.cutDrainedCIMonitor(e, cancels, &report)
 			}
 		}
 	}
@@ -2240,64 +2247,36 @@ waitLoop:
 			default:
 			}
 		}
-		if !finished[id] && m.runParkedAtGate(id) {
-			// Parked: Shutdown's ErrDaemonShutdown cause preserves it and the
-			// next start resumes it, so it is not a run the stop cut off.
-			// Asked of every
-			// unfinished run rather than only the ones a reclassify tick
-			// already exempted, because a run that parks between the last
-			// tick and the end of the wait is preserved and resumed all the
-			// same, and reporting it as forcibly stopped contradicts what
-			// happens to it.
+		if !finished[id] && m.runPreservedByShutdown(id) {
+			// Preserved: Shutdown's ErrDaemonShutdown cause keeps the row and
+			// the worktree and the next start resumes it, so it is not a run
+			// the stop cut off. Asked of every unfinished run rather than only
+			// the ones a reclassify tick already exempted, because a run that
+			// parks or enters its monitor between the last tick and the end of
+			// the wait is preserved all the same, and reporting it as forcibly
+			// stopped contradicts what happens to it.
 			continue
 		}
-		// An entry exempted mid-drain but no longer parked is reported like
-		// any other waited run. The wait may have ended before a reclassify
-		// tick could re-admit it, and a run the stop is about to kill must
-		// never be absent from the report entirely.
+		// An entry exempted mid-drain but no longer at a resume point is
+		// reported like any other waited run. The wait may have ended before a
+		// reclassify tick could re-admit it, and a run the stop is about to
+		// kill must never be absent from the report entirely.
 		waited = append(waited, id)
 		if finished[id] {
-			if !e.ci {
-				report.Finished = append(report.Finished, id)
-			}
-			// A cut CI monitor is reported under Interrupted only. It exited
-			// because Drain cancelled it, not because its work completed.
+			report.Finished = append(report.Finished, id)
 			continue
 		}
-		if !e.ci {
-			// Drain does not cancel a waited run itself once the wait ends;
-			// Shutdown() still will.
-			report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
-				RunID:  id,
-				Branch: e.branch,
-				Reason: unfinishedReason,
-			})
-		}
-		// A ci entry that missed the deadline already has its one Interrupted
-		// entry from classification above; it is not duplicated here.
+		// Drain does not cancel a waited run itself once the wait ends;
+		// Shutdown() still will.
+		report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
+			RunID:  id,
+			Branch: e.branch,
+			Reason: unfinishedReason,
+		})
 	}
 	report.Waited = waited
 
 	return report
-}
-
-// cutDrainedCIMonitor cancels one CI-monitor run with the drain's own cause
-// and records it as interrupted. Classification runs both at drain start and
-// on the reclassify ticker, so this is the single place that marks an entry
-// cut, keeping one Interrupted row per run.
-func (m *RunManager) cutDrainedCIMonitor(e *drainWaitEntry, cancels map[string]context.CancelCauseFunc, report *DrainReport) {
-	if e.ci {
-		return
-	}
-	e.ci = true
-	if cancel, ok := cancels[e.runID]; ok {
-		cancel(fmt.Errorf("%s", types.RunCIMonitorDrainedReason))
-	}
-	report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
-		RunID:  e.runID,
-		Branch: e.branch,
-		Reason: ipc.DrainInterruptedCIMonitor,
-	})
 }
 
 // Shutdown signals all active runs to stop. Called during daemon shutdown to

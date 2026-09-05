@@ -54,12 +54,19 @@ func StepPlanDrifted(run *db.Run, want []types.StepName) bool {
 }
 
 // exemptFromGuard is the single predicate every guard surface splits on: the
-// run is genuinely parked at a gate, the plan that would resume it still
+// run is at one of the two resume points a stop preserves (genuinely parked at
+// a gate, or sitting in a live CI monitor), the plan that would resume it still
 // matches the one it was started under, and recovery's own preconditions
 // corroborate that the next start could actually pick it up. resumable is nil
 // only where a caller has no state to corroborate against.
+//
+// Including the CI monitor deliberately stops stop/restart/update refusing
+// while one is live: the monitor now survives the stop instead of being cut.
 func exemptFromGuard(run *db.Run, steps []*db.StepResult, requiredStepPlan []types.StepName, resumable func(*db.Run) bool) bool {
-	if !ParkedAtGate(run, steps) || StepPlanDrifted(run, requiredStepPlan) {
+	if !ParkedAtGate(run, steps) && !ResumableCIMonitor(run, steps) {
+		return false
+	}
+	if StepPlanDrifted(run, requiredStepPlan) {
 		return false
 	}
 	return resumable == nil || resumable(run)
@@ -115,7 +122,7 @@ func (d GuardDecision) ParkedNotice() string {
 	if d.binarySwap {
 		qualifier = binarySwapQualifier
 	}
-	return parkedRunNotice(d.Parked, qualifier)
+	return preservedRunNotice(d.Parked, qualifier)
 }
 
 // corroborationTimeout bounds the per-run git read the guard makes while
@@ -219,16 +226,20 @@ func activeRunsWithSteps(database *db.DB) ([]*db.Run, map[string][]*db.StepResul
 	return runs, stepsByRun, nil
 }
 
-// parkedRunNotice renders the promise with an optional qualifier clause, so a
-// caller whose resuming binary may differ states the guarantee it actually
+// preservedRunNotice renders the promise with an optional qualifier clause, so
+// a caller whose resuming binary may differ states the guarantee it actually
 // has rather than a certainty.
-func parkedRunNotice(parked []*db.Run, qualifier string) string {
-	if len(parked) == 0 {
+//
+// The wording says preserved rather than parked because the exempt set holds
+// two shapes now, and a live CI monitor is not parked: nobody is waiting on an
+// operator, the run is polling a PR.
+func preservedRunNotice(preserved []*db.Run, qualifier string) string {
+	if len(preserved) == 0 {
 		return ""
 	}
-	runWord, _ := RunCountWords(len(parked))
-	return fmt.Sprintf("%d parked pipeline %s will be preserved and resumed when the daemon starts again%s\n", len(parked), runWord, qualifier) +
-		RunListWith("parked pipeline runs:", parked)
+	runWord, _ := RunCountWords(len(preserved))
+	return fmt.Sprintf("%d pipeline %s will be preserved and resumed when the daemon starts again%s\n", len(preserved), runWord, qualifier) +
+		RunListWith("preserved pipeline runs:", preserved)
 }
 
 // RunCountWords agrees a run count's noun and verb. The parked exemption makes

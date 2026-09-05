@@ -785,8 +785,8 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 
 	if rv.Status == string(types.RunCIMonitorInterrupted) {
 		cause := "The daemon restarted while monitoring CI"
-		if run.Error != nil && *run.Error == types.RunCIMonitorDrainedReason {
-			cause = "An operator drained the daemon while it monitored CI"
+		if run.Error != nil && strings.TrimSpace(*run.Error) != types.RunCIMonitorInterruptedReason {
+			cause = strings.TrimRight(strings.TrimSpace(*run.Error), ".;")
 		}
 		help := []string{cause + "; the PR remains open and was not marked failed."}
 		if rv.PRURL != "" {

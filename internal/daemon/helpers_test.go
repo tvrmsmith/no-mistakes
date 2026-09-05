@@ -21,6 +21,15 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
+// daemonSocketBindTimeout bounds how long a test daemon may take to bind its
+// socket. It is one owner for both start helpers so the two cannot drift, and
+// it is deliberately far above the daemon's own startup cost: the gate
+// migration and orphan-process phases alone run for seconds on a loaded
+// machine. Both waits abandon early when the daemon goroutine returns an
+// error, so a real startup failure still reports in milliseconds and only a
+// genuine hang pays this bound.
+const daemonSocketBindTimeout = 30 * time.Second
+
 func TestMain(m *testing.M) {
 	switch os.Getenv("NM_DAEMON_HELPER_PROCESS") {
 	case "1":
@@ -110,11 +119,20 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 		errCh <- RunWithResources(p, d)
 	}()
 
-	// Wait for socket to appear.
-	deadline := time.Now().Add(3 * time.Second)
+	// Wait for socket to appear. The bound is generous because the daemon's
+	// own startup phases (gate migration, orphan-process sweep) routinely take
+	// several seconds on a loaded machine, and a bound near that median turns
+	// contention into a "no such file or directory" dial failure in whichever
+	// test happens to run then.
+	deadline := time.Now().Add(daemonSocketBindTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(p.Socket()); err == nil {
 			break
+		}
+		select {
+		case err := <-errCh:
+			t.Fatalf("daemon exited before binding its socket: %v", err)
+		default:
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -271,7 +289,7 @@ func restartTestDaemonInstance(t *testing.T, p *paths.Paths, d *db.DB, sf StepFa
 		instance.errCh <- RunWithOptions(p, d, sf)
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(daemonSocketBindTimeout)
 	for {
 		if _, err := os.Stat(p.Socket()); err == nil {
 			break

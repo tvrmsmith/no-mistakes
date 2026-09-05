@@ -14,8 +14,9 @@ import (
 
 // TestRenderDriveResult_CIMonitorInterrupted exercises the agent-facing
 // `axi drive` surface for a run recovered as RunCIMonitorInterrupted (issue
-// #361): the daemon restarted while monitoring CI for an already-open PR, so
-// the run is a distinct, non-failure terminal outcome that keeps the PR intact.
+// #361): the daemon restarted while monitoring CI for an already-open PR, one
+// of several routes to this status, so the run is a distinct, non-failure
+// terminal outcome that keeps the PR intact.
 func TestRenderDriveResult_CIMonitorInterrupted(t *testing.T) {
 	if got := outcomeFor(string(types.RunCIMonitorInterrupted)); got != "ci-monitor-interrupted" {
 		t.Fatalf("outcomeFor(%q) = %q, want %q", types.RunCIMonitorInterrupted, got, "ci-monitor-interrupted")
@@ -68,13 +69,15 @@ func TestRenderDriveResult_CIMonitorInterrupted(t *testing.T) {
 	}
 }
 
-// TestRenderDriveResult_CIMonitorDrained is the same terminal status reached by
-// the other route, an operator draining the daemon. Nothing restarted, so
-// telling the driving agent that something did states a cause that did not
-// happen.
-func TestRenderDriveResult_CIMonitorDrained(t *testing.T) {
+// TestRenderDriveResult_CIMonitorDeclinedWithAConcreteReason is the same
+// terminal status reached by the other route: recovery declined to resume a
+// CI-shaped run because of adverse evidence (here, a missing worktree) and
+// recorded that concrete reason as the run's error text. Nothing restarted,
+// so telling the driving agent that something did states a cause that did
+// not happen; the reason itself is the cause.
+func TestRenderDriveResult_CIMonitorDeclinedWithAConcreteReason(t *testing.T) {
 	prURL := "https://github.com/user/repo/pull/375"
-	reason := types.RunCIMonitorDrainedReason
+	reason := "worktree missing for recovered run"
 	run := &ipc.RunInfo{
 		ID:      "run-2",
 		Branch:  "feature/drain",
@@ -98,9 +101,47 @@ func TestRenderDriveResult_CIMonitorDrained(t *testing.T) {
 
 	rendered := out.String()
 	if strings.Contains(rendered, "restarted") {
-		t.Errorf("a drained CI monitor must not be reported as a restart:\n%s", rendered)
+		t.Errorf("a declined CI monitor must not be reported as a restart:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "An operator drained the daemon while it monitored CI; the PR remains open and was not marked failed.") {
-		t.Errorf("rendered drive output does not name the drain as the cause:\n%s", rendered)
+	if strings.Contains(rendered, preserveGateFixCommitsGuidance) {
+		t.Errorf("declined CI monitor output leaked ordinary gate-fix guidance:\n%s", rendered)
+	}
+	want := "worktree missing for recovered run; the PR remains open and was not marked failed."
+	if !strings.Contains(rendered, want) {
+		t.Errorf("rendered drive output does not name the concrete reason as the cause:\nwant %q\ngot:\n%s", want, rendered)
+	}
+}
+
+// TestRenderDriveResult_CIMonitorDeclinedReasonTrimsTrailingPeriod checks that
+// a concrete reason ending in a period does not render a double-punctuated
+// sentence once the fixed suffix is appended.
+func TestRenderDriveResult_CIMonitorDeclinedReasonTrimsTrailingPeriod(t *testing.T) {
+	prURL := "https://github.com/user/repo/pull/375"
+	reason := "worktree missing for recovered run."
+	run := &ipc.RunInfo{
+		ID:      "run-2",
+		Branch:  "feature/drain",
+		Status:  types.RunCIMonitorInterrupted,
+		HeadSHA: "abcdef1234567890",
+		Error:   &reason,
+		PRURL:   &prURL,
+		Steps: []ipc.StepResultInfo{
+			{StepName: types.StepPR, Status: types.StepStatusCompleted},
+			{StepName: types.StepCI, Status: types.StepStatusSkipped},
+		},
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	if err := renderDriveResult(cmd, run, false); err != nil {
+		t.Fatalf("renderDriveResult returned unexpected error: %v", err)
+	}
+
+	rendered := out.String()
+	want := "worktree missing for recovered run; the PR remains open and was not marked failed."
+	if !strings.Contains(rendered, want) {
+		t.Errorf("rendered drive output does not trim the trailing period:\nwant %q\ngot:\n%s", want, rendered)
 	}
 }

@@ -308,6 +308,11 @@ type ShutdownResult struct {
 type DrainInterruptedReason string
 
 const (
+	// DrainInterruptedCIMonitor is no longer produced by this daemon: a drain
+	// now preserves a resumable CI monitor rather than cutting it (see
+	// lifecycle.ResumableCIMonitor). The value stays in the protocol because
+	// ProtocolVersion is still 1, so a current CLI can still connect to an
+	// older daemon binary that does report it.
 	DrainInterruptedCIMonitor DrainInterruptedReason = "ci_monitor"
 	DrainInterruptedDeadline  DrainInterruptedReason = "deadline"
 	// DrainInterruptedShutdown is a drain the daemon's own shutdown ended

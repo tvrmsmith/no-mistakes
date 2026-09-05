@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -71,23 +70,24 @@ func TestShutdown_DrainWithNoInFlightRunsReportsDrainedEmpty(t *testing.T) {
 	}
 }
 
-// TestShutdown_DrainCutsCIMonitorAndReportsIt covers scenario 3: a drain
-// classifies a run whose only active step is CI as a CI monitor, cuts it
-// immediately, and reports it over the wire rather than waiting.
-func TestShutdown_DrainCutsCIMonitorAndReportsIt(t *testing.T) {
+// TestDrainDoesNotCutACIMonitor is scenario 3 after the monitor became
+// resumable: `daemon stop --drain` neither cancels a live CI monitor nor
+// reports it, and the run survives the stop as a running row rather than
+// landing in ci_monitor_interrupted.
+func TestDrainDoesNotCutACIMonitor(t *testing.T) {
 	started := make(chan struct{})
 	ciStep := &mockSlowStep{name: types.StepCI, started: started}
-	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+	instance := startTestDaemonInstance(t, func() []pipeline.Step {
 		return []pipeline.Step{ciStep}
 	})
+	p, d := instance.paths, instance.db
 
-	_, headSHA := setupTestGitRepo(t, p, d, "drain-ci-repo")
+	repo, headSHA := setupTestGitRepo(t, p, d, "drain-ci-repo")
 
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer client.Close()
 
 	var pushResult ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -112,61 +112,41 @@ func TestShutdown_DrainCutsCIMonitorAndReportsIt(t *testing.T) {
 
 	var result ipc.ShutdownResult
 	start := time.Now()
-	// The bound is a generous fraction of the deadline, not a tight one: the
-	// cut run still has to unwind (head reconciliation, terminal row) before
-	// its done channel closes, and a loaded CI machine makes that slow. What
-	// the test proves is that the drain did not sit out its own deadline.
 	if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 20000}, &result); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
 	elapsed := time.Since(start)
 
+	// The daemon drains in-flight handlers as it exits, so an idle client
+	// connection left open outlives the shutdown it is waiting for.
+	client.Close()
+	if err := instance.stopAndWait(t); err != nil {
+		t.Fatalf("daemon exited with error: %v", err)
+	}
+
 	if elapsed >= 10*time.Second {
-		t.Fatalf("drain took %v, want a prompt cut of the CI monitor rather than waiting out the 20s deadline", elapsed)
+		t.Fatalf("drain took %v, want the monitor released rather than the 20s deadline waited out", elapsed)
 	}
 	if !result.OK || !result.Drained {
 		t.Fatalf("result = %+v, want OK and Drained", result)
 	}
-	if len(result.Interrupted) != 1 {
-		t.Fatalf("Interrupted = %v, want exactly one entry", result.Interrupted)
-	}
-	entry := result.Interrupted[0]
-	if entry.RunID != pushResult.RunID || entry.Reason != ipc.DrainInterruptedCIMonitor {
-		t.Fatalf("Interrupted[0] = %+v, want run %s reason %s", entry, pushResult.RunID, ipc.DrainInterruptedCIMonitor)
+	if len(result.Interrupted) != 0 {
+		t.Fatalf("Interrupted = %v, want empty: the drain preserves a CI monitor rather than cutting it", result.Interrupted)
 	}
 
-	// What the wire says the drain did must match what the run's own row says
-	// happened to it. A cut CI monitor is ci_monitor_interrupted, not failed:
-	// the PR is still open and the operator is told so, and a `failed` row
-	// here would show up in axi and the TUI as work that broke.
-	waitForRunStatus(t, d, pushResult.RunID, types.RunCIMonitorInterrupted)
-}
-
-// waitForRunStatus polls a run's terminal status. The drain reports the run as
-// cut the moment its goroutine exits; the terminal row is written on that same
-// unwind, so a direct read can race it.
-func waitForRunStatus(t *testing.T, d *db.DB, runID string, want types.RunStatus) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	var last types.RunStatus
-	for time.Now().Before(deadline) {
-		run, err := d.GetRun(runID)
-		if err != nil {
-			t.Fatalf("get run %s: %v", runID, err)
-		}
-		if run == nil {
-			t.Fatalf("run %s not found", runID)
-		}
-		last = run.Status
-		if last == want {
-			if run.Error == nil || *run.Error != types.RunCIMonitorDrainedReason {
-				t.Fatalf("run %s error = %v, want %q", runID, run.Error, types.RunCIMonitorDrainedReason)
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	run, err := d.GetRun(pushResult.RunID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("run %s status = %s, want %s", runID, last, want)
+	if run.Status != types.RunRunning {
+		t.Fatalf("run status = %s (error %v), want it left %s for the next start to resume", run.Status, run.Error, types.RunRunning)
+	}
+	if run.Error != nil {
+		t.Fatalf("run error = %q, want nil", *run.Error)
+	}
+	if _, err := os.Stat(p.WorktreeDir(repo.ID, pushResult.RunID)); err != nil {
+		t.Fatalf("drain removed the preserved worktree: %v", err)
+	}
 }
 
 // TestShutdown_DrainReportsDeadlineCutForNonCIRun covers scenario 4: a

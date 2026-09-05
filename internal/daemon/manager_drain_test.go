@@ -53,6 +53,13 @@ func registerFakeRun(t *testing.T, m *RunManager, database *db.DB, repo *db.Repo
 	if err != nil {
 		t.Fatal(err)
 	}
+	// startRun marks the row running before it registers the goroutine, and
+	// the preservation predicates read that status, so a fake run that stayed
+	// pending would describe a state the manager never registers.
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	run.Status = types.RunRunning
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan struct{})
 	m.mu.Lock()
@@ -119,6 +126,21 @@ func markCIStepActiveErr(database *db.DB, run *db.Run) error {
 		return err
 	}
 	return database.StartStepWithAutoFixLimit(sr.ID, 0)
+}
+
+// stopCIMonitorErr completes a run's CI step row, the transition that leaves
+// the run with no live monitor for a reclassify tick to observe.
+func stopCIMonitorErr(database *db.DB, run *db.Run) error {
+	rows, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.StepName == types.StepCI {
+			return database.CompleteStep(row.ID, 0, 10, "")
+		}
+	}
+	return fmt.Errorf("run %s has no ci step row", run.ID)
 }
 
 func containsRunID(ids []string, id string) bool {
@@ -191,30 +213,94 @@ func TestDrain_GateParkedRunDoesNotHoldUpDrain(t *testing.T) {
 	}
 }
 
-// TestDrain_CIMonitorIsCutNotWaitedFor covers scenario 3.
-func TestDrain_CIMonitorIsCutNotWaitedFor(t *testing.T) {
+// TestDrain_CIMonitorIsExemptNotCut is the unit half of scenario 3's
+// replacement: a live CI monitor is now preserved across the stop, so Drain
+// releases it from the wait the way it releases a gate-parked run instead of
+// cancelling it.
+func TestDrain_CIMonitorIsExemptNotCut(t *testing.T) {
 	m, database, repo := newDrainTestManager(t)
-	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	run, ctx, _ := registerFakeRun(t, m, database, repo, "feature")
 	markCIMonitorActive(t, database, run)
-	close(done) // goroutine "exits promptly" once cancelled
+	// done is never closed: the monitor keeps polling until Shutdown preserves it.
 
 	start := time.Now()
 	report := m.Drain(context.Background(), 5*time.Second)
 	elapsed := time.Since(start)
 	if elapsed >= 2*time.Second {
-		t.Fatalf("Drain took %v, want promptly for a cut CI monitor", elapsed)
+		t.Fatalf("Drain took %v, want it released once rather than waiting out the deadline", elapsed)
 	}
 
-	cause := context.Cause(ctx)
-	if cause == nil || cause.Error() != types.RunCIMonitorDrainedReason {
-		t.Fatalf("cancel cause = %v, want %q", cause, types.RunCIMonitorDrainedReason)
+	if cause := context.Cause(ctx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil: Drain no longer cuts a CI monitor", cause)
 	}
-	if len(report.Interrupted) != 1 {
-		t.Fatalf("Interrupted = %v, want exactly one entry", report.Interrupted)
+	if containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want it to exclude the preserved CI monitor %s", report.Waited, run.ID)
 	}
-	entry := report.Interrupted[0]
-	if entry.RunID != run.ID || entry.Reason != ipc.DrainInterruptedCIMonitor {
-		t.Fatalf("Interrupted[0] = %+v, want run %s reason %s", entry, run.ID, ipc.DrainInterruptedCIMonitor)
+	if len(report.Interrupted) != 0 {
+		t.Fatalf("Interrupted = %v, want empty: the monitor is left for Shutdown's preserve-and-resume path", report.Interrupted)
+	}
+}
+
+// TestDrainReadmitsARunThatStopsMonitoringCI is the mirror of the gate case:
+// exemption is not a latch. A run whose CI monitor ends mid-drain is back to
+// work the stop would kill, so it rejoins the wait and the report.
+func TestDrainReadmitsARunThatStopsMonitoringCI(t *testing.T) {
+	shortenDrainReclassify(t, 20*time.Millisecond)
+	m, database, repo := newDrainTestManager(t)
+	monitor, _, _ := registerFakeRun(t, m, database, repo, "feature")
+	markCIMonitorActive(t, database, monitor)
+	// A second in-flight run keeps the wait alive long enough for a
+	// reclassify tick to observe the transition.
+	_, _, _ = registerFakeRun(t, m, database, repo, "other")
+
+	stopErr := make(chan error, 1)
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		stopErr <- stopCIMonitorErr(database, monitor)
+	}()
+
+	report := m.Drain(context.Background(), time.Second)
+
+	if err := <-stopErr; err != nil {
+		t.Fatalf("end the ci monitor mid-drain: %v", err)
+	}
+	if !containsRunID(report.Waited, monitor.ID) {
+		t.Fatalf("Waited = %v, want the readmitted run %s", report.Waited, monitor.ID)
+	}
+	entry, ok := findInterrupted(report.Interrupted, monitor.ID)
+	if !ok {
+		t.Fatalf("Interrupted = %v, want an entry for the readmitted run %s", report.Interrupted, monitor.ID)
+	}
+	if entry.Reason == ipc.DrainInterruptedCIMonitor {
+		t.Fatalf("Interrupted[%s].Reason = %s, want the ordinary in-flight reason", monitor.ID, entry.Reason)
+	}
+}
+
+// TestDrainReportDoesNotClaimItInterruptedAPreservedCIMonitor pins the
+// post-loop reporting path on its own. The reclassify ticker never fires here,
+// so the only thing that can keep the run out of Interrupted is the report
+// loop asking reality about every unfinished run.
+func TestDrainReportDoesNotClaimItInterruptedAPreservedCIMonitor(t *testing.T) {
+	shortenDrainReclassify(t, time.Hour)
+	m, database, repo := newDrainTestManager(t)
+	run, _, _ := registerFakeRun(t, m, database, repo, "feature")
+
+	markErr := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		markErr <- markCIMonitorActiveErr(database, run)
+	}()
+
+	report := m.Drain(context.Background(), 300*time.Millisecond)
+
+	if err := <-markErr; err != nil {
+		t.Fatalf("mark run as a CI monitor mid-drain: %v", err)
+	}
+	if entry, ok := findInterrupted(report.Interrupted, run.ID); ok {
+		t.Fatalf("Interrupted holds %+v, want nothing: the stop preserves this monitor rather than cutting it", entry)
+	}
+	if containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want it to exclude the preserved CI monitor %s", report.Waited, run.ID)
 	}
 }
 
@@ -363,27 +449,6 @@ func TestDrain_ActiveCIStepWithoutPRURLIsNotCut(t *testing.T) {
 	}
 	if !containsRunID(report.Finished, run.ID) {
 		t.Fatalf("Finished = %v, want it to contain %s", report.Finished, run.ID)
-	}
-}
-
-// TestDrain_CutCIMonitorIsNotCountedAsFinished pins the operator-facing
-// count: a CI monitor exits promptly once the drain cancels it, but it exited
-// because the drain cut it, not because its work completed, so it belongs in
-// Interrupted alone. Counting it as finished contradicts the very next line
-// of the CLI's own output.
-func TestDrain_CutCIMonitorIsNotCountedAsFinished(t *testing.T) {
-	m, database, repo := newDrainTestManager(t)
-	run, _, done := registerFakeRun(t, m, database, repo, "feature")
-	markCIMonitorActive(t, database, run)
-	close(done)
-
-	report := m.Drain(context.Background(), 5*time.Second)
-
-	if containsRunID(report.Finished, run.ID) {
-		t.Fatalf("Finished = %v, want it to exclude the cut CI monitor %s", report.Finished, run.ID)
-	}
-	if _, ok := findInterrupted(report.Interrupted, run.ID); !ok {
-		t.Fatalf("Interrupted = %v, want an entry for %s", report.Interrupted, run.ID)
 	}
 }
 
@@ -933,23 +998,19 @@ func TestDrain_RunThatParksMidDrainIsReleased(t *testing.T) {
 	}
 }
 
-// TestDrain_RunThatReachesCIMidDrainIsCut is the other half of
+// TestDrain_RunThatReachesCIMidDrainIsExempted is the other half of
 // reclassification: a run that enters its CI monitor after the drain begins
-// would otherwise be waited on for a PR merge that can take 12 hours.
-func TestDrain_RunThatReachesCIMidDrainIsCut(t *testing.T) {
+// would otherwise be waited on for a PR merge that can take 12 hours, and the
+// stop now preserves it instead of cutting it.
+func TestDrain_RunThatReachesCIMidDrainIsExempted(t *testing.T) {
 	shortenDrainReclassify(t, 20*time.Millisecond)
 	m, database, repo := newDrainTestManager(t)
-	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	run, ctx, _ := registerFakeRun(t, m, database, repo, "feature")
+	// done is never closed: only the exemption can end this wait.
 	markErr := make(chan error, 1)
 	go func() {
 		time.Sleep(40 * time.Millisecond)
-		if err := markCIMonitorActiveErr(database, run); err != nil {
-			markErr <- err
-			return
-		}
-		markErr <- nil
-		<-ctx.Done()
-		close(done)
+		markErr <- markCIMonitorActiveErr(database, run)
 	}()
 
 	start := time.Now()
@@ -960,17 +1021,16 @@ func TestDrain_RunThatReachesCIMidDrainIsCut(t *testing.T) {
 		t.Fatalf("mark run as a CI monitor mid-drain: %v", err)
 	}
 	if elapsed >= 5*time.Second {
-		t.Fatalf("Drain took %v, want the CI monitor cut once it was reclassified", elapsed)
+		t.Fatalf("Drain took %v, want it released once the monitor was reclassified", elapsed)
 	}
-	if cause := context.Cause(ctx); cause == nil || cause.Error() != types.RunCIMonitorDrainedReason {
-		t.Fatalf("cancel cause = %v, want %q", context.Cause(ctx), types.RunCIMonitorDrainedReason)
+	if cause := context.Cause(ctx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil: Drain no longer cuts a CI monitor", cause)
 	}
-	entry, ok := findInterrupted(report.Interrupted, run.ID)
-	if !ok || entry.Reason != ipc.DrainInterruptedCIMonitor {
-		t.Fatalf("Interrupted = %v, want one %s entry for %s", report.Interrupted, ipc.DrainInterruptedCIMonitor, run.ID)
+	if len(report.Interrupted) != 0 {
+		t.Fatalf("Interrupted = %v, want empty", report.Interrupted)
 	}
-	if len(report.Interrupted) != 1 {
-		t.Fatalf("Interrupted = %v, want exactly one entry (reclassification must not report a run twice)", report.Interrupted)
+	if containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want it to exclude the preserved CI monitor %s", report.Waited, run.ID)
 	}
 }
 
