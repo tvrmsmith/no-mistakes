@@ -988,6 +988,36 @@ func TestRecoverStaleRunsExceptPreservesOnlyValidatedRuns(t *testing.T) {
 	}
 }
 
+// RecoverStaleRunsExcept passes an empty status to failActiveRuns so the
+// terminal status is derived from the reason by types.TerminalStatusForReason,
+// rather than pinned to failed at the call site. Every other test here hands it
+// a generic crash message, which derives to failed anyway, so a hardcoded
+// types.RunFailed would read identically. A cancellation reason is the only
+// input that tells the two apart.
+func TestRecoverStaleRunsExceptDerivesItsTerminalStatusFromTheReason(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/derive-project", "git@github.com:user/derive-project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := d.RecoverStaleRunsExcept(types.RunCancelReasonAbortedByUser, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("recovered count = %d, want 1", count)
+	}
+	got, _ := d.GetRun(run.ID)
+	if got.Status != types.RunCancelled {
+		t.Fatalf("run status = %q, want %q", got.Status, types.RunCancelled)
+	}
+	if got.Error == nil || *got.Error != types.RunCancelReasonAbortedByUser {
+		t.Fatalf("run error = %v, want %q", got.Error, types.RunCancelReasonAbortedByUser)
+	}
+}
+
 func TestRunSkippedStepsRoundTripAndDefaultEmpty(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/skip-project", "git@github.com:user/skip-project.git", "main")
