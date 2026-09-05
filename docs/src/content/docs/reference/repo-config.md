@@ -8,12 +8,12 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), `test.evidence.branch`, and `auto_fix.min_severity` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), `test.evidence.branch`, `auto_fix.min_severity`, and `restart.exempt_paths` only from that trusted copy.
 `pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
-Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch, with two exceptions: `test.evidence.branch`, which names a git ref the daemon pushes to, and `auto_fix.min_severity` — the retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise.
+Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch, with two exceptions: `test.evidence.branch`, which names a git ref the daemon pushes to, and `auto_fix.min_severity` — the retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise. `restart` is its own trusted-only block for the same reason: `restart.exempt_paths` is a gate strength, and widening it to `**` would let a pushed branch exempt every commit it makes from revalidation.
 
 If you genuinely want per-branch `commands` and `agent` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](#allow_repo_commands) in this same file on your default branch. This re-enables the previous behavior with eyes open. The switch is read only from the trusted default-branch copy, so a contributor cannot self-enable it from a pushed branch.
 
@@ -63,6 +63,14 @@ disable_project_settings: true
 # When unset, PRs target the repository's forge default branch.
 pr:
   base_branch: develop
+
+# Optional restart-exemption globs, read only from the trusted default branch.
+# Unset uses the built-in default; an explicit empty list means no commit is
+# exempt and every agent-authored commit restarts.
+restart:
+  exempt_paths:
+    - "docs/**"
+    - "*.md"
 
 auto_fix:
   rebase: 3
@@ -200,6 +208,28 @@ This list and a run's own `--skip` selection are additive: neither can re-enable
 
 This field is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`.
 It removes whole validation phases, so a pushed branch that could list `review` would review itself.
+
+### restart.exempt_paths
+
+Globs that decide which agent-authored commits skip re-entering pipeline validation.
+
+| | |
+| --- | --- |
+| Type | `list of string` |
+| Default | `["*.md", "docs/**", "*.txt", "LICENSE", "LICENSE.*", "COPYING", "NOTICE"]` |
+
+```yaml
+restart:
+  exempt_paths:
+    - "docs/**"
+    - "*.md"
+```
+
+When every path an agent-authored commit touches matches one of these globs, the pipeline skips re-entering validation for that commit instead of restarting from the validation boundary. A pattern matches the same way `ignore_patterns` and `review.path_instructions` do: no slash matches by basename, a trailing `/**` matches an entire subtree, and anything else is a full-path glob.
+
+Leaving this field unset uses the built-in default above. Setting it to an explicit empty list (`exempt_paths: []`) means no path is exempt, so every agent-authored commit restarts. The default deliberately carries no entry for `AGENTS.md` or `CLAUDE.md`. Those files steer the agents that run in later steps, so a commit touching one of them still restarts regardless of what this list says.
+
+This field is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`. It is a gate strength: widening it to `**` would exempt every commit from revalidation, so a pushed branch must not be able to set it.
 
 ### pr.base_branch
 
