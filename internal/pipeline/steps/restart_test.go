@@ -44,25 +44,31 @@ func validationSteps() []pipeline.Step {
 }
 
 // TestRunValidationStep_CommitAttributionMatrix crosses "an agent ran this
-// round" with the kind of path the commit touches. Attribution is the only
-// axis that decides a restart today: the documentation-glob exemption is issue
-// #6 and does not exist yet, so a docs-only agent commit restarts exactly like
-// a code one. The row that writes nothing pins the other half of attribution:
-// an agent that ran and changed nothing leaves no commit to restart on.
+// round" with the kind of path the commit touches. A tool-authored commit
+// never restarts. An agent-authored commit restarts unless every path it
+// touched is documentation matched by the default restart.exempt_paths list,
+// and AGENTS.md/CLAUDE.md are never exempt even under a *.md glob, since they
+// steer the agents that run in every later step. The row that writes nothing
+// pins the other half of attribution: an agent that ran and changed nothing
+// leaves no commit to restart on.
 func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name        string
 		agentRan    bool
-		dirtyPath   string
+		dirtyPaths  []string
 		wantRestart types.StepName
 		wantCommits int
 	}{
-		{name: "agent_docs", agentRan: true, dirtyPath: "README.md", wantRestart: pipeline.RestartBoundary, wantCommits: 1},
-		{name: "agent_code", agentRan: true, dirtyPath: "main.go", wantRestart: pipeline.RestartBoundary, wantCommits: 1},
-		{name: "tool_docs", agentRan: false, dirtyPath: "README.md", wantRestart: "", wantCommits: 1},
-		{name: "tool_code", agentRan: false, dirtyPath: "main.go", wantRestart: "", wantCommits: 1},
-		{name: "agent_no_write", agentRan: true, dirtyPath: "", wantRestart: "", wantCommits: 0},
+		{name: "agent_docs", agentRan: true, dirtyPaths: []string{"README.md"}, wantRestart: "", wantCommits: 1},
+		{name: "agent_docs_subtree", agentRan: true, dirtyPaths: []string{"docs/guide.md"}, wantRestart: "", wantCommits: 1},
+		{name: "agent_agent_instructions", agentRan: true, dirtyPaths: []string{"AGENTS.md"}, wantRestart: pipeline.RestartBoundary, wantCommits: 1},
+		{name: "agent_nested_agent_instructions", agentRan: true, dirtyPaths: []string{"docs/CLAUDE.md"}, wantRestart: pipeline.RestartBoundary, wantCommits: 1},
+		{name: "agent_docs_and_code", agentRan: true, dirtyPaths: []string{"README.md", "main.go"}, wantRestart: pipeline.RestartBoundary, wantCommits: 1},
+		{name: "agent_code", agentRan: true, dirtyPaths: []string{"main.go"}, wantRestart: pipeline.RestartBoundary, wantCommits: 1},
+		{name: "tool_docs", agentRan: false, dirtyPaths: []string{"README.md"}, wantRestart: "", wantCommits: 1},
+		{name: "tool_code", agentRan: false, dirtyPaths: []string{"main.go"}, wantRestart: "", wantCommits: 1},
+		{name: "agent_no_write", agentRan: true, dirtyPaths: nil, wantRestart: "", wantCommits: 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,11 +77,13 @@ func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 			gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 			write := func() {
-				if tc.dirtyPath == "" {
-					return
-				}
-				if err := os.WriteFile(filepath.Join(dir, tc.dirtyPath), []byte("changed\n"), 0o644); err != nil {
-					t.Fatal(err)
+				for _, dirtyPath := range tc.dirtyPaths {
+					if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(dirtyPath)), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, dirtyPath), []byte("changed\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 			ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
@@ -84,6 +92,7 @@ func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 			}}
 			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 			sctx.Shared = &pipeline.RunShared{}
+			sctx.Config.Restart.ExemptPaths = config.DefaultRestartExemptPaths
 			before := commitCount(t, dir)
 
 			outcome, err := runValidationStep(sctx, types.StepDocument, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
@@ -109,6 +118,161 @@ func TestRunValidationStep_CommitAttributionMatrix(t *testing.T) {
 				t.Fatalf("worktree = %q, want clean", status)
 			}
 		})
+	}
+}
+
+// TestRunValidationStep_ConfiguredExemptListReplacesTheDefault proves a
+// repository's own restart.exempt_paths, not the built-in default, decides the
+// exemption once one is configured.
+func TestRunValidationStep_ConfiguredExemptListReplacesTheDefault(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		dirtyPath   string
+		wantRestart types.StepName
+	}{
+		{name: "matches_configured_list", dirtyPath: "notes/a.txt", wantRestart: ""},
+		{name: "no_longer_matches_default", dirtyPath: "README.md", wantRestart: pipeline.RestartBoundary},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+			ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+				if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(tc.dirtyPath)), 0o755); err != nil {
+					return nil, err
+				}
+				if err := os.WriteFile(filepath.Join(dir, tc.dirtyPath), []byte("changed\n"), 0o644); err != nil {
+					return nil, err
+				}
+				return &agent.Result{Output: json.RawMessage(`{"summary":"edit"}`)}, nil
+			}}
+			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			sctx.Shared = &pipeline.RunShared{}
+			sctx.Config.Restart.ExemptPaths = []string{"notes/**"}
+
+			outcome, err := runValidationStep(sctx, types.StepDocument, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+				if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+					return nil, err
+				}
+				return &pipeline.StepOutcome{}, nil
+			})
+			if err != nil {
+				t.Fatalf("runValidationStep() error = %v", err)
+			}
+			if outcome.RestartFrom != tc.wantRestart {
+				t.Fatalf("RestartFrom = %q, want %q", outcome.RestartFrom, tc.wantRestart)
+			}
+		})
+	}
+}
+
+// TestRunValidationStep_EmptyExemptListRestartsOnEveryAgentCommit proves an
+// explicit empty restart.exempt_paths, distinct from an unset one, exempts
+// nothing.
+func TestRunValidationStep_EmptyExemptListRestartsOnEveryAgentCommit(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("changed\n"), 0o644); err != nil {
+			return nil, err
+		}
+		return &agent.Result{Output: json.RawMessage(`{"summary":"edit"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+	sctx.Config.Restart.ExemptPaths = []string{}
+
+	outcome, err := runValidationStep(sctx, types.StepDocument, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{}, nil
+	})
+	if err != nil {
+		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if outcome.RestartFrom != pipeline.RestartBoundary {
+		t.Fatalf("RestartFrom = %q, want %q", outcome.RestartFrom, pipeline.RestartBoundary)
+	}
+}
+
+// TestRunValidationStep_RenameOutOfSourceStillRestarts proves the exemption
+// reads both halves of a rename. --no-renames means a source file moved into
+// docs/ still shows its deleted origin, so the commit is not read as
+// docs-only even though the only surviving path looks like documentation.
+func TestRunValidationStep_RenameOutOfSourceStillRestarts(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "main.go")
+	gitCmd(t, dir, "commit", "-m", "add main.go")
+	headSHA = strings.TrimSpace(gitCmd(t, dir, "rev-parse", "HEAD"))
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+			return nil, err
+		}
+		gitCmd(t, dir, "mv", "main.go", "docs/main.go")
+		return &agent.Result{Output: json.RawMessage(`{"summary":"move it"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+	sctx.Config.Restart.ExemptPaths = config.DefaultRestartExemptPaths
+
+	outcome, err := runValidationStep(sctx, types.StepDocument, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{}, nil
+	})
+	if err != nil {
+		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if outcome.RestartFrom != pipeline.RestartBoundary {
+		t.Fatalf("RestartFrom = %q, want %q", outcome.RestartFrom, pipeline.RestartBoundary)
+	}
+}
+
+// TestRunValidationStep_ExemptCommitDoesNotArmTheChurnGuard proves an exempt
+// commit never records a LastRestartTree it did not restart on, so a later
+// genuine restart on that same tree is not misread as churn.
+func TestRunValidationStep_ExemptCommitDoesNotArmTheChurnGuard(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("changed\n"), 0o644); err != nil {
+			return nil, err
+		}
+		return &agent.Result{Output: json.RawMessage(`{"summary":"edit"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+	sctx.Config.Restart.ExemptPaths = config.DefaultRestartExemptPaths
+
+	outcome, err := runValidationStep(sctx, types.StepDocument, func(inner *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+		if _, err := inner.RunAgent(agent.RunOpts{CWD: dir}); err != nil {
+			return nil, err
+		}
+		return &pipeline.StepOutcome{}, nil
+	})
+	if err != nil {
+		t.Fatalf("runValidationStep() error = %v", err)
+	}
+	if outcome.RestartFrom != "" {
+		t.Fatalf("RestartFrom = %q, want empty for an exempt commit", outcome.RestartFrom)
+	}
+	if got := sctx.Shared.LastRestartTree(types.StepDocument); got != "" {
+		t.Fatalf("LastRestartTree(Document) = %q, want empty; an exempt commit must not arm the churn guard", got)
 	}
 }
 

@@ -236,6 +236,14 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 // again. A commit a deterministic tool produced - a formatter rewriting
 // whitespace - carries nothing new to judge and costs no revalidation.
 //
+// An agent-authored commit can still skip the restart when every path it
+// touched is documentation: restartExemptCommit matches the commit's changed
+// paths against sctx.Config.Restart.ExemptPaths, a trusted-only glob list, and
+// unconditionally excludes AGENTS.md and CLAUDE.md wherever they live, since
+// those steer the agents that run in every later step. The exemption is a
+// property of the commit rather than of the step that made it, which is why it
+// lives here and applies to every validation step alike.
+//
 // A round that records a review-approved head does not commit at its exit. The
 // step that certifies must not modify the tree it certifies, so it parks over
 // the leftovers instead (residueGateOutcome).
@@ -309,6 +317,17 @@ func runValidationStep(
 		// A step that already named its own restart boundary (CI) owns that
 		// decision; never overwrite it.
 		return outcome, nil
+	}
+
+	if headBefore != "" {
+		paths, err := commitPathsSinceHead(sctx.Ctx, sctx.WorkDir, headBefore)
+		if err != nil {
+			return nil, fmt.Errorf("list paths committed by %s: %w", name, err)
+		}
+		if restartExemptCommit(paths, sctx.Config.Restart.ExemptPaths) {
+			sctx.Log(fmt.Sprintf("%s committed only documentation (%s); skipping restart", name, describePaths(paths)))
+			return outcome, nil
+		}
 	}
 
 	tree, err := git.Run(sctx.Ctx, sctx.WorkDir, "rev-parse", "HEAD^{tree}")

@@ -346,7 +346,36 @@ type RepoConfig struct {
 	// registered pending or failing check. No inference from workflow files,
 	// prior history, branch names, or grace-period expiry.
 	NoCI bool `yaml:"no_ci"`
+	// Restart carries the exemption list that decides which agent-authored
+	// commits skip re-entering pipeline validation. Its ExemptPaths is a gate
+	// strength - widening it to "**" disables the restart rule entirely - so
+	// it is honored ONLY from the trusted default-branch copy of
+	// .no-mistakes.yaml (see EffectiveRepoConfig), regardless of
+	// allow_repo_commands: a contributor's pushed branch must not be able to
+	// exempt its own commits from revalidation.
+	Restart RestartRaw `yaml:"restart"`
 }
+
+// RestartRaw is the YAML representation of the restart block.
+type RestartRaw struct {
+	// ExemptPaths lists the globs a commit's every path must match for that
+	// commit to skip re-entering validation. nil means unset, so the built-in
+	// default applies; an explicit empty list means no path is exempt and
+	// every agent-authored commit restarts.
+	ExemptPaths []string `yaml:"exempt_paths"`
+}
+
+// Restart is the resolved restart configuration.
+type Restart struct {
+	ExemptPaths []string
+}
+
+// DefaultRestartExemptPaths is the built-in exemption list: a commit whose
+// every changed path matches one of these globs is documentation-shaped and
+// skips re-entering validation. It deliberately carries no entry for
+// AGENTS.md or CLAUDE.md - those steer agent behavior rather than being read
+// by humans, so a commit touching only them still restarts.
+var DefaultRestartExemptPaths = []string{"*.md", "docs/**", "*.txt", "LICENSE", "LICENSE.*", "COPYING", "NOTICE"}
 
 // DocumentRaw is the YAML representation of document-step settings.
 type DocumentRaw struct {
@@ -515,6 +544,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 		Review                 ReviewRaw        `yaml:"review"`
 		DisableProjectSettings bool             `yaml:"disable_project_settings"`
 		NoCI                   bool             `yaml:"no_ci"`
+		Restart                RestartRaw       `yaml:"restart"`
 	}
 	var raw repoConfigRaw
 	if err := value.Decode(&raw); err != nil {
@@ -536,6 +566,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.Review = raw.Review
 	c.DisableProjectSettings = raw.DisableProjectSettings
 	c.NoCI = raw.NoCI
+	c.Restart = raw.Restart
 	return nil
 }
 
@@ -681,6 +712,9 @@ type Config struct {
 	// (see the RepoConfig field). Use SkippedSteps to combine it with a run's
 	// own --skip selection.
 	SkipSteps []types.StepName
+	// Restart is the resolved, trusted-only restart-exemption configuration
+	// (see the RepoConfig field).
+	Restart Restart
 }
 
 // SkippedSteps returns every step a run skips: the repository's standing
@@ -2284,6 +2318,9 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateReviewRaw(cfg.Review); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	if err := validateRestartRaw(cfg.Restart); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	if err := validateTestRaw(cfg.Test); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
@@ -2406,6 +2443,25 @@ func validatePathInstructionGlob(pattern string) error {
 	return nil
 }
 
+// validateRestartRaw fails the config closed on a restart.exempt_paths entry
+// that is blank or that validatePathInstructionGlob would reject, using the
+// same glob rules as ignore_patterns and review.path_instructions. This
+// deliberately also runs on the PUSHED copy for the same reason
+// validateReviewRaw does: a branch carrying an invalid block must fail here,
+// before it merges, rather than brick the trusted-config read afterwards.
+func validateRestartRaw(restart RestartRaw) error {
+	for i, pattern := range restart.ExemptPaths {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed == "" {
+			return fmt.Errorf("restart.exempt_paths[%d] must not be blank", i)
+		}
+		if err := validatePathInstructionGlob(trimmed); err != nil {
+			return fmt.Errorf("restart.exempt_paths[%d] %q is not a valid glob: %w", i, pattern, err)
+		}
+	}
+	return nil
+}
+
 // EffectiveRepoConfig returns the repo config that should drive the pipeline
 // given a pushed-branch copy and the trusted default-branch copy.
 //
@@ -2423,7 +2479,11 @@ func validatePathInstructionGlob(pattern string) error {
 // project-instruction boundary. NoCI is trusted-only so a pushed branch cannot
 // self-declare no-CI and bypass its own checks, and CI (the transient-rerun
 // budget) is trusted-only because every rerun it authorizes is another
-// provider-side workflow run billed to the repository. These gate-control
+// provider-side workflow run billed to the repository. Restart
+// (restart.exempt_paths, which commit shapes skip re-entering pipeline
+// validation) is trusted-only for the same reason as auto_fix.min_severity: it
+// is a gate strength, and widening it to "**" would disable the restart rule
+// for a pushed branch's own commits. These gate-control
 // fields ignore allowRepoCommands. PR is the explicit exception: the
 // allowRepoCommands opt-in also permits a pushed PR target because it controls
 // where a maintainer-authorized PR lands, not code execution.
@@ -2497,6 +2557,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// allow_repo_commands, which widens command selection, not which gates
 		// exist. A pushed branch that could list `review` would review itself.
 		effective.SkipSteps = slices.Clone(trusted.SkipSteps)
+		// The whole restart block is trusted-only, exactly like the ci block
+		// above and for the same shape of reason: restart.exempt_paths is a
+		// gate strength, and widening it to "**" would disable the restart
+		// rule entirely. Replacing the block rather than the one field means a
+		// restart.* setting added later lands on the safe side by default.
+		effective.Restart = RestartRaw{ExemptPaths: slices.Clone(trusted.Restart.ExemptPaths)}
 		// pr.base_branch controls where the contributor's PR lands, so it is
 		// trusted-only unless the repository explicitly opts into pushed
 		// settings alongside commands and agent selection.
@@ -2512,6 +2578,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.Test.Evidence.Branch = nil
 		effective.AutoFix.MinSeverity = nil
 		effective.SkipSteps = nil
+		effective.Restart = RestartRaw{}
 		if !allowRepoCommands {
 			effective.PR = PRRaw{}
 		}
@@ -2983,6 +3050,21 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	// narrowing knob is global-only.
 	review.PathInstructions = resolvePathInstructions(repo.Review.PathInstructions)
 
+	// restart.exempt_paths: nil (unset) falls back to the built-in default,
+	// an explicit empty list (no path is exempt) is cloned through as-is. The
+	// package-level default is never handed to a caller directly, so mutating
+	// the resolved slice cannot corrupt it for the next repository.
+	restart := Restart{ExemptPaths: slices.Clone(DefaultRestartExemptPaths)}
+	if repo.Restart.ExemptPaths != nil {
+		// Trimmed here rather than at validation, which reads the config
+		// without rewriting it. An untrimmed " docs/** " passes the glob check
+		// and then matches nothing, so the exemption would silently never fire.
+		restart.ExemptPaths = make([]string, 0, len(repo.Restart.ExemptPaths))
+		for _, pattern := range repo.Restart.ExemptPaths {
+			restart.ExemptPaths = append(restart.ExemptPaths, strings.TrimSpace(pattern))
+		}
+	}
+
 	commit := Commit{FixMessage: DefaultFixMessageTemplate}
 	if global.Commit.FixMessage != nil {
 		commit.FixMessage = *global.Commit.FixMessage
@@ -3030,6 +3112,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		DisableProjectSettings: repo.DisableProjectSettings,
 		NoCI:                   repo.NoCI,
 		SkipSteps:              slices.Clone(repo.SkipSteps),
+		Restart:                restart,
 	}
 
 	if repo.Agent != "" {
