@@ -108,6 +108,21 @@ func (p *Paths) RunEvidenceDir(configured, runID string) string {
 	return filepath.Join(p.EvidenceRoot(configured), runID)
 }
 
+// CoverageDir is the default root for run test-coverage artifacts, keyed by
+// run ID underneath it.
+//
+// Unlike EvidenceDir, coverage takes no configurable root and no retention
+// policy: a profile is consumed by the run that produced it and by nothing
+// else, so there is no operator reason to relocate it and no reason to keep
+// it past the run. EnsureDirs deliberately leaves creation to the Test step,
+// so a machine that never runs a test command never grows the directory.
+func (p *Paths) CoverageDir() string { return filepath.Join(p.root, "coverage") }
+
+// RunCoverageDir is the coverage directory for a single run.
+func (p *Paths) RunCoverageDir(runID string) string {
+	return filepath.Join(p.CoverageDir(), runID)
+}
+
 func (p *Paths) ReposDir() string { return filepath.Join(p.root, "repos") }
 func (p *Paths) RepoDir(repoID string) string {
 	return filepath.Join(p.root, "repos", repoID+".git")

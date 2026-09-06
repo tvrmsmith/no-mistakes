@@ -396,6 +396,7 @@ func (m *RunManager) finishRunGoroutine(repoID, runID string, cfg *config.Config
 		// A preserved run resumes and still owns its evidence; only a run that
 		// is really finished gives its directory up.
 		m.cleanupRunEvidence(cfg, runID)
+		m.cleanupRunCoverage(runID)
 	}
 	m.mu.Lock()
 	delete(m.executors, runID)
@@ -861,6 +862,19 @@ func (m *RunManager) cleanupRunEvidence(cfg *config.Config, runID string) {
 		slog.Debug("run evidence kept", "run_id", runID, "reason", err)
 	}
 	reapEvidence(m.db, root, policy, time.Now())
+}
+
+// cleanupRunCoverage removes one finished run's whole coverage directory.
+//
+// Unlike evidence this is os.RemoveAll rather than the empty-directory-only
+// os.Remove: evidence is kept for the operator to read after the run, while a
+// coverage profile is consumed by the run that produced it and is dead the
+// moment the run ends, whatever it holds. Best effort, like its neighbour: a
+// failed cleanup logs at debug and never fails a finished run.
+func (m *RunManager) cleanupRunCoverage(runID string) {
+	if err := os.RemoveAll(m.paths.RunCoverageDir(runID)); err != nil {
+		slog.Debug("run coverage directory not fully removed", "run_id", runID, "reason", err)
+	}
 }
 
 // removeRunWorktree tears one run's worktree down: it sweeps whatever is still

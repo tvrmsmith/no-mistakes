@@ -287,6 +287,14 @@ type RepoConfig struct {
 	Agents         []types.AgentName `yaml:"-"`
 	Commands       Commands          `yaml:"commands"`
 	IgnorePatterns []string          `yaml:"ignore_patterns"`
+	// TrustedIgnorePatterns is the ignore_patterns list as the trusted
+	// default-branch copy declares it, carried beside the pushed-branch list
+	// rather than replacing it. IgnorePatterns stays contributor-writable
+	// because it only narrows what a run works on, but a gate that exempts a
+	// changed file from a check reads this copy instead, so a pushed branch
+	// cannot exempt its own file from the gate judging it. EffectiveRepoConfig
+	// is the only writer; it is never decoded from YAML.
+	TrustedIgnorePatterns []string `yaml:"-"`
 	// AllowRepoCommands opts in to honoring the code-executing selection
 	// fields (commands.{test,lint,format} and agent) from a contributor's
 	// pushed branch instead of the trusted default-branch copy. It is read
@@ -684,6 +692,10 @@ type Config struct {
 	Eval                  Eval
 	Commands              Commands
 	IgnorePatterns        []string
+	// TrustedIgnorePatterns is the default-branch copy of IgnorePatterns. Read
+	// it, not IgnorePatterns, when an ignore entry exempts a changed file from
+	// a gate rather than merely narrowing the run's scope.
+	TrustedIgnorePatterns []string
 	AutoFix               AutoFix
 	CI                    CI
 	Commit                Commit
@@ -2563,6 +2575,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// rule entirely. Replacing the block rather than the one field means a
 		// restart.* setting added later lands on the safe side by default.
 		effective.Restart = RestartRaw{ExemptPaths: slices.Clone(trusted.Restart.ExemptPaths)}
+		// ignore_patterns itself stays pushed-readable, since narrowing what a
+		// run works on is the contributor's call. The trusted copy is carried
+		// beside it for the gates that use an ignore entry to EXEMPT a changed
+		// file from a check, which a pushed branch must not be able to do to
+		// its own file, the same split review.path_instructions gets.
+		effective.TrustedIgnorePatterns = slices.Clone(trusted.IgnorePatterns)
 		// pr.base_branch controls where the contributor's PR lands, so it is
 		// trusted-only unless the repository explicitly opts into pushed
 		// settings alongside commands and agent selection.
@@ -2579,6 +2597,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.AutoFix.MinSeverity = nil
 		effective.SkipSteps = nil
 		effective.Restart = RestartRaw{}
+		effective.TrustedIgnorePatterns = nil
 		if !allowRepoCommands {
 			effective.PR = PRRaw{}
 		}
@@ -3093,20 +3112,21 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		SessionReuse:          global.SessionReuse,
 		// Eval is global-only by design (see GlobalConfig.Eval), so it is
 		// copied straight through with no repository override step.
-		Eval:           global.Eval,
-		SCM:            global.SCM,
-		Commands:       repo.Commands,
-		IgnorePatterns: repo.IgnorePatterns,
-		AutoFix:        af,
-		CI:             ci,
-		Commit:         commit,
-		Intent:         intent,
-		Test:           test,
-		Document:       Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
-		Review:         review,
-		SignCommits:    global.SignCommits,
-		PR:             PR{BaseBranch: strings.TrimSpace(repo.PR.BaseBranch)},
-		ForgeProfiles:  global.ForgeProfiles,
+		Eval:                  global.Eval,
+		SCM:                   global.SCM,
+		Commands:              repo.Commands,
+		IgnorePatterns:        repo.IgnorePatterns,
+		TrustedIgnorePatterns: repo.TrustedIgnorePatterns,
+		AutoFix:               af,
+		CI:                    ci,
+		Commit:                commit,
+		Intent:                intent,
+		Test:                  test,
+		Document:              Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
+		Review:                review,
+		SignCommits:           global.SignCommits,
+		PR:                    PR{BaseBranch: strings.TrimSpace(repo.PR.BaseBranch)},
+		ForgeProfiles:         global.ForgeProfiles,
 		// repo is the EffectiveRepoConfig result, so this value is already
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,

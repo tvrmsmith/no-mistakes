@@ -14,6 +14,7 @@ If the default branch cannot be fetched and resolved to a readable commit, or it
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
 Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch, with two exceptions: `test.evidence.branch`, which names a git ref the daemon pushes to, and `auto_fix.min_severity` — the retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise. `restart` is its own trusted-only block for the same reason: `restart.exempt_paths` is a gate strength, and widening it to `**` would let a pushed branch exempt every commit it makes from revalidation.
+`ignore_patterns` is read from both copies for different jobs: the pushed value filters review and documentation, and the trusted default-branch value is the only one that exempts a changed file from the Test step's coverage guard, so a pushed `ignore_patterns: ["**"]` cannot turn that guard off for its own change (see [`ignore_patterns`](#ignore_patterns)).
 
 If you genuinely want per-branch `commands` and `agent` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](#allow_repo_commands) in this same file on your default branch. This re-enables the previous behavior with eyes open. The switch is read only from the trusted default-branch copy, so a contributor cannot self-enable it from a pushed branch.
 
@@ -377,7 +378,9 @@ Do not rely on a configured command to leave a background server or watcher runn
 
 ### ignore_patterns
 
-Paths to exclude from review and documentation checks.
+Paths to exclude from review and documentation checks, and from the Test step's coverage guard.
+
+The two uses read different copies of this file. Review and documentation filtering reads the pushed branch's value, so you can silence a generated directory from the branch that adds it. The coverage guard's exemption, which is what excuses a changed file from needing a test that exercises it, reads the **trusted default-branch copy only**: exempting a file from the gate that judges it is maintainer authority, the same split [`review.path_instructions`](#reviewpath_instructions) takes. A pattern that exists only on the pushed branch therefore still has to be covered.
 
 | | |
 | --- | --- |
@@ -572,7 +575,7 @@ Each unit is a service, a directory of code with its own test command, or the re
 
 `command` runs verbatim via the platform shell, exactly like `commands.test`, and should cover the unit, integration, and service-isolation test tiers for that unit. End-to-end tests stay in CI; do not put them in a unit command.
 
-The command receives [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_CHANGED_FILES`](/no-mistakes/reference/environment/#no_mistakes_changed_files), and [`NO_MISTAKES_CHANGED_FILE_COUNT`](/no-mistakes/reference/environment/#no_mistakes_changed_file_count) so it can scope itself the same way discovery did; the environment reference owns their values and encoding limits. A `commands.test` command receives them too, since discovery treats it as one implicit `repository` unit.
+The command receives [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_CHANGED_FILES`](/no-mistakes/reference/environment/#no_mistakes_changed_files), and [`NO_MISTAKES_CHANGED_FILE_COUNT`](/no-mistakes/reference/environment/#no_mistakes_changed_file_count) so it can scope itself the same way discovery did; the environment reference owns their values and encoding limits. It also receives [`NO_MISTAKES_COVERAGE_DIR`](/no-mistakes/reference/environment/#no_mistakes_coverage_dir) and must write a coverage profile and a test report there, because the Test step refuses a green exit code that covers nothing. A `commands.test` command receives them too, since discovery treats it as one implicit `repository` unit.
 
 `command` runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so the whole `test.units` list is honored only from the trusted default-branch copy of this file unless the repository opts in via `allow_repo_commands: true` - see [`allow_repo_commands`](#allow_repo_commands). A contributor's pushed branch cannot inject shell by naming a new unit or repointing an existing one's command.
 

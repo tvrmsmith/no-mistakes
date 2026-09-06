@@ -555,3 +555,35 @@ func TestExecutor_ConfiguredSkippedStepDoesNotExecuteAndContinues(t *testing.T) 
 		}
 	}
 }
+
+// TestExecutor_ResolvesCoverageDirForSteps verifies the executor fills
+// StepContext.CoverageDir the same way it fills EvidenceDir: resolved once
+// from the app root, keyed by run ID, so the Test step that writes coverage
+// artifacts and the guard that reads them agree on one directory.
+func TestExecutor_ResolvesCoverageDirForSteps(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	var gotCoverageDir string
+	step := &adaptiveCallStep{
+		name: types.StepTest,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			gotCoverageDir = sctx.CoverageDir
+			return &StepOutcome{ExitCode: 0}, nil
+		},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	want := p.RunCoverageDir(run.ID)
+	if gotCoverageDir == "" {
+		t.Fatal("expected CoverageDir to be set, got empty string")
+	}
+	if gotCoverageDir != want {
+		t.Errorf("CoverageDir = %q, want %q", gotCoverageDir, want)
+	}
+}

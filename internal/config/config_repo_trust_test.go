@@ -854,3 +854,61 @@ func TestLoadRepoConfig_RestartExemptPathsRejectsBlankPattern(t *testing.T) {
 		t.Fatalf("error = %v, want it to name restart.exempt_paths", err)
 	}
 }
+
+// TestEffectiveRepoConfig_TrustedIgnorePatternsComeFromTheTrustedCopy proves
+// the split ignore_patterns gets. The list itself stays pushed-readable, since
+// narrowing what a run works on is the contributor's call, but the copy a gate
+// reads to EXEMPT a changed file from its own check has to come from the
+// default branch, or a contributor writes ignore_patterns: ["**"] on their
+// branch and switches off the guard judging it.
+func TestEffectiveRepoConfig_TrustedIgnorePatternsComeFromTheTrustedCopy(t *testing.T) {
+	pushed := &RepoConfig{IgnorePatterns: []string{"services/**"}}
+	trusted := &RepoConfig{IgnorePatterns: []string{"docs/**"}}
+
+	got := EffectiveRepoConfig(pushed, trusted, false)
+	if len(got.IgnorePatterns) != 1 || got.IgnorePatterns[0] != "services/**" {
+		t.Fatalf("ignore_patterns = %v, want the pushed copy", got.IgnorePatterns)
+	}
+	if len(got.TrustedIgnorePatterns) != 1 || got.TrustedIgnorePatterns[0] != "docs/**" {
+		t.Fatalf("trusted ignore_patterns = %v, want the trusted copy's list", got.TrustedIgnorePatterns)
+	}
+
+	// Present only on the pushed branch: the exempting copy stays empty.
+	got = EffectiveRepoConfig(pushed, &RepoConfig{}, false)
+	if len(got.TrustedIgnorePatterns) != 0 {
+		t.Fatalf("trusted ignore_patterns = %v, want none for a pushed-only value", got.TrustedIgnorePatterns)
+	}
+
+	// No trusted copy at all, and under the commands opt-in, which widens
+	// command selection and not which files a gate may skip.
+	if got = EffectiveRepoConfig(pushed, nil, false); len(got.TrustedIgnorePatterns) != 0 {
+		t.Fatalf("trusted ignore_patterns = %v, want none without a trusted copy", got.TrustedIgnorePatterns)
+	}
+	if got = EffectiveRepoConfig(pushed, nil, true); len(got.TrustedIgnorePatterns) != 0 {
+		t.Fatalf("trusted ignore_patterns = %v, want none under allow_repo_commands", got.TrustedIgnorePatterns)
+	}
+
+	// The trusted list is cloned, so a later write through the effective config
+	// cannot reach back into the trusted copy every other run reads.
+	got = EffectiveRepoConfig(pushed, trusted, false)
+	got.TrustedIgnorePatterns[0] = "**"
+	if trusted.IgnorePatterns[0] != "docs/**" {
+		t.Fatalf("the trusted copy was aliased, now %v", trusted.IgnorePatterns)
+	}
+}
+
+// TestMerge_TrustedIgnorePatternsReachTheResolvedConfig closes the gap between
+// the split above and the steps that read it: a value that stops at RepoConfig
+// never reaches a step.
+func TestMerge_TrustedIgnorePatternsReachTheResolvedConfig(t *testing.T) {
+	repo := &RepoConfig{IgnorePatterns: []string{"vendor/**"}, TrustedIgnorePatterns: []string{"docs/**"}}
+
+	cfg := Merge(&GlobalConfig{}, repo)
+
+	if len(cfg.TrustedIgnorePatterns) != 1 || cfg.TrustedIgnorePatterns[0] != "docs/**" {
+		t.Fatalf("resolved TrustedIgnorePatterns = %v, want [docs/**]", cfg.TrustedIgnorePatterns)
+	}
+	if len(cfg.IgnorePatterns) != 1 || cfg.IgnorePatterns[0] != "vendor/**" {
+		t.Fatalf("resolved IgnorePatterns = %v, want [vendor/**]", cfg.IgnorePatterns)
+	}
+}

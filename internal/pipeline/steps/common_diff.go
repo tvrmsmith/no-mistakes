@@ -10,13 +10,53 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/git"
 )
 
+// testFileEvidence is how a path's own name marks it as test code. The two
+// grades are not interchangeable: a marker says the file is a test but says
+// nothing about the language it is written in (tsconfig.spec.json and
+// docs/load-test.md both carry one), while a language convention is defined by
+// a specific test runner and so is evidence about the language too.
+type testFileEvidence int
+
+const (
+	notTestFile testFileEvidence = iota
+	testFileByMarker
+	testFileByLanguageConvention
+)
+
+// testFileMarkers are the language-neutral base-name conventions repositories
+// use to mark a file as test code.
+var testFileMarkers = []string{"_test.", ".test.", "_spec.", ".spec.", "-test.", "-spec."}
+
+// classifyTestFileName is the single owner of "is this file test code, and on
+// what evidence". Callers that only need the yes-or-no answer use isTestFile.
+//
+// There is deliberately no bare "test_" or "test-" prefix rule: this
+// repository's own test_discovery.go and test_execution.go carry it and are
+// ordinary source, and treating them as tests exempted them from the
+// vacuous-green guard entirely.
+func classifyTestFileName(path string) testFileEvidence {
+	base := filepath.Base(filepath.FromSlash(strings.ReplaceAll(path, "\\", "/")))
+	if base == "" || base == "." {
+		return notTestFile
+	}
+	if isTestFileByLanguageConvention(base) {
+		return testFileByLanguageConvention
+	}
+	lower := strings.ToLower(base)
+	for _, marker := range testFileMarkers {
+		if strings.Contains(lower, marker) {
+			return testFileByMarker
+		}
+	}
+	return notTestFile
+}
+
 // isTestFile returns true if the file path matches common test file naming patterns.
 func isTestFile(path string) bool {
-	base := filepath.Base(path)
-	if base == "" {
-		return false
-	}
+	return classifyTestFileName(path) != notTestFile
+}
 
+func isTestFileByLanguageConvention(base string) bool {
 	// Go: *_test.go
 	if strings.HasSuffix(base, "_test.go") {
 		return true
@@ -32,8 +72,10 @@ func isTestFile(path string) bool {
 			return true
 		}
 	}
-	// Ruby: test_*.rb
-	if strings.HasSuffix(base, ".rb") && strings.HasPrefix(filepath.Base(path), "test_") {
+	// Ruby: minitest's test_*.rb and rspec's *_spec.rb, which is the dominant
+	// one. Without it a Ruby repository credits no extension as source, and
+	// the wrong-project park is dead for the whole stack.
+	if strings.HasSuffix(base, ".rb") && (strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_spec.rb")) {
 		return true
 	}
 	// Java: *Test.java or *Tests.java
@@ -43,6 +85,19 @@ func isTestFile(path string) bool {
 	// JS/TS: *.test.{js,ts,jsx,tsx} or *.spec.{js,ts,jsx,tsx}
 	for _, ext := range []string{".js", ".ts", ".jsx", ".tsx"} {
 		if strings.HasSuffix(base, ".test"+ext) || strings.HasSuffix(base, ".spec"+ext) {
+			return true
+		}
+	}
+	// C#, Kotlin, Swift, PHP: *Test.<ext> or *Tests.<ext>, the PascalCase
+	// spelling each language's runner discovers by default.
+	for _, ext := range []string{".cs", ".kt", ".swift", ".php"} {
+		if strings.HasSuffix(base, "Test"+ext) || strings.HasSuffix(base, "Tests"+ext) {
+			return true
+		}
+	}
+	// C++ and Elixir: *_test.<ext>, plus googletest's *_unittest spelling.
+	for _, ext := range []string{".cc", ".cpp", ".cxx", ".exs"} {
+		if strings.HasSuffix(base, "_test"+ext) || strings.HasSuffix(base, "_unittest"+ext) {
 			return true
 		}
 	}

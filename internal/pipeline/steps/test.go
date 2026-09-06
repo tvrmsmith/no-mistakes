@@ -2,10 +2,13 @@ package steps
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +27,42 @@ func (s *TestStep) Name() types.StepName { return types.StepTest }
 
 func (s *TestStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+// vacuousGreenFindingID marks the finding parkVacuousGreen raises so the fix
+// round can tell "the units proved nothing" from "a test failed" and ask for
+// the right repair. Finding.ID survives into the next round's
+// PreviousFindings, while the description is agent-facing prose that will be
+// reworded.
+const vacuousGreenFindingID = "vacuous-green"
+
+const (
+	testFixTask = `Fix the failing tests in this repository. Reproduce the specific failure, identify the root cause, and fix either the tests or the code so that failure passes.`
+
+	testFixReproduceRule = `- Reproduce the specific failing case first (the exact test, package, script, or check named in the findings), then re-run only that focused verification after the fix.`
+
+	vacuousGreenFixTask = `Write the missing test for this change. The test commands already exited zero and proved nothing: either no test executed at all, or no executed test reached the code this change touched. There is no failing case to reproduce, so add coverage rather than looking for a broken test.`
+
+	vacuousGreenFixWriteRule = `- Write a new test (or extend an existing one) that executes the changed code and would fail if that code were wrong, then run only that new test to confirm it passes.`
+)
+
+// previousFindingsIncludeVacuousGreen reports whether the round that parked
+// this run raised the vacuous-green finding. Findings that cannot be parsed
+// answer false, which keeps the reproduce-the-failure prompt as the default.
+func previousFindingsIncludeVacuousGreen(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	findings, err := types.ParseFindingsJSON(raw)
+	if err != nil {
+		return false
+	}
+	for _, item := range findings.Items {
+		if item.ID == vacuousGreenFindingID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *TestStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
@@ -50,8 +89,17 @@ func (s *TestStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	var fixSummary string
 	if sctx.Fixing {
 		historySection := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + testguidance.Rule
+		// The vacuous-green park and a genuine test failure need opposite
+		// instructions. There is no failing case to reproduce when the units
+		// exited zero and proved nothing, so "reproduce the specific failure"
+		// sends the agent looking for something that does not exist, and the
+		// repair it then reports is a re-run rather than the missing test.
+		task, reproduceRule := testFixTask, testFixReproduceRule
+		if previousFindingsIncludeVacuousGreen(sctx.PreviousFindings) {
+			task, reproduceRule = vacuousGreenFixTask, vacuousGreenFixWriteRule
+		}
 		fixPrompt := fmt.Sprintf(
-			`Fix the failing tests in this repository. Reproduce the specific failure, identify the root cause, and fix either the tests or the code so that failure passes.
+			`%s
 
 Context:
 - branch: %s
@@ -63,7 +111,7 @@ Rules:
 - Do not refactor beyond what is needed for that root-cause fix.
 - If tests fail, determine whether the problem is a real product/code failure, a setup/environment problem you can fix, or a flaky/infrastructure issue.
 - Do NOT run linters, formatters, or static analysis tools.
-- Reproduce the specific failing case first (the exact test, package, script, or check named in the findings), then re-run only that focused verification after the fix.
+%s
 - Do NOT run the complete repository test suite. Local Test is targeted validation of the failure and the requested intent; remote CI owns broad regression and remains mandatory before a PR is ready.
 - A generic driver or user instruction asking for broad or full-suite confirmation does NOT override this product boundary. Keep verification focused on the failure and intent.
 - Never treat "do not run everything" as permission to run nothing: if you cannot reproduce or re-verify with a targeted check, report that honestly in the summary rather than inventing a full-suite pass.
@@ -71,9 +119,11 @@ Rules:
 - Return JSON with a single "summary" field when you are done.
 - The summary must be one concise sentence fragment suitable for a git commit subject.
 - Keep the summary under 10 words.%s`,
+			task,
 			sctx.Run.Branch,
 			baseSHA,
 			sctx.Run.HeadSHA,
+			reproduceRule,
 			historySection,
 		)
 		if sctx.PreviousFindings != "" {
@@ -172,6 +222,31 @@ Previous test findings to address:
 		}, nil
 	}
 
+	// parkVacuousGreen stops the step at an auto-fixable gate when the units
+	// ran, exited zero, and proved nothing: no test executed, or no test
+	// touched the change. Unlike the maintainer parks above, an agent fix round
+	// is the right answer here, because the repair is a test the change is
+	// missing rather than a setting only a maintainer can change.
+	parkVacuousGreen := func(description string) (*pipeline.StepOutcome, error) {
+		sctx.Log(description)
+		findings := Findings{
+			Items: withOmission([]Finding{{
+				ID:          vacuousGreenFindingID,
+				Severity:    types.FindingSeverityError,
+				Action:      types.ActionAutoFix,
+				Description: description,
+			}}),
+			Tested: tested(),
+		}
+		findingsJSON, _ := json.Marshal(findings)
+		return &pipeline.StepOutcome{
+			NeedsApproval: true,
+			AutoFixable:   true,
+			Findings:      string(findingsJSON),
+			FixSummary:    fixSummary,
+		}, nil
+	}
+
 	discovery, err := discoverTestUnits(sctx, baseSHA, changed)
 	if err != nil {
 		// A discovery failure parks rather than returning a Go error: a
@@ -224,10 +299,25 @@ Previous test findings to address:
 			return nil, nil
 		}
 		ran[unit.Name] = true
+		unitDir, dirErr := testUnitCoverageDir(sctx, unit.Name)
+		if dirErr != nil {
+			return nil, dirErr
+		}
+		// A profile an earlier attempt of this same run left behind would
+		// certify an attempt that wrote nothing, which is exactly the vacuous
+		// green the guard exists to catch, so the directory starts empty every
+		// time rather than being merged into.
+		if err := os.RemoveAll(unitDir); err != nil {
+			return nil, fmt.Errorf("clear test coverage dir: %w", err)
+		}
+		if err := os.MkdirAll(unitDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create test coverage dir: %w", err)
+		}
 		env := []string{
 			envTestBaseSHA + "=" + baseSHA,
 			envTestChangedFiles + "=" + changedFilesEnv,
 			envTestChangedFileCount + "=" + strconv.Itoa(len(changed)),
+			envTestCoverageDir + "=" + unitDir,
 		}
 		output, exitCode, runErr := runStepShellCommandEnv(sctx, unit.Command, env)
 		if runErr != nil {
@@ -297,6 +387,21 @@ Previous test findings to address:
 			if outcome, runErr := runUnit(unit); outcome != nil || runErr != nil {
 				return outcome, runErr
 			}
+		}
+	}
+
+	// The vacuous-green guard. It sits after the selected-unit loop and after
+	// the under-selection expansion, so it judges every command this attempt
+	// ran, and before the evidence pass, because there is no point spending an
+	// agent turn gathering intent evidence for a run that already failed this
+	// gate.
+	//
+	// It is skipped entirely when no unit command ran, which is the
+	// agent-evidence path: no command there could have exercised anything and
+	// no artifact exists to read a verdict out of.
+	if len(covered) > 0 {
+		if outcome, guardErr := guardVacuousGreen(sctx, covered, changed, baseSHA, parkForMaintainer, parkVacuousGreen); outcome != nil || guardErr != nil {
+			return outcome, guardErr
 		}
 	}
 
@@ -510,6 +615,279 @@ Previous test findings to address:
 		Findings:      string(findingsJSON),
 		FixSummary:    fixSummary,
 	}, nil
+}
+
+// testStepPark is one of the Test step's two gate shapes, closed over the
+// attempt's own findings and fix summary so the guard below can raise either
+// without rebuilding them.
+type testStepPark func(description string) (*pipeline.StepOutcome, error)
+
+// testUnitCoverageDir is where one unit's command writes its coverage profile
+// and test report. Every unit gets its own directory under the run's coverage
+// directory, because a shared one would let a unit that wrote nothing be
+// greened by the profile a different unit left there.
+//
+// The segment is the sanitized unit name, and when sanitizing changed the name
+// or left something that is not a usable single path element it also carries a
+// dash plus the first 8 hex characters of the name's sha256. Two distinct unit
+// names can sanitize to one segment ("api/v1" and "api v1" both become
+// "api-v1"), and sharing a directory between them is the same cross-unit leak.
+// The suffix is conditional so the ordinary name stays readable in a log line
+// and a gate finding, and only the colliding case pays for the distinction.
+//
+// The caller wipes the returned directory before the unit's command runs, so a
+// name that resolves anywhere but strictly inside the run's coverage directory
+// ("." is the run's own root, ".." is the root every run shares) is refused
+// rather than sanitized into something plausible. Unit names are not fully
+// maintainer-controlled: an agent-inferred layout names its own units.
+func testUnitCoverageDir(sctx *pipeline.StepContext, unitName string) (string, error) {
+	root := runCoverageDir(sctx)
+	if root == "" {
+		return "", fmt.Errorf("test coverage dir is not configured for this run")
+	}
+	segment := sanitizeEvidenceSegment(unitName)
+	if segment != unitName || !isSingleSafePathSegment(segment) {
+		sum := sha256.Sum256([]byte(unitName))
+		suffix := hex.EncodeToString(sum[:])[:8]
+		if isSingleSafePathSegment(segment) {
+			segment += "-" + suffix
+		} else {
+			segment = "unit-" + suffix
+		}
+	}
+	dir := filepath.Join(root, segment)
+	if filepath.Dir(dir) != filepath.Clean(root) {
+		return "", fmt.Errorf("test unit %q resolves to a coverage directory outside %s", unitName, root)
+	}
+	return dir, nil
+}
+
+// isSingleSafePathSegment reports whether s can be joined onto a directory as
+// exactly one child of it. Empty, "." and ".." each resolve to a directory the
+// unit does not own, and a separator would nest or escape.
+func isSingleSafePathSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	if strings.ContainsAny(s, `/\`) {
+		return false
+	}
+	return !filepath.IsAbs(s)
+}
+
+// guardVacuousGreen decides whether the unit commands that just exited zero
+// actually exercised the change. A command that runs no test exits zero, so
+// does one whose every test was filtered out, and so does a suite that tests
+// only code the change never touched; the exit code cannot tell any of those
+// from a real pass.
+//
+// It returns a nil outcome and a nil error when the attempt clears the gate.
+// A Go error is a filesystem fault reading the artifacts, never a verdict.
+func guardVacuousGreen(
+	sctx *pipeline.StepContext,
+	covered []config.TestUnit,
+	changed []string,
+	baseSHA string,
+	parkForMaintainer testStepPark,
+	parkVacuousGreen testStepPark,
+) (*pipeline.StepOutcome, error) {
+	var merged coverageProfile
+	// Kept beside the merged profile because the changed-function check reads
+	// each unit's reporting convention on its own; see
+	// coveredChangedFunctionsAcrossUnits.
+	var unitProfiles []coverageProfile
+	seenFiles := map[string]bool{}
+	// Carried to every verdict below, including the auto-fixable ones: an agent
+	// asked to write a missing test needs to see that a profile was skipped or
+	// unparseable, because that may be the whole reason its coverage looks
+	// absent.
+	var artifactNotes []string
+	// A unit that skipped an artifact, or whose directory held more artifacts
+	// than the reader was willing to open, reported less than it measured, so
+	// the two vacuity verdicts below stop being evidence about the tests: the
+	// missing coverage may be sitting in the file the reader could not use or
+	// never reached. That is a command to repair, never an agent fix round, so
+	// the verdict routes to the maintainer instead.
+	artifactUnread := false
+	vacuityPark := func(description string) (*pipeline.StepOutcome, error) {
+		if artifactUnread {
+			return parkForMaintainer(description)
+		}
+		return parkVacuousGreen(description)
+	}
+
+	for _, unit := range covered {
+		unitDir, err := testUnitCoverageDir(sctx, unit.Name)
+		if err != nil {
+			return nil, err
+		}
+		artifacts, err := readCoverageArtifacts(unitDir)
+		if err != nil {
+			return nil, fmt.Errorf("read coverage artifacts for test unit %q: %w", unit.Name, err)
+		}
+
+		// The maintainer parks below are all configuration problems: the
+		// command does not emit the artifacts, or emits them in a shape the
+		// guard cannot read. An agent fix round would paper over that by
+		// changing the tests instead of the command that reports on them.
+		//
+		// What the guard needs is judged first, and an artifact it had to skip
+		// or could not parse is carried as context on that verdict. A skipped
+		// artifact alone is not a park: a runner that writes a giant log or a
+		// large sibling directory beside a perfectly good profile has broken
+		// nothing the guard reads.
+		notes := unreadableArtifactNotes(artifacts)
+		if notes != "" {
+			artifactNotes = append(artifactNotes, fmt.Sprintf("test unit %q%s", unit.Name, notes))
+		}
+		if len(artifacts.Skipped) > 0 || artifacts.ScanLimited {
+			artifactUnread = true
+		}
+		switch {
+		case !artifacts.HasProfile:
+			return parkForMaintainer(fmt.Sprintf("test unit %q wrote no coverage profile to %s; a test run that exercised nothing cannot report a passing gate%s", unit.Name, unitDir, notes))
+		case !artifacts.HasReport:
+			return parkForMaintainer(fmt.Sprintf("test unit %q wrote no test report to %s; without a reported test count a passing exit code proves nothing ran%s", unit.Name, unitDir, notes))
+		case len(artifacts.Unparseable) > 0:
+			return parkForMaintainer(fmt.Sprintf("test unit %q wrote a coverage artifact that could not be parsed: %s", unit.Name, strings.Join(artifacts.Unparseable, ", ")))
+		}
+
+		if artifacts.Report.Executed <= 0 {
+			return vacuityPark(fmt.Sprintf("test unit %q reported %d executed tests; a command that runs no test cannot report a passing gate%s", unit.Name, artifacts.Report.Executed, notes))
+		}
+
+		unitProfiles = append(unitProfiles, artifacts.Profile)
+		merged.Functions = append(merged.Functions, artifacts.Profile.Functions...)
+		for _, file := range artifacts.Profile.Files {
+			if seenFiles[file] {
+				continue
+			}
+			seenFiles[file] = true
+			merged.Files = append(merged.Files, file)
+		}
+	}
+
+	// A profile that parses but names no source file describes nothing, so it
+	// certifies nothing: the extension exemption below would read it as "this
+	// change touches nothing a profile could describe" and green a run whose
+	// instrumenter matched no source at all. That is a reporting problem of the
+	// same class as a missing profile, so it goes to the maintainer.
+	mergedNotes := ""
+	if len(artifactNotes) > 0 {
+		mergedNotes = " (" + strings.Join(artifactNotes, "; ") + ")"
+	}
+
+	if len(merged.Files) == 0 {
+		return parkForMaintainer(fmt.Sprintf(
+			"the coverage profiles the units that ran (%s) wrote name no source file; a profile describing nothing cannot certify the change%s",
+			strings.Join(testUnitNames(covered), ", "),
+			mergedNotes,
+		))
+	}
+
+	// The changed-function check reads every unit's profile, because a change
+	// can span two units and either one's tests may be the ones that exercise
+	// it, but it reads them one unit at a time so no unit's reporting
+	// convention decides how another's paths are matched.
+	//
+	// The diff is read before the files are classified, because a file the
+	// change only deleted lines from carries nothing to exercise and so is not
+	// a file coverage can be demanded for.
+	//
+	// A maintainer's ignore_patterns entry excuses the file it names from
+	// needing a covered function, so the entry is read from the TRUSTED
+	// default-branch copy, never the pushed one. Exempting a changed file from
+	// the gate that judges it is the same authority review.path_instructions
+	// splits on: a contributor who could add `ignore_patterns: ["**"]` to their
+	// own branch would turn the guard off for the change it exists to check.
+	guarded := reviewablePaths(changed, sctx.Config.TrustedIgnorePatterns)
+	if len(guarded) == 0 {
+		sctx.Log("every changed file matches a trusted ignore_patterns entry, so no covered function is required")
+		return nil, nil
+	}
+	ranges, err := changedLineRanges(sctx.Ctx, sctx.WorkDir, baseSHA, sctx.Run.HeadSHA, sctx.Fixing, guarded)
+	if err != nil {
+		return nil, err
+	}
+	// One path set drives both halves of the verdict. changedLineRanges parses
+	// the whole diff, so its map still carries the paths the ignore filter just
+	// excluded; handing the unfiltered map to the coverage check let an
+	// executed function in an ignored file certify an uncovered guarded one,
+	// and let an ignored or deletion-only path collide with a guarded path over
+	// one short profile key and park a change that really was tested.
+	guardedPaths := changedWithHeadSideLines(ranges, guarded)
+	guardedRanges := rangesForPaths(ranges, guardedPaths)
+	classified, err := classifyChangedFiles(sctx.Ctx, sctx.WorkDir, merged, guardedPaths)
+	if err != nil {
+		return nil, err
+	}
+	if len(classified.Coverable) == 0 {
+		// A change carrying source files no profile could describe means the
+		// commands that ran cover a different project than the change. That is a
+		// configuration problem, and greening it is exactly what issue 9 refuses.
+		if len(classified.Unexplained) > 0 {
+			return parkForMaintainer(fmt.Sprintf(
+				"the coverage profiles the units that ran (%s) wrote describe none of the source files this change touches (%s); a command pointed at other code cannot certify it%s",
+				strings.Join(testUnitNames(covered), ", "),
+				summarizePaths(classified.Unexplained, 5),
+				mergedNotes,
+			))
+		}
+		// A documentation or configuration change touches nothing a coverage
+		// profile could ever describe. Demanding a covered function there would
+		// park every README edit.
+		sctx.Log("no changed file has an extension the coverage profiles describe, so no covered function is required")
+		return nil, nil
+	}
+
+	if len(coveredChangedFunctionsAcrossUnits(unitProfiles, sctx.WorkDir, guardedRanges)) == 0 {
+		return vacuityPark(fmt.Sprintf(
+			"no test exercised a changed function; the units that ran (%s) recorded no executed function in the changed lines of %s%s",
+			strings.Join(testUnitNames(covered), ", "),
+			summarizePaths(classified.Coverable, 5),
+			mergedNotes,
+		))
+	}
+	return nil, nil
+}
+
+// unreadableArtifactNotes renders what the reader could not use as a
+// parenthesised suffix on another park's description, so a maintainer reading
+// "wrote no coverage profile" also sees the oversized or unparseable file that
+// may be why.
+func unreadableArtifactNotes(artifacts coverageArtifacts) string {
+	var notes []string
+	if len(artifacts.Unparseable) > 0 {
+		notes = append(notes, "artifacts that could not be parsed: "+strings.Join(artifacts.Unparseable, ", "))
+	}
+	if len(artifacts.Skipped) > 0 {
+		notes = append(notes, "artifacts the guard could not read: "+strings.Join(artifacts.Skipped, ", "))
+	}
+	if artifacts.ScanLimited {
+		notes = append(notes, fmt.Sprintf("stopped reading after %d coverage artifacts or %d files", maxCoverageFilesScanned, maxCoverageEntriesVisited))
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(notes, "; ") + ")"
+}
+
+func testUnitNames(units []config.TestUnit) []string {
+	names := make([]string, len(units))
+	for i, unit := range units {
+		names[i] = unit.Name
+	}
+	return names
+}
+
+// summarizePaths renders at most limit paths and appends a count for the rest,
+// so a gate finding names the files a maintainer should look at without
+// pasting a large diff's whole file list into the PR body.
+func summarizePaths(paths []string, limit int) string {
+	if len(paths) <= limit {
+		return strings.Join(paths, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(paths[:limit], ", "), len(paths)-limit)
 }
 
 func testAgentContext(sctx *pipeline.StepContext) (context.Context, context.CancelFunc, time.Duration) {

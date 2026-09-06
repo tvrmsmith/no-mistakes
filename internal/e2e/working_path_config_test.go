@@ -104,7 +104,8 @@ func TestWorkingPathRepoConfigReplacesDefaultBranchCopy(t *testing.T) {
 
 	// Uncommitted, so only the working-path read can see it. It states a test
 	// command and no lint command at all.
-	writeRepoConfig(t, h.WorkDir, fmt.Sprintf("commands:\n  test: \"echo local > %s\"\n", workingPathMarker))
+	h.WriteTestCommand("nm-wp-replace-test-e2e", fmt.Sprintf("echo local > %s", workingPathMarker))
+	writeRepoConfig(t, h.WorkDir, "commands:\n  test: nm-wp-replace-test-e2e\n")
 
 	h.PushToGate("wp-replace")
 	run := h.WaitForRun("wp-replace", 90*time.Second)

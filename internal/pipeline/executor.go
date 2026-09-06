@@ -170,6 +170,18 @@ func (e *Executor) runEvidenceDir(runID string) string {
 	return e.paths.RunEvidenceDir(configured, runID)
 }
 
+// runCoverageDir resolves where this run's test-coverage artifacts are
+// written, the same way runEvidenceDir resolves evidence: once, from the app
+// root, so the Test step that writes coverage and the guard that reads it
+// name the same directory. Coverage takes no configured root, unlike
+// evidence, because nothing outside the run ever needs to find it.
+func (e *Executor) runCoverageDir(runID string) string {
+	if e.paths == nil {
+		return ""
+	}
+	return e.paths.RunCoverageDir(runID)
+}
+
 // SetGateReconcileTimings overrides the interval between approval-gate
 // reconciliation checks and the deadline for each check. It is primarily used
 // by deterministic tests and specialized embeddings; non-positive values keep
@@ -1104,6 +1116,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		Sessions:         e.sessions,
 		Shared:           e.shared,
 		EvidenceDir:      e.runEvidenceDir(run.ID),
+		CoverageDir:      e.runCoverageDir(run.ID),
 		Fixing:           state.fixing,
 		PreviousFindings: state.previousFindings,
 		Log:              writeLog,

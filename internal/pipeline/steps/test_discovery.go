@@ -364,7 +364,8 @@ Rules for the command you report:
 - Each command must scope itself to the changed files under its unit. Local Test is targeted validation of this change; remote CI owns broad regression.
 - A command must NOT be the complete repository test suite, even when the unit is the repository itself. Name the specific test targets, directories, packages, or selectors the changed files reach.
 - The command runs with NO_MISTAKES_BASE_SHA set to the base commit and NO_MISTAKES_CHANGED_FILES set to the newline-separated changed paths, with NO_MISTAKES_CHANGED_FILE_COUNT carrying the true total. Read those variables in the command when that is how a unit's runner takes a target list.
-- A command that walks the whole repository is wrong even if it passes, because it spends the run's budget on work remote CI repeats.`,
+- A command that walks the whole repository is wrong even if it passes, because it spends the run's budget on work remote CI repeats.
+- The command also runs with NO_MISTAKES_COVERAGE_DIR set to a directory OUTSIDE the worktree. It must write a coverage profile (LCOV or Cobertura XML) and a test report (JUnit XML or Visual Studio TRX) into that directory, and must never write coverage output into the worktree. A command that reports neither cannot prove it exercised anything, so the run will park instead of reporting a pass.`,
 			sctx.Run.Branch,
 			baseSHA,
 			sctx.Run.HeadSHA,

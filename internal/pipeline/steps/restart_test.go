@@ -1092,22 +1092,26 @@ func TestValidationStep_ExecuteRoutesThroughTheSharedExitHelper(t *testing.T) {
 // re-derives from scratch the verdict it already reported.
 func TestStep_RestartCarryoverReachesTheEvidencePass(t *testing.T) {
 	t.Parallel()
+	skipUnlessPOSIXShell(t)
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 	// The Test step runs two agent passes, discovery then evidence. Only the
 	// evidence prompt is under test here, so discovery gets a valid layout
 	// rather than the findings payload, which would fail its validation and
-	// park the step before the evidence pass ever runs.
+	// park the step before the evidence pass ever runs. The layout's command
+	// writes coverage artifacts (oneRepositoryUnitCommand) so the
+	// vacuous-green guard, which runs before the evidence pass, lets the
+	// attempt through.
 	var evidencePrompt string
 	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
 		if strings.Contains(opts.Prompt, "Derive this repository's independently testable units") {
-			return &agent.Result{Output: json.RawMessage(`{"units":[{"name":"repository","path":".","command":"exit 0"}],"selected":["repository"]}`)}, nil
+			return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
 		}
 		evidencePrompt = opts.Prompt
 		return &agent.Result{Output: json.RawMessage(`{"findings":[],"risk_level":"low","risk_rationale":"none","risk_scope":"source-or-external","summary":"ok"}`)}, nil
 	}}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Shared = &pipeline.RunShared{}
 	sctx.Fixing = false
 	sctx.PreviousFindings = `{"findings":[{"id":"carried-test-finding","severity":"warning","description":"assertion never ran","action":"no-op"}],"summary":"1 issue"}`

@@ -78,6 +78,16 @@ func loadScenario(path string) (*Scenario, error) {
 	return &s, nil
 }
 
+// defaultUnitCommand is the command the default inferred unit runs. The e2e
+// harness installs a script under this name on PATH (internal/e2e/harness.go
+// InferredUnitCommand) that writes the coverage profile and test report the
+// Test step's vacuous-green guard requires. A bare `exit 0` here reports
+// nothing, so every journey that leaves commands.test unset would park at the
+// Test step instead of reaching the step it was written to exercise. The name
+// is repeated on both sides because this is package main and neither side can
+// import the other.
+const defaultUnitCommand = "nm-e2e-unit-test"
+
 // applyDefaultTestUnits gives every structured action a one-unit test layout
 // when it declares neither units nor selected.
 //
@@ -102,7 +112,7 @@ func (s *Scenario) applyDefaultTestUnits() {
 		structured["units"] = []any{map[string]any{
 			"name":    "repository",
 			"path":    ".",
-			"command": "exit 0",
+			"command": defaultUnitCommand,
 		}}
 		structured["selected"] = []string{"repository"}
 	}

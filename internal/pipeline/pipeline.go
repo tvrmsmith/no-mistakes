@@ -96,6 +96,15 @@ type StepContext struct {
 	// prompt and the PR step's publisher - names the same directory. Empty only
 	// in embeddings that never gather evidence.
 	EvidenceDir string
+	// CoverageDir is where this run's test coverage artifacts belong, always
+	// outside the worktree, so a profile never enters the branch under
+	// validation. The executor resolves it once from the app root, the same
+	// way it resolves EvidenceDir, so the Test step that writes it and the
+	// guard that reads it name one directory. Unlike evidence it is never
+	// published: profiles are large, they churn every run, and nothing outside
+	// the run consumes them. Empty only in embeddings that never run a test
+	// command.
+	CoverageDir string
 	Env         []string // extra environment variables for subprocesses (used in tests)
 	// UserIntent is a short, possibly-empty summary of what the change author
 	// was trying to accomplish. It's surfaced in step prompts so agents have

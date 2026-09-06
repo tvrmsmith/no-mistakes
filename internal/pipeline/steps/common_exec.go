@@ -309,6 +309,12 @@ const (
 	envTestBaseSHA          = "NO_MISTAKES_BASE_SHA"
 	envTestChangedFiles     = "NO_MISTAKES_CHANGED_FILES"
 	envTestChangedFileCount = "NO_MISTAKES_CHANGED_FILE_COUNT"
+	// envTestCoverageDir names the per-unit directory the command writes its
+	// coverage profile and test report into. The vacuous-green guard has no
+	// other way to tell a real pass from a suite that ran nothing, because
+	// both exit zero, and the directory sits outside the worktree so the
+	// artifacts can never enter the branch under validation.
+	envTestCoverageDir = "NO_MISTAKES_COVERAGE_DIR"
 )
 
 // maxChangedFilesEnvBytes bounds NO_MISTAKES_CHANGED_FILES. A single

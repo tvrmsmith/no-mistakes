@@ -483,6 +483,10 @@ func TestDiscoveryPrompt_BoundsTheInferredCommandToTheChangedPaths(t *testing.T)
 		"must NOT be the complete repository test suite",
 		envTestChangedFiles,
 		envTestBaseSHA,
+		// An inferred command that writes no coverage artifacts parks the run
+		// for a maintainer, so the prompt that infers it has to say so.
+		envTestCoverageDir,
+		"coverage profile",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("discovery prompt missing %q, got:\n%s", want, prompt)

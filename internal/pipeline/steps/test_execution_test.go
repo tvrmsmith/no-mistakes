@@ -16,6 +16,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps/internal/stepstest"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -80,12 +81,45 @@ func markerCommand(marker string) string {
 
 // unitTestContext builds a StepContext with Shared wired, as the executor
 // does, so discovery caching and scope-fault counting behave like production.
+// CoverageDir is set explicitly, as coverageStepContext in
+// test_coverage_guard_test.go does, because newTestContext leaves it empty
+// and testUnitCoverageDir needs somewhere to write a unit's coverage
+// artifacts before the command even runs, whether or not that unit's outcome
+// ever reaches the vacuous-green guard. Every fixture command in this file
+// that is meant to pass the guard uses coverageFor below to emit the
+// artifacts it needs alongside its own marker/behavior.
 func unitTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA string, units []config.TestUnit) *pipeline.StepContext {
 	t.Helper()
 	sctx := newTestContext(t, ag, workDir, baseSHA, headSHA, config.Commands{})
 	sctx.Config.Test.Units = units
 	sctx.Shared = &pipeline.RunShared{}
+	sctx.CoverageDir = filepath.Join(t.TempDir(), "coverage", "run-1")
 	return sctx
+}
+
+// coverageFor glues a coverage-writing command in FRONT of a unit's own
+// command, crediting the exact file this file's changeUnitFile fixtures
+// modify with a function whose declared line is 1, so functionSpans has no
+// next function to bound it against and the span runs to EOF. That matches
+// the guard's changed-function check against a real diff, since these
+// fixtures use real .go files (unlike test_test.go's plain-text changed
+// files, where the check is legitimately skipped for having no coverable
+// extension overlap).
+//
+// The coverage command runs first and command last, rather than joined with
+// "&&", because several fixtures in this file are literally "exit 0"/"exit
+// 1": the shell "exit" builtin ends the script immediately rather than
+// returning a status "&&" can chain from, so appending after it would run
+// coverage-writing dead code. Running command last also means the unit's own
+// exit status, not the coverage writer's, is still what the step sees.
+func coverageFor(command, file string) string {
+	return stepstest.CoverageCommand(stepstest.CoverageFixture{
+		File:     file,
+		Function: "Changed",
+		Line:     1,
+		Hits:     1,
+		Tests:    1,
+	}) + "; " + command
 }
 
 func capturingLog(sctx *pipeline.StepContext) *[]string {
@@ -121,6 +155,7 @@ func jsonString(t *testing.T, s string) string {
 }
 
 func TestTestStep_RunsOnlyTheChangedUnitsCommand(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	markerDir := t.TempDir()
@@ -130,7 +165,7 @@ func TestTestStep_RunsOnlyTheChangedUnitsCommand(t *testing.T) {
 	headSHA := changeUnitFile(t, dir, "services/api/main.go")
 
 	units := []config.TestUnit{
-		{Name: "api", Path: "services/api", Command: markerCommand(apiMarker)},
+		{Name: "api", Path: "services/api", Command: coverageFor(markerCommand(apiMarker), "services/api/main.go")},
 		{Name: "web", Path: "services/web", Command: markerCommand(webMarker)},
 	}
 	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
@@ -185,6 +220,7 @@ func TestTestStep_LogsTheSelectedUnitsAndEachCommand(t *testing.T) {
 // is written for: it is the catch-all for code no narrower unit owns, so a
 // change under api/ runs api alone and raises no scope fault.
 func TestTestStep_NestedLayoutRunsOnlyTheNarrowUnit(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	markerDir := t.TempDir()
@@ -195,7 +231,7 @@ func TestTestStep_NestedLayoutRunsOnlyTheNarrowUnit(t *testing.T) {
 
 	units := []config.TestUnit{
 		{Name: "root", Path: ".", Command: markerCommand(rootMarker)},
-		{Name: "api", Path: "services/api", Command: markerCommand(apiMarker)},
+		{Name: "api", Path: "services/api", Command: coverageFor(markerCommand(apiMarker), "services/api/main.go")},
 	}
 	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
 	lines := capturingLog(sctx)
@@ -275,7 +311,7 @@ func TestTestStep_GreenAttemptReportsTheDroppedChangedFileList(t *testing.T) {
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	units := []config.TestUnit{
-		{Name: "api", Path: "services/api", Command: "exit 0"},
+		{Name: "api", Path: "services/api", Command: coverageFor("exit 0", "services/api/"+long+"-0.go")},
 	}
 	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
 
@@ -284,8 +320,13 @@ func TestTestStep_GreenAttemptReportsTheDroppedChangedFileList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	findings := decodeFindings(t, outcome.Findings)
+	// The finding under test rides a GREEN attempt, and it is the only thing
+	// the attempt has to say. A run that parked at the coverage guard instead
+	// would carry that park's finding here and assert nothing about this one.
+	if len(findings.Items) != 1 {
+		t.Fatalf("attempt reported more than the omission, so it did not pass: %s", outcome.Findings)
+	}
 	var omission *Finding
 	for i := range findings.Items {
 		if strings.Contains(findings.Items[i].Description, envTestChangedFiles) {
@@ -321,7 +362,7 @@ func decodeFindings(t *testing.T, payload string) Findings {
 func TestTestStep_GreenOutcomeNamesTheUnitsItCovered(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
-	apiCmd := markerCommand(filepath.Join(t.TempDir(), "api.done"))
+	apiCmd := coverageFor(markerCommand(filepath.Join(t.TempDir(), "api.done")), "services/api/main.go")
 
 	headSHA := changeUnitFile(t, dir, "services/api/main.go")
 
@@ -336,6 +377,11 @@ func TestTestStep_GreenOutcomeNamesTheUnitsItCovered(t *testing.T) {
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The record under test is the one a GREEN attempt writes, so a run that
+	// parked at the coverage guard would prove nothing about it.
+	if outcome.NeedsApproval {
+		t.Fatalf("attempt parked instead of passing: %s", outcome.Findings)
 	}
 	tested := decodeFindings(t, outcome.Findings).Tested
 	want := []string{"api: " + apiCmd, "api-contract: " + apiCmd}
@@ -425,6 +471,7 @@ func TestTestStep_ConfiguredLayoutOwningNoChangedFileFallsBackToTheEvidenceAgent
 }
 
 func TestTestStep_EvidencePassAfterUnitCommandsJudgesThemInsteadOfRerunning(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	headSHA := changeUnitFile(t, dir, "services/api/main.go")
@@ -434,7 +481,8 @@ func TestTestStep_EvidencePassAfterUnitCommandsJudgesThemInsteadOfRerunning(t *t
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			if strings.Contains(opts.Prompt, "Derive this repository's independently testable units") {
-				return &agent.Result{Output: json.RawMessage(`{"units":[{"name":"api","path":"services/api","command":"exit 0"}],"selected":["api"]}`)}, nil
+				out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor("exit 0", "services/api/main.go")) + `}],"selected":["api"]}`
+				return &agent.Result{Output: json.RawMessage(out)}, nil
 			}
 			evidencePrompt = opts.Prompt
 			return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
@@ -461,6 +509,7 @@ func TestTestStep_EvidencePassAfterUnitCommandsJudgesThemInsteadOfRerunning(t *t
 // cases above: it proves those fixtures pass because the agent reported
 // nothing, not because the step failed to read what it reported.
 func TestTestStep_EvidenceFindingsDriveApproval(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	headSHA := changeUnitFile(t, dir, "services/api/main.go")
@@ -469,7 +518,8 @@ func TestTestStep_EvidenceFindingsDriveApproval(t *testing.T) {
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			if strings.Contains(opts.Prompt, "Derive this repository's independently testable units") {
-				return &agent.Result{Output: json.RawMessage(`{"units":[{"name":"api","path":"services/api","command":"exit 0"}],"selected":["api"]}`)}, nil
+				out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor("exit 0", "services/api/main.go")) + `}],"selected":["api"]}`
+				return &agent.Result{Output: json.RawMessage(out)}, nil
 			}
 			return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"error","action":"auto-fix","description":"the new handler has no test"}]}`)}, nil
 		},
@@ -575,6 +625,7 @@ func TestTestStep_DiscoveryFailureParks(t *testing.T) {
 }
 
 func TestTestStep_UnderSelectionExpandsRunsTheMissingUnitAndLogsBoth(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	markerDir := t.TempDir()
@@ -594,7 +645,7 @@ func TestTestStep_UnderSelectionExpandsRunsTheMissingUnitAndLogsBoth(t *testing.
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, markerCommand(apiMarker)) + `},{"name":"web","path":"services/web","command":` + jsonString(t, markerCommand(webMarker)) + `}],"selected":["api"]}`
+			out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor(markerCommand(apiMarker), "services/api/main.go")) + `},{"name":"web","path":"services/web","command":` + jsonString(t, coverageFor(markerCommand(webMarker), "services/web/main.go")) + `}],"selected":["api"]}`
 			return &agent.Result{Output: json.RawMessage(out)}, nil
 		},
 	}
@@ -630,6 +681,7 @@ func TestTestStep_UnderSelectionExpandsRunsTheMissingUnitAndLogsBoth(t *testing.
 // rediscovers the same under-selecting layout, raises a second scope fault, and
 // parks instead of running.
 func TestTestStep_ExpandedSelectionIsReusedByTheNextAttemptInTheSameRun(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	markerDir := t.TempDir()
@@ -653,7 +705,7 @@ func TestTestStep_ExpandedSelectionIsReusedByTheNextAttemptInTheSameRun(t *testi
 				if !isDiscoveryCall(opts) {
 					return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
 				}
-				out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, markerCommand(apiMarker)) + `},{"name":"web","path":"services/web","command":` + jsonString(t, markerCommand(webMarker)) + `}],"selected":["api"]}`
+				out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor(markerCommand(apiMarker), "services/api/main.go")) + `},{"name":"web","path":"services/web","command":` + jsonString(t, coverageFor(markerCommand(webMarker), "services/web/main.go")) + `}],"selected":["api"]}`
 				return &agent.Result{Output: json.RawMessage(out)}, nil
 			},
 		}
@@ -830,6 +882,7 @@ func (r *runStore) SetRunTestDiscovery(id, state string) error {
 }
 
 func TestTestStep_RecoveredRunReusesTheDiscoveredLayout(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	markerDir := t.TempDir()
@@ -845,7 +898,7 @@ func TestTestStep_RecoveredRunReusesTheDiscoveredLayout(t *testing.T) {
 			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				if strings.Contains(opts.Prompt, "Derive this repository's independently testable units") {
 					atomic.AddInt32(&discoveryPasses, 1)
-					out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, markerCommand(apiMarker)) + `}],"selected":["api"]}`
+					out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor(markerCommand(apiMarker), "services/api/main.go")) + `}],"selected":["api"]}`
 					return &agent.Result{Output: json.RawMessage(out)}, nil
 				}
 				return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
@@ -1046,6 +1099,11 @@ func TestTestStep_ConfiguredCommandStillBehavesAsOneRepositoryUnit(t *testing.T)
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContext(t, nil, dir, baseSHA, headSHA, config.Commands{Test: "exit 1"})
 	sctx.Shared = &pipeline.RunShared{}
+	// The failing exit code returns before the vacuous-green guard ever reads
+	// a coverage artifact, but testUnitCoverageDir creates the unit's
+	// directory unconditionally before the command runs, so CoverageDir still
+	// has to be configured here.
+	sctx.CoverageDir = filepath.Join(t.TempDir(), "coverage", "run-1")
 	lines := capturingLog(sctx)
 
 	step := &TestStep{}

@@ -172,6 +172,10 @@ func NewTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA stri
 		// a per-test directory so a step under test can never write evidence
 		// into a shared location the next test would then observe.
 		EvidenceDir: filepath.Join(t.TempDir(), "evidence", "run-1"),
+		// Same rationale as EvidenceDir above: a per-test directory outside
+		// WorkDir, so a step under test can never write a coverage profile
+		// into a shared location or into the worktree it is validating.
+		CoverageDir: filepath.Join(t.TempDir(), "coverage", "run-1"),
 		WorkDir:     workDir,
 		Agent:       ag,
 		Config:      &config.Config{Agent: types.AgentClaude, Commands: cmds},
@@ -780,4 +784,48 @@ func RunGitDirect(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// CoverageFixture describes the one-function coverage profile and the test
+// report CoverageCommand emits, which is the smallest pair of artifacts the
+// Test step's vacuous-green guard accepts.
+type CoverageFixture struct {
+	File     string // source file the profile names, repository-relative
+	Function string
+	Line     int
+	Hits     int
+	Tests    int
+	Skipped  int
+}
+
+// CoverageCommand returns a shell command that writes a minimal LCOV
+// profile and a JUnit report into $NO_MISTAKES_COVERAGE_DIR, so a test
+// fixture command can satisfy the vacuous-green guard.
+//
+// The command is POSIX shell only. The Windows shard runs this package's
+// fixture commands through cmd.exe, which cannot echo the JUnit report's
+// angle brackets without escaping every one of them, and carrying a second
+// cmd.exe spelling of the same two files costs more than the coverage it
+// buys. Tests that need this skip on Windows.
+func CoverageCommand(f CoverageFixture) string {
+	profile := fmt.Sprintf("SF:%s\nFN:%d,%s\nFNDA:%d,%s\nend_of_record\n", f.File, f.Line, f.Function, f.Hits, f.Function)
+	report := fmt.Sprintf("<testsuite tests=\"%d\" skipped=\"%d\"></testsuite>\n", f.Tests, f.Skipped)
+	return WriteCoverageArtifactsCommand(profile, report)
+}
+
+// WriteCoverageArtifactsCommand returns a POSIX shell command that writes
+// profile and report verbatim into $NO_MISTAKES_COVERAGE_DIR. It exists
+// beside CoverageCommand for the fixtures whose profile needs more than one
+// function, which is how a test tells "covered the changed lines" apart from
+// "covered something else in the same file".
+func WriteCoverageArtifactsCommand(profile, report string) string {
+	return "printf '%s' " + shellQuote(profile) + ` > "$NO_MISTAKES_COVERAGE_DIR/coverage.lcov"; ` +
+		"printf '%s' " + shellQuote(report) + ` > "$NO_MISTAKES_COVERAGE_DIR/report.xml"`
+}
+
+// shellQuote wraps s for POSIX sh. Single quotes suppress every expansion,
+// which matters because a coverage profile carries characters ($ and \ among
+// them) a double-quoted string would interpret.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -196,7 +196,7 @@ func TestLoadScenarioAddsDefaultTestUnitsWhenAbsent(t *testing.T) {
 	if len(payload.Units) != 1 {
 		t.Fatalf("units = %+v, want one unit", payload.Units)
 	}
-	if payload.Units[0].Name != "repository" || payload.Units[0].Path != "." || payload.Units[0].Command != "exit 0" {
+	if payload.Units[0].Name != "repository" || payload.Units[0].Path != "." || payload.Units[0].Command != defaultUnitCommand {
 		t.Fatalf("unit = %+v, want the repository unit", payload.Units[0])
 	}
 	if len(payload.Selected) != 1 || payload.Selected[0] != "repository" {

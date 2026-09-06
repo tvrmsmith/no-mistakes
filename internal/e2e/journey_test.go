@@ -297,6 +297,7 @@ func runHappyPath(t *testing.T, agentName string) {
 	assertAbortByRunIDReapsRunFromOutsideWorktree(t, h)
 	assertRespondNoWaitingStepRun(t, h)
 	assertFailingTestCommandRun(t, h)
+	assertVacuousGreenTestCommandParks(t, h)
 	assertFailingLintCommandRun(t, h)
 	if agentName == "claude" {
 		assertDifferentBranchDoesNotCancelActiveRun(t, h)
@@ -1334,10 +1335,7 @@ func assertGateRefDeletionDoesNotCreateRun(t *testing.T, h *Harness, branch stri
 func assertConfiguredCommandRun(t *testing.T, h *Harness) {
 	t.Helper()
 	testCommandLog := filepath.Join(h.NMHome, "configured-test-command.log")
-	testCommand := filepath.Join(h.BinDir, "nm-test-e2e")
-	if err := os.WriteFile(testCommand, []byte("#!/bin/sh\nprintf test-ran > \""+testCommandLog+"\"\n"), 0o755); err != nil {
-		t.Fatalf("write e2e test command: %v", err)
-	}
+	h.WriteTestCommand("nm-test-e2e", "printf test-ran > \""+testCommandLog+"\"")
 	lintCommandLog := filepath.Join(h.NMHome, "configured-lint-command.log")
 	lintCommand := filepath.Join(h.BinDir, "nm-lint-e2e")
 	if err := os.WriteFile(lintCommand, []byte("#!/bin/sh\nprintf lint-ran > \""+lintCommandLog+"\"\n"), 0o755); err != nil {
@@ -2046,7 +2044,8 @@ func assertDifferentBranchDoesNotCancelActiveRun(t *testing.T, h *Harness) {
 	h.CommitChange("different-branch-slow", ".no-mistakes.yaml", slowConfig, "configure different-branch slow test")
 	h.PushToGate("different-branch-slow")
 	slowRun := waitForStepStatus(t, h, "different-branch-slow", types.StepTest, types.StepStatusRunning, 60*time.Second)
-	fastConfig := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: true\n  lint: true\n"
+	h.WriteTestCommand("nm-different-branch-fast-e2e", "exit 0")
+	fastConfig := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-different-branch-fast-e2e\n  lint: true\n"
 	h.CommitChange("different-branch-fast", ".no-mistakes.yaml", fastConfig, "configure different-branch fast checks")
 	h.PushToGate("different-branch-fast")
 	fastRun := h.WaitForRun("different-branch-fast", 60*time.Second)
@@ -2216,13 +2215,70 @@ func assertFailingTestCommandRun(t *testing.T, h *Harness) {
 	}
 }
 
+// assertVacuousGreenTestCommandParks is the whole-pipeline observation of the
+// gate issue 9 added. Every other journey's test command writes coverage
+// artifacts, so nothing else here exercises the case the gate exists for: a
+// command that exits zero having run no test. This one writes nothing, and the
+// pipeline must stop at the Test step for a maintainer rather than carry the
+// exit code through to a pushed branch and an opened PR.
+func assertVacuousGreenTestCommandParks(t *testing.T, h *Harness) {
+	t.Helper()
+	silentCommand := filepath.Join(h.BinDir, "nm-test-vacuous-e2e")
+	if err := os.WriteFile(silentCommand, []byte("#!/bin/sh\necho no tests matched\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write vacuous e2e test command: %v", err)
+	}
+	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-test-vacuous-e2e\n  lint: true\n"
+	h.CommitChange("vacuous-test-command", ".no-mistakes.yaml", config, "configure vacuous test command")
+	h.PushToGate("vacuous-test-command")
+	run := waitForStepStatus(t, h, "vacuous-test-command", types.StepTest, types.StepStatusAwaitingApproval, 60*time.Second)
+	testStep, ok := findStep(run.Steps, types.StepTest)
+	if !ok {
+		t.Fatal("expected test step in vacuous test command run")
+	}
+	if testStep.FindingsJSON == nil {
+		t.Fatal("expected vacuous test command to record findings JSON")
+	}
+	findings, err := types.ParseFindingsJSON(*testStep.FindingsJSON)
+	if err != nil {
+		t.Fatalf("parse vacuous test findings: %v", err)
+	}
+	if len(findings.Items) == 0 {
+		t.Fatalf("expected a finding for the vacuous test command, got %+v", findings)
+	}
+	item := findings.Items[0]
+	if item.Action != types.ActionAskUser {
+		t.Fatalf("expected the vacuous-green gate to ask the maintainer, got action %q", item.Action)
+	}
+	if !strings.Contains(item.Description, `"repository"`) {
+		t.Fatalf("expected the finding to name the unit that reported nothing, got %q", item.Description)
+	}
+	// The snapshot above was taken the moment the Test step reached the gate,
+	// so reading Push and PR out of it proves only that they had not run yet.
+	// Re-read the run after a settle, which is the state that says the park
+	// actually held the pipeline rather than merely preceding it.
+	time.Sleep(3 * time.Second)
+	settled := h.RunInfo(run.ID)
+	if settled.Status == types.RunCompleted {
+		t.Fatal("the run completed while the test gate was parked, so a command that ran no test reached the remote")
+	}
+	for _, stepName := range []types.StepName{types.StepPush, types.StepPR} {
+		step, ok := findStep(settled.Steps, stepName)
+		if ok && step.Status == types.StepStatusCompleted {
+			t.Fatalf("%s completed while the test gate was still parked, so a command that ran no test reached the remote", stepName)
+		}
+	}
+	h.CancelRun(run.ID)
+	waitForRunIDStatus(t, h, run.ID, types.RunCancelled, 60*time.Second)
+}
+
 func assertFailingLintCommandRun(t *testing.T, h *Harness) {
 	t.Helper()
 	failingCommand := filepath.Join(h.BinDir, "nm-lint-fails-e2e")
 	if err := os.WriteFile(failingCommand, []byte("#!/bin/sh\necho configured lint failed\nexit 1\n"), 0o755); err != nil {
 		t.Fatalf("write failing e2e lint command: %v", err)
 	}
-	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: true\n  lint: nm-lint-fails-e2e\n"
+	h.WriteTestCommand("nm-lint-journey-test-e2e", "exit 0")
+	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-lint-journey-test-e2e\n  lint: nm-lint-fails-e2e\n"
 	h.CommitChange("failing-lint-command", ".no-mistakes.yaml", config, "configure failing lint command")
 	h.PushToGate("failing-lint-command")
 	run := waitForStepStatus(t, h, "failing-lint-command", types.StepLint, types.StepStatusAwaitingApproval, 60*time.Second)
@@ -2866,7 +2922,7 @@ func assertNoCommandTestStep(t *testing.T, steps []ipc.StepResultInfo, invs []In
 	}
 	// Tested carries both halves of the step: the units execution ran, each
 	// as "<name>: <command>", and whatever the evidence pass reported.
-	wantTested := []string{"repository: exit 0", "fakeagent: simulated test run"}
+	wantTested := []string{"repository: " + InferredUnitCommand, "fakeagent: simulated test run"}
 	if !slices.Equal(findings.Tested, wantTested) {
 		t.Fatalf("tested = %+v, want the executed unit plus the fakeagent detail %+v", findings.Tested, wantTested)
 	}
