@@ -388,7 +388,16 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	gate := point.gate
 
 	// Only a gate carries the awaiting-agent marker, so this dereference
-	// belongs after the CI branch has already returned.
+	// belongs after the CI branch has already returned. It still needs its own
+	// guard: recoveredResumePoint selects the gate from the step rows alone,
+	// and the marker write is best-effort, so a real gate row can arrive with
+	// no marker. That is adverse evidence about a run recovery cannot fully
+	// account for, reported as a plain error the daemon records verbatim,
+	// rather than a panic that would fail the run unparked and delete the
+	// worktree this whole path exists to keep.
+	if run.AwaitingAgentSince == nil {
+		return fmt.Errorf("recovered gate at step %s has no awaiting-agent marker", gate.step.Name())
+	}
 	parkStart := time.Unix(*run.AwaitingAgentSince, 0)
 	duration := recoveredStepDuration(gate.stepResult)
 	completeRecoveredGate := func() error {
@@ -902,6 +911,79 @@ func recoveredLogPath(step *db.StepResult) string {
 // executeStep runs a single step with approval coordination.
 // Returns whether to skip the remainder, an optional earlier restart step,
 // and any execution error.
+// ciMonitorPreserveCheckTimeout bounds the worktree read ciMonitorPreservable
+// makes. The step's own context is already cancelled by the time it runs, so
+// the read carries its own deadline rather than inheriting a dead one, and the
+// daemon is mid-shutdown, so it must not be able to wait indefinitely.
+const ciMonitorPreserveCheckTimeout = 10 * time.Second
+
+// ciMonitorPreservable reports whether the CI step a clean stop just cancelled
+// is a bare monitor the next daemon start can re-enter, and when it is not,
+// the reason for the log.
+//
+// Three facts have to hold together, each guarding a different way the
+// preservation promise goes wrong:
+//
+//   - The row is still a running CI row holding no agent pid, matching what
+//     lifecycle.ResumableCIMonitor accepts on the next start.
+//   - The run has a PR URL. ResumableCIMonitor requires one, and the CI row is
+//     already running while the step builds its host and before it bails out
+//     with "no PR URL found". Preserving inside that window leaves a row
+//     recovery refuses, and the blanket sweep then reports a clean operator
+//     stop as "daemon crashed during execution".
+//   - The worktree is clean. The pid cannot carry this on its own: every agent
+//     adapter emits its exit event on a cancelled turn and the executor's
+//     handler clears the pid, so a repair killed mid-edit reaches here looking
+//     exactly like a bare monitor. steps.commitRepair commits everything
+//     immediately after each turn, so uncommitted work here means an
+//     interrupted turn, whose leftovers the next repair's git add -A would
+//     otherwise commit under a message describing a different repair.
+//
+// Every read fails closed. An unproven claim must not keep a run alive,
+// because the ordinary failure path is recoverable and a wrongly preserved
+// worktree quietly corrupts the PR.
+func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir string) (bool, string) {
+	current, err := e.db.GetStepResult(stepID)
+	if err != nil {
+		return false, fmt.Sprintf("could not re-read the ci step row: %v", err)
+	}
+	// GetStepResult reports a missing row as a nil result and a nil error.
+	if current == nil {
+		return false, "the ci step row is gone"
+	}
+	if current.Status != types.StepStatusRunning {
+		return false, fmt.Sprintf("the ci step row is %s rather than running", current.Status)
+	}
+	if current.AgentPID != nil {
+		return false, fmt.Sprintf("an auto-fix agent still holds pid %d", *current.AgentPID)
+	}
+	// The in-memory run predates the pr step's write, so the PR URL has to come
+	// from the row rather than from run.
+	latest, err := e.db.GetRun(run.ID)
+	if err != nil {
+		return false, fmt.Sprintf("could not re-read the run row: %v", err)
+	}
+	if latest == nil {
+		return false, "the run row is gone"
+	}
+	if latest.PRURL == nil || strings.TrimSpace(*latest.PRURL) == "" {
+		return false, "the run has no PR URL for a resumed monitor to poll"
+	}
+	if strings.TrimSpace(workDir) == "" {
+		return false, "the run has no worktree to check for interrupted work"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ciMonitorPreserveCheckTimeout)
+	defer cancel()
+	dirty, err := git.HasUncommittedChanges(ctx, workDir)
+	if err != nil {
+		return false, fmt.Sprintf("could not check the worktree for interrupted work: %v", err)
+	}
+	if dirty {
+		return false, "an interrupted auto-fix left uncommitted work in the worktree"
+	}
+	return true, ""
+}
+
 func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult, run *db.Run, repo *db.Repo, workDir, logDir string, state stepExecutionState) (bool, types.StepName, error) {
 	stepName := step.Name()
 	logPath := filepath.Join(logDir, string(stepName)+".log")
@@ -1113,22 +1195,17 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// besides an approval gate, so preserving any other step would
 			// strand the run with nothing for recovery to re-enter.
 			//
-			// The row re-read is load-bearing. A shutdown landing mid-auto-fix
-			// leaves the row fixing with an agent's half-written edits
-			// uncommitted in the worktree, and preserving that would let the
-			// resumed step's git add -A in steps/ci_fix.go commit them with no
-			// round record explaining it. A read that fails proves nothing, so
-			// it falls through to the ordinary failure path rather than
-			// keeping the run alive on an unproven claim.
+			// What may be preserved is decided by ciMonitorPreservable, which
+			// owns every fact that has to hold and fails closed on each one.
 			if stepName == types.StepCI && errors.Is(context.Cause(sctx.Ctx), ErrDaemonShutdown) {
-				current, readErr := e.db.GetStepResult(sr.ID)
-				if readErr != nil {
-					slog.Warn("could not re-read ci step row for shutdown preservation", "step", stepName, "error", readErr)
-				} else if current.Status == types.StepStatusRunning && current.AgentPID == nil {
+				ok, why := e.ciMonitorPreservable(sr.ID, run, workDir)
+				if ok {
 					// Write nothing: the running row and its worktree are what
 					// the next daemon start resumes from.
 					return false, "", ErrParkPreserved
 				}
+				slog.Warn("clean stop is not preserving this ci step; failing it instead",
+					"run_id", run.ID, "step", stepName, "reason", why)
 			}
 			if dbErr := e.db.FailStep(sr.ID, redactedErr, durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)

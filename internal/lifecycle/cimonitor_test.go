@@ -41,6 +41,36 @@ func TestResumableCIMonitor_MonitorWithoutAPRURLDoesNot(t *testing.T) {
 	}
 }
 
+// The CI step runs its auto-fix agent inline and the executor never moves the
+// row to fixing for it, so a live repair looks like a running monitor in every
+// way except the pid it records. The drain reads this predicate to decide what
+// it may walk away from, so missing the pid would let it abandon a working
+// agent and report the run under none of waited, finished, or interrupted.
+func TestResumableCIMonitor_ARunningCIRowHoldingAnAgentPIDDoesNot(t *testing.T) {
+	run := monitoringRun("https://github.com/o/r/pull/1")
+	steps := ciSteps(types.StepStatusRunning)
+	pid := 4242
+	steps[len(steps)-1].AgentPID = &pid
+	if ResumableCIMonitor(run, steps) {
+		t.Error("ResumableCIMonitor(running ci row holding an agent pid) = true, want false")
+	}
+	// The wider predicate deliberately ignores the pid, because the SQL lift it
+	// mirrors does: the run still deserves the status that spares its worktree.
+	if !CIMonitorRun(run, steps) {
+		t.Error("CIMonitorRun(running ci row holding an agent pid) = false, want true")
+	}
+}
+
+// Every case above builds a running run, so nothing pinned the guard that stops
+// a terminal row from being read as resumable.
+func TestResumableCIMonitor_ATerminalRunDoesNot(t *testing.T) {
+	run := monitoringRun("https://github.com/o/r/pull/1")
+	run.Status = types.RunCompleted
+	if ResumableCIMonitor(run, ciSteps(types.StepStatusRunning)) {
+		t.Error("ResumableCIMonitor(completed run) = true, want false")
+	}
+}
+
 func TestResumableCIMonitor_ACIStepMidRepairDoesNot(t *testing.T) {
 	run := monitoringRun("https://github.com/o/r/pull/1")
 	for _, status := range []types.StepStatus{types.StepStatusFixing, types.StepStatusFixReview, types.StepStatusAwaitingApproval} {

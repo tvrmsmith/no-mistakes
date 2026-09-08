@@ -19,7 +19,7 @@ var ciMonitorActiveStatuses = map[types.StepStatus]bool{
 // ResumableCIMonitor reports whether run's only active step is a live CI
 // monitor that daemon startup recovery could re-enter as it stands: the run is
 // running with a PR URL, and its single active step row is a running
-// types.StepCI row.
+// types.StepCI row holding no agent pid.
 //
 // The PR URL matters because the CI step row is already running while the step
 // builds its host and before it bails out with "no PR URL found", and there is
@@ -31,9 +31,17 @@ var ciMonitorActiveStatuses = map[types.StepStatus]bool{
 // round record explains, and an awaiting_approval row is the window
 // CompleteRunAwaitingAgent opens while an answer the operator already gave is
 // being applied.
+//
+// The agent pid is a separate fact from the status and cannot be folded into
+// it. The CI step runs its auto-fix agent inline from inside Execute, and the
+// executor only writes fixing for a step whose outcome is auto-fixable, which
+// a CI outcome never is, so the row stays running for the whole repair while
+// the agent's pid is recorded against it. Status alone therefore cannot tell a
+// bare monitor from a live repair, and the drain reads this predicate to
+// decide what it may walk away from.
 func ResumableCIMonitor(run *db.Run, steps []*db.StepResult) bool {
-	return ciMonitorShape(run, steps, func(status types.StepStatus) bool {
-		return status == types.StepStatusRunning
+	return ciMonitorShape(run, steps, func(step *db.StepResult) bool {
+		return step.Status == types.StepStatusRunning && step.AgentPID == nil
 	})
 }
 
@@ -45,17 +53,21 @@ func ResumableCIMonitor(run *db.Run, steps []*db.StepResult) bool {
 //
 // It answers only "what terminal status does this run deserve", never "can it
 // be resumed"; ResumableCIMonitor owns that.
+// It deliberately ignores the agent pid ResumableCIMonitor refuses on, because
+// the SQL lift it mirrors does too: a run whose repair agent died still
+// deserves the interrupted-monitor status that spares its worktree, even
+// though nothing may re-enter it.
 func CIMonitorRun(run *db.Run, steps []*db.StepResult) bool {
-	return ciMonitorShape(run, steps, func(status types.StepStatus) bool {
-		return ciMonitorActiveStatuses[status]
+	return ciMonitorShape(run, steps, func(step *db.StepResult) bool {
+		return ciMonitorActiveStatuses[step.Status]
 	})
 }
 
 // ciMonitorShape is the common test both predicates apply, differing only in
-// which CI row statuses each accepts. Any other row in the wider active set
+// which CI rows each accepts. Any other row in the wider active set
 // disqualifies the run under both, because a second live step means the run is
 // not sitting in its monitor.
-func ciMonitorShape(run *db.Run, steps []*db.StepResult, ciStatusQualifies func(types.StepStatus) bool) bool {
+func ciMonitorShape(run *db.Run, steps []*db.StepResult, ciRowQualifies func(*db.StepResult) bool) bool {
 	if run == nil || run.Status != types.RunRunning {
 		return false
 	}
@@ -70,7 +82,7 @@ func ciMonitorShape(run *db.Run, steps []*db.StepResult, ciStatusQualifies func(
 		if step.StepName != types.StepCI {
 			return false
 		}
-		if !ciStatusQualifies(step.Status) {
+		if !ciRowQualifies(step) {
 			return false
 		}
 		ciActive = true

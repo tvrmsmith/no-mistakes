@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -217,6 +220,214 @@ func TestRecoveredResumePoint_GateStillResolvesUnchanged(t *testing.T) {
 	}
 }
 
+// seedParkedGate writes the rows a run leaves behind while it waits at an
+// approval gate on the last step of plan: complete findings on the step row,
+// one matching round, and the awaiting_approval status. It deliberately does
+// not set the run's awaiting-agent marker, so a caller can choose whether this
+// park has one.
+func seedParkedGate(t *testing.T, database *db.DB, run *db.Run, plan []Step) []*db.StepResult {
+	t.Helper()
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	rows := make([]*db.StepResult, 0, len(plan))
+	for _, step := range plan {
+		row, err := database.InsertStepResult(run.ID, step.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, row)
+	}
+	for _, row := range rows[:len(rows)-1] {
+		if err := database.CompleteStepWithStatus(row.ID, types.StepStatusCompleted, 0, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gateRow := rows[len(rows)-1]
+	if err := database.StartStep(gateRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	findings := `{"findings":[{"id":"review-1","severity":"warning","description":"needs a fix","action":"ask-user"}],"summary":"one issue"}`
+	if err := database.SetStepFindings(gateRow.ID, findings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.InsertReviewStepRound(gateRow.ID, 1, "initial", &findings, nil, "1111111111111111111111111111111111111111", 25); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatusWithDuration(gateRow.ID, types.StepStatusAwaitingApproval, 25); err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+// The marker write is best-effort on every path that makes it, so a real gate
+// row can reach recovery with no marker beside it. Resume reads the park start
+// from that marker, and dereferencing a nil one would panic the run goroutine,
+// failing the run unparked and deleting the worktree preservation exists to
+// keep. Rejecting it instead leaves the operator a run they can resolve.
+func TestExecutor_ResumeOfAGateWithNoParkMarkerIsRejectedRatherThanPanicking(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	plan := []Step{newPassStep(types.StepReview)}
+	seedParkedGate(t, database, run, plan)
+
+	recovered := mustGetRun(t, database, run.ID)
+	if recovered.AwaitingAgentSince != nil {
+		t.Fatalf("AwaitingAgentSince = %v, want nil", recovered.AwaitingAgentSince)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, plan, nil)
+	err := exec.Resume(context.Background(), recovered, repo, t.TempDir())
+	if err == nil {
+		t.Fatal("Resume() = nil error for a markerless gate, want an error")
+	}
+	if !strings.Contains(err.Error(), "no awaiting-agent marker") {
+		t.Errorf("Resume() error = %v, want it to name the missing marker", err)
+	}
+	if errors.Is(err, ErrRecoveryEvidenceUnavailable) {
+		t.Errorf("Resume() error = %v, want adverse evidence rather than an unavailable read", err)
+	}
+}
+
+// preGateErr is held rather than returned as the loop meets it, so that the
+// same pass can still recognise a live CI monitor's own running row. Nothing
+// covered the case it exists for, and deleting the return left the package
+// green.
+func TestRecoveredResumePoint_AnUnresolvedStepBeforeAGateIsRejected(t *testing.T) {
+	database, p, run, _ := setupTest(t)
+	plan := []Step{newPassStep(types.StepReview), newPassStep(types.StepTest)}
+	rows := seedParkedGate(t, database, run, plan)
+	// seedParkedGate completes every earlier row, so put the review row back to
+	// the running state a crash mid-step leaves behind.
+	if err := database.UpdateStepStatus(rows[0].ID, types.StepStatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, plan, nil)
+	_, err := exec.recoveredResumePoint(mustGetRun(t, database, run.ID))
+	if err == nil {
+		t.Fatal("recoveredResumePoint() = nil error for an unresolved step before the gate, want an error")
+	}
+	if !strings.Contains(err.Error(), "before approval gate") {
+		t.Errorf("recoveredResumePoint() error = %v, want it to name the pre-gate step", err)
+	}
+}
+
+func TestRecoveredResumePoint_TwoActiveStepsAreNotACIMonitor(t *testing.T) {
+	database, p, run, _ := setupTest(t)
+	plan := []Step{newPassStep(types.StepReview), newPassStep(types.StepCI)}
+	rows := seedCIMonitorRun(t, database, run, plan)
+	if err := database.UpdateRunPRURL(run.ID, testCIPRURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatus(rows[0].ID, types.StepStatusRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, plan, nil)
+	_, err := exec.recoveredResumePoint(mustGetRun(t, database, run.ID))
+	if err == nil {
+		t.Fatal("recoveredResumePoint() = nil error for two active steps, want an error")
+	}
+	if !strings.Contains(err.Error(), "2 active steps") {
+		t.Errorf("recoveredResumePoint() error = %v, want it to name the active step count", err)
+	}
+}
+
+func TestRecoveredResumePoint_AnUnresolvedStepBeforeTheCIMonitorIsRejected(t *testing.T) {
+	database, p, run, _ := setupTest(t)
+	plan := []Step{newPassStep(types.StepReview), newPassStep(types.StepCI)}
+	rows := seedCIMonitorRun(t, database, run, plan)
+	if err := database.UpdateRunPRURL(run.ID, testCIPRURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatus(rows[0].ID, types.StepStatusPending); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, plan, nil)
+	_, err := exec.recoveredResumePoint(mustGetRun(t, database, run.ID))
+	if err == nil {
+		t.Fatal("recoveredResumePoint() = nil error for a pending step before the monitor, want an error")
+	}
+	if !strings.Contains(err.Error(), "before the CI monitor") {
+		t.Errorf("recoveredResumePoint() error = %v, want it to name the unresolved earlier step", err)
+	}
+}
+
+// A resumed monitor is a full CI step, so it can still ask for the revalidation
+// restart a repaired PR needs. Nothing proved the restart branch of
+// resumeCIMonitor was reachable at all.
+func TestExecutor_ResumedCIMonitorCanRestartThePipeline(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+
+	var calls int
+	ciStep := &recordingCIStep{
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{ExitCode: 0, RestartFrom: types.StepReview}, nil
+			}
+			return &StepOutcome{ExitCode: 0}, nil
+		},
+	}
+	reviewStep := newPassStep(types.StepReview)
+	plan := []Step{reviewStep, ciStep}
+	seedCIMonitorRun(t, database, run, plan)
+	if err := database.UpdateRunPRURL(run.ID, testCIPRURL); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, plan, nil)
+	if err := exec.Resume(context.Background(), mustGetRun(t, database, run.ID), repo, t.TempDir()); err != nil {
+		t.Fatalf("Resume() error = %v, want nil", err)
+	}
+
+	if calls != 2 {
+		t.Errorf("ci step Execute calls = %d, want 2 (the resumed poll plus the revalidation)", calls)
+	}
+	if reviewStep.callCount() != 1 {
+		t.Errorf("review step Execute calls = %d, want 1 from the restart", reviewStep.callCount())
+	}
+	if final := mustGetRun(t, database, run.ID); final.Status != types.RunCompleted {
+		t.Errorf("restarted run status = %s, want %s", final.Status, types.RunCompleted)
+	}
+}
+
+// The happy-path resume test ends green, so nothing showed a resumed monitor
+// reporting the red CI it re-entered to watch for.
+func TestExecutor_ResumedCIMonitorThatEndsRedFailsTheRun(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+
+	redCI := &recordingCIStep{fn: func(*StepContext) (*StepOutcome, error) {
+		return nil, errors.New("required checks failed")
+	}}
+	plan := []Step{newPassStep(types.StepReview), redCI}
+	rows := seedCIMonitorRun(t, database, run, plan)
+	if err := database.UpdateRunPRURL(run.ID, testCIPRURL); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, plan, nil)
+	if err := exec.Resume(context.Background(), mustGetRun(t, database, run.ID), repo, t.TempDir()); err == nil {
+		t.Fatal("Resume() = nil error for a red CI monitor, want the failure")
+	}
+
+	final := mustGetRun(t, database, run.ID)
+	if final.Status != types.RunFailed {
+		t.Errorf("resumed run status = %s, want %s", final.Status, types.RunFailed)
+	}
+	ciRow, err := database.GetStepResult(rows[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ciRow.Status != types.StepStatusFailed {
+		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
+	}
+}
+
 func TestValidateRecoveredRun_AcceptsACIMonitorWithNoAwaitingAgentMarker(t *testing.T) {
 	database, _, run, _ := setupTest(t)
 	plan := ciMonitorPlan()
@@ -364,10 +575,19 @@ func TestExecutor_ResumedCIMonitorKeepsItsEarlierElapsedTime(t *testing.T) {
 // runCancelledCIStep drives a single CI step to the point where it is blocked
 // on the run context, optionally leaving the row in some other state first,
 // then cancels with cause and reports what Execute returned.
+//
+// The fixture is the shape a real live monitor has, because that is what
+// preservation requires: a real git worktree with nothing uncommitted in it,
+// and a run carrying the PR URL a resumed monitor would poll. A caller that
+// wants one of those facts missing removes it in before.
 func runCancelledCIStep(t *testing.T, cause error, before func(sctx *StepContext)) (*db.DB, *db.StepResult, error) {
 	t.Helper()
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
+	initGitRepo(t, workDir)
+	if err := database.UpdateRunPRURL(run.ID, "https://github.com/o/r/pull/7"); err != nil {
+		t.Fatal(err)
+	}
 
 	entered := make(chan struct{})
 	ciStep := &recordingCIStep{
@@ -446,6 +666,43 @@ func TestExecutor_CleanShutdownDoesNotPreserveACIStepHoldingAnAgentPID(t *testin
 	})
 	if errors.Is(err, ErrParkPreserved) {
 		t.Fatalf("Execute() error = %v, want NOT ErrParkPreserved for a row holding an agent pid", err)
+	}
+	if ciRow.Status != types.StepStatusFailed {
+		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
+	}
+}
+
+// A repair turn killed by the stop clears its own agent pid on the way out,
+// because every adapter emits its exit event on a cancelled turn, so the pid
+// check above cannot see this case. The uncommitted work the agent left is the
+// evidence that survives, and preserving it would let the next repair's
+// git add -A commit those edits under a message describing a different repair.
+func TestExecutor_CleanShutdownDoesNotPreserveACIStepWithUncommittedRepairWork(t *testing.T) {
+	_, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
+		if wErr := os.WriteFile(filepath.Join(sctx.WorkDir, "half-written.go"), []byte("package broken\n"), 0o644); wErr != nil {
+			t.Error(wErr)
+		}
+	})
+	if errors.Is(err, ErrParkPreserved) {
+		t.Fatalf("Execute() error = %v, want NOT ErrParkPreserved for a dirty worktree", err)
+	}
+	if ciRow.Status != types.StepStatusFailed {
+		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
+	}
+}
+
+// The CI row is already running while the step builds its host and before it
+// bails out with "no PR URL found". lifecycle.ResumableCIMonitor refuses a run
+// with no PR URL, so preserving inside that window would leave a row the next
+// start declines and the blanket sweep then reports as a crash.
+func TestExecutor_CleanShutdownDoesNotPreserveACIStepWithNoPRURL(t *testing.T) {
+	_, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
+		if dbErr := sctx.DB.UpdateRunPRURL(sctx.Run.ID, ""); dbErr != nil {
+			t.Error(dbErr)
+		}
+	})
+	if errors.Is(err, ErrParkPreserved) {
+		t.Fatalf("Execute() error = %v, want NOT ErrParkPreserved for a run with no PR URL", err)
 	}
 	if ciRow.Status != types.StepStatusFailed {
 		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)

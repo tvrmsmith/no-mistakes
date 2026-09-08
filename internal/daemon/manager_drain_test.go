@@ -241,6 +241,44 @@ func TestDrain_CIMonitorIsExemptNotCut(t *testing.T) {
 	}
 }
 
+// TestDrain_CIMonitorHoldingAnAgentPIDIsWaitedOnNotExempt is the case status
+// alone cannot see. The CI step runs its auto-fix agent inline from inside
+// Execute, and the executor only writes fixing for a step whose outcome is
+// auto-fixable, which a CI outcome never is, so a live repair leaves the row
+// running with the agent's pid recorded against it. The sibling test above
+// seeds fixing, a state the CI step never actually produces, so nothing pinned
+// the real shape: exempting it would walk away from a working agent and report
+// the run under none of Waited, Finished, or Interrupted.
+func TestDrain_CIMonitorHoldingAnAgentPIDIsWaitedOnNotExempt(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	markCIMonitorActive(t, database, run)
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := 4242
+	if err := database.SetStepAgentActivity(steps[0].ID, "repairing ci", &pid); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		close(done)
+	}()
+
+	report := m.Drain(context.Background(), 5*time.Second)
+
+	if cause := context.Cause(ctx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil: a live CI repair is waited on, not cut", cause)
+	}
+	if len(report.Interrupted) != 0 {
+		t.Fatalf("Interrupted = %v, want empty", report.Interrupted)
+	}
+	if !containsRunID(report.Finished, run.ID) {
+		t.Fatalf("Finished = %v, want it to contain %s", report.Finished, run.ID)
+	}
+}
+
 // TestDrainReadmitsARunThatStopsMonitoringCI is the mirror of the gate case:
 // exemption is not a latch. A run whose CI monitor ends mid-drain is back to
 // work the stop would kill, so it rejoins the wait and the report.
