@@ -43,3 +43,8 @@ demo_raw.gif
 
 # Worktree-local gh release used to pin the user-attachments upload contract.
 .scratch-gh/
+
+# Review subagents run in their own git worktrees rooted here. Git records a
+# nested worktree as a gitlink, so `git add -A` stages a submodule entry that
+# points at a commit no clone can resolve.
+.claude/worktrees/
