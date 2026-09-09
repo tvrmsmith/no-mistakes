@@ -60,10 +60,11 @@ type Executor struct {
 	shared   *RunShared
 	workDir  string
 
-	mu          sync.Mutex
-	approvalCh  chan approvalResponse // buffered channel for approval responses
-	waiting     bool                  // true when blocked on approval
-	waitingStep types.StepName        // which step is currently awaiting approval
+	mu                   sync.Mutex
+	approvalCh           chan approvalResponse // buffered channel for approval responses
+	waiting              bool                  // true when blocked on approval
+	waitingStep          types.StepName        // which step is currently awaiting approval
+	waitingProtectedPath bool                  // approval would skip work refused by protected_paths
 
 	gateReconcileInterval time.Duration
 	gateReconcileTimeout  time.Duration
@@ -169,6 +170,10 @@ func (e *Executor) RespondWithOverrides(step types.StepName, action types.Approv
 	if step != e.waitingStep {
 		e.mu.Unlock()
 		return fmt.Errorf("step mismatch: responding to %q but %q is awaiting approval", step, e.waitingStep)
+	}
+	if action == types.ActionApprove && e.waitingProtectedPath {
+		e.mu.Unlock()
+		return fmt.Errorf("cannot approve a protected-path refusal: resolve the reported edit, then use fix to retry %s; approval would skip unfinished work", step)
 	}
 	e.waiting = false
 	e.mu.Unlock()
@@ -297,6 +302,7 @@ func (e *Executor) initializeRunScopes(runID string) {
 type stepExecutionState struct {
 	fixing           bool
 	previousFindings string
+	deferredFindings string
 	roundNum         int
 	autoFixAttempts  int
 	executionMS      int64
@@ -444,7 +450,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	// A cancellation observed here falls through to the wait below, whose single
 	// return funnel translates a clean shutdown into ErrParkPreserved before any
 	// write completes the gate.
-	reconciled, reconcileErr := e.reconcileApprovalGate(ctx, gate.step, reconcileCtx)
+	reconciled, reconcileErr := e.reconcileApprovalGate(ctx, gate.step, reconcileCtx, gate.findings)
 	if reconciled && ctx.Err() == nil {
 		if dbErr := e.db.CompleteRunAwaitingAgent(run.ID, time.Since(parkStart).Milliseconds()); dbErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("complete reconciled awaiting-agent state: %w", dbErr), ctx)
@@ -467,6 +473,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	e.mu.Lock()
 	e.waiting = true
 	e.waitingStep = gate.step.Name()
+	e.waitingProtectedPath = HasProtectedPathRefusal(gate.findings)
 	e.mu.Unlock()
 	e.emitStepEventWithFindingsAndError(
 		ipc.EventStepCompleted,
@@ -479,7 +486,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		gate.stepResult.DurationMS,
 	)
 
-	response, reconciled, err := e.waitForApprovalOrReconcile(ctx, gate.step, reconcileCtx, false)
+	response, reconciled, err := e.waitForApprovalOrReconcile(ctx, gate.step, reconcileCtx, gate.findings, false)
 	if errors.Is(err, ErrDaemonShutdown) {
 		// A clean shutdown interrupted the resumed run while it was still
 		// parked at this gate. Leave the run and gate step exactly as
@@ -553,13 +560,14 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 				}
 			}
 		}
-		if dbErr := e.db.UpdateStepStatus(gate.stepResult.ID, types.StepStatusFixing); dbErr != nil {
+		if dbErr := e.db.StartStepFixRound(gate.stepResult.ID, e.autoFixLimit(gate.step.Name())); dbErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("mark recovered step %s fixing: %w", gate.step.Name(), dbErr), ctx)
 		}
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFixing), "", "", nil)
 		skipRemaining, restartFrom, err := e.executeStep(ctx, gate.step, gate.stepResult, run, repo, workDir, logDir, stepExecutionState{
 			fixing:           true,
 			previousFindings: merged,
+			deferredFindings: removeMatchingFindingsJSON(gate.findings, selected),
 			roundNum:         gate.round,
 			autoFixAttempts:  gate.autoFixes,
 			executionMS:      duration,
@@ -908,6 +916,13 @@ func recoveredLogPath(step *db.StepResult) string {
 	return ""
 }
 
+func (e *Executor) autoFixLimit(stepName types.StepName) int {
+	if e.config == nil {
+		return 0
+	}
+	return e.config.AutoFixLimit(stepName)
+}
+
 // executeStep runs a single step with approval coordination.
 // Returns whether to skip the remainder, an optional earlier restart step,
 // and any execution error.
@@ -988,16 +1003,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	stepName := step.Name()
 	logPath := filepath.Join(logDir, string(stepName)+".log")
 	finalExitCode := 0
-	autoFixLimit := 0
-	if e.config != nil {
-		autoFixLimit = e.config.AutoFixLimit(stepName)
-	}
+	autoFixLimit := e.autoFixLimit(stepName)
 
-	// Mark step as running
-	if err := e.db.StartStepWithAutoFixLimit(sr.ID, autoFixLimit); err != nil {
-		return false, "", fmt.Errorf("start step %s: %w", stepName, err)
+	if !state.fixing {
+		if err := e.db.StartStepWithAutoFixLimit(sr.ID, autoFixLimit); err != nil {
+			return false, "", fmt.Errorf("start step %s: %w", stepName, err)
+		}
+		e.emitStepEvent(ipc.EventStepStarted, run, repo, stepName, string(types.StepStatusRunning))
 	}
-	e.emitStepEvent(ipc.EventStepStarted, run, repo, stepName, string(types.StepStatusRunning))
 
 	// Track execution-only time, excluding approval wait periods.
 	phaseStart := time.Now()
@@ -1125,6 +1138,18 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		ciReadyNoCI = declaredNoCI
 		e.emitCIReadinessEvent(run, repo, ready, declaredNoCI)
 	}
+	// A fix round is marked fixing before the step re-executes and only
+	// changes status when Execute returns. A step whose fix round ends with
+	// ordinary execution (the CI monitor after a published repair) reports
+	// that here, so the durable status and every subscriber see running
+	// again; step_started is the event the TUI already maps to running.
+	markRunning := func() error {
+		if err := e.db.UpdateStepStatus(sr.ID, types.StepStatusRunning); err != nil {
+			return fmt.Errorf("return step status to running: %w", err)
+		}
+		e.emitStepEvent(ipc.EventStepStarted, run, repo, stepName, string(types.StepStatusRunning))
+		return nil
+	}
 	sctx := &StepContext{
 		Ctx:              ctx,
 		Run:              run,
@@ -1143,6 +1168,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		EvidenceDir:      e.runEvidenceDir(run.ID),
 		Fixing:           state.fixing,
 		PreviousFindings: state.previousFindings,
+		DeferredFindings: state.deferredFindings,
 		Log:              writeLog,
 		LogChunk:         writeLogChunk,
 		LogFile: func(text string) {
@@ -1150,6 +1176,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			touchLogActivity(text, true)
 		},
 		CIReadinessChanged: ciReadinessChanged,
+		MarkRunning:        markRunning,
 		OnPRMerged:         e.onPRMerged,
 	}
 	if stepName == types.StepReview {
@@ -1165,6 +1192,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	}
 	skipRemaining := false
 	stepSkipped := false
+	var skipReason string
 	currentRoundID := state.currentRoundID
 	var reviewApprovedHeadSHA string
 	var restartFrom types.StepName
@@ -1174,6 +1202,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		reviewStartingHeadSHA := run.HeadSHA
 		sctx.ReviewStartingHeadSHA = reviewStartingHeadSHA
 		outcome, err := step.Execute(sctx)
+		if refusal := ProtectedPathOutcome(err); refusal != nil {
+			outcome, err = refusal, nil
+		}
 		roundNum++
 		roundDuration := time.Since(phaseStart).Milliseconds()
 		if err != nil {
@@ -1245,9 +1276,6 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		var inserted *db.StepRound
 		var dbErr error
 		roundTrigger := nextTrigger
-		if stepName == types.StepCI && restartFrom != "" && !sctx.Fixing {
-			roundTrigger = "auto_fix"
-		}
 		if stepName == types.StepReview {
 			if e.config != nil && e.config.CaptureEvalProvenance {
 				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, e.config.TrustedConfigSHA, e.config.ReplayGlobalYAML, e.config.ReplayRepoYAML, roundDuration)
@@ -1255,7 +1283,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				inserted, dbErr = e.db.InsertReviewStepRound(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, roundDuration)
 			}
 		} else {
-			inserted, dbErr = e.db.InsertStepRound(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, roundDuration)
+			inserted, dbErr = e.db.InsertStepRoundWithRepair(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, outcome.RepairPublished, roundDuration)
 		}
 		if dbErr != nil {
 			currentRoundID = roundInsertID(currentRoundID, inserted, dbErr)
@@ -1283,8 +1311,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				executionMS += time.Since(phaseStart).Milliseconds()
 				fixCount := findingsCount(fixableFindings)
 				writeLog(fmt.Sprintf("auto-fix round %d/%d starting after round %d (%d %s)", autoFixAttempts, autoFixLimit, roundNum, fixCount, pluralize(fixCount, "finding", "findings")))
-				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
-					slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
+				if dbErr := e.db.StartStepFixRound(sr.ID, autoFixLimit); dbErr != nil {
+					slog.Warn("failed to start step fix round in db", "step", stepName, "error", dbErr)
 				}
 				if currentRoundID != "" {
 					if idsJSON := findingIDsJSON(fixableFindings); idsJSON != "" {
@@ -1297,6 +1325,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				phaseStart = time.Now()
 				sctx.Fixing = true
 				sctx.PreviousFindings = fixableFindings
+				sctx.DeferredFindings = removeMatchingFindingsJSON(outcome.Findings, fixableFindings)
 				nextTrigger = "auto_fix"
 				continue
 			}
@@ -1308,6 +1337,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// are acceptable and don't block the pipeline.
 			skipRemaining = outcome.SkipRemaining
 			stepSkipped = outcome.Skipped
+			skipReason = safeurl.RedactText(outcome.SkipReason)
 			break
 		}
 
@@ -1331,6 +1361,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		e.mu.Lock()
 		e.waiting = true
 		e.waitingStep = stepName
+		e.waitingProtectedPath = HasProtectedPathRefusal(outcome.Findings)
 		e.mu.Unlock()
 
 		// Parking starts before the gate becomes observable. This includes the
@@ -1353,7 +1384,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), outcome.Findings, "", &executionMS)
 
-		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, true)
+		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, outcome.Findings, true)
 		if errors.Is(err, ErrDaemonShutdown) {
 			// A clean shutdown interrupted the run while it was parked at this
 			// gate. Leave the run row, the awaiting-agent marker, and the gate
@@ -1423,13 +1454,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			phaseStart = time.Now()
 			selectedCount := selectedFindingCount(outcome.Findings, response.findingIDs)
 			writeLog(fmt.Sprintf("user-fix round starting after round %d (%d %s selected)", roundNum, selectedCount, pluralize(selectedCount, "finding", "findings")))
-			if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
-				slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
+			if dbErr := e.db.StartStepFixRound(sr.ID, autoFixLimit); dbErr != nil {
+				slog.Warn("failed to start step fix round in db", "step", stepName, "error", dbErr)
 			}
 			sctx.Fixing = true
 			selectedFindings := filterFindingsJSON(outcome.Findings, response.findingIDs)
 			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
 			sctx.PreviousFindings = mergedFindings
+			sctx.DeferredFindings = removeMatchingFindingsJSON(outcome.Findings, selectedFindings)
 			nextTrigger = "auto_fix"
 			if currentRoundID != "" {
 				allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, mergedFindings)
@@ -1470,6 +1502,10 @@ done:
 		reviewedHead := reviewApprovedHeadSHA
 		run.ReviewApprovedHeadSHA = &reviewedHead
 		ClearUncertifiedPipelineRangeIfCertified(ctx, e.db, repo.ID, run.Branch, reviewedHead, workDir)
+	} else if stepSkipped {
+		if err := e.db.CompleteSkippedStep(sr.ID, finalExitCode, durationMS, logPath, skipReason); err != nil {
+			return false, "", fmt.Errorf("complete skipped step %s: %w", stepName, err)
+		}
 	} else if err := e.db.CompleteStepWithStatus(sr.ID, status, finalExitCode, durationMS, logPath); err != nil {
 		return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 	}
@@ -1678,7 +1714,7 @@ func pluralize(n int, singular, plural string) string {
 // the same gate when the run resumes. A response and a cancellation that land
 // concurrently are still a genuine race, and the response may win that one.
 // The caller must set e.waiting and e.waitingStep before calling this method.
-func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sctx *StepContext, immediate bool) (approvalResponse, bool, error) {
+func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sctx *StepContext, findings string, immediate bool) (approvalResponse, bool, error) {
 	defer func() {
 		e.mu.Lock()
 		e.waiting = false
@@ -1720,7 +1756,7 @@ func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sc
 		case <-ctx.Done():
 			return approvalResponse{}, false, context.Cause(ctx)
 		case <-timer.C:
-			resolved, err := e.reconcileApprovalGate(ctx, step, sctx)
+			resolved, err := e.reconcileApprovalGate(ctx, step, sctx, findings)
 			if ctx.Err() != nil {
 				return approvalResponse{}, false, context.Cause(ctx)
 			}
@@ -1761,9 +1797,12 @@ func (e *Executor) claimGateReconciliation() bool {
 	return true
 }
 
-func (e *Executor) reconcileApprovalGate(ctx context.Context, step Step, sctx *StepContext) (bool, error) {
+func (e *Executor) reconcileApprovalGate(ctx context.Context, step Step, sctx *StepContext, findingsJSON string) (bool, error) {
 	reconciler, ok := step.(ApprovalGateReconciler)
 	if !ok {
+		return false, nil
+	}
+	if HasProtectedPathRefusal(findingsJSON) {
 		return false, nil
 	}
 	timeout := e.gateReconcileTimeout
@@ -1967,6 +2006,15 @@ func (e *Executor) emitStepEventWithFindingsAndError(eventType ipc.EventType, ru
 		StepName:   &stepName,
 		Status:     &status,
 		DurationMS: durationMS,
+	}
+	// The combined housekeeping invocation is recorded under Document because
+	// that is where it executes. Carry its broader scope on completion so an
+	// attached TUI does not temporarily present the shared wall time as
+	// documentation-only work while waiting for another snapshot.
+	if stepName == types.StepDocument {
+		if combined, err := e.db.HasAgentInvocationPurpose(run.ID, string(stepName), "housekeeping"); err == nil && combined {
+			event.WorkScope = ipc.WorkScopeDocumentLintHousekeeping
+		}
 	}
 	stats := e.findingStatsForStep(run.ID, stepName)
 	if stats.ReportedFindings > 0 || stats.FixedFindings > 0 {

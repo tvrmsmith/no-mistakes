@@ -114,6 +114,77 @@ const (
 	FindingCategoryLint          = "lint"
 )
 
+// Finding category constants for the CI step's check findings. The CI step
+// turns each settled issue on the pull request into one finding and the fix
+// half routes by this category: a check finding names its provider check in
+// Finding.Check, a merge-conflict finding asks for a rebase, a transient
+// finding is a provider-attributed outcome no code change can clear, and a
+// review-bot finding carries one unresolved comment from a third-party
+// review bot's check.
+const (
+	FindingCategoryCICheck         = "ci-check"
+	FindingCategoryCIMergeConflict = "ci-merge-conflict"
+	FindingCategoryCITransient     = "ci-transient"
+	FindingCategoryCIReviewBot     = "ci-review-bot"
+)
+
+// Test scenario result constants: the vocabulary the test step's evidence
+// prompt instructs the agent to use for each derived scenario.
+//
+// ScenarioResultUntested is the honest answer for a scenario this machine
+// could not drive against the real product - either the change has no live
+// product surface, or a required tool, credential, permission, or authority
+// is unavailable. It is reported on the pull request and never blocks by
+// itself; the run's verdict determines whether that scenario coverage parks
+// the step.
+const (
+	ScenarioResultPass     = "pass"
+	ScenarioResultFail     = "fail"
+	ScenarioResultUntested = "untested"
+)
+
+// Test verdict constants: the test step's own conclusion about whether the
+// change is safe to ship, independent of individual findings.
+//
+// TestVerdictNoSurface is the honest answer when the change itself has no
+// runtime product no-mistakes can drive live - a CI-workflow-only change, a
+// docs-only change, a pure non-runtime refactor, or anything else with no
+// live-exercisable scenario. It is not a silent skip: the Test step parks
+// for a human to decide whether proceeding without live validation is
+// acceptable. A change that has a live surface and was not driven still
+// uses pass/fail/untested plus go/no-go/inconclusive; claiming no-surface
+// while any scenario is live or pass/fail is a contract violation.
+const (
+	TestVerdictGo           = "go"
+	TestVerdictNoGo         = "no-go"
+	TestVerdictInconclusive = "inconclusive"
+	TestVerdictNoSurface    = "no-surface"
+)
+
+var (
+	knownScenarioResults = []string{ScenarioResultPass, ScenarioResultFail, ScenarioResultUntested}
+	knownTestVerdicts    = []string{TestVerdictGo, TestVerdictNoGo, TestVerdictInconclusive, TestVerdictNoSurface}
+)
+
+// IsKnownScenarioResult reports whether result is part of the scenario result
+// vocabulary.
+func IsKnownScenarioResult(result string) bool {
+	return slices.Contains(knownScenarioResults, result)
+}
+
+// IsKnownTestVerdict reports whether verdict is part of the verdict vocabulary.
+func IsKnownTestVerdict(verdict string) bool {
+	return slices.Contains(knownTestVerdicts, verdict)
+}
+
+// KnownScenarioResults returns the scenario result vocabulary, for error
+// messages that have to name what they accept.
+func KnownScenarioResults() []string { return slices.Clone(knownScenarioResults) }
+
+// KnownTestVerdicts returns the verdict vocabulary, for error messages that
+// have to name what they accept.
+func KnownTestVerdicts() []string { return slices.Clone(knownTestVerdicts) }
+
 // Finding represents a single review, test, lint, or PR comment finding.
 type Finding struct {
 	ID               string `json:"id,omitempty"`
@@ -126,8 +197,61 @@ type Finding struct {
 	UserInstructions string `json:"user_instructions,omitempty"`
 	ReviewScope      string `json:"review_scope,omitempty"`
 	// Category separates the combined document+lint housekeeping pass's
-	// findings into their owning gates. Empty everywhere else.
+	// findings into their owning gates and the CI step's findings by kind
+	// (see the FindingCategoryCI* constants). Empty everywhere else.
 	Category string `json:"category,omitempty"`
+	// Check is the provider check name a CI finding was derived from. CheckID
+	// is the provider's opaque identity for that exact check, so same-named
+	// checks remain distinct through selection and repair. Both are empty on
+	// every non-CI finding.
+	Check   string `json:"check,omitempty"`
+	CheckID string `json:"check_id,omitempty"`
+}
+
+// TestScenario is one named end-to-end scenario the test step derived from the
+// user intent and the change, and the result of driving it.
+//
+// Live is the whole point of the record: it is true ONLY when the scenario was
+// driven against the real product in this run. A unit test, a stub, a recorded
+// fixture, or reading the code is not live, and a scenario that could not be
+// driven here is reported with Result ScenarioResultUntested plus a Reason
+// explaining the unavailable capability or absence of a live product surface,
+// rather than being guessed at.
+type TestScenario struct {
+	Name     string `json:"name"`
+	Result   string `json:"result"`
+	Live     bool   `json:"live"`
+	Evidence string `json:"evidence"`
+	Reason   string `json:"reason"`
+}
+
+// LiveScenarioCounts returns how many of scenarios were driven live against
+// the real product, and how many there are in total.
+func LiveScenarioCounts(scenarios []TestScenario) (live, total int) {
+	for _, s := range scenarios {
+		total++
+		if s.Live {
+			live++
+		}
+	}
+	return live, total
+}
+
+// NoLiveExercisableScenarios reports whether every scenario is untested and
+// none were driven live. That is the only shape the Test step will accept as
+// "this change has no live-validatable surface": a pass or fail, or any live
+// mark, means there was something to exercise and no-surface must not cover
+// it.
+func NoLiveExercisableScenarios(scenarios []TestScenario) bool {
+	if len(scenarios) == 0 {
+		return false
+	}
+	for _, s := range scenarios {
+		if s.Live || s.Result != ScenarioResultUntested {
+			return false
+		}
+	}
+	return true
 }
 
 // TestArtifact describes evidence produced by the test step for human review.
@@ -150,16 +274,26 @@ type findingWire struct {
 	UserInstructions    string `json:"user_instructions,omitempty"`
 	ReviewScope         string `json:"review_scope,omitempty"`
 	Category            string `json:"category,omitempty"`
+	Check               string `json:"check,omitempty"`
+	CheckID             string `json:"check_id,omitempty"`
 	RequiresHumanReview *bool  `json:"requires_human_review,omitempty"`
 }
 
 // Findings is the structured findings payload exchanged across pipeline, IPC, and TUI.
+//
+// Scenarios and Verdict are the test step's live-validation contract. Both are
+// omitempty and both decode as their zero values from every findings payload
+// written before the contract existed, so an older recorded run still parses
+// and simply renders no scenario table.
 type Findings struct {
 	Items          []Finding      `json:"findings"`
 	Summary        string         `json:"summary"`
 	Tested         []string       `json:"tested,omitempty"`
 	TestingSummary string         `json:"testing_summary,omitempty"`
 	Artifacts      []TestArtifact `json:"artifacts,omitempty"`
+	Scenarios      []TestScenario `json:"scenarios,omitempty"`
+	Verdict        string         `json:"verdict,omitempty"`
+	TestedHeadSHA  string         `json:"tested_head_sha,omitempty"`
 	RiskLevel      string         `json:"risk_level"`
 	RiskRationale  string         `json:"risk_rationale"`
 	RiskScope      string         `json:"risk_scope,omitempty"`
@@ -172,6 +306,9 @@ type findingsWire struct {
 	Tested         []string       `json:"tested"`
 	TestingSummary string         `json:"testing_summary"`
 	Artifacts      []TestArtifact `json:"artifacts"`
+	Scenarios      []TestScenario `json:"scenarios"`
+	Verdict        string         `json:"verdict"`
+	TestedHeadSHA  string         `json:"tested_head_sha"`
 	RiskLevel      string         `json:"risk_level"`
 	RiskRationale  string         `json:"risk_rationale"`
 	RiskScope      string         `json:"risk_scope"`
@@ -188,7 +325,34 @@ func ParseFindingsJSON(raw string) (Findings, error) {
 	if len(items) == 0 && len(wire.Legacy) > 0 {
 		items = wire.Legacy
 	}
-	return Findings{Items: items, Summary: wire.Summary, Tested: wire.Tested, TestingSummary: wire.TestingSummary, Artifacts: wire.Artifacts, RiskLevel: wire.RiskLevel, RiskRationale: wire.RiskRationale, RiskScope: wire.RiskScope}, nil
+	return Findings{
+		Items:          items,
+		Summary:        wire.Summary,
+		Tested:         wire.Tested,
+		TestingSummary: wire.TestingSummary,
+		Artifacts:      wire.Artifacts,
+		Scenarios:      wire.Scenarios,
+		Verdict:        wire.Verdict,
+		TestedHeadSHA:  wire.TestedHeadSHA,
+		RiskLevel:      wire.RiskLevel,
+		RiskRationale:  wire.RiskRationale,
+		RiskScope:      wire.RiskScope,
+	}, nil
+}
+
+// FindingsMetadata returns findings with its items dropped, so every helper
+// that re-selects items keeps the whole evidence payload - tested commands,
+// artifacts, scenarios, verdict, risk - without re-enumerating those fields at
+// each call site. Enumerating them is how a new evidence field gets silently
+// dropped by a filter written before it existed; the artifact list was already
+// being lost that way by the pipeline's own merge and filter helpers.
+//
+// It is exported because those helpers live in internal/pipeline rather than
+// here: this package owns what the payload contains, so it owns the answer to
+// "keep everything except the items".
+func FindingsMetadata(findings Findings) Findings {
+	findings.Items = nil
+	return findings
 }
 
 // NormalizeFindings assigns deterministic IDs to findings that do not have one yet.
@@ -211,7 +375,7 @@ func FilterFindings(findings Findings, ids []string) Findings {
 	for _, id := range ids {
 		selected[id] = true
 	}
-	filtered := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
+	filtered := FindingsMetadata(findings)
 	for _, item := range findings.Items {
 		if selected[item.ID] {
 			filtered.Items = append(filtered.Items, item)
@@ -232,7 +396,7 @@ func ExcludeFindings(findings Findings, ids []string) Findings {
 	for _, id := range ids {
 		excluded[id] = true
 	}
-	result := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
+	result := FindingsMetadata(findings)
 	for _, item := range findings.Items {
 		if !excluded[item.ID] {
 			result.Items = append(result.Items, item)
@@ -247,7 +411,7 @@ func ExcludeFindings(findings Findings, ids []string) Findings {
 // reported and remain selectable by hand; the floor only bounds what the
 // executor fixes on its own.
 func AutoFixableFindings(findings Findings, minSeverity string) Findings {
-	result := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
+	result := FindingsMetadata(findings)
 	for _, item := range findings.Items {
 		if !MeetsSeverityFloor(item.Severity, minSeverity) {
 			continue
@@ -264,15 +428,7 @@ func AutoFixableFindings(findings Findings, minSeverity string) Findings {
 // Source stamped to FindingSourceUser and receive deterministic "user-N" IDs
 // if they do not carry an ID. The original Findings is not mutated.
 func MergeUserOverrides(findings Findings, instructions map[string]string, added []Finding) Findings {
-	result := Findings{
-		Summary:        findings.Summary,
-		Tested:         findings.Tested,
-		TestingSummary: findings.TestingSummary,
-		Artifacts:      findings.Artifacts,
-		RiskLevel:      findings.RiskLevel,
-		RiskRationale:  findings.RiskRationale,
-		RiskScope:      findings.RiskScope,
-	}
+	result := FindingsMetadata(findings)
 	if len(findings.Items) > 0 {
 		result.Items = make([]Finding, len(findings.Items))
 		copy(result.Items, findings.Items)
@@ -418,6 +574,8 @@ func (f *Finding) UnmarshalJSON(data []byte) error {
 	f.UserInstructions = wire.UserInstructions
 	f.ReviewScope = wire.ReviewScope
 	f.Category = wire.Category
+	f.Check = wire.Check
+	f.CheckID = wire.CheckID
 	if f.Action == "" && wire.RequiresHumanReview != nil {
 		if *wire.RequiresHumanReview {
 			f.Action = ActionAskUser

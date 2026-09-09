@@ -49,6 +49,8 @@ func handleFakeCLI(mode string) {
 		fakeGitPassthroughHandler(args)
 	case "git-move-head-passthrough":
 		fakeGitMoveHeadPassthroughHandler(args)
+	case "git-intervening-push-passthrough":
+		fakeGitInterveningPushPassthroughHandler(args)
 	case "git-reset-after-commit-passthrough":
 		fakeGitResetAfterCommitPassthroughHandler(args)
 	case "git-require-noninteractive-env":
@@ -69,6 +71,17 @@ func handleFakeCLI(mode string) {
 		fakeCIGlabSequenceHandler(args)
 	case "ci-gh-reconcile":
 		fakeCIGHReconcileHandler(args)
+	case "ci-gh-with-intervening-push":
+		// A single step invocation can need both a faked gh (for the PR
+		// attestation write) and a faked git (to inject a push-time race) in
+		// the same sctx.Env, so this dispatches on the binary name rather
+		// than a second, mutually exclusive FAKE_CLI_MODE.
+		binaryName := filepath.Base(os.Args[0])
+		if strings.TrimSuffix(binaryName, filepath.Ext(binaryName)) == "git" {
+			fakeGitInterveningPushPassthroughHandler(args)
+		} else {
+			fakeCIGHHandler(args)
+		}
 	default:
 		os.Exit(1)
 	}
@@ -197,6 +210,34 @@ func fakeGitMoveHeadPassthroughHandler(args []string) {
 	fakeGitForward(args, realGit)
 }
 
+// fakeGitInterveningPushPassthroughHandler models a genuine push-time race:
+// right before forwarding the pipeline's own push, it pushes an
+// already-prepared interloper commit to the same remote ref from a second
+// clone, so the pipeline's real force-with-lease push - resolved against the
+// remote state as it was at decision time, moments earlier - is rejected by
+// git's own lease check exactly as it would be against a real concurrent
+// push. FAKE_CLI_INTERLOPER_DIR is the second clone (with the interloper
+// commit already committed but not yet pushed); FAKE_CLI_INTERLOPER_REMOTE
+// and FAKE_CLI_INTERLOPER_REF name where to push it.
+func fakeGitInterveningPushPassthroughHandler(args []string) {
+	realGit := os.Getenv("FAKE_CLI_REAL_GIT")
+	if fakeGitSubcommand(args) == "push" {
+		interloperDir := os.Getenv("FAKE_CLI_INTERLOPER_DIR")
+		interloperRemote := os.Getenv("FAKE_CLI_INTERLOPER_REMOTE")
+		interloperRef := os.Getenv("FAKE_CLI_INTERLOPER_REF")
+		if interloperDir != "" && interloperRemote != "" && interloperRef != "" {
+			push := exec.Command(realGit, "-C", interloperDir, "push", interloperRemote, interloperRef)
+			push.Stdout = io.Discard
+			push.Stderr = os.Stderr
+			if err := push.Run(); err != nil {
+				fmt.Fprintln(os.Stderr, "interloper push failed:", err)
+				os.Exit(1)
+			}
+		}
+	}
+	fakeGitForward(args, realGit)
+}
+
 // fakeGitSubcommand returns the git subcommand in args, skipping the global
 // options (and their values) that may precede it.
 func fakeGitSubcommand(args []string) string {
@@ -281,6 +322,24 @@ func fakeGitRemoteErrorHandler(args []string) {
 		os.Exit(1)
 	}
 	fakeGitForward(args, realGit)
+}
+
+func fakePRHeadSHA() string {
+	configured := os.Getenv("FAKE_CLI_PR_HEAD_SHA")
+	if os.Getenv("FAKE_CLI_HEAD_FROM_WORKTREE") != "1" || configured != "deadbeef" {
+		return configured
+	}
+	realGit := os.Getenv("FAKE_CLI_REAL_GIT")
+	if realGit == "" {
+		fmt.Fprintln(os.Stderr, "missing FAKE_CLI_REAL_GIT")
+		os.Exit(1)
+	}
+	out, err := exec.Command(realGit, "rev-parse", "HEAD").Output()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func fakeGitForward(args []string, realGit string) {
@@ -389,7 +448,7 @@ func fakeCIGHReconcileHandler(args []string) {
 		}
 	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json headRefOid") {
-		fmt.Println(os.Getenv("FAKE_CLI_PR_HEAD_SHA"))
+		fmt.Println(fakePRHeadSHA())
 		os.Exit(0)
 	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json mergeable") {
@@ -461,11 +520,23 @@ func fakeCIGHHandler(args []string) {
 	joined := strings.Join(args, " ")
 
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
+		if authErr := os.Getenv("FAKE_CLI_AUTH_ERR"); authErr != "" {
+			fmt.Fprintln(os.Stderr, authErr)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 	fakeGHHandlePRContentCommands(args, joined)
+	if strings.Contains(joined, "pr list") {
+		if prListJSON := os.Getenv("FAKE_CLI_PR_LIST_JSON"); prListJSON != "" {
+			fmt.Print(prListJSON)
+		} else {
+			fmt.Println("[]")
+		}
+		os.Exit(0)
+	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json headRefOid") {
-		fmt.Println(os.Getenv("FAKE_CLI_PR_HEAD_SHA"))
+		fmt.Println(fakePRHeadSHA())
 		os.Exit(0)
 	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json mergeable") {
@@ -496,6 +567,10 @@ func fakeCIGHHandler(args []string) {
 		os.Exit(0)
 	}
 	if strings.Contains(joined, "api") && strings.Contains(joined, "graphql") {
+		if strings.Contains(joined, "reviewThreads") {
+			printFakeReviewThreads(os.Getenv("FAKE_CLI_REVIEW_COMMENTS"))
+			os.Exit(0)
+		}
 		if checksErr != "" {
 			fmt.Fprintln(os.Stderr, checksErr)
 			os.Exit(1)
@@ -555,7 +630,7 @@ func fakeCIGHSequenceHandler(args []string) {
 		os.Exit(0)
 	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json headRefOid") {
-		fmt.Println(os.Getenv("FAKE_CLI_PR_HEAD_SHA"))
+		fmt.Println(fakePRHeadSHA())
 		os.Exit(0)
 	}
 	if strings.Contains(joined, "pr checks") {
@@ -765,7 +840,7 @@ func fakeCIGHNoChecksHandler(args []string) {
 		os.Exit(0)
 	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json headRefOid") {
-		fmt.Println(os.Getenv("FAKE_CLI_PR_HEAD_SHA"))
+		fmt.Println(fakePRHeadSHA())
 		os.Exit(0)
 	}
 	os.Exit(1)
@@ -805,12 +880,15 @@ func printFakeCommitChecks(raw string, args []string) {
 		Bucket      string `json:"bucket"`
 		CompletedAt string `json:"completedAt"`
 		Link        string `json:"link"`
+		// App is the check suite's app slug, rendered the way GitHub's
+		// GraphQL rollup reports it (checkSuite.app.slug). Empty omits it.
+		App string `json:"app"`
 	}
 	if err := json.Unmarshal([]byte(raw), &checks); err != nil {
 		fmt.Println(raw)
 		return
 	}
-	nodes := make([]map[string]string, 0, len(checks))
+	nodes := make([]map[string]any, 0, len(checks))
 	for _, check := range checks {
 		status := check.Status
 		if status == "" {
@@ -840,10 +918,14 @@ func printFakeCommitChecks(raw string, args []string) {
 		if repo := fakeGraphQLRepo(args); repo != "" {
 			link = strings.Replace(link, "github.com/test/repo/", "github.com/"+repo+"/", 1)
 		}
-		nodes = append(nodes, map[string]string{
+		node := map[string]any{
 			"__typename": "CheckRun", "name": check.Name, "status": status,
 			"conclusion": conclusion, "completedAt": check.CompletedAt, "detailsUrl": link,
-		})
+		}
+		if check.App != "" {
+			node["checkSuite"] = map[string]any{"app": map[string]any{"slug": check.App}}
+		}
+		nodes = append(nodes, node)
 	}
 	response := map[string]any{
 		"data": map[string]any{
@@ -854,6 +936,60 @@ func printFakeCommitChecks(raw string, args []string) {
 							"nodes":    nodes,
 							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
 						},
+					},
+				},
+			},
+		},
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Println(string(encoded))
+}
+
+// printFakeReviewThreads renders FAKE_CLI_REVIEW_COMMENTS - a JSON array of
+// {author, path, line, body} - as the reviewThreads GraphQL response the
+// GitHub backend's GetReviewComments parses, one unresolved thread per
+// comment. An empty or invalid value renders a pull request with no threads.
+func printFakeReviewThreads(raw string) {
+	var comments []struct {
+		Author string `json:"author"`
+		Path   string `json:"path"`
+		Line   int    `json:"line"`
+		Body   string `json:"body"`
+	}
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &comments); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	threads := make([]map[string]any, 0, len(comments))
+	for i, comment := range comments {
+		threads = append(threads, map[string]any{
+			"isResolved": false,
+			"comments": map[string]any{
+				"nodes": []map[string]any{{
+					"databaseId": i + 1,
+					"body":       comment.Body,
+					"path":       comment.Path,
+					"line":       comment.Line,
+					"url":        fmt.Sprintf("https://github.com/test/repo/pull/42#discussion_r%d", i+1),
+					"createdAt":  "2026-09-07T00:00:00Z",
+					"author":     map[string]any{"login": comment.Author},
+				}},
+			},
+		})
+	}
+	response := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"pullRequest": map[string]any{
+					"reviewThreads": map[string]any{
+						"nodes":    threads,
+						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
 					},
 				},
 			},

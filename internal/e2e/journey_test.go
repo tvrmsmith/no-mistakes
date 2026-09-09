@@ -308,7 +308,7 @@ func runHappyPath(t *testing.T, agentName string) {
 		assertReviewAgentErrorRun(t, h)
 		assertReviewExistingBranchUsesMergeBaseScope(t, h)
 		assertExplicitAttachUsesRepoWideActiveRun(t, h)
-		assertTestMalformedStructuredOutputRun(t, h)
+		assertTestMalformedStructuredOutputCorrectedRun(t, h)
 		assertLintMalformedStructuredOutputRun(t, h)
 		assertDocumentWarningRun(t, h)
 		assertDocumentInfoRun(t, h)
@@ -394,10 +394,13 @@ func cleanReviewScenario(t *testing.T) string {
         - severity: warning
           description: "README missing new CLI flag"
       summary: "README needs updating"
-  - match: "branch: document-missing-findings"
+  - match: "report only what you could not resolve.\n\nContext:\n- branch: document-missing-findings"
     text: "documentation missing findings field"
     structured:
       summary: "docs status unavailable"
+      risk_level: low
+      risk_rationale: "documentation status only"
+      risk_scope: source-or-external
   - match: "branch: document-info"
     text: "documentation info finding"
     structured:
@@ -411,9 +414,17 @@ func cleanReviewScenario(t *testing.T) string {
       summary: "README needs updating"
       risk_level: low
       risk_rationale: "documentation-only follow-up"
+      risk_scope: source-or-external
       tested:
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
       artifacts: []
       title: "docs: update README"
       body: "## Summary\ndocumentation update"
@@ -430,6 +441,7 @@ func cleanReviewScenario(t *testing.T) string {
       summary: "found 1 issue"
       risk_level: medium
       risk_rationale: "warning requires human review"
+      risk_scope: source-or-external
   - match: "branch: agent-edits"
     text: "agent edited a file"
     edits:
@@ -444,8 +456,15 @@ func cleanReviewScenario(t *testing.T) string {
       tested:
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
       artifacts: []
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself.\n\nContext:\n- branch: test-agent-new-test-file"
+  - match: "You are validating a code change by driving the product itself. Derive the scenarios this change must satisfy, then run each one against the real running product.\n\nContext:\n- branch: test-agent-new-test-file"
     text: "tests passed after adding a regression test"
     edits:
       - path: "agent_test.py"
@@ -458,14 +477,21 @@ func cleanReviewScenario(t *testing.T) string {
       tested:
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
       artifacts: []
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself.\n\nContext:\n- branch: test-malformed-structured-output"
+  - match: "You are validating a code change by driving the product itself. Derive the scenarios this change must satisfy, then run each one against the real running product.\n\nContext:\n- branch: test-malformed-structured-output"
     text: "tests found some issues"
     structured_raw: '{"summary":123}'
   - match: "Detect the linting and formatting tools for this project, run the relevant checks yourself, apply safe fixes, and verify the result.\n\nContext:\n- branch: lint-malformed-structured-output"
     text: "lint found some issues"
     structured_raw: '{"summary":123}'
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself.\n\nContext:\n- branch: test-agent-staged-new-test-file"
+  - match: "You are validating a code change by driving the product itself. Derive the scenarios this change must satisfy, then run each one against the real running product.\n\nContext:\n- branch: test-agent-staged-new-test-file"
     text: "tests passed after staging a regression test"
     edits:
       - path: "agent_staged_test.go"
@@ -478,8 +504,15 @@ func cleanReviewScenario(t *testing.T) string {
       tested:
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
       artifacts: []
-  - match: "You are validating a code change by testing it. Examine the repository and run the smallest relevant tests yourself."
+  - match: "You are validating a code change by driving the product itself. Derive the scenarios this change must satisfy, then run each one against the real running product."
     text: "tests passed with no evidence artifacts"
     structured:
       findings: []
@@ -487,6 +520,13 @@ func cleanReviewScenario(t *testing.T) string {
       tested:
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
       artifacts: []
   - match: "Review the code changes and return structured findings with a risk assessment.\n\nContext:\n- branch: feature/e2e"
     text: "looks good"
@@ -507,6 +547,13 @@ func cleanReviewScenario(t *testing.T) string {
       tested:
         - "fakeagent: simulated review"
       testing_summary: "not run during review"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
   - match: "Review the code changes and return structured findings"
     text: "looks good"
     structured:
@@ -525,15 +572,31 @@ func cleanReviewScenario(t *testing.T) string {
       tested:
         - "fakeagent: simulated review"
       testing_summary: "not run during review"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
   - text: "no issues found"
     structured:
       findings: []
       summary: "no issues found"
       risk_level: low
       risk_rationale: "no risks detected in the diff"
+      risk_scope: source-or-external
       tested:
         - "fakeagent: simulated test run"
       testing_summary: "simulated tests passed"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
+      artifacts: []
       title: "feat: fakeagent change"
       body: "## Summary\nfakeagent canned PR body"
 `
@@ -1056,7 +1119,7 @@ func assertEmptyDiffAfterRebaseRun(t *testing.T, h *Harness) {
 	if sawPromptContainingAll(invs, "Review the code changes", "branch: empty-after-rebase") {
 		t.Fatal("empty-after-rebase run should skip review without calling the agent")
 	}
-	if sawPromptContainingAll(invs, "You are validating a code change by testing it", "branch: empty-after-rebase") {
+	if sawPromptContainingAll(invs, "You are validating a code change by driving the product itself", "branch: empty-after-rebase") {
 		t.Fatal("empty-after-rebase run should skip test without calling the agent")
 	}
 	if sawPromptContainingAll(invs, "Find what this change made stale", "branch: empty-after-rebase") {
@@ -1361,8 +1424,11 @@ func assertConfiguredCommandRun(t *testing.T, h *Harness) {
 	if err != nil {
 		t.Fatalf("parse configured test findings: %v", err)
 	}
-	if len(findings.Tested) != 1 || findings.Tested[0] != "nm-test-e2e" {
-		t.Fatalf("expected configured test command to be recorded, got %+v", findings.Tested)
+	if len(findings.Tested) == 0 || findings.Tested[0] != "nm-test-e2e" {
+		t.Fatalf("expected configured test command to be recorded first, got %+v", findings.Tested)
+	}
+	if len(findings.Scenarios) == 0 || findings.Verdict == "" {
+		t.Fatalf("expected the evidence turn to run after the green baseline, got scenarios=%+v verdict=%q", findings.Scenarios, findings.Verdict)
 	}
 	logData, err := os.ReadFile(testCommandLog)
 	if err != nil {
@@ -1386,8 +1452,8 @@ func assertConfiguredCommandRun(t *testing.T, h *Harness) {
 		t.Fatalf("configured lint command log = %q", string(lintLogData))
 	}
 	invs := h.AgentInvocations()
-	if sawPromptContainingAll(invs, "You are validating a code change by testing it", "branch: configured-commands") {
-		t.Fatalf("configured test command should not call the agent for test detection; invocations:\n%s", summarisePrompts(invs))
+	if !sawPromptContainingAll(invs, "You are validating a code change by driving the product itself", "branch: configured-commands") {
+		t.Fatalf("configured test command must still be followed by the evidence turn; invocations:\n%s", summarisePrompts(invs))
 	}
 	if sawPromptContainingAll(invs, "Detect the linting and formatting tools", "branch: configured-commands") {
 		t.Fatalf("configured lint command should not call the agent for lint detection; invocations:\n%s", summarisePrompts(invs))
@@ -1429,35 +1495,19 @@ func assertDocumentMissingFindingsRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-missing-findings", "document-missing-findings.txt", "document missing findings\n", "add document missing findings")
 	h.PushToGate("document-missing-findings")
-	run := waitForStepStatus(t, h, "document-missing-findings", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := h.WaitForRun("document-missing-findings", 60*time.Second)
+	if run.Status != types.RunFailed {
+		t.Fatalf("document-missing-findings run status = %s, want failed", run.Status)
+	}
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-missing-findings run")
 	}
-	if documentStep.FindingsJSON == nil {
-		t.Fatal("expected document missing findings fallback to record findings JSON")
+	if documentStep.Status != types.StepStatusFailed {
+		t.Fatalf("document step status = %s, want failed", documentStep.Status)
 	}
-	findings, err := types.ParseFindingsJSON(*documentStep.FindingsJSON)
-	if err != nil {
-		t.Fatalf("parse document missing findings fallback: %v", err)
-	}
-	if findings.Summary != "docs status unavailable" {
-		t.Fatalf("document missing findings summary = %q, want docs status unavailable", findings.Summary)
-	}
-	if len(findings.Items) != 1 {
-		t.Fatalf("expected one fallback documentation finding, got %+v", findings.Items)
-	}
-	item := findings.Items[0]
-	if item.Action != types.ActionAskUser {
-		t.Fatalf("expected fallback documentation finding to ask user, got action %q", item.Action)
-	}
-	if item.Description != "docs status unavailable" {
-		t.Fatalf("fallback documentation finding description = %q, want docs status unavailable", item.Description)
-	}
-	h.Respond(run.ID, types.StepDocument, types.ActionAbort)
-	completed := h.WaitForRun("document-missing-findings", 60*time.Second)
-	if completed.Status != types.RunFailed {
-		t.Fatalf("document-missing-findings run status after abort = %s, want failed", completed.Status)
+	if documentStep.Error == nil || !strings.Contains(*documentStep.Error, "validate document analyzer findings: missing findings array") {
+		t.Fatalf("document step error = %q, want missing findings array", deref(documentStep.Error))
 	}
 }
 
@@ -1465,35 +1515,19 @@ func assertDocumentMalformedFindingRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-malformed-finding", "document-malformed-finding.txt", "document malformed finding\n", "add document malformed finding")
 	h.PushToGate("document-malformed-finding")
-	run := waitForStepStatus(t, h, "document-malformed-finding", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := h.WaitForRun("document-malformed-finding", 60*time.Second)
+	if run.Status != types.RunFailed {
+		t.Fatalf("document-malformed-finding run status = %s, want failed", run.Status)
+	}
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-malformed-finding run")
 	}
-	if documentStep.FindingsJSON == nil {
-		t.Fatal("expected document malformed finding fallback to record findings JSON")
+	if documentStep.Status != types.StepStatusFailed {
+		t.Fatalf("document step status = %s, want failed", documentStep.Status)
 	}
-	findings, err := types.ParseFindingsJSON(*documentStep.FindingsJSON)
-	if err != nil {
-		t.Fatalf("parse document malformed finding fallback: %v", err)
-	}
-	if findings.Summary != "README needs updating" {
-		t.Fatalf("document malformed finding summary = %q, want README needs updating", findings.Summary)
-	}
-	if len(findings.Items) != 1 {
-		t.Fatalf("expected one fallback documentation finding, got %+v", findings.Items)
-	}
-	item := findings.Items[0]
-	if item.Action != types.ActionAskUser {
-		t.Fatalf("expected fallback documentation finding to ask user, got action %q", item.Action)
-	}
-	if item.Description != "README needs updating" {
-		t.Fatalf("fallback documentation finding description = %q, want README needs updating", item.Description)
-	}
-	h.Respond(run.ID, types.StepDocument, types.ActionAbort)
-	completed := h.WaitForRun("document-malformed-finding", 60*time.Second)
-	if completed.Status != types.RunFailed {
-		t.Fatalf("document-malformed-finding run status after abort = %s, want failed", completed.Status)
+	if documentStep.Error == nil || !strings.Contains(*documentStep.Error, "validate document analyzer findings: finding 0 missing action") {
+		t.Fatalf("document step error = %q, want missing finding action", deref(documentStep.Error))
 	}
 }
 
@@ -1533,35 +1567,19 @@ func assertDocumentMissingSummaryRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-missing-summary", "document-missing-summary.txt", "document missing summary\n", "add document missing summary")
 	h.PushToGate("document-missing-summary")
-	run := waitForStepStatus(t, h, "document-missing-summary", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := h.WaitForRun("document-missing-summary", 60*time.Second)
+	if run.Status != types.RunFailed {
+		t.Fatalf("document-missing-summary run status = %s, want failed", run.Status)
+	}
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-missing-summary run")
 	}
-	if documentStep.FindingsJSON == nil {
-		t.Fatal("expected document missing summary fallback to record findings JSON")
+	if documentStep.Status != types.StepStatusFailed {
+		t.Fatalf("document step status = %s, want failed", documentStep.Status)
 	}
-	findings, err := types.ParseFindingsJSON(*documentStep.FindingsJSON)
-	if err != nil {
-		t.Fatalf("parse document missing summary fallback: %v", err)
-	}
-	if findings.Summary != "agent returned no structured output" {
-		t.Fatalf("document missing summary fallback summary = %q, want agent returned no structured output", findings.Summary)
-	}
-	if len(findings.Items) != 1 {
-		t.Fatalf("expected one fallback documentation finding, got %+v", findings.Items)
-	}
-	item := findings.Items[0]
-	if item.Action != types.ActionAskUser {
-		t.Fatalf("expected missing-summary fallback documentation finding to ask user, got action %q", item.Action)
-	}
-	if item.Description != "agent returned no structured output" {
-		t.Fatalf("missing-summary fallback description = %q, want agent returned no structured output", item.Description)
-	}
-	h.Respond(run.ID, types.StepDocument, types.ActionAbort)
-	completed := h.WaitForRun("document-missing-summary", 60*time.Second)
-	if completed.Status != types.RunFailed {
-		t.Fatalf("document-missing-summary run status after abort = %s, want failed", completed.Status)
+	if documentStep.Error == nil || !strings.Contains(*documentStep.Error, "validate document analyzer findings: missing summary") {
+		t.Fatalf("document step error = %q, want missing summary", deref(documentStep.Error))
 	}
 }
 
@@ -1673,27 +1691,27 @@ func assertExplicitAttachUsesRepoWideActiveRun(t *testing.T, h *Harness) {
 	}
 }
 
-func assertTestMalformedStructuredOutputRun(t *testing.T, h *Harness) {
+func assertTestMalformedStructuredOutputCorrectedRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("test-malformed-structured-output", "test-malformed-structured-output.txt", "test malformed structured output\n", "add test malformed structured output")
 	h.PushToGate("test-malformed-structured-output")
 	run := h.WaitForRun("test-malformed-structured-output", 60*time.Second)
 	if run.Status != types.RunCompleted {
-		t.Fatalf("test-malformed-structured-output run status=%s error=%v", run.Status, deref(run.Error))
+		t.Fatalf("test-malformed-structured-output run status=%s error=%v, want completed after analyzer correction", run.Status, deref(run.Error))
 	}
 	testStep, ok := findStep(run.Steps, types.StepTest)
 	if !ok {
 		t.Fatal("expected test step in test-malformed-structured-output run")
 	}
-	if testStep.FindingsJSON == nil {
-		t.Fatal("expected malformed test structured output fallback to record findings JSON")
+	if testStep.Status != types.StepStatusCompleted {
+		t.Fatalf("expected test step to complete after malformed analyzer output was corrected, got %s", testStep.Status)
 	}
-	findings, err := types.ParseFindingsJSON(*testStep.FindingsJSON)
-	if err != nil {
-		t.Fatalf("parse malformed test output fallback findings: %v", err)
-	}
-	if !strings.Contains(findings.Summary, "tests found some issues") {
-		t.Fatalf("malformed test output fallback summary = %q, want tests found some issues", findings.Summary)
+	if !sawPromptContainingAll(h.AgentInvocations(),
+		"Your previous structured findings were REJECTED",
+		"This is a correction-only turn",
+		`{"summary":123}`,
+	) {
+		t.Fatal("expected malformed analyzer payload to trigger a correction-only agent invocation")
 	}
 }
 
@@ -1702,22 +1720,18 @@ func assertLintMalformedStructuredOutputRun(t *testing.T, h *Harness) {
 	h.CommitChange("lint-malformed-structured-output", "lint-malformed-structured-output.generated.go", "lint malformed structured output\n", "add lint malformed structured output")
 	h.PushToGate("lint-malformed-structured-output")
 	run := h.WaitForRun("lint-malformed-structured-output", 60*time.Second)
-	if run.Status != types.RunCompleted {
-		t.Fatalf("lint-malformed-structured-output run status=%s error=%v", run.Status, deref(run.Error))
+	if run.Status != types.RunFailed {
+		t.Fatalf("lint-malformed-structured-output run status=%s error=%v, want failed: malformed analyzer output must not pass the Lint step", run.Status, deref(run.Error))
 	}
 	lintStep, ok := findStep(run.Steps, types.StepLint)
 	if !ok {
 		t.Fatal("expected lint step in lint-malformed-structured-output run")
 	}
-	if lintStep.FindingsJSON == nil {
-		t.Fatal("expected malformed lint structured output fallback to record findings JSON")
+	if lintStep.Status != types.StepStatusFailed {
+		t.Fatalf("expected lint step to fail on malformed analyzer output, got %s", lintStep.Status)
 	}
-	findings, err := types.ParseFindingsJSON(*lintStep.FindingsJSON)
-	if err != nil {
-		t.Fatalf("parse malformed lint output fallback findings: %v", err)
-	}
-	if !strings.Contains(findings.Summary, "lint found some issues") {
-		t.Fatalf("malformed lint output fallback summary = %q, want lint found some issues", findings.Summary)
+	if lintStep.Error == nil || !strings.Contains(*lintStep.Error, "validate lint analyzer findings") {
+		t.Fatalf("expected lint step error to name the analyzer output contract, got %q", deref(lintStep.Error))
 	}
 }
 
@@ -2171,8 +2185,8 @@ func assertFailingTestCommandRun(t *testing.T, h *Harness) {
 	if findings.Items[0].ID != "test-1" {
 		t.Fatalf("expected normalized failing test finding ID test-1, got %q", findings.Items[0].ID)
 	}
-	if len(findings.Tested) != 1 || findings.Tested[0] != "nm-test-fails-e2e" {
-		t.Fatalf("expected failing test command to be recorded, got %+v", findings.Tested)
+	if len(findings.Tested) < 2 || findings.Tested[0] != "nm-test-fails-e2e" {
+		t.Fatalf("expected failing test command followed by live evidence checks, got %+v", findings.Tested)
 	}
 	if testStep.DurationMS == nil {
 		t.Fatal("expected awaiting failing test step to expose execution duration")
@@ -2845,7 +2859,7 @@ func assertNoUnexpectedAutofixCommits(t *testing.T, run *ipc.RunInfo, featureHea
 
 func assertNoCommandTestStep(t *testing.T, steps []ipc.StepResultInfo, invs []Invocation) {
 	t.Helper()
-	if !sawPromptContainingAll(invs, "You are validating a code change by testing it", "branch: feature/e2e", "action", "tested", "testing_summary") {
+	if !sawPromptContainingAll(invs, "You are validating a code change by driving the product itself", "branch: feature/e2e", "action", "tested", "testing_summary") {
 		t.Errorf("expected a test prompt with branch metadata, action guidance, and test reporting fields in invocations, got %d:\n%s", len(invs), summarisePrompts(invs))
 	}
 	step, ok := findStep(steps, types.StepTest)

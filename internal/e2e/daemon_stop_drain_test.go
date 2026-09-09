@@ -40,6 +40,7 @@ func slowReviewScenario(t *testing.T, branch string, delayMS int) string {
       summary: "no blocking issues"
       risk_level: low
       risk_rationale: "no risks detected in the diff"
+      risk_scope: source-or-external
       tested: ["fakeagent: simulated review"]
       testing_summary: "not run during review"
   - text: "no issues found"
@@ -48,8 +49,17 @@ func slowReviewScenario(t *testing.T, branch string, delayMS int) string {
       summary: "no issues found"
       risk_level: low
       risk_rationale: "no risks detected in the diff"
+      risk_scope: source-or-external
       tested: ["fakeagent: simulated test run"]
       testing_summary: "simulated tests passed"
+      scenarios:
+        - name: "fakeagent: simulated end-to-end scenario"
+          result: pass
+          live: true
+          evidence: "fakeagent: simulated test run"
+          reason: ""
+      verdict: go
+      artifacts: []
       title: "feat: fakeagent change"
       body: "## Summary\nfakeagent canned PR body"
 `
@@ -72,6 +82,13 @@ func runStatusFromDB(t *testing.T, h *Harness, runID string) types.RunStatus {
 	}
 	if run == nil {
 		t.Fatalf("run %s vanished from the database", runID)
+	}
+	if run.Status == types.RunFailed {
+		msg := ""
+		if run.Error != nil {
+			msg = *run.Error
+		}
+		t.Logf("run %s failed with: %s", runID, msg)
 	}
 	return run.Status
 }
