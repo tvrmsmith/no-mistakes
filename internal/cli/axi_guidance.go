@@ -14,12 +14,13 @@ package cli
 // synchronization as well as a rerun - and the synchronization has to come
 // first. Once `rerun` has created its pending run, that run is the newest one
 // branchsync inspects; it carries no push binding, so the state is
-// `pipeline_owned` and both `Refresh` and `Apply` refuse. The clone is then
-// stranded behind the gate head, and a fresh `axi run` is rejected
-// non-fast-forward at its trigger push. Syncing first also establishes exactly
-// the equality the later reattach needs (gate head == local HEAD).
+// `pipeline_owned` and both `Refresh` and `Apply` refuse. A clone behind the
+// gate head does not get that far any more, because the clean-head rule above
+// refuses the rerun outright, which is what keeps the sync reachable. Syncing
+// first also establishes exactly the equality the later reattach needs (gate
+// head == local HEAD).
 // Proven end to end by e2e TestAxiStaleMonitorSyncBeforeRerunReattaches and,
-// for the failure of the reverse order, TestAxiStaleMonitorRerunBeforeSyncStrandsTheRecovery.
+// for the reverse order, TestAxiStaleMonitorRerunBeforeSyncIsRefused.
 //
 // The skill body (internal/skill/skill.go) owns the full driving guidance and
 // the published agents guide (docs/.../guides/agents.md) mirrors it; the repo

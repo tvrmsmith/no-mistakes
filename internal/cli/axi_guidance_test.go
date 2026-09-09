@@ -47,7 +47,7 @@ import (
 // `legacy_unbound`, a state the classifier cannot produce for a rerun, and
 // nothing here noticed. Proven end
 // to end by e2e TestAxiStaleMonitorSyncBeforeRerunReattaches and its
-// TestAxiStaleMonitorRerunBeforeSyncStrandsTheRecovery counterpart.
+// TestAxiStaleMonitorRerunBeforeSyncIsRefused counterpart.
 var canonicalStaleMonitorPhrases = []string{
 	"never hand-rebase",
 	"revalidates from Review",
