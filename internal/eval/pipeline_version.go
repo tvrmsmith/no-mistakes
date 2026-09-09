@@ -24,16 +24,14 @@ const (
 	PipelineAny PipelineVersion = ""
 )
 
-// cheapGateNames are the steps cheap enough to gate before a full review
-// pass. types.StepLint and types.StepTest are real constants; "format" and
-// "metrics" are named directly by string because a sibling change is still
-// adding them as types.StepName constants, and comparing by string keeps this
-// derivation correct both before and after they land.
+// cheapGateNames are the steps cheap enough to gate before a full review pass.
+// They are compared by string because the recorded db rows this derivation also
+// reads carry step names as free text.
 var cheapGateNames = map[string]bool{
-	string(types.StepLint): true,
-	string(types.StepTest): true,
-	"format":               true,
-	"metrics":              true,
+	string(types.StepLint):    true,
+	string(types.StepTest):    true,
+	string(types.StepFormat):  true,
+	string(types.StepMetrics): true,
 }
 
 // orderedStep is the shape both PipelineVersionFromSteps (from recorded db

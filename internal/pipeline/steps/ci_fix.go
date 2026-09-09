@@ -264,7 +264,7 @@ type ciRepairResult struct {
 	// HeadAdvanced is true when the run's recorded head moved to the repair.
 	HeadAdvanced bool
 	// Revalidate is true when the repair was NOT published and the pipeline
-	// must re-run from Review before Push may publish it.
+	// must re-run from Format before Push may publish it.
 	Revalidate         bool
 	NoCodeChangeNeeded bool
 	Summary            string
@@ -311,7 +311,7 @@ func (s *CIStep) commitRepair(sctx *pipeline.StepContext, summary string) (ciRep
 }
 
 // ciRevalidatesRepairs reports whether this run must re-run the whole pipeline
-// from Review after the CI step repairs a failing check, rather than publishing
+// from Format after the CI step repairs a failing check, rather than publishing
 // the repair and continuing to monitor. It is the resolved ci.revalidate_repairs
 // policy (global config, overridden by the repository's trusted default-branch
 // config). The repair recorder uses it to choose immediate publication or
@@ -325,9 +325,9 @@ func ciRevalidatesRepairs(sctx *pipeline.StepContext) bool {
 // repair took without cross-referencing the config that was in force.
 func ciRepairPolicyDescription(sctx *pipeline.StepContext) string {
 	if ciRevalidatesRepairs(sctx) {
-		return "always restart validation from Review after a repair"
+		return "always restart validation from Format after a repair"
 	}
-	return "publish a repair whose continuity with the reviewed head is provable, otherwise restart validation from Review"
+	return "publish a repair whose continuity with the reviewed head is provable, otherwise restart validation from Format"
 }
 
 // recordRepair binds a freshly produced CI repair commit to the run.
@@ -337,7 +337,7 @@ func ciRepairPolicyDescription(sctx *pipeline.StepContext) string {
 //
 //	A repair is published without revalidating only when its continuity with the
 //	reviewed, published head can be PROVEN. When that continuity cannot be
-//	proven, the repair revalidates from Review.
+//	proven, the repair revalidates from Format.
 //
 // ci.revalidate_repairs governs intent identically on every path: true asks for
 // revalidation outright, false asks to publish when it is safe to do so. Merge
@@ -358,7 +358,7 @@ func (s *CIStep) recordRepair(sctx *pipeline.StepContext, headSHA string) (ciRep
 		return s.recordLocalRepair(sctx, headSHA)
 	}
 	if reason := ciRepairContinuityGap(sctx, headSHA); reason != "" {
-		sctx.Log(fmt.Sprintf("cannot prove the repaired head continues the reviewed head: %s; revalidating from Review instead of publishing", reason))
+		sctx.Log(fmt.Sprintf("cannot prove the repaired head continues the reviewed head: %s; revalidating from Format instead of publishing", reason))
 		return s.recordLocalRepair(sctx, headSHA)
 	}
 	return s.publishRepair(sctx, headSHA)
@@ -396,7 +396,7 @@ func ciRepairContinuityGap(sctx *pipeline.StepContext, headSHA string) string {
 // the Push step's
 // assertReviewApprovedPushHead guard refuses to publish the repaired head until
 // Review has approved it again. The CI monitor turns that into a restart at
-// Review.
+// Format.
 func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, headSHA string) (ciRepairResult, error) {
 	ref := normalizedBranchRef(sctx.Run.Branch)
 	if _, err := stepGitRun(sctx, "update-ref", ref, headSHA); err != nil {

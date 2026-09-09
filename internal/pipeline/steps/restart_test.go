@@ -1012,8 +1012,8 @@ func TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn(t *testing.T)
 // step's wrapper line leaves that step's edits uncommitted with no restart
 // asked for, which is exactly what each case here fails on.
 //
-// Review is the boundary and the certifier today, so it parks over the residue
-// instead of committing it. The other three commit and re-enter validation.
+// Review is the certifier, so it parks over the residue instead of committing
+// it. The other three commit and re-enter validation.
 func TestValidationStep_ExecuteRoutesThroughTheSharedExitHelper(t *testing.T) {
 	t.Parallel()
 	cleanReview, err := json.Marshal(Findings{

@@ -1504,6 +1504,8 @@ func stepDisplayName(name types.StepName) string {
 		return "Review"
 	case types.StepTest:
 		return "Test"
+	case types.StepMetrics:
+		return "Metrics"
 	case types.StepDocument:
 		return "Document"
 	case types.StepLint:

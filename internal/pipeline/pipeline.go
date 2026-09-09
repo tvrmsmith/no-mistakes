@@ -47,7 +47,7 @@ func evidenceUnavailable(cause error) error {
 // Push. That is also why the boundary step cannot restart into itself: it
 // would re-enter the same step whose commit triggered the restart.
 //
-// The region now runs Format, Lint, Test, Document, Review, so every cheap
+// The region now runs Format, Lint, Test, Metrics, Document, Review, so every cheap
 // deterministic gate clears the tree before Review judges it, and no step
 // between Review and Push commits code. Push asserts a clean worktree instead
 // of formatting and sweeping one up.
@@ -64,7 +64,7 @@ const RestartBoundary types.StepName = types.StepFormat
 // presented as it.
 func CommitsOwnWorkAtExit(name types.StepName) bool {
 	switch name {
-	case types.StepFormat, types.StepReview, types.StepTest, types.StepDocument, types.StepLint:
+	case types.StepFormat, types.StepReview, types.StepTest, types.StepMetrics, types.StepDocument, types.StepLint:
 		return true
 	default:
 		return false

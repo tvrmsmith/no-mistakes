@@ -315,6 +315,15 @@ const (
 	// both exit zero, and the directory sits outside the worktree so the
 	// artifacts can never enter the branch under validation.
 	envTestCoverageDir = "NO_MISTAKES_COVERAGE_DIR"
+	// envMetricsCoverageRoot names the run's coverage ROOT, the directory
+	// holding every unit's subdirectory, which the metrics command reads.
+	//
+	// It is deliberately not envTestCoverageDir. That name is the Test step's
+	// per-unit WRITE target, wiped immediately before each unit's command
+	// runs, and one repository shell function reading one name must not get a
+	// different directory depending on which step called it. The Metrics step
+	// therefore sets this name and never sets NO_MISTAKES_COVERAGE_DIR.
+	envMetricsCoverageRoot = "NO_MISTAKES_COVERAGE_ROOT"
 )
 
 // maxChangedFilesEnvBytes bounds NO_MISTAKES_CHANGED_FILES. A single

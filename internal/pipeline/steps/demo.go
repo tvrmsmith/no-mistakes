@@ -64,6 +64,12 @@ func DemoSteps() []pipeline.Step {
 			log:        "Running: go test -race ./...\n\nok  \tgithub.com/kunchenguid/no-mistakes/internal/handler\t1.2s\nok  \tgithub.com/kunchenguid/no-mistakes/internal/config\t0.8s\nok  \tgithub.com/kunchenguid/no-mistakes/internal/server\t1.5s\n\nPASS",
 		},
 		&demoStep{
+			name:       types.StepMetrics,
+			delay:      2 * time.Second,
+			displayDur: 9 * time.Second,
+			log:        "Running: crap-report --coverage $NO_MISTAKES_COVERAGE_ROOT\nMeasuring complexity against coverage...\nmetrics passed: 12 function(s) measured against a crap threshold of 30",
+		},
+		&demoStep{
 			name:       types.StepDocument,
 			delay:      3 * time.Second,
 			displayDur: 18 * time.Second,

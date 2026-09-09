@@ -75,6 +75,7 @@ auto_fix:
   rebase: 3
   review: 0
   test: 3
+  metrics: 3
   document: 3
   lint: 3
   ci: 3
@@ -375,7 +376,7 @@ Accepts any Go `time.ParseDuration` string: `30m`, `2h`, `4h30m`, etc.
 
 This is an idle timeout, not an absolute deadline: every time the base branch advances, the monitor re-arms it.
 So an actively-updated green PR keeps its monitor no matter how long it stays open.
-If it later develops an actual GitHub, GitLab, Forgejo, or Azure DevOps merge conflict, the CI auto-fix path rebases it, revalidates from Review because rebasing cannot prove continuity with the reviewed head, and publishes it through Push, while a clean behind PR needs no command.
+If it later develops an actual GitHub, GitLab, Forgejo, or Azure DevOps merge conflict, the CI auto-fix path rebases it, revalidates from Format because rebasing cannot prove continuity with the reviewed head, and publishes it through Push, while a clean behind PR needs no command.
 A genuinely idle/abandoned PR still parks at an approval gate after the timeout elapses.
 While that CI gate is parked, the daemon continues bounded read-only PR-state checks.
 If the PR is merged or closed externally, the stale gate completes automatically; an open, unknown, or temporarily unreachable PR remains parked for a user decision.
@@ -603,12 +604,15 @@ For empty `commands.lint`, the lint step attempts safe lint fixes during its own
 | `auto_fix.format`   | `int` | `3`     | Formatter failure auto-fix attempts                                                         |
 | `auto_fix.review`   | `int` | `0`     | Review finding auto-fix attempts                                                            |
 | `auto_fix.test`     | `int` | `3`     | Test failure auto-fix attempts                                                              |
+| `auto_fix.metrics`  | `int` | `3`     | Metrics breach auto-fix attempts                                                            |
 | `auto_fix.document` | `int` | `3`     | Not used by the automatic document pass                                                     |
 | `auto_fix.lint`     | `int` | `3`     | Lint issue auto-fix attempts                                                                |
 | `auto_fix.ci`       | `int` | `3`     | CI auto-fix attempts for CI failures, plus GitHub, GitLab, Forgejo, and Azure DevOps merge conflicts |
 | `auto_fix.min_severity` | `string` | `warning` | Lowest finding severity the pipeline fixes on its own: `error`, `warning`, or `info` |
 
 Legacy alias: `auto_fix.babysit`.
+
+There is deliberately no global `metrics` block beside this one. The retry count bounds how hard the pipeline tries and is an operator setting like its neighbours, while [`metrics.threshold`](/no-mistakes/reference/repo-config/#metrics) is a gate strength only the repository's own maintainer calibrates, so it lives in the repo config alone.
 
 `auto_fix.min_severity` bounds only automatic fixing. Findings below the floor are still reported at the gate and can be selected by hand with `no-mistakes axi respond --action fix --findings <ids>`; they just do not spend a fix round plus the full rereview that round triggers on their own.
 It defaults to `warning` because `info` findings are advisory. Set it to `info` to restore fixing every auto-fix finding regardless of severity, or to `error` to fix only blocking ones.
@@ -685,7 +689,7 @@ A value in the trusted repository config overrides this global value in both dir
 
 ### commit.fix_message
 
-Template for the subject of commits created by the Review, Test, Document, Lint, and CI repair paths.
+Template for the subject of commits created by the Review, Test, Metrics, Document, Lint, and CI repair paths.
 
 | | |
 | --- | --- |
@@ -713,7 +717,7 @@ A per-repo [`commit.fix_message`](/no-mistakes/reference/repo-config/#commitfix_
 ### intent
 
 Transcript-based user-intent extraction settings.
-When enabled and no intent was supplied directly for the run, no-mistakes can read recent local agent transcripts, match the session that produced the change, summarize the author's intent, pass that summary to rebase, lint, test, document, review, CI auto-fix, and PR prompts, and include it in generated PR descriptions.
+When enabled and no intent was supplied directly for the run, no-mistakes can read recent local agent transcripts, match the session that produced the change, summarize the author's intent, pass that summary to rebase, format auto-fix, lint, test, metrics auto-fix, document, review, CI auto-fix, and PR prompts, and include it in generated PR descriptions.
 
 |      |          |
 | ---- | -------- |

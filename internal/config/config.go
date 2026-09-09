@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path"
@@ -86,17 +87,17 @@ const (
 	MaxCIRerunTransient = 5
 	// DefaultCIRevalidateRepairs is the policy the CI step uses when
 	// ci.revalidate_repairs is unset. It is false because restarting the whole
-	// pipeline at Review for every CI repair is the single most expensive
-	// thing the pipeline can do to a run: it replays Review, Test, Document,
-	// Lint, Push, and PR against the repaired head, so one repair costs
-	// another full agent pass over the whole change. VISION.md's cost
-	// constraint makes that opt-in.
+	// pipeline at Format for every CI repair is the single most expensive
+	// thing the pipeline can do to a run: it replays Format, Lint, Test,
+	// Metrics, Document, Review, Push, and PR against the repaired head, so
+	// one repair costs another full agent pass over the whole change.
+	// VISION.md's cost constraint makes that opt-in.
 	//
 	// False does not mean "always publish". It means "publish when it is
 	// provably safe to": a repair is published only when its head is the run's
 	// review-approved commit or a descendant of it, and any repair that cannot
 	// show that - every merge-conflict repair, since a rebase rewrites the
-	// head - revalidates from Review instead. See CI.RevalidateRepairs.
+	// head - revalidates from Format instead. See CI.RevalidateRepairs.
 	DefaultCIRevalidateRepairs = false
 	// DefaultEvalMaxCases caps the auto-captured local eval corpus. Cases
 	// share one object pool per repository, so the marginal cost of a case is
@@ -362,7 +363,34 @@ type RepoConfig struct {
 	// allow_repo_commands: a contributor's pushed branch must not be able to
 	// exempt its own commits from revalidation.
 	Restart RestartRaw `yaml:"restart"`
+	// Metrics carries the metrics step's gate settings. Its threshold is the
+	// gate's strength and its exempt_paths waive the gate for a path, so the
+	// WHOLE block is honored ONLY from the trusted default-branch copy of
+	// .no-mistakes.yaml (see EffectiveRepoConfig), regardless of
+	// allow_repo_commands: a contributor's pushed branch must not be able to
+	// raise the threshold past its own breach or exempt the file that breached.
+	Metrics MetricsRaw `yaml:"metrics"`
 }
+
+// MetricsRaw is the YAML representation of the metrics block.
+type MetricsRaw struct {
+	// Threshold is the score at or above which a measured function breaches.
+	// nil means unset, so the built-in default applies. Zero is a legal
+	// calibration value meaning every measured function breaches.
+	Threshold *float64 `yaml:"threshold"`
+	// ExemptPaths lists the globs whose matching files the gate does not judge.
+	ExemptPaths []string `yaml:"exempt_paths"`
+}
+
+// Metrics is the resolved metrics-step configuration.
+type Metrics struct {
+	Threshold   float64
+	ExemptPaths []string
+}
+
+// DefaultMetricsThreshold is the built-in score ceiling, the conventional CRAP
+// limit above which a function is judged too complex for its coverage.
+const DefaultMetricsThreshold = 30
 
 // RestartRaw is the YAML representation of the restart block.
 type RestartRaw struct {
@@ -553,6 +581,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 		DisableProjectSettings bool             `yaml:"disable_project_settings"`
 		NoCI                   bool             `yaml:"no_ci"`
 		Restart                RestartRaw       `yaml:"restart"`
+		Metrics                MetricsRaw       `yaml:"metrics"`
 	}
 	var raw repoConfigRaw
 	if err := value.Decode(&raw); err != nil {
@@ -575,14 +604,16 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.DisableProjectSettings = raw.DisableProjectSettings
 	c.NoCI = raw.NoCI
 	c.Restart = raw.Restart
+	c.Metrics = raw.Metrics
 	return nil
 }
 
 // Commands holds optional per-repo command overrides.
 type Commands struct {
-	Lint   string `yaml:"lint"`
-	Test   string `yaml:"test"`
-	Format string `yaml:"format"`
+	Lint    string `yaml:"lint"`
+	Test    string `yaml:"test"`
+	Format  string `yaml:"format"`
+	Metrics string `yaml:"metrics"`
 }
 
 // AutoFixRaw is the YAML representation of auto-fix config.
@@ -596,6 +627,7 @@ type AutoFixRaw struct {
 	CI       *int `yaml:"ci"`
 	Babysit  *int `yaml:"babysit"`
 	Rebase   *int `yaml:"rebase"`
+	Metrics  *int `yaml:"metrics"`
 	// MinSeverity is the lowest finding severity the executor will fix on its
 	// own. Unrecognized and blank values leave the resolved default in place.
 	// It is trusted-only (see EffectiveRepoConfig), unlike the retry counts
@@ -628,7 +660,7 @@ type CI struct {
 	// failure and merge conflict alike: a repair is published without
 	// revalidating only when its continuity with the reviewed, published head
 	// can be PROVEN - the repaired head is the run's review-approved commit or
-	// a descendant of it - and revalidates from Review when it cannot.
+	// a descendant of it - and revalidates from Format when it cannot.
 	//
 	// false (default): a provable repair is published through the same guarded
 	// force-push path the Push step uses - review-approved-head continuity, the
@@ -643,8 +675,9 @@ type CI struct {
 	// resolved rebase from one that dropped the work.
 	//
 	// true: the repair is kept local, the run's review approval is revoked,
-	// and the pipeline restarts at Review so the repaired head re-passes
-	// Review, Test, Document, and Lint before Push republishes it. Safer, and
+	// and the pipeline restarts at Format so the repaired head re-passes
+	// Format, Lint, Test, Metrics, Document, and Review before Push
+	// republishes it. Safer, and
 	// materially more expensive in wall-clock time and tokens - which is why
 	// it is opt-in (see VISION.md).
 	RevalidateRepairs bool
@@ -660,6 +693,7 @@ type AutoFix struct {
 	Format   int
 	CI       int
 	Rebase   int
+	Metrics  int
 	// MinSeverity bounds automatic fixing to findings at or above this
 	// severity. Lower-severity findings are still reported and remain
 	// selectable by hand; they just do not spend a fix round on their own.
@@ -727,6 +761,9 @@ type Config struct {
 	// Restart is the resolved, trusted-only restart-exemption configuration
 	// (see the RepoConfig field).
 	Restart Restart
+	// Metrics is the resolved metrics-step configuration. Its repository half
+	// is trusted-only (see the RepoConfig field).
+	Metrics Metrics
 }
 
 // SkippedSteps returns every step a run skips: the repository's standing
@@ -1179,9 +1216,9 @@ ci:
   # be proven. Defaults to false: a repair that descends from the reviewed head
   # is published through the same guarded force-push path the Push step uses and
   # CI keeps monitoring, so one repair costs one agent round. A repair that
-  # cannot show that ancestry revalidates from Review anyway - a merge-conflict
+  # cannot show that ancestry revalidates from Format anyway - a merge-conflict
   # repair always does, because rebasing rewrites the head. Set true to restart
-  # validation at Review for every repair - safer, and it pays for another full
+  # validation at Format for every repair - safer, and it pays for another full
   # pipeline pass in wall clock and tokens every time CI is repaired. A
   # repository that sets ci.revalidate_repairs on its own default branch
   # overrides this value.
@@ -2336,6 +2373,9 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateTestRaw(cfg.Test); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	if err := validateMetricsRaw(cfg.Metrics); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	skipSteps, err := normalizeSkipSteps(cfg.SkipSteps)
 	if err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
@@ -2474,6 +2514,34 @@ func validateRestartRaw(restart RestartRaw) error {
 	return nil
 }
 
+// validateMetricsRaw fails the config closed on a metrics block the gate could
+// not act on. It deliberately also runs on the PUSHED copy, for the same
+// reason validateRestartRaw does: a branch carrying an invalid block must fail
+// here, before it merges, rather than brick the trusted-config read afterwards.
+//
+// The rules stay minimal on purpose. The daemon's
+// assertGateTrustedConfigReadable aborts EVERY run of a repository whose
+// default-branch config fails to validate, so each rule added here is a way to
+// take the whole repository offline. Zero is legal: it means every measured
+// function breaches, which is a real calibration value.
+func validateMetricsRaw(metrics MetricsRaw) error {
+	if metrics.Threshold != nil {
+		threshold := *metrics.Threshold
+		if math.IsNaN(threshold) || math.IsInf(threshold, 0) {
+			return fmt.Errorf("metrics.threshold must be a finite number")
+		}
+		if threshold < 0 {
+			return fmt.Errorf("metrics.threshold must not be negative, got %v", threshold)
+		}
+	}
+	for i, pattern := range metrics.ExemptPaths {
+		if strings.TrimSpace(pattern) == "" {
+			return fmt.Errorf("metrics.exempt_paths[%d] must not be empty", i)
+		}
+	}
+	return nil
+}
+
 // EffectiveRepoConfig returns the repo config that should drive the pipeline
 // given a pushed-branch copy and the trusted default-branch copy.
 //
@@ -2575,6 +2643,17 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// rule entirely. Replacing the block rather than the one field means a
 		// restart.* setting added later lands on the safe side by default.
 		effective.Restart = RestartRaw{ExemptPaths: slices.Clone(trusted.Restart.ExemptPaths)}
+		// The whole metrics block is trusted-only for the same reason: the
+		// threshold is the gate's strength and exempt_paths waives the gate for
+		// a path, so a pushed branch that could set either would clear its own
+		// breach. Replacing the block rather than each field means a metrics.*
+		// setting added later lands on the safe side by default. The slice is
+		// cloned because a bare struct copy would alias the trusted config's
+		// backing array.
+		effective.Metrics = MetricsRaw{
+			Threshold:   trusted.Metrics.Threshold,
+			ExemptPaths: slices.Clone(trusted.Metrics.ExemptPaths),
+		}
 		// ignore_patterns itself stays pushed-readable, since narrowing what a
 		// run works on is the contributor's call. The trusted copy is carried
 		// beside it for the gates that use an ignore entry to EXEMPT a changed
@@ -2597,6 +2676,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.AutoFix.MinSeverity = nil
 		effective.SkipSteps = nil
 		effective.Restart = RestartRaw{}
+		effective.Metrics = MetricsRaw{}
 		effective.TrustedIgnorePatterns = nil
 		if !allowRepoCommands {
 			effective.PR = PRRaw{}
@@ -2931,6 +3011,30 @@ func applyReviewOverrides(dst *Review, src *GlobalReviewRaw) {
 	}
 }
 
+// metricsDefaults returns the default metrics-step settings: the conventional
+// CRAP ceiling and no exemptions.
+func metricsDefaults() Metrics {
+	return Metrics{Threshold: DefaultMetricsThreshold}
+}
+
+// applyMetricsOverrides applies non-nil raw values onto resolved defaults.
+// The threshold is validated at config parse time (validateMetricsRaw), so a
+// negative or non-finite value never reaches here.
+func applyMetricsOverrides(dst *Metrics, src *MetricsRaw) {
+	if src.Threshold != nil {
+		dst.Threshold = *src.Threshold
+	}
+	// A non-nil source list REPLACES dst.ExemptPaths rather than appending, so
+	// applying the repo copy after the global copy does not merge two
+	// exemption lists into one. An explicit empty list means no exemptions.
+	if src.ExemptPaths != nil {
+		dst.ExemptPaths = make([]string, 0, len(src.ExemptPaths))
+		for _, pattern := range src.ExemptPaths {
+			dst.ExemptPaths = append(dst.ExemptPaths, strings.TrimSpace(pattern))
+		}
+	}
+}
+
 // autoFixDefaults returns the default auto-fix configuration.
 func autoFixDefaults() AutoFix {
 	return AutoFix{
@@ -2941,6 +3045,7 @@ func autoFixDefaults() AutoFix {
 		Format:   3,
 		CI:       3,
 		Rebase:   3,
+		Metrics:  3,
 		// Info findings are advisory. Fixing them automatically costs a fix
 		// round plus the full rereview that round triggers, so they are
 		// reported and left for a deliberate hand selection instead.
@@ -3003,6 +3108,9 @@ func applyAutoFixOverrides(dst *AutoFix, src *AutoFixRaw) {
 	if src.Rebase != nil {
 		dst.Rebase = *src.Rebase
 	}
+	if src.Metrics != nil {
+		dst.Metrics = *src.Metrics
+	}
 	if src.MinSeverity != nil {
 		if severity := strings.ToLower(strings.TrimSpace(*src.MinSeverity)); severity != "" && types.IsKnownFindingSeverity(severity) {
 			dst.MinSeverity = severity
@@ -3028,6 +3136,8 @@ func (c *Config) AutoFixLimit(step types.StepName) int {
 		return c.AutoFix.CI
 	case types.StepRebase:
 		return c.AutoFix.Rebase
+	case types.StepMetrics:
+		return c.AutoFix.Metrics
 	default:
 		return 0
 	}
@@ -3084,6 +3194,13 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		}
 	}
 
+	// There is deliberately no global metrics block. The threshold is a gate
+	// strength that only the repository's own maintainer can calibrate, and
+	// EffectiveRepoConfig already sourced this copy from the trusted default
+	// branch, so an operator-wide default would only add a surface nobody sets.
+	metrics := metricsDefaults()
+	applyMetricsOverrides(&metrics, &repo.Metrics)
+
 	commit := Commit{FixMessage: DefaultFixMessageTemplate}
 	if global.Commit.FixMessage != nil {
 		commit.FixMessage = *global.Commit.FixMessage
@@ -3133,6 +3250,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		NoCI:                   repo.NoCI,
 		SkipSteps:              slices.Clone(repo.SkipSteps),
 		Restart:                restart,
+		Metrics:                metrics,
 	}
 
 	if repo.Agent != "" {

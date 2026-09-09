@@ -270,6 +270,7 @@ auto_fix:
   format: 0
   lint: 0
   test: 0
+  metrics: 0
   review: 0
   document: 0
   ci: 0

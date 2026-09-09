@@ -579,7 +579,7 @@ func TestCIStep_FailedRevalidationWriteDoesNotAdvanceTheLiveHead(t *testing.T) {
 // The delivery decision itself is covered by
 // TestCIStep_RevalidateRepairsPolicySelectsRepairDelivery without paying for a
 // monitor loop. This one test pays for it once, to pin the remaining wiring:
-// the monitor turns a held repair into a restart at Review, and states the
+// the monitor turns a held repair into a restart at Format, and states the
 // policy in force before it does anything.
 func TestCIStep_MonitorRestartsAtTheValidationBoundaryForAHeldRepair(t *testing.T) {
 	t.Parallel()

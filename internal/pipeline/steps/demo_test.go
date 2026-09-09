@@ -38,6 +38,7 @@ func TestDemoSteps(t *testing.T) {
 		types.StepRebase,
 		types.StepLint,
 		types.StepTest,
+		types.StepMetrics,
 		types.StepDocument,
 		types.StepReview,
 		types.StepPush,

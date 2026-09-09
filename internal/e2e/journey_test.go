@@ -105,7 +105,7 @@ func TestAXIControlByteFailureGateRemainsReadable(t *testing.T) {
 	if !bytes.Contains(rawLog, []byte("bad\x1fvalue")) {
 		t.Fatal("durable Test log should preserve the raw control byte")
 	}
-	for _, stepName := range []types.StepName{types.StepDocument, types.StepReview, types.StepPush} {
+	for _, stepName := range []types.StepName{types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush} {
 		step, ok := findStep(run.Steps, stepName)
 		if !ok || step.Status != types.StepStatusPending {
 			t.Fatalf("%s should remain pending at the readable Test gate, got %+v", stepName, step)
@@ -1046,7 +1046,7 @@ func assertEmptyDiffAfterRebaseRun(t *testing.T, h *Harness) {
 	if run.Status != types.RunCompleted {
 		t.Fatalf("empty-after-rebase run did not complete: status=%s error=%v", run.Status, deref(run.Error))
 	}
-	for _, stepName := range []types.StepName{types.StepFormat, types.StepLint, types.StepTest, types.StepDocument, types.StepReview, types.StepPush, types.StepPR, types.StepCI} {
+	for _, stepName := range []types.StepName{types.StepFormat, types.StepLint, types.StepTest, types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush, types.StepPR, types.StepCI} {
 		step, ok := findStep(run.Steps, stepName)
 		if !ok {
 			t.Fatalf("expected %s step in empty-after-rebase run", stepName)
@@ -1199,7 +1199,7 @@ func assertFormatFailureParksAutoFixable(t *testing.T, h *Harness) {
 		t.Fatalf("expected the Format step to own the formatter run, got: %s", logData)
 	}
 	// Nothing may reach the remote from a run stopped at the first gate.
-	for _, stepName := range []types.StepName{types.StepLint, types.StepTest, types.StepDocument, types.StepReview, types.StepPush} {
+	for _, stepName := range []types.StepName{types.StepLint, types.StepTest, types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush} {
 		step, ok := findStep(run.Steps, stepName)
 		if !ok || step.Status != types.StepStatusPending {
 			t.Fatalf("%s should remain pending at the Format gate, got %+v", stepName, step)
@@ -1258,7 +1258,7 @@ func assertNonEmptyDiffAfterRebaseRun(t *testing.T, h *Harness) {
 	if strings.TrimSpace(string(mergeBase)) != strings.TrimSpace(string(mainSHA)) {
 		t.Fatalf("non-empty-after-rebase merge-base = %s, want upstream main %s", strings.TrimSpace(string(mergeBase)), strings.TrimSpace(string(mainSHA)))
 	}
-	for _, stepName := range []types.StepName{types.StepRebase, types.StepFormat, types.StepLint, types.StepTest, types.StepDocument, types.StepReview, types.StepPush} {
+	for _, stepName := range []types.StepName{types.StepRebase, types.StepFormat, types.StepLint, types.StepTest, types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush} {
 		step, ok := findStep(run.Steps, stepName)
 		if !ok {
 			t.Fatalf("expected %s step in non-empty-after-rebase run", stepName)
@@ -2251,7 +2251,7 @@ func assertFailingTestCommandRun(t *testing.T, h *Harness) {
 	if *completedTestStep.DurationMS > awaitingDurationMS+200 {
 		t.Fatalf("test step duration should exclude approval wait: awaiting=%dms completed=%dms", awaitingDurationMS, *completedTestStep.DurationMS)
 	}
-	for _, stepName := range []types.StepName{types.StepDocument, types.StepReview, types.StepPush} {
+	for _, stepName := range []types.StepName{types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush} {
 		step, ok := findStep(completed.Steps, stepName)
 		if !ok {
 			t.Fatalf("expected %s step after approving failing test command", stepName)
@@ -2794,12 +2794,12 @@ func assertPushedHead(t *testing.T, runHeadSHA, upstreamHeadSHA string) {
 }
 
 // assertPipelineStepsInOrder pins the executed layout end to end. The cheap
-// deterministic gates (Format, Lint, Test) and Document all precede Review, so
+// deterministic gates (Format, Lint, Test, Metrics) and Document all precede Review, so
 // Review judges a tree the earlier gates already cleared and its approval
 // describes what Push then publishes unchanged.
 func assertPipelineStepsInOrder(t *testing.T, steps []ipc.StepResultInfo) {
 	t.Helper()
-	expected := []types.StepName{types.StepIntent, types.StepRebase, types.StepFormat, types.StepLint, types.StepTest, types.StepDocument, types.StepReview, types.StepPush, types.StepPR, types.StepCI}
+	expected := []types.StepName{types.StepIntent, types.StepRebase, types.StepFormat, types.StepLint, types.StepTest, types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush, types.StepPR, types.StepCI}
 	if len(steps) != len(expected) {
 		t.Fatalf("pipeline recorded %d steps, want %d", len(steps), len(expected))
 	}

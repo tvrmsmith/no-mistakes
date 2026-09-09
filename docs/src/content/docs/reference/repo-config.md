@@ -8,12 +8,12 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), `test.evidence.branch`, `auto_fix.min_severity`, and `restart.exempt_paths` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), the whole `metrics` block (`metrics.threshold`, `metrics.exempt_paths`), `test.evidence.branch`, `auto_fix.min_severity`, and `restart.exempt_paths` only from that trusted copy.
 `pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
-Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch, with two exceptions: `test.evidence.branch`, which names a git ref the daemon pushes to, and `auto_fix.min_severity` — the retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise. `restart` is its own trusted-only block for the same reason: `restart.exempt_paths` is a gate strength, and widening it to `**` would let a pushed branch exempt every commit it makes from revalidation.
+Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch, with two exceptions: `test.evidence.branch`, which names a git ref the daemon pushes to, and `auto_fix.min_severity` — the retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise. `restart` is its own trusted-only block for the same reason: `restart.exempt_paths` is a gate strength, and widening it to `**` would let a pushed branch exempt every commit it makes from revalidation. `metrics` is trusted-only on the same grounds: `metrics.threshold` is the strength of the metrics gate and `metrics.exempt_paths` waives it for a path, so a contributor must not be able to raise the ceiling that judges their own breach.
 `ignore_patterns` is read from both copies for different jobs: the pushed value filters review and documentation, and the trusted default-branch value is the only one that exempts a changed file from the Test step's coverage guard, so a pushed `ignore_patterns: ["**"]` cannot turn that guard off for its own change (see [`ignore_patterns`](#ignore_patterns)).
 
 If you genuinely want per-branch `commands` and `agent` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](#allow_repo_commands) in this same file on your default branch. This re-enables the previous behavior with eyes open. The switch is read only from the trusted default-branch copy, so a contributor cannot self-enable it from a pushed branch.
@@ -31,6 +31,14 @@ commands:
   # Targeted local validation only - not a full-repo CI-parity suite.
   test: "go test ./internal/cli -run '^TestDoctor' -count=1"
   format: "gofmt -w ."
+  # Reads the coverage the Test step produced and reports per-function scores.
+  metrics: "crap-report --coverage $NO_MISTAKES_COVERAGE_ROOT"
+
+# Optional metrics gate settings, read only from the trusted default branch.
+metrics:
+  threshold: 30
+  exempt_paths:
+    - "internal/generated/**"
 
 ignore_patterns:
   - "*.generated.go"
@@ -77,6 +85,7 @@ auto_fix:
   rebase: 3
   review: 3
   test: 3
+  metrics: 3
   document: 3
   lint: 5
   ci: 3
@@ -203,7 +212,7 @@ skip_steps:
   - ci
 ```
 
-Valid names are the [pipeline steps](/no-mistakes/reference/pipeline-steps/): `intent`, `rebase`, `format`, `lint`, `test`, `document`, `review`, `push`, `pr`, `ci`. An unrecognized name fails the config rather than being ignored — a typo that silently skipped nothing would read exactly like a step that ran.
+Valid names are the [pipeline steps](/no-mistakes/reference/pipeline-steps/): `intent`, `rebase`, `format`, `lint`, `test`, `metrics`, `document`, `review`, `push`, `pr`, `ci`. An unrecognized name fails the config rather than being ignored — a typo that silently skipped nothing would read exactly like a step that ran.
 
 This list and a run's own `--skip` selection are additive: neither can re-enable what the other switched off. Skipping `review` also means no run of this repository ever records review approval, which the Push step requires, so a repository that skips `review` while keeping `push` will not publish.
 
@@ -296,6 +305,53 @@ Formatter command run by the Format step.
 | Default | Empty (no formatter runs) |
 
 This does not prevent empty `commands.lint` from detecting and running formatters during the lint step's own agent pass.
+
+### commands.metrics
+
+Code-metrics command run by the [Metrics step](/no-mistakes/reference/pipeline-steps/#metrics). Run via the platform shell - `sh -c` on POSIX, `cmd.exe /c` on Windows.
+
+| | |
+| --- | --- |
+| Type | `string` |
+| Default | Empty (the metrics step skips) |
+
+When set, the Metrics step runs this exact command against the coverage the Test step produced, reads a JSON report from its stdout, and gates on any function scoring above [`metrics.threshold`](#metrics). When empty, the step logs that no command is configured and skips. There is no agent fallback: a CRAP score needs measured complexity joined to measured coverage, and an agent producing those numbers by inspection is producing fiction.
+
+The command receives [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_CHANGED_FILES`](/no-mistakes/reference/environment/#no_mistakes_changed_files), [`NO_MISTAKES_CHANGED_FILE_COUNT`](/no-mistakes/reference/environment/#no_mistakes_changed_file_count), and [`NO_MISTAKES_COVERAGE_ROOT`](/no-mistakes/reference/environment/#no_mistakes_coverage_root), the directory holding every test unit's coverage subdirectory. It reads that directory and never writes to it.
+
+Setting this command while the Test step produces no coverage parks the run for a maintainer rather than passing; the [Metrics step reference](/no-mistakes/reference/pipeline-steps/#metrics) owns the output contract, the verdict rules, and that park.
+
+This command runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so it is honored only from the trusted default-branch copy of this file unless the repository opts in via [`allow_repo_commands: true`](#allow_repo_commands).
+
+### metrics
+
+Threshold and exemptions for the [Metrics step](/no-mistakes/reference/pipeline-steps/#metrics)'s verdict.
+
+| | |
+|---|---|
+| Type | `object` |
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `metrics.threshold` | `float` | `30` |
+| `metrics.exempt_paths` | `list of string` | Empty (every measured function is judged) |
+
+```yaml
+metrics:
+  threshold: 30
+  exempt_paths:
+    - "internal/generated/**"
+```
+
+A function breaches when its score is **strictly above** `threshold`, so the threshold is the highest score the repository accepts. The default of `30` is the conventional CRAP ceiling. Zero is legal and means every measured function scoring above zero breaches, which is a real calibration value. A negative or non-finite threshold fails the config load. Advisory behavior, where the gate reports but never blocks, is reached by setting a high threshold rather than by a separate mode.
+
+`exempt_paths` entries match the same way `ignore_patterns` and `restart.exempt_paths` do: no slash matches by basename, a trailing `/**` matches an entire subtree, and anything else is a full-path glob. A function whose file matches any entry is not judged. An entry that is empty after trimming fails the config load.
+
+`threshold` is metric-blind. The `metric` field of the command's report is a free-form string the step only renders, so a repository that switches its command to a different metric must recalibrate its own threshold.
+
+The **whole block** is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`. The threshold is the strength of this gate and an exemption waives it for a path, so a contributor cannot raise the ceiling that judges their own breach. The block sits on the trusted side as a whole rather than field by field, so a `metrics.*` field added later lands on the safe side by default. With no trusted copy of this file, the block is unset and the defaults apply.
+
+There is deliberately no global `metrics` block. The threshold is a gate strength only the repository's own maintainer can calibrate, so an operator setting cannot supply one.
 
 ### document.instructions
 
@@ -411,6 +467,7 @@ Override auto-fix attempt limits for specific steps. Fields not set here inherit
 | `auto_fix.format` | `int` | Inherits from global (default `3`) |
 | `auto_fix.review` | `int` | Inherits from global (default `0`) |
 | `auto_fix.test` | `int` | Inherits from global (default `3`) |
+| `auto_fix.metrics` | `int` | Inherits from global (default `3`) |
 | `auto_fix.document` | `int` | Inherits from global (default `3`) |
 | `auto_fix.lint` | `int` | Inherits from global (default `3`) |
 | `auto_fix.ci` | `int` | Inherits from global (default `3`) |
@@ -502,7 +559,7 @@ Continuity is proven when the repaired head is the run's durably review-approved
 `revalidate_repairs` sets the intent, identically on every path:
 
 - **`false` (default)** asks to publish when it is safe to. A repair that builds on the reviewed head - the ordinary case, where the fix agent adds a commit - is committed and published immediately through the same guarded path the [Push step](/no-mistakes/reference/pipeline-steps/#push) uses (review-approved-head continuity, the force-with-lease anchor, remote verification, and the durable push binding all still apply), and the CI monitor keeps watching the same run for the new head. One repair costs one agent round.
-- **`true`** asks for revalidation outright: every repair is kept local, the run's review approval is revoked, and validation restarts at Format so the repaired head re-passes Format, Lint, Test, Document, and Review before Push republishes it.
+- **`true`** asks for revalidation outright: every repair is kept local, the run's review approval is revoked, and validation restarts at Format so the repaired head re-passes Format, Lint, Test, Metrics, Document, and Review before Push republishes it.
 
 CI repair publication uses the same settlement order as Push. The [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns the publication and retry behavior.
 
@@ -514,7 +571,7 @@ The tradeoff `true` buys is cost against an unreviewed repair:
 
 | | `false` (default) | `true` |
 |---|---|---|
-| Ordinary repair that builds on the reviewed head | published immediately, one agent round | revalidated: one agent round plus a full Format, Lint, Test, Document, Review, Push, PR pass |
+| Ordinary repair that builds on the reviewed head | published immediately, one agent round | revalidated: one agent round plus a full Format, Lint, Test, Metrics, Document, Review, Push, PR pass |
 | Merge-conflict repair | revalidated | revalidated |
 | Ordinary repair is reviewed before it reaches the PR | no | yes |
 | Steps that re-run when a repair revalidates | Format onward; Intent and Rebase do not | same |
@@ -542,7 +599,7 @@ Override the auto-fix commit subject template for this repository.
 
 The value follows the [global `commit.fix_message` template syntax and validation rules](/no-mistakes/reference/global-config/#commitfix_message).
 That includes the 1,024-byte template limit, 16-placeholder limit, 4,096-byte summary and rendered-subject limits, and rejection of bidi and invisible Unicode format characters.
-The setting applies to the Review, Test, Document, Lint, and CI repair paths, not commits created by the Rebase or Push steps.
+The setting applies to the Review, Test, Metrics, Document, Lint, and CI repair paths, not commits created by the Rebase or Push steps.
 
 This non-executing field is read from the pushed branch, so a branch can adopt its own commit convention without enabling `allow_repo_commands`.
 

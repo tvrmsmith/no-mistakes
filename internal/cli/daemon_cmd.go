@@ -250,6 +250,24 @@ func formatSkipPushOptions(steps []types.StepName) []string {
 	return []string{"no-mistakes.skip=" + strings.Join(parts, ",")}
 }
 
+// stepNameList is the pipeline's step names in run order, for the help text
+// every --step and --skip error prints. It is derived from types.AllSteps()
+// rather than written out, because the hand-written copies drifted: they
+// omitted format and still listed the pre-reorder order.
+func stepNameList() string {
+	steps := types.AllSteps()
+	names := make([]string, 0, len(steps))
+	for _, step := range steps {
+		names = append(names, string(step))
+	}
+	return strings.Join(names, ", ")
+}
+
+// validStepsHelp is the one-line hint an unknown or missing step name gets.
+func validStepsHelp() string {
+	return "Valid steps: " + stepNameList()
+}
+
 func validStep(step types.StepName) bool {
 	for _, known := range types.AllSteps() {
 		if step == known {

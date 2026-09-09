@@ -1,20 +1,21 @@
 ---
 title: Pipeline
-description: The ten steps that run on every gated push.
+description: The eleven steps that run on every gated push.
 ---
 
 The pipeline runs a fixed, opinionated sequence of steps. Order is not configurable. What each step runs *is*.
 
 ```
-intent → rebase → format → lint → test → document → review → push → pr → ci
+intent → rebase → format → lint → test → metrics → document → review → push → pr → ci
 ```
 
 ```mermaid
 flowchart LR
-  intent["Intent"] --> rebase["Rebase"] --> format["Format"] --> lint["Lint"] --> test["Test"] --> document["Document"] --> review["Review"] --> push["Push"] --> pr["PR"] --> ci["CI"]
+  intent["Intent"] --> rebase["Rebase"] --> format["Format"] --> lint["Lint"] --> test["Test"] --> metrics["Metrics"] --> document["Document"] --> review["Review"] --> push["Push"] --> pr["PR"] --> ci["CI"]
   format -. findings .-> action["Approve / fix / skip / abort"]
   lint -. findings .-> action
   test -. findings .-> action
+  metrics -. findings .-> action
   document -. findings .-> action
   review -. findings .-> action
   ci -. failures .-> action
@@ -27,12 +28,12 @@ This page is the overview. For each step's exact behavior, defaults, skip rules,
 The pipeline is opinionated so that "passed the gate" has a stable meaning:
 
 - the branch was checked against fresh remote upstream and the pushed-branch target first
-- format, lint, tests, user-facing test evidence when available, docs, and review happened before any branch push to the configured target
+- format, lint, tests, the metrics gate when configured, user-facing test evidence when available, docs, and review happened before any branch push to the configured target
 - the human stayed in control when a step needed judgment
 - the final branch update was guarded against discarding unincorporated commits already on the push target
 - push, PR creation, and CI monitoring only happened after the local gate was satisfied
 
-## The ten steps
+## The eleven steps
 
 | # | Step | What it does | Default auto-fix limit |
 |---|---|---|---|
@@ -41,11 +42,12 @@ The pipeline is opinionated so that "passed the gate" has a stable meaning:
 | 3 | **Format** | Run the configured formatter | `3` |
 | 4 | **Lint** | Run lint/static analysis | `3` |
 | 5 | **Test** | Targeted local validation of the change and intent (not a full CI suite), plus evidence when intent is available | `3` |
-| 6 | **Document** | Update docs when needed and report unresolved gaps | initial pass |
-| 7 | **Review** | AI code review of your diff | `0` (requires approval) |
-| 8 | **Push** | Safely push the validated branch to the configured target | n/a |
-| 9 | **PR** | Create or update the pull request | n/a |
-| 10 | **CI** | Watch CI + mergeability, auto-fix failures | `3` |
+| 6 | **Metrics** | Run the configured metrics command against the coverage the Test step produced and gate on complexity-versus-coverage breaches | `3` |
+| 7 | **Document** | Update docs when needed and report unresolved gaps | initial pass |
+| 8 | **Review** | AI code review of your diff | `0` (requires approval) |
+| 9 | **Push** | Safely push the validated branch to the configured target | n/a |
+| 10 | **PR** | Create or update the pull request | n/a |
+| 11 | **CI** | Watch CI + mergeability, auto-fix failures | `3` |
 
 ## Why these steps, in this order
 
@@ -55,7 +57,8 @@ The pipeline is opinionated so that "passed the gate" has a stable meaning:
   If there's no diff left after the rebase, the pipeline skips the rest.
 - **Format first among local checks** so the formatter's own rewrite, a tool-authored commit, never triggers a restart, and every step after it reads the formatted tree.
 - **Lint and test before review** so a formatter fix, a lint fix, or a test fix all land before the agent spends time reviewing code that may still change.
-- **Document after test** so docs are updated against code that's known to work.
+- **Metrics after test** so the gate reads the coverage the test units just wrote. It runs only when `commands.metrics` is set, and it has no agent fallback: a CRAP score needs measured complexity joined to measured coverage, and an agent producing those numbers by inspection is producing fiction.
+- **Document after metrics** so docs are updated against code that's known to work.
 - **Review last in the validation region** so it reads the tree that actually ships, not one a later step still might change.
   A later run's initial review also receives fix-round provenance for any uncertified pipeline-authored commits left on the branch when a previous run's re-review did not complete.
 - **Push → PR → CI** happens after all local checks pass.
@@ -70,7 +73,7 @@ Every step can:
 - **Return findings** with severity (`error`, `warning`, `info`) and an action (`auto-fix`, `ask-user`, `no-op`).
 - **Trigger auto-fix** if the step's `auto_fix` limit is above 0, the step result is auto-fixable, and any finding is `auto-fix`-eligible. The document step applies safe documentation fixes during its initial pass, and the lint step applies safe lint fixes during its own initial pass when `commands.lint` is empty.
 - **Pause for approval** if blocking findings remain after auto-fix, or if any finding is `ask-user`.
-- **Send the run back through validation** when Lint, Test, Document, or Review commits work an agent produced, so the new head is linted, tested, documented, and reviewed rather than shipped unjudged. [Validation restart](/no-mistakes/reference/pipeline-steps/#validation-restart) owns the attribution rule, the churn and residue gates, and the `restarts` count.
+- **Send the run back through validation** when Lint, Test, Metrics, Document, or Review commits work an agent produced, so the new head is linted, tested, documented, and reviewed rather than shipped unjudged. [Validation restart](/no-mistakes/reference/pipeline-steps/#validation-restart) owns the attribution rule, the churn and residue gates, and the `restarts` count.
 - **Skip** when there's nothing to do (e.g., no diff, unsupported host).
 - **Fail** on fatal errors and stop the pipeline.
 
@@ -81,7 +84,7 @@ See [Auto-Fix Loop](/no-mistakes/concepts/auto-fix/) for how the fix cycle works
 You can't reorder steps. You *can*:
 
 - Swap the agent, or configure an ordered fallback list, globally or per-repo.
-- Set explicit `commands.lint`, `commands.format`, and an optional **targeted** `commands.test` (local intent validation only; not a full CI suite).
+- Set explicit `commands.lint`, `commands.format`, and an optional **targeted** `commands.test` (local intent validation only; not a full CI suite), and an optional `commands.metrics`.
 - Store test evidence locally by default or, on a supported provider, opt into publishing it to an orphan evidence branch with `test.evidence.store_in_repo`.
 - Control auto-fix limits per step.
 - Ignore paths during review and documentation checks.
@@ -93,7 +96,7 @@ See [Configuration](/no-mistakes/guides/configuration/).
 ## What you can't configure
 
 - The step order.
-- Skipping specific steps permanently - per-run skips are allowed, but the pipeline itself always has all ten.
+- Skipping specific steps permanently - per-run skips are allowed, but the pipeline itself always has all eleven.
 - Adding new steps.
 
 This is intentional. The pipeline is opinionated so that "passed the gate" means the same thing across repos.

@@ -96,7 +96,7 @@ Yolo and AXI `--yes` approve that fix review automatically after their one fix r
 
 ## Fix commits
 
-When the Format, Review, Test, Document, Lint, or CI step commits auto-fix changes, its subject comes from `commit.fix_message`.
+When the Format, Review, Test, Metrics, Document, Lint, or CI step commits auto-fix changes, its subject comes from `commit.fix_message`.
 The [global config reference](/no-mistakes/reference/global-config/#commitfix_message) owns the template syntax, default, validation rules, size limits, and supported placeholders; the [repo config reference](/no-mistakes/reference/repo-config/#commitfix_message) owns the repository override and trust behavior.
 The pipeline validates the template, agent summary, predicted output size, and final rendered subject before `git add -A`, so a rejected value does not leave changes staged.
 
