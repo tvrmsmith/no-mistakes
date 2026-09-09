@@ -181,6 +181,8 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	// update-check.json while testing.T is removing the temp directory.
 	t.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
 
+	h.assertStubsWinTheLoginShellPath()
+
 	h.writeGlobalConfig()
 	h.initGitRepos()
 
@@ -212,6 +214,72 @@ func (h *Harness) writeLoginShellPathSeed() {
 			h.t.Fatalf("write %s: %v", name, err)
 		}
 	}
+}
+
+// loginShellGuard bounds the probe below to one shell spawn per `go test`
+// process. What it checks is a property of the developer's machine, not of any
+// one test, so the first harness answers it for all of them.
+var loginShellGuard sync.Once
+
+// assertStubsWinTheLoginShellPath fails the suite when a real gh or tea would
+// beat the BinDir stub on the PATH the daemon adopts. The daemon replaces its
+// environment with the login shell's, so a shell that never reads the seed
+// files leaves the pipeline talking to the developer's authenticated
+// github.com CLI. That failed as four unrelated-looking tests
+// (TestForkRouting and siblings) reporting an empty PR URL, hours away from
+// the environment leak that caused it, so the check reports the leak directly.
+//
+// A probe that cannot run is not a failure: shellenv itself degrades to
+// os.Environ() in exactly those cases, and that fallback keeps the exported
+// PATH with BinDir already first.
+func (h *Harness) assertStubsWinTheLoginShellPath() {
+	loginShellGuard.Do(func() {
+		shell := os.Getenv("SHELL")
+		if base := filepath.Base(shell); base != "zsh" && base != "bash" {
+			h.t.Logf("login-shell PATH guard skipped: $SHELL=%q is neither zsh nor bash", shell)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		// Same invocation shellenv uses, so the guard reads the PATH the daemon
+		// will actually resolve rather than an approximation of it.
+		out, err := exec.CommandContext(ctx, shell, "-l", "-i", "-c", "env -0").Output()
+		if err != nil {
+			h.t.Logf("login-shell PATH guard skipped: probing %s failed: %v", shell, err)
+			return
+		}
+		resolved, ok := pathFromNulEnv(string(out))
+		if !ok {
+			h.t.Logf("login-shell PATH guard skipped: %s printed no PATH", shell)
+			return
+		}
+		for _, dir := range filepath.SplitList(resolved) {
+			if dir == h.BinDir {
+				return
+			}
+			for _, name := range []string{"gh", "tea"} {
+				candidate := filepath.Join(dir, executableName(name))
+				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+					h.t.Fatalf("login shell PATH puts a real %s (%s) ahead of the e2e stub dir %s; "+
+						"the daemon adopts this PATH, so every step would reach the live CLI. "+
+						"Check that the shell reads the seed files NewHarness writes into %s.",
+						name, candidate, h.BinDir, h.HomeDir)
+				}
+			}
+		}
+		h.t.Fatalf("login shell PATH omits the e2e stub dir %s entirely; the daemon adopts this PATH, "+
+			"so any step reaching for gh, tea, or an agent would find the machine's own copy", h.BinDir)
+	})
+}
+
+// pathFromNulEnv reads the PATH entry out of `env -0` output.
+func pathFromNulEnv(out string) (string, bool) {
+	for _, entry := range strings.Split(out, "\x00") {
+		if value, found := strings.CutPrefix(entry, "PATH="); found {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func shellQuote(value string) string {
