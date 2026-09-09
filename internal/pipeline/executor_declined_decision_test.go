@@ -210,7 +210,7 @@ func TestExecutor_FixResolutionStillRecordsAUserSelection(t *testing.T) {
 			return &StepOutcome{NeedsApproval: false, ExitCode: 0}, nil
 		},
 	}
-	exec := NewExecutor(database, p, nil, nil, []Step{step, newPassStep(types.StepTest)}, nil)
+	exec := NewExecutor(database, p, nil, nil, []Step{step, newPassStep(types.StepPush)}, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()

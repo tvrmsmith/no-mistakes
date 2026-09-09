@@ -97,8 +97,8 @@ const body = `
 
 Drive ` + "`no-mistakes`" + ` through the ` + "`no-mistakes axi`" + ` command family: it prints
 machine-readable [TOON](https://toonformat.dev) to stdout and progress to stderr.
-The pipeline validates committed history through intent, rebase, review, test,
-document, lint, push, PR, and CI before it reaches the configured push target.
+The pipeline validates committed history through intent, rebase, format, lint,
+test, document, review, push, PR, and CI before it reaches the configured push target.
 ` + gateguidance.SkillBoundary + `
 ## Validate and decide
 

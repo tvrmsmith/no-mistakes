@@ -6,17 +6,17 @@ description: The ten steps that run on every gated push.
 The pipeline runs a fixed, opinionated sequence of steps. Order is not configurable. What each step runs *is*.
 
 ```
-intent → rebase → format → review → test → document → lint → push → pr → ci
+intent → rebase → format → lint → test → document → review → push → pr → ci
 ```
 
 ```mermaid
 flowchart LR
-  intent["Intent"] --> rebase["Rebase"] --> format["Format"] --> review["Review"] --> test["Test"] --> document["Document"] --> lint["Lint"] --> push["Push"] --> pr["PR"] --> ci["CI"]
+  intent["Intent"] --> rebase["Rebase"] --> format["Format"] --> lint["Lint"] --> test["Test"] --> document["Document"] --> review["Review"] --> push["Push"] --> pr["PR"] --> ci["CI"]
   format -. findings .-> action["Approve / fix / skip / abort"]
-  review -. findings .-> action
+  lint -. findings .-> action
   test -. findings .-> action
   document -. findings .-> action
-  lint -. findings .-> action
+  review -. findings .-> action
   ci -. failures .-> action
 ```
 
@@ -27,7 +27,7 @@ This page is the overview. For each step's exact behavior, defaults, skip rules,
 The pipeline is opinionated so that "passed the gate" has a stable meaning:
 
 - the branch was checked against fresh remote upstream and the pushed-branch target first
-- review, tests, user-facing test evidence when available, docs, and lint happened before any branch push to the configured target
+- format, lint, tests, user-facing test evidence when available, docs, and review happened before any branch push to the configured target
 - the human stayed in control when a step needed judgment
 - the final branch update was guarded against discarding unincorporated commits already on the push target
 - push, PR creation, and CI monitoring only happened after the local gate was satisfied
@@ -39,10 +39,10 @@ The pipeline is opinionated so that "passed the gate" has a stable meaning:
 | 1 | **Intent** | Use supplied intent or infer it from recent local agent transcripts | n/a |
 | 2 | **Rebase** | Fetch fresh remote upstream and the configured branch target, then rebase your branch onto them | `3` |
 | 3 | **Format** | Run the configured formatter | `3` |
-| 4 | **Review** | AI code review of your diff | `0` (requires approval) |
+| 4 | **Lint** | Run lint/static analysis | `3` |
 | 5 | **Test** | Targeted local validation of the change and intent (not a full CI suite), plus evidence when intent is available | `3` |
 | 6 | **Document** | Update docs when needed and report unresolved gaps | initial pass |
-| 7 | **Lint** | Run lint/static analysis; shares the document step's initial housekeeping pass when no lint command is configured | `3` |
+| 7 | **Review** | AI code review of your diff | `0` (requires approval) |
 | 8 | **Push** | Safely push the validated branch to the configured target | n/a |
 | 9 | **PR** | Create or update the pull request | n/a |
 | 10 | **CI** | Watch CI + mergeability, auto-fix failures | `3` |
@@ -53,13 +53,13 @@ The pipeline is opinionated so that "passed the gate" has a stable meaning:
 - **Rebase next** so everything else runs against the latest upstream and pushed-branch target.
   It also stops when the branch would silently bundle commits from a local default branch that were never pushed to `origin/<default_branch>`.
   If there's no diff left after the rebase, the pipeline skips the rest.
-- **Format before review** so the formatter's own rewrite, a tool-authored commit, never triggers a restart, and review reads the formatted tree.
-- **Review before test** so the agent reads fresh code, not code it may have touched during fixes.
-  A later run's initial review also receives fix-round provenance for any uncertified pipeline-authored commits left on the branch when a previous run's re-review did not complete.
+- **Format first among local checks** so the formatter's own rewrite, a tool-authored commit, never triggers a restart, and every step after it reads the formatted tree.
+- **Lint and test before review** so a formatter fix, a lint fix, or a test fix all land before the agent spends time reviewing code that may still change.
 - **Document after test** so docs are updated against code that's known to work.
-- **Lint last among local checks** so it doesn't churn over code that may still change.
+- **Review last in the validation region** so it reads the tree that actually ships, not one a later step still might change.
+  A later run's initial review also receives fix-round provenance for any uncertified pipeline-authored commits left on the branch when a previous run's re-review did not complete.
 - **Push → PR → CI** happens after all local checks pass.
-  CI publishes a repair through the Push step's guarded path and keeps monitoring only when it can prove the repair descends from the reviewed head; otherwise the repair revalidates from Review before Push republishes it, which is what a merge-conflict repair always does. [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs) sets that intent: `false` (default) publishes when it is provable, `true` revalidates every repair.
+  CI publishes a repair through the Push step's guarded path and keeps monitoring only when it can prove the repair descends from the reviewed head; otherwise the repair revalidates from Format before Push republishes it, which is what a merge-conflict repair always does. [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs) sets that intent: `false` (default) publishes when it is provable, `true` revalidates every repair.
   CI is the only step that talks to the outside world for validation.
 
 ## What each step can do
@@ -68,9 +68,9 @@ Every step can:
 
 - **Complete** cleanly and advance the pipeline.
 - **Return findings** with severity (`error`, `warning`, `info`) and an action (`auto-fix`, `ask-user`, `no-op`).
-- **Trigger auto-fix** if the step's `auto_fix` limit is above 0, the step result is auto-fixable, and any finding is `auto-fix`-eligible. The document step applies safe documentation fixes during its initial pass and, when `commands.lint` is empty, combines that pass with initial safe lint fixes before the lint step consumes its findings.
+- **Trigger auto-fix** if the step's `auto_fix` limit is above 0, the step result is auto-fixable, and any finding is `auto-fix`-eligible. The document step applies safe documentation fixes during its initial pass, and the lint step applies safe lint fixes during its own initial pass when `commands.lint` is empty.
 - **Pause for approval** if blocking findings remain after auto-fix, or if any finding is `ask-user`.
-- **Send the run back through validation** when Review, Test, Document, or Lint commits work an agent produced, so the new head is reviewed, tested, documented, and linted rather than shipped unjudged. [Validation restart](/no-mistakes/reference/pipeline-steps/#validation-restart) owns the attribution rule, the churn and residue gates, and the `restarts` count.
+- **Send the run back through validation** when Lint, Test, Document, or Review commits work an agent produced, so the new head is linted, tested, documented, and reviewed rather than shipped unjudged. [Validation restart](/no-mistakes/reference/pipeline-steps/#validation-restart) owns the attribution rule, the churn and residue gates, and the `restarts` count.
 - **Skip** when there's nothing to do (e.g., no diff, unsupported host).
 - **Fail** on fatal errors and stop the pipeline.
 
@@ -93,7 +93,7 @@ See [Configuration](/no-mistakes/guides/configuration/).
 ## What you can't configure
 
 - The step order.
-- Skipping specific steps permanently - per-run skips are allowed, but the pipeline itself always has all nine.
+- Skipping specific steps permanently - per-run skips are allowed, but the pipeline itself always has all ten.
 - Adding new steps.
 
 This is intentional. The pipeline is opinionated so that "passed the gate" means the same thing across repos.

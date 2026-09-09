@@ -496,49 +496,24 @@ func TestPushStep_RedactsForkURLInGitErrors(t *testing.T) {
 	}
 }
 
-// TestPushStep_CommitsLeftoverChangesWhenLegacyHuskyRuntimeIsMissing pins the
-// Push step's leftover-worktree commit against the same fresh-worktree hook
-// failure the correction-commit helper exists to survive: core.hooksPath=.husky
-// with a tracked pre-commit hook sourcing the generated .husky/_/husky.sh that
-// this worktree never had. The formatter or the Test step's evidence agent left
-// an uncommitted edit behind, and the run must still deliver it.
-func TestPushStep_CommitsLeftoverChangesWhenLegacyHuskyRuntimeIsMissing(t *testing.T) {
+// TestPushStep_RefusesADirtyWorktree pins the assertion that replaced Push's
+// catch-all commit. Every validation step now commits its own work at its exit
+// through runValidationStep, so leftovers at Push mean a step misreported its
+// exit state. Sweeping them up would publish a tree Review never certified.
+func TestPushStep_RefusesADirtyWorktree(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 
-	dir, baseSHA, _ := setupGitRepo(t)
-	hooksDir := filepath.Join(dir, ".husky")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/usr/bin/env sh\n. \"$(dirname -- \"$0\")/_/husky.sh\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	gitCmd(t, dir, "add", ".husky/pre-commit")
-	gitCmd(t, dir, "commit", "-m", "add legacy Husky hook")
-	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
-	gitCmd(t, dir, "config", "core.hooksPath", ".husky")
+	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	// Positive control: with the hook live, a verified commit cannot succeed in
-	// this worktree, so the assertions below prove the bypass rather than an
-	// inert hook configuration.
-	if err := os.WriteFile(filepath.Join(dir, "hook-probe.txt"), []byte("probe\n"), 0o644); err != nil {
+	// A tracked file modified and an untracked file left behind.
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("uncommitted edit\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitCmd(t, dir, "add", "hook-probe.txt")
-	if out, err := runGitDirect(dir, "commit", "-m", "probe"); err == nil {
-		t.Fatalf("expected the legacy Husky hook to block a verified commit, got success:\n%s", out)
-	}
-	gitCmd(t, dir, "reset", "HEAD", "hook-probe.txt")
-	if err := os.Remove(filepath.Join(dir, "hook-probe.txt")); err != nil {
-		t.Fatal(err)
-	}
-
-	// Leftover worktree change the Push step must commit before pushing.
-	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("formatted feature code\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "leftover.txt"), []byte("stray\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -548,25 +523,56 @@ func TestPushStep_CommitsLeftoverChangesWhenLegacyHuskyRuntimeIsMissing(t *testi
 	setupGateMirror(t, sctx)
 	recordReviewApproval(t, sctx, headSHA)
 
-	if _, err := (&PushStep{}).Execute(sctx); err != nil {
-		t.Fatalf("push failed on a worktree whose legacy Husky runtime is absent: %v", err)
-	}
+	remoteBefore := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
 
-	if got := gitStatusPorcelain(t, dir); got != "" {
-		t.Fatalf("expected clean worktree after the leftover commit, got %q", got)
+	_, err := (&PushStep{}).Execute(sctx)
+	if err == nil {
+		t.Fatal("push accepted a dirty worktree")
 	}
-	pushedHead := gitCmd(t, dir, "rev-parse", "HEAD")
-	if pushedHead == headSHA {
-		t.Fatal("expected a new correction commit carrying the leftover change")
+	if !strings.Contains(err.Error(), "refusing to push: worktree is not clean") {
+		t.Fatalf("error = %v, want it to contain %q", err, "refusing to push: worktree is not clean")
 	}
-	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got != pushedHead {
-		t.Fatalf("remote head = %s, want pushed correction commit %s", got, pushedHead)
+	for _, path := range []string{"feature.txt", "leftover.txt"} {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("error = %v, want it to name %q", err, path)
+		}
 	}
-	if got := gitCmd(t, dir, "show", pushedHead+":feature.txt"); got != "formatted feature code" {
-		t.Fatalf("delivered feature.txt = %q, want the leftover change", got)
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != headSHA {
+		t.Fatalf("HEAD = %s, want the unchanged head %s: push committed the residue", got, headSHA)
 	}
-	if _, err := os.Stat(filepath.Join(hooksDir, "_", "husky.sh")); !os.IsNotExist(err) {
-		t.Fatalf("legacy Husky runtime unexpectedly exists: %v", err)
+	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got != remoteBefore {
+		t.Fatalf("remote head = %s, want the unchanged %s: push published a refused tree", got, remoteBefore)
+	}
+}
+
+// TestPushStep_DoesNotRunTheConfiguredFormatter proves the push-time formatter
+// backstop is gone. Format is its own step and the restart boundary now, so a
+// formatter running here would edit a tree Review already certified.
+func TestPushStep_DoesNotRunTheConfiguredFormatter(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{
+		Format: "touch formatter-ran.txt",
+	})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	setupGateMirror(t, sctx)
+	recordReviewApproval(t, sctx, headSHA)
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push failed on a clean worktree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "formatter-ran.txt")); !os.IsNotExist(err) {
+		t.Fatalf("push ran the configured formatter: stat formatter-ran.txt = %v", err)
+	}
+	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got != headSHA {
+		t.Fatalf("remote head = %s, want %s", got, headSHA)
 	}
 }
 

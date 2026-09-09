@@ -26,7 +26,7 @@ func TestAllStepsOrder(t *testing.T) {
 		t.Fatalf("expected 10 steps, got %d", len(steps))
 	}
 
-	expected := []StepName{StepIntent, StepRebase, StepFormat, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
+	expected := []StepName{StepIntent, StepRebase, StepFormat, StepLint, StepTest, StepDocument, StepReview, StepPush, StepPR, StepCI}
 	for i, s := range steps {
 		if s != expected[i] {
 			t.Errorf("step[%d] = %q, want %q", i, s, expected[i])
@@ -42,10 +42,10 @@ func TestStepNameOrder(t *testing.T) {
 		{StepIntent, 1},
 		{StepRebase, 2},
 		{StepFormat, 3},
-		{StepReview, 4},
+		{StepLint, 4},
 		{StepTest, 5},
 		{StepDocument, 6},
-		{StepLint, 7},
+		{StepReview, 7},
 		{StepPush, 8},
 		{StepPR, 9},
 		{StepCI, 10},
@@ -73,6 +73,20 @@ func TestStepNameOrderAgreesWithAllSteps(t *testing.T) {
 		if got := step.Order(); got != 0 {
 			t.Errorf("%q.Order() = %d, want 0 for a step outside AllSteps()", step, got)
 		}
+	}
+}
+
+// TestReviewIsTheLastStepOfTheValidationRegion pins the property the reorder
+// exists for: every cheap gate has run by the time Review judges the tree, and
+// nothing between Review and Push can change what Review certified.
+func TestReviewIsTheLastStepOfTheValidationRegion(t *testing.T) {
+	for _, step := range []StepName{StepFormat, StepLint, StepTest, StepDocument} {
+		if step.Order() >= StepReview.Order() {
+			t.Errorf("%q.Order() = %d, want less than %q at %d", step, step.Order(), StepReview, StepReview.Order())
+		}
+	}
+	if StepReview.Order() >= StepPush.Order() {
+		t.Errorf("%q.Order() = %d, want less than %q at %d", StepReview, StepReview.Order(), StepPush, StepPush.Order())
 	}
 }
 

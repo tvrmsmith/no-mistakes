@@ -39,7 +39,7 @@ type AgentInvocation struct {
 	StepName string
 	Round    int
 	// Purpose is the pipeline duty served: review, review-fix,
-	// test-evidence, housekeeping, document, lint, pr, intent, or a
+	// test-evidence, document, lint, pr, intent, or a
 	// step-derived default.
 	Purpose string
 	Agent   string

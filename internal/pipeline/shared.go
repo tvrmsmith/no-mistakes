@@ -10,18 +10,6 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-// HousekeepingLintResult is the lint assessment produced by the combined
-// document+lint housekeeping pass: the document step performs both duties in
-// one agent invocation and hands the lint half to the lint step so it does
-// not pay a second cold agent pass.
-type HousekeepingLintResult struct {
-	// FindingsJSON holds the lint-category findings (possibly an empty set)
-	// in the same JSON shape the lint step produces itself.
-	FindingsJSON string
-	// Summary is the housekeeping pass's one-line lint summary.
-	Summary string
-}
-
 // TestDiscovery is one run's test-unit discovery: the repository's unit layout
 // and the names of the units a change touches.
 type TestDiscovery struct {
@@ -73,15 +61,14 @@ type testDiscoveryRecord struct {
 // the layout it already paid an agent pass for, and the row dies with the run,
 // so nothing carries across runs.
 type RunShared struct {
-	mu               sync.Mutex
-	housekeepingLint *HousekeepingLintResult
+	mu sync.Mutex
 	// store and runID address the run row the test discovery writes through
 	// to. Both are empty for a RunShared built without a store, which keeps
 	// discovery purely in-memory.
 	store RunSharedStore
 	runID string
 	// testDiscovery and its fingerprint cache the Test step's discovery result
-	// for the run. Unlike housekeepingLint, this is read, not consumed: a
+	// for the run. It is read, not consumed: a
 	// daemon restart re-enters the Test step and must reuse the discovered
 	// layout rather than pay a second cold agent pass for a changed-file set
 	// it has already resolved.
@@ -105,9 +92,8 @@ func NewRunShared(store RunSharedStore, runID string) *RunShared {
 }
 
 // RestoreRunShared returns the run-scoped results holder a recovered run
-// resumes with: the housekeeping half is empty, and the Test step's discovery
-// is read back from the run row so the resumed run reuses the layout instead
-// of paying a second cold agent pass.
+// resumes with: the Test step's discovery is read back from the run row so the
+// resumed run reuses the layout instead of paying a second cold agent pass.
 //
 // A read or decode failure only costs that reuse, so it warns and returns an
 // empty holder rather than refusing the resume.
@@ -290,9 +276,8 @@ func (s *RunShared) LastRestartTree(step types.StepName) string {
 
 // SetLastRestartTree records the tree a step's restart-triggering commit
 // produced, so a later round of the same step that commits an identical tree
-// is recognised as churn rather than progress. Unlike the housekeeping stash
-// this is not consume-once: the comparison must survive every later round of
-// the run.
+// is recognised as churn rather than progress. The comparison must survive
+// every later round of the run.
 //
 // Only the most recent tree per step is kept, and RunShared is rebuilt on
 // every Execute and Resume, so the guard catches a consecutive repeat within
@@ -309,45 +294,4 @@ func (s *RunShared) SetLastRestartTree(step types.StepName, tree string) {
 		s.restartTrees = make(map[types.StepName]string)
 	}
 	s.restartTrees[step] = tree
-}
-
-// SetHousekeepingLint records the combined pass's lint assessment for the
-// lint step. It replaces any previous assessment (a document fix round
-// re-runs the combined pass and re-stashes a fresh result).
-func (s *RunShared) SetHousekeepingLint(result HousekeepingLintResult) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.housekeepingLint = &result
-}
-
-// ClearHousekeepingLint discards a previous combined-pass lint assessment
-// before a document pass starts, so a later lint step never consumes stale
-// findings.
-func (s *RunShared) ClearHousekeepingLint() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.housekeepingLint = nil
-}
-
-// TakeHousekeepingLint returns and consumes the combined pass's lint
-// assessment. The second call returns false so a lint fix round re-assesses
-// with its own agent pass instead of trusting a stale result.
-func (s *RunShared) TakeHousekeepingLint() (HousekeepingLintResult, bool) {
-	if s == nil {
-		return HousekeepingLintResult{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.housekeepingLint == nil {
-		return HousekeepingLintResult{}, false
-	}
-	result := *s.housekeepingLint
-	s.housekeepingLint = nil
-	return result, true
 }

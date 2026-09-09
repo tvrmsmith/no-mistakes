@@ -267,6 +267,7 @@ agent_path_override:
   %s: %s
 auto_fix:
   rebase: 0
+  format: 0
   lint: 0
   test: 0
   review: 0
@@ -463,6 +464,17 @@ func (h *Harness) UpstreamBranchSHA(branch string) string {
 		h.t.Fatalf("rev-parse upstream %s: %v\n%s", branch, err, sha)
 	}
 	return string(bytes.TrimSpace(sha))
+}
+
+// UpstreamHasBranch reports whether the branch exists on the upstream remote,
+// which is how a test tells "the pipeline published this" from "it stopped
+// before Push".
+func (h *Harness) UpstreamHasBranch(branch string) bool {
+	h.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := h.runGit(ctx, h.UpstreamDir, "rev-parse", "--verify", "refs/heads/"+branch)
+	return err == nil
 }
 
 func (h *Harness) AddWorktree(branch string) string {

@@ -298,7 +298,7 @@ func TestSecondCleanStopPreservesRunParkedAtALaterGate(t *testing.T) {
 	steps := func() []pipeline.Step {
 		return []pipeline.Step{
 			&mockApprovalStep{name: types.StepReview},
-			&mockApprovalStep{name: types.StepTest},
+			&mockApprovalStep{name: types.StepPush},
 		}
 	}
 	first := startTestDaemonInstance(t, steps)
@@ -313,7 +313,7 @@ func TestSecondCleanStopPreservesRunParkedAtALaterGate(t *testing.T) {
 	second := restartTestDaemonInstance(t, p, d, steps)
 
 	approveWhenResumed(t, p, runID, types.StepReview)
-	waitForStepStatus(t, d, runID, types.StepTest, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, d, runID, types.StepPush, types.StepStatusAwaitingApproval)
 	reparked := waitForRunAwaitingAgent(t, d, runID)
 
 	if err := second.stopAndWait(t); err != nil {
@@ -336,8 +336,8 @@ func TestSecondCleanStopPreservesRunParkedAtALaterGate(t *testing.T) {
 	if _, err := os.Stat(p.WorktreeDir(repo.ID, runID)); err != nil {
 		t.Fatalf("worktree removed on second clean shutdown: %v", err)
 	}
-	if row := findStepRow(t, d, runID, types.StepTest); row == nil || row.Status != types.StepStatusAwaitingApproval {
-		t.Fatalf("test step row = %v, want %s", row, types.StepStatusAwaitingApproval)
+	if row := findStepRow(t, d, runID, types.StepPush); row == nil || row.Status != types.StepStatusAwaitingApproval {
+		t.Fatalf("push step row = %v, want %s", row, types.StepStatusAwaitingApproval)
 	}
 }
 
@@ -345,14 +345,14 @@ func TestSecondCleanStopPreservesRunParkedAtALaterGate(t *testing.T) {
 // stop: a run started with --skip must not run the skipped step just because a
 // restart resumed it from its gate.
 func TestResumedRunStillHonorsItsRequestedSkipSet(t *testing.T) {
-	skipped := &mockPassStep{name: types.StepTest}
+	skipped := &mockPassStep{name: types.StepPush}
 	steps := func() []pipeline.Step {
 		return []pipeline.Step{&mockApprovalStep{name: types.StepReview}, skipped}
 	}
 	first := startTestDaemonInstance(t, steps)
 	p, d := first.paths, first.db
 
-	_, runID := startParkedRun(t, p, d, "shutdown-park-skip-repo", []types.StepName{types.StepTest})
+	_, runID := startParkedRun(t, p, d, "shutdown-park-skip-repo", []types.StepName{types.StepPush})
 
 	if err := first.stopAndWait(t); err != nil {
 		t.Fatalf("first daemon exited with error: %v", err)
@@ -368,9 +368,9 @@ func TestResumedRunStillHonorsItsRequestedSkipSet(t *testing.T) {
 	if got := skipped.execCnt.Load(); got != 0 {
 		t.Fatalf("skipped step executed %d times after resume, want 0", got)
 	}
-	row := findStepRow(t, d, runID, types.StepTest)
+	row := findStepRow(t, d, runID, types.StepPush)
 	if row == nil || row.Status != types.StepStatusSkipped {
-		t.Fatalf("test step row = %v, want %s", row, types.StepStatusSkipped)
+		t.Fatalf("push step row = %v, want %s", row, types.StepStatusSkipped)
 	}
 }
 
@@ -380,14 +380,14 @@ func TestResumedRunStillHonorsItsRequestedSkipSet(t *testing.T) {
 // EFFECTIVE set: persisting the run argument alone leaves a resume free to
 // run a delivery step the repository's own config excluded.
 func TestResumedRunStillHonorsTheRepoConfigSkipSet(t *testing.T) {
-	skipped := &mockPassStep{name: types.StepTest}
+	skipped := &mockPassStep{name: types.StepPush}
 	steps := func() []pipeline.Step {
 		return []pipeline.Step{&mockApprovalStep{name: types.StepReview}, skipped}
 	}
 	first := startTestDaemonInstance(t, steps)
 	p, d := first.paths, first.db
 
-	_, runID := startParkedRunWithRepoConfig(t, p, d, "shutdown-park-config-skip-repo", "skip_steps:\n  - test\n", nil)
+	_, runID := startParkedRunWithRepoConfig(t, p, d, "shutdown-park-config-skip-repo", "skip_steps:\n  - push\n", nil)
 
 	if err := first.stopAndWait(t); err != nil {
 		t.Fatalf("first daemon exited with error: %v", err)
@@ -403,9 +403,9 @@ func TestResumedRunStillHonorsTheRepoConfigSkipSet(t *testing.T) {
 	if got := skipped.execCnt.Load(); got != 0 {
 		t.Fatalf("config-skipped step executed %d times after resume, want 0", got)
 	}
-	row := findStepRow(t, d, runID, types.StepTest)
+	row := findStepRow(t, d, runID, types.StepPush)
 	if row == nil || row.Status != types.StepStatusSkipped {
-		t.Fatalf("test step row = %v, want %s", row, types.StepStatusSkipped)
+		t.Fatalf("push step row = %v, want %s", row, types.StepStatusSkipped)
 	}
 }
 
@@ -518,18 +518,18 @@ func TestCleanShutdownStillFailsRunCancelledMidStep(t *testing.T) {
 // its skip set has already resolved a post-gate step: the skipped row must be
 // accepted at the next gate recovery rather than read as unexplained state.
 func TestResumedSkippedStepSurvivesASecondStop(t *testing.T) {
-	skipped := &mockPassStep{name: types.StepTest}
+	skipped := &mockPassStep{name: types.StepPush}
 	steps := func() []pipeline.Step {
 		return []pipeline.Step{
 			&mockApprovalStep{name: types.StepReview},
 			skipped,
-			&mockApprovalStep{name: types.StepDocument},
+			&mockApprovalStep{name: types.StepPR},
 		}
 	}
 	first := startTestDaemonInstance(t, steps)
 	p, d := first.paths, first.db
 
-	repo, runID := startParkedRun(t, p, d, "shutdown-park-skip-twice-repo", []types.StepName{types.StepTest})
+	repo, runID := startParkedRun(t, p, d, "shutdown-park-skip-twice-repo", []types.StepName{types.StepPush})
 
 	if err := first.stopAndWait(t); err != nil {
 		t.Fatalf("first daemon exited with error: %v", err)
@@ -537,8 +537,8 @@ func TestResumedSkippedStepSurvivesASecondStop(t *testing.T) {
 
 	second := restartTestDaemonInstance(t, p, d, steps)
 	approveWhenResumed(t, p, runID, types.StepReview)
-	waitForStepStatus(t, d, runID, types.StepTest, types.StepStatusSkipped)
-	waitForStepStatus(t, d, runID, types.StepDocument, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, d, runID, types.StepPush, types.StepStatusSkipped)
+	waitForStepStatus(t, d, runID, types.StepPR, types.StepStatusAwaitingApproval)
 	waitForRunAwaitingAgent(t, d, runID)
 
 	if err := second.stopAndWait(t); err != nil {
@@ -549,7 +549,7 @@ func TestResumedSkippedStepSurvivesASecondStop(t *testing.T) {
 	}
 
 	restartTestDaemonInstance(t, p, d, steps)
-	approveWhenResumed(t, p, runID, types.StepDocument)
+	approveWhenResumed(t, p, runID, types.StepPR)
 
 	completed := waitForRunTerminalState(t, d, runID)
 	if completed.Status != types.RunCompleted {

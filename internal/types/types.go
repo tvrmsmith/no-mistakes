@@ -117,7 +117,7 @@ func (s StepName) Value() (driver.Value, error) {
 // a new step means editing both. Moving a step shifts the values Order()
 // persists into step_results.step_order, which internal/db orders and compares
 // numerically against rows already written.
-var allSteps = []StepName{StepIntent, StepRebase, StepFormat, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
+var allSteps = []StepName{StepIntent, StepRebase, StepFormat, StepLint, StepTest, StepDocument, StepReview, StepPush, StepPR, StepCI}
 
 // Order returns the fixed execution order for a step (1-indexed), derived from
 // its position in AllSteps. An unknown step returns 0.

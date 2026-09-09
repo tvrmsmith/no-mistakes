@@ -208,6 +208,47 @@ func TestDocumentStep_PromptAppliesPlacementPolicy(t *testing.T) {
 	}
 }
 
+// TestDocumentStep_PromptNeverCarriesTheLintDuty pins the deletion of the
+// combined document+lint housekeeping pass. Lint runs before Document now, so
+// there is no consumer for a stashed lint result and the document pass owns
+// documentation alone, whether or not commands.lint is configured.
+func TestDocumentStep_PromptNeverCarriesTheLintDuty(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"docs current"}`)}, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+
+	if _, err := (&DocumentStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	prompt := ag.calls[0].Prompt
+	for _, forbidden := range []string{
+		"Combined lint duty",
+		"combined documentation and lint housekeeping pass",
+		"no separate lint agent will run",
+		`"category"`,
+	} {
+		if strings.Contains(prompt, forbidden) {
+			t.Errorf("document prompt still carries the deleted lint duty %q\nprompt:\n%s", forbidden, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "Keep the project documentation accurate for this change.") {
+		t.Errorf("expected the documentation-only intro\nprompt:\n%s", prompt)
+	}
+	if strings.Contains(string(ag.calls[0].JSONSchema), "category") {
+		t.Errorf("document schema still carries the category property: %s", ag.calls[0].JSONSchema)
+	}
+	if ag.calls[0].Purpose != "document" {
+		t.Errorf("purpose = %q, want %q", ag.calls[0].Purpose, "document")
+	}
+}
+
 // TestDocumentStep_TrustedPolicyInstructionsAugmentPrompt proves a
 // repository's own ownership map (config document.instructions, loaded only
 // from the trusted default branch) reaches the prompt as an augmentation of

@@ -110,8 +110,9 @@ func TestPipelineVersionFromSteps_ReviewWithNoCheapGateIsPreReorder(t *testing.T
 // build's own step order is the only thing left to read.
 func TestPipelineVersionFromSteps_NoReviewRowFallsBackToTheBuildsOwnOrder(t *testing.T) {
 	// Pinned to a concrete value rather than derived from the function under
-	// test, so the sibling reorder landing forces a deliberate edit here.
-	want := PipelineReviewEarly
+	// test, so a later reorder forces a deliberate edit here. The build now
+	// runs every cheap gate before review.
+	want := PipelineCheapGatesFirst
 	steps := []*db.StepResult{
 		stepAt(types.StepIntent, 1),
 		stepAt(types.StepRebase, 2),

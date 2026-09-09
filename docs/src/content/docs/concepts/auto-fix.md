@@ -31,8 +31,7 @@ flowchart TD
    - If everything passes, the step completes and the pipeline moves on
 
 The document step applies fixes during its initial pass instead of relying on a follow-up automatic fix loop.
-When `commands.lint` is empty, that same invocation is a combined documentation-and-lint housekeeping pass: it updates documentation, detects relevant linters and formatters, applies safe fixes, verifies both duties, and categorizes any unresolved findings for the document or lint gate.
-The lint step consumes a usable lint result from that pass instead of starting a second cold agent invocation; when the combined pass is skipped, cannot produce trustworthy structured output, or loses its in-memory result across a daemon restart, lint falls back to its own agent pass.
+When `commands.lint` is empty, the lint step likewise applies safe fixes during its own initial agent pass.
 Unresolved documentation findings and unresolved blocking lint findings pause for approval instead of entering another automatic fix loop.
 
 ## Before the agent: deterministic CI reruns
@@ -76,7 +75,7 @@ In the TUI, yolo mode is an explicit override that auto-resolves paused steps by
 Steps with only `no-op` findings are approved as-is.
 
 The `review`, `test`, and configured-command `lint` steps use this shared model directly. The `document` step also uses the same `action` field, but unresolved documentation findings pause for approval because the initial document pass already attempted the documentation updates it could make safely.
-When `commands.lint` is empty, the combined housekeeping pass routes documentation and lint findings to their owning gates. Its unresolved lint findings describe issues left after safe fixes, so blocking findings pause for approval instead of remaining eligible for another automatic fix loop.
+When `commands.lint` is empty, the lint step's own agent pass works the same way: its unresolved findings describe issues left after safe fixes, so blocking findings pause for approval instead of remaining eligible for another automatic fix loop.
 
 Documentation findings use the same approval UI, but the `document` step treats any finding as an unresolved documentation gap or judgment call that should pause for approval.
 
@@ -100,13 +99,11 @@ Yolo and AXI `--yes` approve that fix review automatically after their one fix r
 When the Format, Review, Test, Document, Lint, or CI step commits auto-fix changes, its subject comes from `commit.fix_message`.
 The [global config reference](/no-mistakes/reference/global-config/#commitfix_message) owns the template syntax, default, validation rules, size limits, and supported placeholders; the [repo config reference](/no-mistakes/reference/repo-config/#commitfix_message) owns the repository override and trust behavior.
 The pipeline validates the template, agent summary, predicted output size, and final rendered subject before `git add -A`, so a rejected value does not leave changes staged.
-The combined document-and-lint housekeeping pass runs in the Document step, so its documentation and safe lint fixes use the Document value for `{{.Step}}`; configured-command lint fixes use the Lint value.
 
 Before a step-specific fix commit, the pipeline verifies that the live worktree HEAD still descends from the head recorded after its previous commit.
 It allows a legitimate forward commit made by an agent, but aborts the run if an out-of-band backward or divergent reset would drop the reviewed history.
 
-The template does not control commits created by the Rebase or Push steps.
-The Push step uses `no-mistakes: apply agent fixes` for remaining uncommitted changes.
+The template does not control commits created by the Rebase step. The Push step never commits: it refuses with an error if the worktree is dirty.
 
 ## Step rounds
 

@@ -947,14 +947,17 @@ func TestCaptureTagsTheCaseWithThePipelineTheRunRecorded(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("review before the cheap gates", func(t *testing.T) {
-		p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+		p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 		defer sourceDB.Close()
-		// The review step setupCapturedRun records is already ordered before
-		// a test step under today's fixed types.StepName.Order(), so no order
-		// override is needed to prove "review ran early".
-		if _, err := sourceDB.InsertStepResult(run.ID, types.StepTest); err != nil {
+		// Today's fixed types.StepName.Order() puts the cheap gates before
+		// review, so this layout has to be forced onto the recorded rows the
+		// same way the sibling subtest forces its own.
+		step, err := sourceDB.InsertStepResult(run.ID, types.StepTest)
+		if err != nil {
 			t.Fatal(err)
 		}
+		forceStepOrder(t, p, reviewRound.StepResultID, 1)
+		forceStepOrder(t, p, step.ID, 10)
 		store, err := Open(filepath.Join(p.Root(), "eval"))
 		if err != nil {
 			t.Fatal(err)
@@ -1004,11 +1007,16 @@ func TestCaptureTagsTheCaseWithThePipelineTheRunRecorded(t *testing.T) {
 
 func TestRelabelPreservesTheCapturedPipelineTag(t *testing.T) {
 	ctx := context.Background()
-	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
+	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer sourceDB.Close()
-	if _, err := sourceDB.InsertStepResult(run.ID, types.StepTest); err != nil {
+	testStep, err := sourceDB.InsertStepResult(run.ID, types.StepTest)
+	if err != nil {
 		t.Fatal(err)
 	}
+	// The captured tag has to be review-early for this test to prove relabel
+	// preserves it, and today's step order records the opposite layout.
+	forceStepOrder(t, p, reviewRound.StepResultID, 1)
+	forceStepOrder(t, p, testStep.ID, 10)
 	store, err := Open(filepath.Join(p.Root(), "eval"))
 	if err != nil {
 		t.Fatal(err)

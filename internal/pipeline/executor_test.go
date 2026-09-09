@@ -152,7 +152,7 @@ func TestExecutor_RevalidationGateRemainsRecoverable(t *testing.T) {
 		}
 		return &StepOutcome{}, nil
 	}}
-	steps := []Step{review, newPassStep(types.StepTest), newPassStep(types.StepPush), ci}
+	steps := []Step{newPassStep(types.StepTest), review, newPassStep(types.StepPush), ci}
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
 	exec.SetSkippedSteps([]types.StepName{types.StepPush})
 	// The persisted set is what explains an already-skipped step row to
@@ -329,9 +329,9 @@ func TestExecutor_StepError_FailsRun(t *testing.T) {
 	workDir := t.TempDir()
 
 	steps := []Step{
-		newPassStep(types.StepReview),
+		newPassStep(types.StepLint),
 		newFailStep(types.StepTest, fmt.Errorf("tests crashed")),
-		newPassStep(types.StepLint), // should not run
+		newPassStep(types.StepReview), // should not run
 	}
 
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
@@ -353,7 +353,7 @@ func TestExecutor_StepError_FailsRun(t *testing.T) {
 		t.Errorf("step test: expected %q, got %q", types.StepStatusFailed, dbSteps[1].Status)
 	}
 	if dbSteps[2].Status != types.StepStatusPending {
-		t.Errorf("step lint: expected %q, got %q", types.StepStatusPending, dbSteps[2].Status)
+		t.Errorf("step review: expected %q, got %q", types.StepStatusPending, dbSteps[2].Status)
 	}
 }
 

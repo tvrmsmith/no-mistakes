@@ -6,7 +6,7 @@ description: Reference for each step in the validation pipeline.
 This is the per-step reference. For the overview and rationale, see [Pipeline](/no-mistakes/concepts/pipeline/). For the fix loop, see [Auto-Fix Loop](/no-mistakes/concepts/auto-fix/).
 
 ```text
-intent → rebase → format → review → test → document → lint → push → pr → ci
+intent → rebase → format → lint → test → document → review → push → pr → ci
 ```
 
 Each step can produce findings, request approval, trigger auto-fix, or apply safe fixes during its own pass. Steps that encounter fatal errors stop the pipeline. Steps can also be pre-skipped when starting a run, skipped by the user, or skipped automatically by the pipeline.
@@ -16,8 +16,8 @@ This is a soft boundary, not OS-level sandbox enforcement.
 The steering still allows requested test evidence under the run's managed evidence directory, plus incidental temp or cache writes from normal development tools.
 Configured shell commands and one-shot agent subprocesses are scoped to their step: when the invocation exits, fails, or is cancelled, no-mistakes terminates remaining child processes it spawned so background workers do not outlive the run.
 When configured Test or Lint command output exceeds 64 KiB, the complete output remains in the authoritative step log while findings, IPC responses, and repair prompts receive a valid-UTF-8 head-and-tail projection capped at 64 KiB. The truncation marker reports the exact original and omitted byte counts and points to `no-mistakes axi logs --step <step> --full` for the complete output.
-Commits created by the shared Review, Test, Document, and Lint fix path, plus CI repair commits, use the configurable [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message) template.
-The shared correction commits, and the Push step's commit of leftover changes from a pipeline agent or formatter, are machine-authored records of pipeline output. Each is created with the complete local commit-hook family suppressed by combining `--no-verify` with an empty temporary `core.hooksPath` for that invocation, so `pre-commit`, `prepare-commit-msg`, `commit-msg`, and `post-commit` do not run. This lets a disposable run worktree commit a correction even when a tracked hook depends on generated untracked runtime files that do not exist there - the canonical case is `core.hooksPath=.husky` with a tracked hook that sources the absent `.husky/_/husky.sh`.
+Commits created by the shared Format, Lint, Test, Document, and Review fix path, plus CI repair commits, use the configurable [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message) template.
+The shared correction commits are machine-authored records of pipeline output. Each is created with the complete local commit-hook family suppressed by combining `--no-verify` with an empty temporary `core.hooksPath` for that invocation, so `pre-commit`, `prepare-commit-msg`, `commit-msg`, and `post-commit` do not run. This lets a disposable run worktree commit a correction even when a tracked hook depends on generated untracked runtime files that do not exist there - the canonical case is `core.hooksPath=.husky` with a tracked hook that sources the absent `.husky/_/husky.sh`.
 The suppression is limited to those correction-commit invocations. It does not change the repository, Git configuration, or daemon environment; CI repair commits and all other commit paths keep normal hook behavior. Pipeline gates remain authoritative; whether a CI repair returns through the local gates before publication is controlled by [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs).
 Agent roles that can write, repair, or review tests reject tests whose only evidence is matching implementation source text, tokens, syntax, or incidental snapshots.
 They instead require an executable interface or a typed or normalized semantic model that proves observable behavior.
@@ -26,9 +26,9 @@ Review flags every newly added violation and requires same-pattern tests encount
 
 ## Validation restart
 
-Format, Review, Test, Document, and Lint share one exit path. When a round leaves the worktree unclean, that step commits the leftovers itself, and the commit is attributed to whoever produced it.
+Format, Lint, Test, Document, and Review share one exit path. When a round leaves the worktree unclean, that step commits the leftovers itself, and the commit is attributed to whoever produced it.
 
-A commit made in a round that invoked an agent is agent-authored: nothing has judged it, so the run re-enters validation from Format, and the run's review approval is revoked in the same write that records the new head. Format, Review, Test, Document, and Lint then run again against that head. A commit a deterministic tool produced, such as a formatter rewriting whitespace, carries nothing new to judge and restarts nothing.
+A commit made in a round that invoked an agent is agent-authored: nothing has judged it, so the run re-enters validation from Format, and the run's review approval is revoked in the same write that records the new head. Format, Lint, Test, Document, and Review then run again against that head. A commit a deterministic tool produced, such as a formatter rewriting whitespace, carries nothing new to judge and restarts nothing.
 
 A re-entry is not a fix round. The re-entered step receives the previous round's findings as context, and per-step auto-fix budgets do not refill across a restart, so a step cannot buy more attempts by restarting.
 
@@ -45,7 +45,7 @@ A run that skipped Format never rewinds into it, because that would re-mark Form
 
 When a human resolves a findings gate with Approve, Skip, or Abort without selecting a fix, no-mistakes records that the round's findings were declined. A gate with no findings records no decision. When the human selects only some findings to fix, the unselected complement is recorded as declined; findings merely left out by automatic filtering remain undecided.
 
-Review, Test, Document, and Lint agent prompts receive a sanitized history containing the current step's earlier rounds, decisions from other steps in the same run, and a bounded window of decisions from earlier runs on the same branch. A recorded decision takes precedence over conflicting user-intent wording, and later decisions about the same concern supersede earlier ones. Completing Review does not clear branch decisions.
+Lint, Test, Document, and Review agent prompts receive a sanitized history containing the current step's earlier rounds, decisions from other steps in the same run, and a bounded window of decisions from earlier runs on the same branch. A recorded decision takes precedence over conflicting user-intent wording, and later decisions about the same concern supersede earlier ones. Completing Review does not clear branch decisions.
 
 This context is advisory and fails open. It tells agents not to implement or re-report a declined finding unless the current code introduces a materially different problem, but it does not block a step or commit and is not a reversion detector. Rebase and CI fix prompts do not receive this decision history.
 
@@ -94,7 +94,7 @@ The integration branch used below is the [PR base branch](/no-mistakes/reference
 
 ## Format
 
-Runs the repository's configured formatter, moved here from the Push step so formatting is visible as its own outcome. Push still runs the same formatter as a backstop; a later change removes that backstop once the reorder guarantees Format runs ahead of it.
+Runs the repository's configured formatter, moved here from the Push step so formatting is visible as its own outcome. Push no longer runs a formatter itself: Format running first in the validation region means every later step already sees formatted code.
 
 **Behavior:**
 
@@ -107,50 +107,24 @@ Runs the repository's configured formatter, moved here from the Push step so for
 
 **Default auto-fix limit:** `3`.
 
-## Review
+## Lint
 
-AI code review of your diff.
+Runs linters and static analysis.
 
 **Behavior:**
 
-- Diffs the base commit against head
-- Filters out files matching `ignore_patterns` from the repo config
-- Sends the filtered diff to the agent with structured review instructions and a structured output schema
-- Runs the review through the `comprehensive-code-review` skill rather than an inline read of the diff. If the agent answers without invoking it, the turn is retried once in a fresh reviewer session and the step then fails; an inline review is never accepted, and there is no config opt-out. The check needs the adapter to report skill use, so on an adapter that does not report it the mandate stays prompt-level only
-- Narrows what later rounds look for once the round count passes [`review.narrow_after_round`](/no-mistakes/reference/global-config/#reviewnarrow_after_round), which owns the ladder of aspects and severities
-- Includes a bounded metadata summary of the previous run's review of the same branch - each finding's id, severity, location, abbreviated summary, and whether the user declined it, it was addressed, or it was left open - so a re-push does not re-derive findings that were already decided. Only a run that reached completion contributes declines and fixes; anything else degrades to "left open"
-- Appends the [`review.path_instructions`](/no-mistakes/reference/repo-config/#reviewpath_instructions) blocks whose glob matches at least one changed file, in configured order, each labelled with its own `path` and the files it matched so a scoped rule cannot read as a repository-wide instruction; a change that matches nothing, or a repo with none configured, gets the prompt unchanged
-- Selects those blocks against the complete changed-file list rather than the `ignore_patterns`-filtered one, so a pushed-branch ignore entry cannot suppress a trusted rule, and reads them from the trusted default-branch config copy regardless of `allow_repo_commands`
-- Logs which of those rules it applied and which matched no changed path
-- Includes user intent when the run has supplied intent or transcript matching found a relevant local agent session; the detailed provenance semantics are documented in [Intent extraction](/no-mistakes/guides/agents/#intent-extraction)
-- Treats authoritative intent as enforceable for source-verifiable acceptance criteria, but does not report the absence of a remote branch, push, pull request, or CI state that this run's later Push, PR, or CI step owns
-- Treats conformance with those criteria as necessary, not sufficient: an authoritative intent obliges flagging contradictions but never substitutes for checking that the algorithm is correct
-- Removes any returned finding whose sole claim is that one of those same-run delivery outcomes is not present yet, while keeping findings about pre-existing or external pull requests, third-party artifacts, and lifecycle state that the current run does not own
-- Keeps the later Push, PR, and CI steps responsible for strictly validating their own outcomes after review completes
-- For any new or changed logic, constructs at least one concrete input or state and traces it, looking for a case that produces a wrong result without erroring; a computation that returns a wrong value, label, or set without failing is in scope
-- For changes that claim a durable bug fix, reconstructs the concrete failing sequence and required invariant, inspects relevant sibling paths and shared state transitions, and reports an inadequate fix only when source evidence proves the same authorized failure remains reachable; the recommendation targets the earliest supported shared boundary
-- Does not treat code shape or duplication alone as evidence of a systemic defect, demand speculative redesign, block explicitly authorized short-term containment merely because a later durable fix is possible, expand the user's scope, or promote optional improvements into blockers
-- Agent returns findings with severity (`error`, `warning`, `info`), file location, description, and an `action` (`no-op`, `auto-fix`, `ask-user`)
-- Also returns a `risk_level` (`low`, `medium`, `high`) and `risk_rationale`
-- Runs every review turn - the initial review and every full rereview - as a fresh, session-free invocation, so the rereview that certifies a fix round never resumes the session whose findings prescribed those fixes; the rereview prompt additionally reframes fix-round changes as pipeline-authored code to review under the same adversarial standard as the author's changes, with prior findings, fix summaries, and same-round tests treated as claims rather than evidence; when the defects it finds sit in prior-fix-round code that exceeds what the original finding required, it reports a single `ask-user` finding recommending that round be reverted to the minimal fix instead of filing further repairs on that code
-- When a review-step fixer round commits and its re-review does not complete, persists that branch's uncertified commit range (lint and document fixer commits do not); the next run's initial review of that range receives the same pipeline-authored provenance framing so the replacement reviewer is not cold. A later rebase remaps the persisted SHAs onto the rewritten head. The range is cleared only after a completed review whose approved head equals or descends from the range tip; parked, failed, skipped, and aborted reviews leave it in place
-- With the default `session_reuse: true`, Claude, Codex, Grok, Pi, and Antigravity reuse one durable fixer session across review-fix turns; a resume failure retries the same fix turn in a fresh fixer session, and unsupported agents run cold
-- Bounds its agent turns with [`review_agent_timeout`](/no-mistakes/reference/global-config/#review_agent_timeout): a round's optional fix turn and its rereview turn share one budget, each later auto-fix round starts a fresh one, and an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
-- Atomically records the exact commit examined when a full review completes successfully; a parked review retains its candidate only for recovery, while failed, skipped, superseded, and legacy reviews grant no inferred approval authority
+- If `commands.lint` is set: runs it via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows). Non-zero exit produces `warning` findings.
+- If `commands.lint` is empty: the lint step runs its own agent pass. The agent detects appropriate linters/formatters, applies safe fixes, reruns the relevant checks, commits any agent changes, and returns structured findings only for unresolved issues.
+- Bounds those agent turns, including a configured-lint repair turn, with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
 
-**Approval:** required if any finding has severity `error` or `warning`. Findings with `action: ask-user` pause for approval instead of entering the normal auto-fix loop. This is for findings that challenge the author's intent, or whose smallest honest remedy would extend the change rather than correct it, not routine correctness, reliability, or security fixes that may need to re-add a small amount of deleted logic. With the default `auto_fix.review: 0`, blocking review findings park for approval even when their action is `auto-fix`; setting repo or global `auto_fix.review` above `0` re-enables the automatic review fix loop for eligible `auto-fix` findings. Findings with `action: no-op` are informational only. The shared [finding-action model](/no-mistakes/concepts/auto-fix/#finding-actions) owns the behavior for a missing `action`.
+**Approval:** lint findings with `action: ask-user` pause for approval.
+`action: auto-fix` findings stay eligible for the fix loop when `commands.lint` is configured.
+`action: no-op` findings are informational only.
 
-**Auto-fix:** the agent receives the selected previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step.
-The fixer fixes the reported instance narrowly, preferring to do so by addressing a deeper architectural reason and simplifying it over introducing machinery that handles the symptoms.
-It applies all selected fixes before running one focused verification limited to the changed area, and it is instructed not to run the complete repository test or lint suite during the fix round.
-The dedicated Test and Lint steps after review remain the authoritative gates, although their coverage may be focused when commands are unconfigured.
-Follow-up review passes use the history to avoid re-reporting user-ignored findings unless the code now has a materially different problem.
+**Auto-fix:** when `commands.lint` is configured, the lint step follows the same pattern as test - the agent fixes `action: auto-fix` issues using the previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step, then lint re-runs.
+When `commands.lint` is empty, unresolved findings from the agent's own pass pause for approval instead of starting another automatic lint/fix loop, because the agent already attempted safe fixes during that pass.
 
-**Default auto-fix limit:** `0`.
-
-### Post-review HEAD continuity
-
-At entry to every remaining step in the fixed pipeline order - Test, Document, Lint, Push, PR, and CI - no-mistakes compares the live worktree `HEAD` with the pipeline-recorded head. An equal head or a pipeline-descendant commit continues. A backward reset, divergent sibling, or unverifiable relationship fails the run before that step performs work, including for steps that would not create a commit.
+**Default auto-fix limit:** `3`.
 
 ## Test
 
@@ -196,35 +170,59 @@ Updates matching documentation for code changes and reports only unresolved gaps
 - Asks the agent to find every documentation gap, update docs or doc comments for all gaps it can resolve, verify its edits, and commit any documentation changes under the placement policy
 - The placement policy gives each fact one authoritative owner, prefers removing stale duplicates or replacing them with pointers, avoids new documentation surfaces for perceived gaps, and keeps durable incident lessons near their owner instead of in `AGENTS.md`
 - `document.instructions` can add trusted default-branch ownership rules for the repository
-- When `commands.lint` is empty, performs documentation and agent-driven lint in one combined housekeeping invocation, categorizing findings for the document or lint gate; if that pass is skipped, its structured output is unusable, or a daemon restart loses the in-memory result, lint runs its own agent pass instead
 - Includes user intent when available
 - Returns findings only for unresolved documentation gaps or human judgment calls
 - Requires approval whenever any unresolved documentation finding is returned, including `info` findings
-- Bounds the documentation (and combined housekeeping) agent with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
+- Bounds the documentation agent with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
 
 **Auto-fix:** documentation fixes happen during the initial document pass. Unresolved findings pause for approval instead of starting another automatic document/fix loop. If you manually trigger a fix from the TUI or AXI interface, the agent receives the selected previous findings plus any per-finding user notes, any selected user-authored findings, and the shared [finding decision history](#finding-decision-history).
 
 **Default auto-fix limit:** not used for automatic document follow-up loops.
 
-## Lint
+## Review
 
-Runs linters and static analysis.
+AI code review of your diff. Review runs last in the validation region: Format, Lint, Test, and Document have already run, so review reads the tree that will actually ship.
 
 **Behavior:**
 
-- If `commands.lint` is set: runs it via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows). Non-zero exit produces `warning` findings.
-- If `commands.lint` is empty: consumes lint-category findings from the document step's combined housekeeping pass, avoiding a second cold agent invocation. If no usable combined result exists, the lint step detects appropriate linters/formatters, applies safe fixes, reruns the relevant checks, commits any agent changes, and returns structured findings only for unresolved issues.
-- Bounds those agent turns, including a configured-lint repair turn, with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
+- Diffs the base commit against head
+- Filters out files matching `ignore_patterns` from the repo config
+- Sends the filtered diff to the agent with structured review instructions and a structured output schema
+- Runs the review through the `comprehensive-code-review` skill rather than an inline read of the diff. If the agent answers without invoking it, the turn is retried once in a fresh reviewer session and the step then fails; an inline review is never accepted, and there is no config opt-out. The check needs the adapter to report skill use, so on an adapter that does not report it the mandate stays prompt-level only
+- Narrows what later rounds look for once the round count passes [`review.narrow_after_round`](/no-mistakes/reference/global-config/#reviewnarrow_after_round), which owns the ladder of aspects and severities
+- Includes a bounded metadata summary of the previous run's review of the same branch - each finding's id, severity, location, abbreviated summary, and whether the user declined it, it was addressed, or it was left open - so a re-push does not re-derive findings that were already decided. Only a run that reached completion contributes declines and fixes; anything else degrades to "left open"
+- Appends the [`review.path_instructions`](/no-mistakes/reference/repo-config/#reviewpath_instructions) blocks whose glob matches at least one changed file, in configured order, each labelled with its own `path` and the files it matched so a scoped rule cannot read as a repository-wide instruction; a change that matches nothing, or a repo with none configured, gets the prompt unchanged
+- Selects those blocks against the complete changed-file list rather than the `ignore_patterns`-filtered one, so a pushed-branch ignore entry cannot suppress a trusted rule, and reads them from the trusted default-branch config copy regardless of `allow_repo_commands`
+- Logs which of those rules it applied and which matched no changed path
+- Includes user intent when the run has supplied intent or transcript matching found a relevant local agent session; the detailed provenance semantics are documented in [Intent extraction](/no-mistakes/guides/agents/#intent-extraction)
+- Treats authoritative intent as enforceable for source-verifiable acceptance criteria, but does not report the absence of a remote branch, push, pull request, or CI state that this run's later Push, PR, or CI step owns
+- Treats conformance with those criteria as necessary, not sufficient: an authoritative intent obliges flagging contradictions but never substitutes for checking that the algorithm is correct
+- Removes any returned finding whose sole claim is that one of those same-run delivery outcomes is not present yet, while keeping findings about pre-existing or external pull requests, third-party artifacts, and lifecycle state that the current run does not own
+- Keeps the later Push, PR, and CI steps responsible for strictly validating their own outcomes after review completes
+- For any new or changed logic, constructs at least one concrete input or state and traces it, looking for a case that produces a wrong result without erroring; a computation that returns a wrong value, label, or set without failing is in scope
+- For changes that claim a durable bug fix, reconstructs the concrete failing sequence and required invariant, inspects relevant sibling paths and shared state transitions, and reports an inadequate fix only when source evidence proves the same authorized failure remains reachable; the recommendation targets the earliest supported shared boundary
+- Does not treat code shape or duplication alone as evidence of a systemic defect, demand speculative redesign, block explicitly authorized short-term containment merely because a later durable fix is possible, expand the user's scope, or promote optional improvements into blockers
+- Agent returns findings with severity (`error`, `warning`, `info`), file location, description, and an `action` (`no-op`, `auto-fix`, `ask-user`)
+- Also returns a `risk_level` (`low`, `medium`, `high`) and `risk_rationale`
+- Runs every review turn - the initial review and every full rereview - as a fresh, session-free invocation, so the rereview that certifies a fix round never resumes the session whose findings prescribed those fixes; the rereview prompt additionally reframes fix-round changes as pipeline-authored code to review under the same adversarial standard as the author's changes, with prior findings, fix summaries, and same-round tests treated as claims rather than evidence; when the defects it finds sit in prior-fix-round code that exceeds what the original finding required, it reports a single `ask-user` finding recommending that round be reverted to the minimal fix instead of filing further repairs on that code
+- When a review-step fixer round commits and its re-review does not complete, persists that branch's uncertified commit range (lint and document fixer commits do not); the next run's initial review of that range receives the same pipeline-authored provenance framing so the replacement reviewer is not cold. A later rebase remaps the persisted SHAs onto the rewritten head. The range is cleared only after a completed review whose approved head equals or descends from the range tip; parked, failed, skipped, and aborted reviews leave it in place
+- With the default `session_reuse: true`, Claude, Codex, Grok, Pi, and Antigravity reuse one durable fixer session across review-fix turns; a resume failure retries the same fix turn in a fresh fixer session, and unsupported agents run cold
+- Bounds its agent turns with [`review_agent_timeout`](/no-mistakes/reference/global-config/#review_agent_timeout): a round's optional fix turn and its rereview turn share one budget, each later auto-fix round starts a fresh one, and an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
+- Atomically records the exact commit examined when a full review completes successfully; a parked review retains its candidate only for recovery, while failed, skipped, superseded, and legacy reviews grant no inferred approval authority
 
-**Approval:** lint findings with `action: ask-user` pause for approval.
-`action: auto-fix` findings stay eligible for the fix loop when `commands.lint` is configured.
-`action: no-op` findings are informational only.
-Combined-pass lint findings use the same gate: `error` and `warning` findings pause for a decision, while `info` findings do not.
+**Approval:** required if any finding has severity `error` or `warning`. Findings with `action: ask-user` pause for approval instead of entering the normal auto-fix loop. This is for findings that challenge the author's intent, or whose smallest honest remedy would extend the change rather than correct it, not routine correctness, reliability, or security fixes that may need to re-add a small amount of deleted logic. With the default `auto_fix.review: 0`, blocking review findings park for approval even when their action is `auto-fix`; setting repo or global `auto_fix.review` above `0` re-enables the automatic review fix loop for eligible `auto-fix` findings. Findings with `action: no-op` are informational only. The shared [finding-action model](/no-mistakes/concepts/auto-fix/#finding-actions) owns the behavior for a missing `action`.
 
-**Auto-fix:** when `commands.lint` is configured, the lint step follows the same pattern as test - the agent fixes `action: auto-fix` issues using the previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step, then lint re-runs.
-When `commands.lint` is empty, unresolved findings from the combined pass pause for approval instead of starting another automatic lint/fix loop, because the agent already attempted safe fixes during housekeeping.
+**Auto-fix:** the agent receives the selected previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step.
+The fixer fixes the reported instance narrowly, preferring to do so by addressing a deeper architectural reason and simplifying it over introducing machinery that handles the symptoms.
+It applies all selected fixes before running one focused verification limited to the changed area, and it is instructed not to run the complete repository test or lint suite during the fix round.
+The dedicated Test and Lint steps that already ran remain the authoritative gates, although their coverage may be focused when commands are unconfigured.
+Follow-up review passes use the history to avoid re-reporting user-ignored findings unless the code now has a materially different problem.
 
-**Default auto-fix limit:** `3`.
+**Default auto-fix limit:** `0`.
+
+### Post-review HEAD continuity
+
+At entry to every remaining step - Push, PR, and CI - no-mistakes compares the live worktree `HEAD` with the pipeline-recorded head. An equal head or a pipeline-descendant commit continues. A backward reset, divergent sibling, or unverifiable relationship fails the run before that step performs work, including for steps that would not create a commit.
 
 ## Push
 
@@ -232,8 +230,7 @@ Pushes the validated branch to the configured push target.
 
 **Behavior:**
 
-- If `commands.format` is set, runs it first
-- Commits any uncommitted changes left by pipeline agents or the formatter with message `no-mistakes: apply agent fixes`
+- Refuses with an error if the worktree is dirty: every validation step commits its own work at its own exit, so a dirty tree here means an earlier step misreported its exit state. Push does not run a formatter and does not make a catch-all commit for leftover changes.
 - Without fork routing, successful run-start validation selects the upstream URL from the working clone; when it matches the gate worktree's `origin`, the worktree URL is used so embedded credentials retained outside the database can authenticate. If validation fails, the run continues with its prior routing.
 - With GitHub fork routing, the push target is `repos.fork_url`
 - Immediately before remote mutation, reloads the durable review-approved commit and refuses to push when that binding is missing, malformed, or unreachable
@@ -252,7 +249,7 @@ A remote branch can move without being rejected when all remote commits are alre
 Any other out-of-band commit stops the push instead of being overwritten.
 Pre-skipping or later skipping Review leaves no approval binding, so Push fails closed unless Push is also skipped.
 
-This step never requires approval - it runs automatically after review, test, document, and lint pass.
+This step never requires approval - it runs automatically after format, lint, test, document, and review pass.
 
 ## PR
 
@@ -302,7 +299,7 @@ The `v1` payload is compact JSON with these required fields:
 - `head_sha`: the exact git commit SHA recorded for the run when no-mistakes writes the PR body
 - `steps`: the ordered pipeline step snapshot; every item has exactly the fields below
 
-- `step`: the raw pipeline step name, such as `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, or `ci`
+- `step`: the raw pipeline step name, such as `intent`, `rebase`, `format`, `lint`, `test`, `document`, `review`, `push`, `pr`, or `ci`
 - `status`: the raw [step status](#step-statuses) recorded for that step, such as `completed`, `skipped`, or `failed`
 
 Items are ordered by the fixed pipeline order and represent the exact database snapshot when no-mistakes creates or updates the PR body. The attestation includes `pr` and `ci` records even though their human-readable details are not shown in `## Pipeline`; at the normal PR write point those records are commonly `running` and `pending`. The `head_sha` binds that snapshot to the commit it describes, so consumers can detect when a later push has made the comment stale. After a pipeline repair push on a host that carries that HTML attestation and can rewrite the PR body, no-mistakes rebinds an existing attestation to the newly published head so a PR that was raised through the gate stays attested; a PR that never carried an attestation is left unchanged, and hosts without a PR-body reader skip the rebind rather than failing the push.
@@ -349,7 +346,7 @@ Monitors PR health after creation and auto-fixes CI failures. Mergeability polli
 - On GitHub, includes unresolved review-thread comments from supported review bots (currently Greptile) in CI repair prompts when an auto-fix attempt starts; the comments are framed as untrusted external data and the rendered section is capped at 32 KiB
 - States the configured repair policy in the step log before the first poll, so a run's log says which of the two paths a repair would take without cross-referencing the config in force at the time
 - Settles the local gate mirror before atomically recording the published head and push binding, so a publication that stalls part way records nothing: the run stays on its pre-repair head and the next fix attempt re-enters the same path, finds the remote already at that commit, and completes it
-- Whenever a repair revalidates - either because the setting requires it or because continuity cannot be proven - restarts at Review only: Intent and Rebase keep their results, steps already skipped for the run stay skipped, the run id is unchanged, and the durable auto-fix attempt count carries across. Earlier cycles remain in the run's round history; the step's own status shows the latest cycle
+- Whenever a repair revalidates - either because the setting requires it or because continuity cannot be proven - restarts at Format, the same boundary an agent-authored commit restarts to elsewhere in the pipeline: Intent and Rebase keep their results, steps already skipped for the run stay skipped, the run id is unchanged, and the durable auto-fix attempt count carries across. Earlier cycles remain in the run's round history; the step's own status shows the latest cycle
 - Bounds that CI-fix agent with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the attempt with a timeout diagnostic rather than leaving the run active indefinitely, and a late successful return after the deadline is not committed
 - If the CI-fix agent exhausts that budget, pauses for user approval instead of re-issuing the same request on the next poll. A budget burn is not transient - repeating it costs another full budget - so the remaining auto-fix attempts are left for the user to spend deliberately with a fix response. The finding carries the measured timeout diagnostic and, when the timed-out agent left uncommitted work in the run worktree, that worktree's path. Ordinary (non-timeout) fix failures keep retrying as before
 - On GitHub, GitLab, Forgejo, or Azure DevOps merge conflict: asks the agent to rebase onto the latest PR base branch tip and make the smallest correct root-cause fix for the conflicts, using user intent when available

@@ -1127,11 +1127,10 @@ func TestStep_RestartCarryoverReachesTheEvidencePass(t *testing.T) {
 	}
 }
 
-// TestLintStep_RestartCarryoverBypassesTheHousekeepingStash is the same rule on
-// the lint side. The stashed combined document+lint result was produced before
-// the restart, so it cannot have accounted for the findings the restart carried
-// back; consuming it would answer the gate with a verdict that predates them.
-func TestLintStep_RestartCarryoverBypassesTheHousekeepingStash(t *testing.T) {
+// TestLintStep_RestartCarryoverReachesTheAgentPass is the same rule on the lint
+// side: a restart re-entry is not a fix round, so Lint's non-fix path must read
+// the findings the restart carried back rather than re-derive its own verdict.
+func TestLintStep_RestartCarryoverReachesTheAgentPass(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -1141,25 +1140,17 @@ func TestLintStep_RestartCarryoverBypassesTheHousekeepingStash(t *testing.T) {
 	}}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Shared = &pipeline.RunShared{}
-	sctx.Shared.SetHousekeepingLint(pipeline.HousekeepingLintResult{
-		FindingsJSON: `{"findings":[],"summary":"stale"}`,
-		Summary:      "stale",
-	})
 	sctx.Fixing = false
 	sctx.PreviousFindings = `{"findings":[{"id":"carried-lint-finding","severity":"warning","description":"vet warning","action":"no-op"}],"summary":"1 issue"}`
 
-	outcome, err := (&LintStep{}).Execute(sctx)
-	if err != nil {
+	if _, err := (&LintStep{}).Execute(sctx); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if len(ag.calls) != 1 {
-		t.Fatalf("agent calls = %d, want 1 (the stash must not answer a restart re-entry)", len(ag.calls))
+		t.Fatalf("agent calls = %d, want 1", len(ag.calls))
 	}
 	if !strings.Contains(ag.calls[0].Prompt, "carried-lint-finding") {
 		t.Fatalf("lint prompt does not carry the restarted findings:\n%s", ag.calls[0].Prompt)
-	}
-	if outcome.FixSummary == "stale" {
-		t.Fatal("outcome came from the stale housekeeping stash")
 	}
 }
 

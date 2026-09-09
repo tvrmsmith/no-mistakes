@@ -420,7 +420,7 @@ func TestExecutor_RecoveredPostGateSkippedStepNeedsTheRunSkipSet(t *testing.T) {
 	if err := database.UpdateStepStatusWithDuration(gate.ID, types.StepStatusAwaitingApproval, 25); err != nil {
 		t.Fatal(err)
 	}
-	later, err := database.InsertStepResult(run.ID, types.StepTest)
+	later, err := database.InsertStepResult(run.ID, types.StepPush)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,12 +435,12 @@ func TestExecutor_RecoveredPostGateSkippedStepNeedsTheRunSkipSet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan := []Step{newApprovalStep(types.StepReview, findings), &adaptiveCallStep{name: types.StepTest}}
+	plan := []Step{newApprovalStep(types.StepReview, findings), &adaptiveCallStep{name: types.StepPush}}
 	if err := ValidateRecoveredRun(database, parked, plan); err == nil {
 		t.Fatal("ValidateRecoveredRun() = nil for a post-gate skipped step the run never requested, want an error")
 	}
 
-	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepTest}); err != nil {
+	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepPush}); err != nil {
 		t.Fatal(err)
 	}
 	explained, err := database.GetRun(run.ID)

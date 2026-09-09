@@ -41,7 +41,7 @@ func resumeAndReadSharedDiscovery(t *testing.T, seed string, fingerprint string)
 	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.InsertStepResult(run.ID, types.StepTest); err != nil {
+	if _, err := database.InsertStepResult(run.ID, types.StepPush); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.SetRunTestDiscovery(run.ID, seed); err != nil {
@@ -57,7 +57,7 @@ func resumeAndReadSharedDiscovery(t *testing.T, seed string, fingerprint string)
 		hit bool
 	)
 	after := &adaptiveCallStep{
-		name: types.StepTest,
+		name: types.StepPush,
 		fn: func(sctx *StepContext) (*StepOutcome, error) {
 			got, hit = sctx.Shared.TestDiscovery(fingerprint)
 			return &StepOutcome{}, nil

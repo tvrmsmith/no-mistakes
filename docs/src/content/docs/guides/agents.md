@@ -8,7 +8,7 @@ It is not runner-free.
 Every validation run requires a supported native agent binary, the `agent: cursor` ACP alias, or an explicit `acp:<target>` through `acpx`.
 The default `agent: auto` setting picks the first supported native agent or ACP alias available on your system.
 
-The coding agent that calls `no-mistakes axi` drives approval gates, but it does not automatically become the pipeline agent that performs review, evidence testing, documentation, combined documentation-and-lint housekeeping, or fixes.
+The coding agent that calls `no-mistakes axi` drives approval gates, but it does not automatically become the pipeline agent that performs review, evidence testing, documentation, linting, or fixes.
 Those jobs run in the daemon's disposable worktree through the configured pipeline agent.
 A validation-step agent inspects, fixes, and returns only its assigned phase; delivery requirements in user intent remain acceptance context, but the outer executor alone performs the other validation, push, PR, and CI phases.
 If that step attempts pipeline control, no-mistakes returns `error.code: nested_gate_context`; the agent must return control to the outer executor, while read-only `no-mistakes axi status`, `no-mistakes axi logs`, help, and `no-mistakes doctor` remain available.
@@ -67,7 +67,7 @@ This refusal also applies when deterministic test or lint commands are configure
 | Test without `commands.test`, or evidence validation with user intent | No | Requires the agent to discover checks and gather end-to-end evidence. |
 | Document | No | Requires the agent to discover and update documentation gaps. |
 | Lint with `commands.lint` | No, as part of a full gate | The command is deterministic, but the full gate still requires an agent. |
-| Lint without `commands.lint` and all fix rounds | No | The document step performs the initial combined housekeeping pass, and an agent is still needed for fallback assessment or code changes. |
+| Lint without `commands.lint` and all fix rounds | No | The lint step runs its own agent pass to detect linters, apply safe fixes, and assess what remains. |
 | Push, PR, and CI as part of a gate | No | They run only after the required validation steps, and PR or CI paths may invoke the agent themselves. |
 
 ### Antigravity and Gemini setups
@@ -154,7 +154,7 @@ Successful outcomes also instruct the agent to summarize the run for the user.
 When the pipeline applied fixes, successful outcomes include a `fixes` table listing each fix so the agent can acknowledge what it missed and the user can review them.
 
 If that PR later falls behind the default branch or hits a merge conflict - commonly because another PR merged first - the agent runs no command and must never hand-rebase.
-The CI monitor stays live in the background after checks pass, and when it sees an actual conflict it rebases onto the base, resolves it, revalidates from Review because rebasing cannot prove continuity with the reviewed head, and re-pushes the branch through Push, so no agent or user action is needed.
+The CI monitor stays live in the background after checks pass, and when it sees an actual conflict it rebases onto the base, resolves it, revalidates from Format because rebasing cannot prove continuity with the reviewed head, and re-pushes the branch through Push, so no agent or user action is needed.
 A PR that is merely behind but still clean needs nothing either, since the platform merges it.
 The one exception is when that monitor is no longer running - the PR was closed, the run was aborted or superseded, it idle-timed-out, or its auto-fix attempts were exhausted - in which case the agent recovers with `no-mistakes rerun`, which cancels the stale monitor and re-runs the full pipeline including a deterministic rebase step.
 When the dead run left auto-fix or CI-rebase commits the clone lacks, the agent takes them with the offered `branch_sync` `sync` action before the rerun, not after: the rerun's own pending run carries no push binding, so it owns the branch (`pipeline_owned`) and `no-mistakes axi sync` then refuses.

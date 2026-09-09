@@ -203,7 +203,7 @@ skip_steps:
   - ci
 ```
 
-Valid names are the [pipeline steps](/no-mistakes/reference/pipeline-steps/): `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, `ci`. An unrecognized name fails the config rather than being ignored — a typo that silently skipped nothing would read exactly like a step that ran.
+Valid names are the [pipeline steps](/no-mistakes/reference/pipeline-steps/): `intent`, `rebase`, `format`, `lint`, `test`, `document`, `review`, `push`, `pr`, `ci`. An unrecognized name fails the config rather than being ignored — a typo that silently skipped nothing would read exactly like a step that ran.
 
 This list and a run's own `--skip` selection are additive: neither can re-enable what the other switched off. Skipping `review` also means no run of this repository ever records review approval, which the Push step requires, so a repository that skips `review` while keeping `push` will not publish.
 
@@ -284,19 +284,18 @@ Explicit lint command. Run via the platform shell - `sh -c` on POSIX, `cmd.exe /
 | Default | Empty (agent auto-detects) |
 
 When set, the lint step runs this exact command and checks the exit code.
-When empty, the agent-driven lint duty is folded into the document step's combined housekeeping pass: one agent invocation covers both documentation and lint, and the lint step consumes that result, reporting lint-category findings with the same gate semantics (blocking findings park for a decision).
-Neither responsibility is skipped: when the document step has nothing to run against (or its structured output cannot be trusted), the lint step runs its own agent pass as before.
+When empty, the lint step runs its own agent pass: it detects appropriate linters, applies safe fixes, and reports lint findings with the same gate semantics (blocking findings park for a decision).
 
 ### commands.format
 
-Formatter command run before the push step commits agent fixes.
+Formatter command run by the Format step.
 
 | | |
 | --- | --- |
 | Type | `string` |
-| Default | Empty (no separate push-step formatter) |
+| Default | Empty (no formatter runs) |
 
-This does not prevent empty `commands.lint` from detecting and running formatters during the combined housekeeping pass, or during the lint step when that pass cannot provide a result.
+This does not prevent empty `commands.lint` from detecting and running formatters during the lint step's own agent pass.
 
 ### document.instructions
 
@@ -418,7 +417,7 @@ Override auto-fix attempt limits for specific steps. Fields not set here inherit
 
 Set to `0` to disable the follow-up auto-fix loop for a step (findings require manual approval).
 The document step attempts documentation fixes during its initial pass, so unresolved documentation findings pause for approval instead of using an automatic follow-up loop.
-For empty `commands.lint`, the document step's combined housekeeping pass also attempts safe lint fixes, and the lint step consumes its result; unresolved blocking lint findings pause for approval instead of starting another automatic fix loop.
+For empty `commands.lint`, the lint step attempts safe lint fixes during its own initial pass; unresolved blocking lint findings pause for approval instead of starting another automatic fix loop.
 
 `auto_fix.ci` covers the CI step's CI failure and merge-conflict auto-fix attempts.
 
@@ -496,14 +495,14 @@ ci:
 
 One rule decides how every CI repair is delivered, on every CI-fix path - automatic and manual, CI failure and merge conflict alike:
 
-> A repair is published without revalidating only when its continuity with the reviewed, published head can be **proven**. When that continuity cannot be proven, the repair revalidates from Review.
+> A repair is published without revalidating only when its continuity with the reviewed, published head can be **proven**. When that continuity cannot be proven, the repair revalidates from Format.
 
 Continuity is proven when the repaired head is the run's durably review-approved commit or a descendant of it. That is the same fact the Push step's publication guard enforces, so the decision to publish and the guard that permits the push can never disagree.
 
 `revalidate_repairs` sets the intent, identically on every path:
 
 - **`false` (default)** asks to publish when it is safe to. A repair that builds on the reviewed head - the ordinary case, where the fix agent adds a commit - is committed and published immediately through the same guarded path the [Push step](/no-mistakes/reference/pipeline-steps/#push) uses (review-approved-head continuity, the force-with-lease anchor, remote verification, and the durable push binding all still apply), and the CI monitor keeps watching the same run for the new head. One repair costs one agent round.
-- **`true`** asks for revalidation outright: every repair is kept local, the run's review approval is revoked, and validation restarts at Review so the repaired head re-passes Review, Test, Document, and Lint before Push republishes it.
+- **`true`** asks for revalidation outright: every repair is kept local, the run's review approval is revoked, and validation restarts at Format so the repaired head re-passes Format, Lint, Test, Document, and Review before Push republishes it.
 
 CI repair publication uses the same settlement order as Push. The [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns the publication and retry behavior.
 
@@ -515,10 +514,10 @@ The tradeoff `true` buys is cost against an unreviewed repair:
 
 | | `false` (default) | `true` |
 |---|---|---|
-| Ordinary repair that builds on the reviewed head | published immediately, one agent round | revalidated: one agent round plus a full Review, Test, Document, Lint, Push, PR pass |
+| Ordinary repair that builds on the reviewed head | published immediately, one agent round | revalidated: one agent round plus a full Format, Lint, Test, Document, Review, Push, PR pass |
 | Merge-conflict repair | revalidated | revalidated |
 | Ordinary repair is reviewed before it reaches the PR | no | yes |
-| Steps that re-run when a repair revalidates | Review onward; Intent and Rebase do not | same |
+| Steps that re-run when a repair revalidates | Format onward; Intent and Rebase do not | same |
 | Run identity | unchanged; a restart is a same-run rewind | same |
 
 Turn it on where even an ordinary unreviewed CI repair is unacceptable.

@@ -28,21 +28,6 @@ func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	lintCmd := sctx.Config.Commands.Lint
 
 	if lintCmd == "" {
-		// The combined document+lint housekeeping pass already performed the
-		// agent-driven lint duty for this round; consume its result instead
-		// of paying a second cold agent invocation. Fix rounds and any round
-		// without a stashed result fall through to a full agent pass, so the
-		// lint responsibility is never silently skipped.
-		//
-		// A round carrying previous findings also falls through. Those findings
-		// are this step's own verdict, carried back by a restart, and the
-		// stashed result was produced without them. Paying a full lint pass to
-		// answer them is the deliberate cost.
-		if !sctx.Fixing && sctx.PreviousFindings == "" {
-			if stash, ok := sctx.Shared.TakeHousekeepingLint(); ok {
-				return lintOutcomeFromHousekeeping(sctx, stash)
-			}
-		}
 		sctx.Log("no lint command configured, asking agent to lint and fix...")
 		reassessHistory := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx)
 		prompt := fmt.Sprintf(
@@ -189,26 +174,4 @@ Previous lint findings to address:
 
 	sctx.Log("lint passed")
 	return &pipeline.StepOutcome{FixSummary: fixSummary}, nil
-}
-
-// lintOutcomeFromHousekeeping reports the lint findings the combined
-// document+lint pass produced, with the same gate semantics as the lint
-// step's own agent path: blocking (error/warning) findings park for a
-// decision, info findings pass through.
-func lintOutcomeFromHousekeeping(sctx *pipeline.StepContext, stash pipeline.HousekeepingLintResult) (*pipeline.StepOutcome, error) {
-	findings, err := types.ParseFindingsJSON(stash.FindingsJSON)
-	if err != nil {
-		// A malformed stash means the combined result cannot be trusted;
-		// this should be unreachable (the document step marshalled it), but
-		// fail safe by parking for a human rather than passing silently.
-		sctx.Log("could not parse combined housekeeping lint result, requiring approval")
-		return documentApprovalOutcome("combined housekeeping lint result unreadable"), nil
-	}
-	sctx.Log(fmt.Sprintf("lint assessed in the combined document+lint housekeeping pass: %d unresolved items", len(findings.Items)))
-	return &pipeline.StepOutcome{
-		NeedsApproval: hasBlockingFindings(findings.Items),
-		AutoFixable:   false,
-		Findings:      stash.FindingsJSON,
-		FixSummary:    stash.Summary,
-	}, nil
 }

@@ -137,8 +137,9 @@ FROM runs GROUP BY plan ORDER BY n DESC;
 ```
 
 The last query is the discriminator. Post-reorder runs record
-`intent,rebase,format,lint,test,metrics,document,review,push,pr,ci` in `runs.step_plan`, so the
-two populations separate without new instrumentation. Join `agent_invocations` to `runs` on
+`intent,rebase,format,lint,test,document,review,push,pr,ci` in `runs.step_plan`, so the
+two populations separate without new instrumentation. A later phase adds a Metrics step; it is not
+part of this reorder and does not appear in that value yet. Join `agent_invocations` to `runs` on
 `run_id` and group by that column to compare cost directly.
 
 ## What would count as success

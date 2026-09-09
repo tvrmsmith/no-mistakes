@@ -206,6 +206,48 @@ func TestLintStep_NoConfiguredLint_UnresolvedFindingsNeedApprovalWithoutAutoFixL
 	}
 }
 
+// TestLintStep_EmptyLintCommandAlwaysRunsItsOwnAgentPass pins the deletion of
+// the combined document+lint housekeeping pass. Lint runs before Document now,
+// so a document round can no longer answer for it: with no commands.lint, Lint
+// pays its own agent pass and reports the findings that pass produced, even
+// when a document round in the same run has already happened.
+func TestLintStep_EmptyLintCommandAlwaysRunsItsOwnAgentPass(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	var lintCalls int
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if opts.Purpose == "lint" {
+				lintCalls++
+				return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"warning","description":"lint pass verdict","action":"no-op"}],"summary":"lint pass verdict"}`)}, nil
+			}
+			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"docs current"}`)}, nil
+		},
+	}
+	shared := &pipeline.RunShared{}
+
+	docCtx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	docCtx.Shared = shared
+	if _, err := (&DocumentStep{}).Execute(docCtx); err != nil {
+		t.Fatalf("document step: %v", err)
+	}
+
+	lintCtx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	lintCtx.Shared = shared
+	outcome, err := (&LintStep{}).Execute(lintCtx)
+	if err != nil {
+		t.Fatalf("lint step: %v", err)
+	}
+	if lintCalls != 1 {
+		t.Fatalf("lint agent passes = %d, want exactly 1", lintCalls)
+	}
+	if !strings.Contains(outcome.Findings, "lint pass verdict") {
+		t.Fatalf("outcome findings = %q, want the lint pass's own verdict", outcome.Findings)
+	}
+}
+
 func TestLintStep_HangingAgentFailsRunAfterTimeout(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{

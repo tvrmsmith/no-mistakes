@@ -24,53 +24,54 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		return nil, err
 	}
 	ctx := sctx.Ctx
-	newHeadSHA := ""
 	if err := sctx.DB.SetRunPushActive(sctx.Run.ID, true); err != nil {
 		return nil, err
 	}
 	defer func() { _ = sctx.DB.SetRunPushActive(sctx.Run.ID, false) }()
 
-	// Run format command if configured (before committing, so changes are formatted)
-	if fmtCmd := sctx.Config.Commands.Format; fmtCmd != "" {
-		sctx.Log(fmt.Sprintf("running formatter: %s", fmtCmd))
-		output, exitCode, err := runStepShellCommand(sctx, fmtCmd)
-		if err != nil {
-			sctx.Log(fmt.Sprintf("warning: format command failed: %v", err))
-		} else if exitCode != 0 {
-			sctx.Log(fmt.Sprintf("warning: format command exited with code %d: %s", exitCode, output))
-		}
-	}
-
-	// Commit any uncommitted changes from pipeline agents or the formatter. Test
-	// evidence is deliberately not among them: it is collected outside the
-	// worktree and published to the orphan evidence branch (internal/evidence),
-	// so no artifact ever enters the pushed branch or the default branch's history.
-	status, _ := git.Run(ctx, sctx.WorkDir, "status", "--porcelain")
-	if strings.TrimSpace(status) != "" {
-		sctx.Log("committing agent changes...")
-		if _, err := git.Run(ctx, sctx.WorkDir, "add", "-A"); err != nil {
-			return nil, fmt.Errorf("stage agent changes: %w", err)
-		}
-		if err := commitPipelineCorrection(ctx, sctx.WorkDir, "no-mistakes: apply agent fixes", sctx.Log); err != nil {
-			return nil, fmt.Errorf("commit agent changes: %w", err)
-		}
-		headSHA, err := git.HeadSHA(ctx, sctx.WorkDir)
-		if err != nil {
-			return nil, fmt.Errorf("resolve head after commit: %w", err)
-		}
-		newHeadSHA = headSHA
+	if err := assertWorktreeCleanBeforePush(sctx); err != nil {
+		return nil, err
 	}
 
 	headBeingPushed, err := git.HeadSHA(ctx, sctx.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve head before push: %w", err)
 	}
-	if err := publishRunHead(sctx, headBeingPushed, newHeadSHA); err != nil {
+	if err := publishRunHead(sctx, headBeingPushed, ""); err != nil {
 		return nil, err
 	}
 
 	sctx.Log("pushed successfully")
 	return &pipeline.StepOutcome{}, nil
+}
+
+// assertWorktreeCleanBeforePush refuses to publish out of a dirty worktree.
+// Push used to stage and commit whatever it found here, which was the last way
+// a change Review never judged could reach the remote. Every validation step
+// now commits its own work at its exit through runValidationStep, and the
+// certifying step parks rather than leave residue behind, so anything still
+// uncommitted at Push means a step misreported its exit state. That is a bug to
+// surface, not a condition to sweep up.
+//
+// Test evidence is not among the possibilities: it is collected outside the
+// worktree and published to the orphan evidence branch (internal/evidence), so
+// no artifact ever enters the pushed branch.
+//
+// An unreadable worktree fails too. "Cannot tell" is not "clean".
+func assertWorktreeCleanBeforePush(sctx *pipeline.StepContext) error {
+	dirty, err := git.HasUncommittedChanges(sctx.Ctx, sctx.WorkDir)
+	if err != nil {
+		return fmt.Errorf("inspect worktree before push: %w", err)
+	}
+	if !dirty {
+		return nil
+	}
+	modified, untracked, err := worktreeResidue(sctx.Ctx, sctx.WorkDir)
+	if err != nil {
+		return fmt.Errorf("inspect worktree before push: %w", err)
+	}
+	return fmt.Errorf("refusing to push: worktree is not clean, so an earlier step left work it did not commit: modified %s, untracked %s",
+		describePaths(modified), describePaths(untracked))
 }
 
 // publishRunHead is the single guarded publication path for a run's head. Both

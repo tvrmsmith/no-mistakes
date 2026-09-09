@@ -36,7 +36,7 @@ func writeFinalPRScopeScenario(t *testing.T) string {
         - "` + staleTwoFileEvidence + `"
       testing_summary: "Focused validation passed at the test step target commit."
       artifacts: []
-  - match: "Perform the combined documentation and lint housekeeping pass for this change."
+  - match: "Keep the project documentation accurate for this change."
     text: "documentation updated"
     edits:
       - path: "docs/flag.md"

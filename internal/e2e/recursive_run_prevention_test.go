@@ -30,14 +30,20 @@ func TestGateStepCannotStartRecursivePipeline(t *testing.T) {
 		expectedPhase string
 		completes     bool
 	}{
+		// claude and codex read the real prompt off stdin, so their fixture
+		// claims the incident from the document step alone. Every other adapter
+		// hardcodes the document prompt string because it cannot read the real
+		// one, so the FIRST agent-invoking step claims it instead. That is Lint
+		// now that the cheap gates run ahead of Review. The phase under test is
+		// whichever step the outer run was in, not a particular one.
 		{name: "claude", agent: "claude", executable: "claude", expectedPhase: "document", completes: true},
 		{name: "codex", agent: "codex", executable: "codex", expectedPhase: "document", completes: true},
-		{name: "rovodev", agent: "rovodev", executable: "rovodev", expectedPhase: "review"},
-		{name: "opencode", agent: "opencode", executable: "opencode", expectedPhase: "review", completes: true},
-		{name: "pi", agent: "pi", executable: "pi", expectedPhase: "review"},
-		{name: "copilot", agent: "copilot", executable: "copilot", expectedPhase: "review"},
-		{name: "cursor", agent: "cursor", executable: "acpx", expectedPhase: "review"},
-		{name: "explicit-acp", agent: "acp:fixture", executable: "acpx", expectedPhase: "review"},
+		{name: "rovodev", agent: "rovodev", executable: "rovodev", expectedPhase: "lint"},
+		{name: "opencode", agent: "opencode", executable: "opencode", expectedPhase: "lint", completes: true},
+		{name: "pi", agent: "pi", executable: "pi", expectedPhase: "lint"},
+		{name: "copilot", agent: "copilot", executable: "copilot", expectedPhase: "lint"},
+		{name: "cursor", agent: "cursor", executable: "acpx", expectedPhase: "lint"},
+		{name: "explicit-acp", agent: "acp:fixture", executable: "acpx", expectedPhase: "lint"},
 	}
 	for _, adapter := range adapters {
 		t.Run(adapter.name, func(t *testing.T) {
@@ -212,22 +218,22 @@ func installRecursiveIncidentAgent(t *testing.T, h *Harness, agentName, executab
 		promptSource = `prompt=$(cat)`
 		execAgent = fmt.Sprintf(`printf '%%s' "$prompt" | exec %s "$@"`, shellQuote(filepath.Join(realDir, executable)))
 	case "opencode":
-		promptSource = `prompt="combined documentation and lint housekeeping pass"`
+		promptSource = `prompt="Keep the project documentation accurate for this change."`
 	case "rovodev":
 		probeGuard = `case "$*" in
   "rovodev --help") exit 0 ;;
 esac`
-		promptSource = `prompt="combined documentation and lint housekeeping pass"`
+		promptSource = `prompt="Keep the project documentation accurate for this change."`
 	default:
 		if !completes {
-			promptSource = `prompt="combined documentation and lint housekeeping pass"`
+			promptSource = `prompt="Keep the project documentation accurate for this change."`
 		}
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 %s
 %s
 case "$prompt" in
-  *"combined documentation and lint housekeeping pass"*)
+  *"Keep the project documentation accurate for this change."*)
     if mkdir "$NM_HOME/recursive-incident-claimed" 2>/dev/null; then
       git switch -c incident-recursive-child >/dev/null 2>&1
       run_attempt() {

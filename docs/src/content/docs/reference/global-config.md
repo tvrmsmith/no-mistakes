@@ -591,7 +591,7 @@ The key is matched against the checkout path recorded at `init`. After moving a 
 
 Maximum follow-up auto-fix attempts per step. Set a step to `0` to disable the follow-up auto-fix loop, so findings require manual approval.
 The document step attempts documentation fixes during its initial pass, so unresolved documentation findings pause for approval instead of using an automatic follow-up loop.
-For empty `commands.lint`, the document step's combined housekeeping pass also attempts safe lint fixes, and the lint step consumes its result; unresolved blocking lint findings then pause for approval instead of starting another automatic fix loop.
+For empty `commands.lint`, the lint step attempts safe lint fixes during its own initial pass; unresolved blocking lint findings then pause for approval instead of starting another automatic fix loop.
 
 |      |          |
 | ---- | -------- |
@@ -713,7 +713,7 @@ A per-repo [`commit.fix_message`](/no-mistakes/reference/repo-config/#commitfix_
 ### intent
 
 Transcript-based user-intent extraction settings.
-When enabled and no intent was supplied directly for the run, no-mistakes can read recent local agent transcripts, match the session that produced the change, summarize the author's intent, pass that summary to rebase, review, test, document, lint, CI auto-fix, and PR prompts, and include it in generated PR descriptions.
+When enabled and no intent was supplied directly for the run, no-mistakes can read recent local agent transcripts, match the session that produced the change, summarize the author's intent, pass that summary to rebase, lint, test, document, review, CI auto-fix, and PR prompts, and include it in generated PR descriptions.
 
 |      |          |
 | ---- | -------- |

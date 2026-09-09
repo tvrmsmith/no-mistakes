@@ -286,25 +286,25 @@ func TestExecutor_RestartIntoASkippedBoundaryAfterDaemonRestart(t *testing.T) {
 
 	documentCalls := 0
 	steps := []Step{
-		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+		&adaptiveCallStep{name: types.StepFormat, fn: func(*StepContext) (*StepOutcome, error) {
 			return &StepOutcome{}, nil
 		}},
 		newApprovalStep(types.StepTest, blockingFindingsJSON),
 		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
 			documentCalls++
-			return &StepOutcome{RestartFrom: types.StepReview}, nil
+			return &StepOutcome{RestartFrom: types.StepFormat}, nil
 		}},
 		&adaptiveCallStep{name: types.StepPush, fn: func(*StepContext) (*StepOutcome, error) {
 			return &StepOutcome{}, nil
 		}},
 	}
 
-	// The run the daemon lost: review skipped, test parked at its gate, the
+	// The run the daemon lost: format skipped, test parked at its gate, the
 	// rest still pending.
-	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepReview}); err != nil {
+	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepFormat}); err != nil {
 		t.Fatal(err)
 	}
-	skipped, err := database.InsertStepResult(run.ID, types.StepReview)
+	skipped, err := database.InsertStepResult(run.ID, types.StepFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestExecutor_RestartIntoASkippedBoundaryAfterDaemonRestart(t *testing.T) {
 		if err == nil {
 			t.Fatal("Resume() error = nil, want the restart into a skipped boundary to fail the recovered run")
 		}
-		for _, want := range []string{"review", "document", "restart"} {
+		for _, want := range []string{"format", "document", "restart"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("Resume() error = %v, want it to name %q", err, want)
 			}
@@ -385,7 +385,7 @@ func TestExecutor_RestartIntoASkippedBoundaryAfterDaemonRestart(t *testing.T) {
 // TestExecutor_DeclinedRestartAfterDaemonRestart is the other half of the
 // recovered verdict, and the one a step-row reading gets wrong. Push is pending
 // in the step rows whether the operator skipped it or the run simply has not
-// reached it, so inferring the skip set from those rows reads --skip review
+// reached it, so inferring the skip set from those rows reads --skip format
 // --skip push as "push is live" and turns a decline into a hard failure exactly
 // where the documented validate-without-publishing mode should keep running.
 // The run row says both are skipped, so the resumed run drops the restart and
@@ -395,20 +395,20 @@ func TestExecutor_DeclinedRestartAfterDaemonRestart(t *testing.T) {
 	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepReview, types.StepPush}); err != nil {
+	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepFormat, types.StepPush}); err != nil {
 		t.Fatal(err)
 	}
 
 	documentCalls := 0
 	pushCalls := 0
 	steps := []Step{
-		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+		&adaptiveCallStep{name: types.StepFormat, fn: func(*StepContext) (*StepOutcome, error) {
 			return &StepOutcome{}, nil
 		}},
 		newApprovalStep(types.StepTest, blockingFindingsJSON),
 		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
 			documentCalls++
-			return &StepOutcome{RestartFrom: types.StepReview}, nil
+			return &StepOutcome{RestartFrom: types.StepFormat}, nil
 		}},
 		&adaptiveCallStep{name: types.StepPush, fn: func(*StepContext) (*StepOutcome, error) {
 			pushCalls++
@@ -416,7 +416,7 @@ func TestExecutor_DeclinedRestartAfterDaemonRestart(t *testing.T) {
 		}},
 	}
 
-	skipped, err := database.InsertStepResult(run.ID, types.StepReview)
+	skipped, err := database.InsertStepResult(run.ID, types.StepFormat)
 	if err != nil {
 		t.Fatal(err)
 	}

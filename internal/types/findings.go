@@ -106,14 +106,6 @@ const (
 	FindingsRiskScopePipelineOwnedDelivery = "pipeline-owned-delivery"
 )
 
-// Finding category constants for the combined document+lint housekeeping
-// pass. An empty Category on a housekeeping finding is treated as
-// documentation (the stricter gate).
-const (
-	FindingCategoryDocumentation = "documentation"
-	FindingCategoryLint          = "lint"
-)
-
 // Finding represents a single review, test, lint, or PR comment finding.
 type Finding struct {
 	ID               string `json:"id,omitempty"`
@@ -125,9 +117,6 @@ type Finding struct {
 	Source           string `json:"source,omitempty"`
 	UserInstructions string `json:"user_instructions,omitempty"`
 	ReviewScope      string `json:"review_scope,omitempty"`
-	// Category separates the combined document+lint housekeeping pass's
-	// findings into their owning gates. Empty everywhere else.
-	Category string `json:"category,omitempty"`
 }
 
 // TestArtifact describes evidence produced by the test step for human review.
@@ -149,7 +138,6 @@ type findingWire struct {
 	Source              string `json:"source,omitempty"`
 	UserInstructions    string `json:"user_instructions,omitempty"`
 	ReviewScope         string `json:"review_scope,omitempty"`
-	Category            string `json:"category,omitempty"`
 	RequiresHumanReview *bool  `json:"requires_human_review,omitempty"`
 }
 
@@ -417,7 +405,6 @@ func (f *Finding) UnmarshalJSON(data []byte) error {
 	f.Source = wire.Source
 	f.UserInstructions = wire.UserInstructions
 	f.ReviewScope = wire.ReviewScope
-	f.Category = wire.Category
 	if f.Action == "" && wire.RequiresHumanReview != nil {
 		if *wire.RequiresHumanReview {
 			f.Action = ActionAskUser

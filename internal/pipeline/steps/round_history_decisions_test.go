@@ -149,7 +149,7 @@ func TestSameRunChoiceToFixSupersedesEarlierStepDecline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewStep, err := f.db.InsertStepResult(currentRun.ID, types.StepReview)
+	lintStep, err := f.db.InsertStepResult(currentRun.ID, types.StepLint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,11 +163,11 @@ func TestSameRunChoiceToFixSupersedesEarlierStepDecline(t *testing.T) {
 	}
 
 	findings := `{"findings":[{"id":"same-run-reversal","severity":"error","description":"same concern","action":"ask-user"}]}`
-	reviewRound, err := f.db.InsertStepRound(reviewStep.ID, 1, "initial", &findings, nil, 10)
+	lintRound, err := f.db.InsertStepRound(lintStep.ID, 1, "initial", &findings, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.db.SetStepRoundDeclined(reviewRound.ID); err != nil {
+	if err := f.db.SetStepRoundDeclined(lintRound.ID); err != nil {
 		t.Fatal(err)
 	}
 	testRound, err := f.db.InsertStepRound(testStep.ID, 1, "initial", &findings, nil, 10)
@@ -187,7 +187,7 @@ func TestSameRunChoiceToFixSupersedesEarlierStepDecline(t *testing.T) {
 	pipeline.BindBranchDecisions(sctx)
 	got := roundHistoryPromptSection(sctx)
 
-	declinedAt := strings.Index(got, "review round 1 declined: {\"id\":\"same-run-reversal\"")
+	declinedAt := strings.Index(got, "lint round 1 declined: {\"id\":\"same-run-reversal\"")
 	fixedAt := strings.Index(got, "test round 1 user chose to fix: {\"id\":\"same-run-reversal\"")
 	if declinedAt < 0 || fixedAt < 0 {
 		t.Fatalf("expected both same-run decisions to remain visible:\n%s", got)
