@@ -933,10 +933,10 @@ func (e *Executor) autoFixLimit(stepName types.StepName) int {
 const ciMonitorPreserveCheckTimeout = 10 * time.Second
 
 // ciMonitorPreservable reports whether the CI step a clean stop just cancelled
-// is a bare monitor the next daemon start can re-enter, and when it is not,
-// the reason for the log.
+// is a bare monitor the next daemon start can re-enter. It returns nil when it
+// is, and otherwise the reason it is not.
 //
-// Three facts have to hold together, each guarding a different way the
+// Four facts have to hold together, each guarding a different way the
 // preservation promise goes wrong:
 //
 //   - The row is still a running CI row holding no agent pid, matching what
@@ -953,50 +953,73 @@ const ciMonitorPreserveCheckTimeout = 10 * time.Second
 //     immediately after each turn, so uncommitted work here means an
 //     interrupted turn, whose leftovers the next repair's git add -A would
 //     otherwise commit under a message describing a different repair.
+//   - The worktree head is the head the run recorded. This is the same rule
+//     lifecycle.WorktreeMatchesRun applies on the next start, read here so a
+//     stop never promises preservation a start then refuses. It is a distinct
+//     fact from cleanliness because steps.commitRepair commits before
+//     recordRepair writes the new head, so a stop landing in that window finds
+//     a clean worktree one commit ahead of run.HeadSHA. Recovery's rule is
+//     deliberately left strict rather than widened to accept a descendant: on
+//     the gate-parked path a descendant head is exactly the adverse evidence
+//     it exists to catch.
 //
 // Every read fails closed. An unproven claim must not keep a run alive,
 // because the ordinary failure path is recoverable and a wrongly preserved
 // worktree quietly corrupts the PR.
-func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir string) (bool, string) {
+//
+// The head-mismatch refusal alone wraps ErrCIMonitorInterrupted, because it is
+// the one refusal that names committed work the run never published: the
+// caller ends the run as types.RunCIMonitorInterrupted so the worktree holding
+// that commit is spared for an operator instead of being swept as a failed
+// run's leftovers.
+func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir string) error {
 	current, err := e.db.GetStepResult(stepID)
 	if err != nil {
-		return false, fmt.Sprintf("could not re-read the ci step row: %v", err)
+		return fmt.Errorf("could not re-read the ci step row: %w", err)
 	}
 	// GetStepResult reports a missing row as a nil result and a nil error.
 	if current == nil {
-		return false, "the ci step row is gone"
+		return errors.New("the ci step row is gone")
 	}
 	if current.Status != types.StepStatusRunning {
-		return false, fmt.Sprintf("the ci step row is %s rather than running", current.Status)
+		return fmt.Errorf("the ci step row is %s rather than running", current.Status)
 	}
 	if current.AgentPID != nil {
-		return false, fmt.Sprintf("an auto-fix agent still holds pid %d", *current.AgentPID)
+		return fmt.Errorf("an auto-fix agent still holds pid %d", *current.AgentPID)
 	}
 	// The in-memory run predates the pr step's write, so the PR URL has to come
 	// from the row rather than from run.
 	latest, err := e.db.GetRun(run.ID)
 	if err != nil {
-		return false, fmt.Sprintf("could not re-read the run row: %v", err)
+		return fmt.Errorf("could not re-read the run row: %w", err)
 	}
 	if latest == nil {
-		return false, "the run row is gone"
+		return errors.New("the run row is gone")
 	}
 	if latest.PRURL == nil || strings.TrimSpace(*latest.PRURL) == "" {
-		return false, "the run has no PR URL for a resumed monitor to poll"
+		return errors.New("the run has no PR URL for a resumed monitor to poll")
 	}
 	if strings.TrimSpace(workDir) == "" {
-		return false, "the run has no worktree to check for interrupted work"
+		return errors.New("the run has no worktree to check for interrupted work")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ciMonitorPreserveCheckTimeout)
 	defer cancel()
 	dirty, err := git.HasUncommittedChanges(ctx, workDir)
 	if err != nil {
-		return false, fmt.Sprintf("could not check the worktree for interrupted work: %v", err)
+		return fmt.Errorf("could not check the worktree for interrupted work: %w", err)
 	}
 	if dirty {
-		return false, "an interrupted auto-fix left uncommitted work in the worktree"
+		return errors.New("an interrupted auto-fix left uncommitted work in the worktree")
 	}
-	return true, ""
+	head, err := git.HeadSHA(ctx, workDir)
+	if err != nil {
+		return fmt.Errorf("could not read the worktree head: %w", err)
+	}
+	if strings.TrimSpace(head) != strings.TrimSpace(latest.HeadSHA) {
+		return fmt.Errorf("%w: the worktree holds commit %s, which the run has not recorded as its head",
+			ErrCIMonitorInterrupted, strings.TrimSpace(head))
+	}
+	return nil
 }
 
 func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult, run *db.Run, repo *db.Repo, workDir, logDir string, state stepExecutionState) (bool, types.StepName, error) {
@@ -1228,20 +1251,32 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			//
 			// What may be preserved is decided by ciMonitorPreservable, which
 			// owns every fact that has to hold and fails closed on each one.
+			interruptedMonitor := false
 			if stepName == types.StepCI && errors.Is(context.Cause(sctx.Ctx), ErrDaemonShutdown) {
-				ok, why := e.ciMonitorPreservable(sr.ID, run, workDir)
-				if ok {
+				refusal := e.ciMonitorPreservable(sr.ID, run, workDir)
+				if refusal == nil {
 					// Write nothing: the running row and its worktree are what
 					// the next daemon start resumes from.
 					return false, "", ErrParkPreserved
 				}
 				slog.Warn("clean stop is not preserving this ci step; failing it instead",
-					"run_id", run.ID, "step", stepName, "reason", why)
+					"run_id", run.ID, "step", stepName, "reason", refusal)
+				// A refusal that found unpushed repair work is not a pipeline
+				// failure: the PR is open, the work is on disk, and the run
+				// records that concrete reason instead of the cancellation
+				// cause so an operator can resolve it.
+				if errors.Is(refusal, ErrCIMonitorInterrupted) {
+					interruptedMonitor = true
+					redactedErr = safeurl.RedactText(refusal.Error())
+				}
 			}
 			if dbErr := e.db.FailStep(sr.ID, redactedErr, durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
 			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", redactedErr, &durationMS)
+			if interruptedMonitor {
+				return false, "", fmt.Errorf("step %s failed: %s: %w", stepName, redactedErr, ErrCIMonitorInterrupted)
+			}
 			return false, "", fmt.Errorf("step %s failed: %s", stepName, redactedErr)
 		}
 		restartFrom = outcome.RestartFrom
@@ -1818,7 +1853,8 @@ func (e *Executor) reconcileApprovalGate(ctx context.Context, step Step, sctx *S
 
 // failRun marks a run as failed and returns the error, except for a run left
 // parked by a clean shutdown (ErrParkPreserved), which it returns unchanged
-// without writing anything.
+// without writing anything, and a CI monitor a clean stop could not preserve
+// (ErrCIMonitorInterrupted), which is recorded as an interrupted monitor.
 // It accepts an optional context; if the context was cancelled with a cause,
 // the cause message is used as the run's error (more informative than "context canceled").
 func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...context.Context) error {
@@ -1830,13 +1866,20 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 		return err
 	}
 	errMsg := err.Error()
-	for _, ctx := range ctxs {
-		if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
-			errMsg = cause.Error()
-			break
+	runStatus := types.RunCIMonitorInterrupted
+	// An interrupted CI monitor keeps its own reason rather than the
+	// cancellation cause: "daemon shutting down" would say nothing about the
+	// unpublished commit the operator has to resolve, and would map back to a
+	// plain failure.
+	if !errors.Is(err, ErrCIMonitorInterrupted) {
+		for _, ctx := range ctxs {
+			if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
+				errMsg = cause.Error()
+				break
+			}
 		}
+		runStatus = types.TerminalStatusForReason(errMsg)
 	}
-	runStatus := types.TerminalStatusForReason(errMsg)
 	verifiedHead, verified := e.reconcileTerminalRunHead(run)
 	var dbErr error
 	if verified {

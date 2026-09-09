@@ -243,7 +243,13 @@ type HealthParams struct{}
 // on its own the instant the drain finishes gets respawned into the window
 // before the supervisor's own stop lands, and that fresh daemon happily starts
 // new runs. DrainOnly leaves the refuse-new-runs latch set and the process
-// alive for the supervisor to stop. It is ignored unless Drain is set.
+// alive for the supervisor to stop.
+//
+// DrainOnly and DrainTimeoutMS modify a drain, so both require Drain. The
+// field layout keeps them independent for wire compatibility, which makes the
+// inverted combination representable, and the daemon rejects it rather than
+// guessing: {Drain: false, DrainOnly: true} read as an immediate shutdown
+// would kill the daemon the caller asked to keep alive.
 type ShutdownParams struct {
 	Drain          bool  `json:"drain,omitempty"`
 	DrainTimeoutMS int64 `json:"drain_timeout_ms,omitempty"`

@@ -31,6 +31,13 @@ var ErrDaemonShutdown = errors.New("daemon shutting down")
 // failed here instead.
 var ErrParkPreserved = errors.New("run left parked for daemon shutdown")
 
+// ErrCIMonitorInterrupted marks a CI monitor a clean stop could neither
+// preserve nor honestly call a pipeline failure: the PR is open and the
+// worktree holds a repair commit the run never published. failRun ends such a
+// run as types.RunCIMonitorInterrupted under its own concrete reason, which is
+// what keeps the worktree out of the orphan sweep.
+var ErrCIMonitorInterrupted = errors.New("ci monitor interrupted")
+
 // ErrRecoveryEvidenceUnavailable marks a recovery check that could not be
 // completed because a read failed, as opposed to one that completed and found
 // adverse evidence. A failed read says nothing about the run, so callers that

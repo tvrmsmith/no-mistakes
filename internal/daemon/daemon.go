@@ -1115,6 +1115,13 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 				return nil, fmt.Errorf("invalid params: %w", err)
 			}
 		}
+		// Drain false with a drain option set is not a request this daemon can
+		// serve: taking the branch below would kill the daemon outright, the
+		// exact opposite of what a DrainOnly caller asked for. A version-skewed
+		// or third-party client that builds that shape is told so instead.
+		if !p.Drain && (p.DrainOnly || p.DrainTimeoutMS != 0) {
+			return nil, fmt.Errorf("invalid params: drain options require drain=true (drain_only=%t, drain_timeout_ms=%d)", p.DrainOnly, p.DrainTimeoutMS)
+		}
 		if !p.Drain {
 			go shutdown()
 			return &ipc.ShutdownResult{OK: true}, nil

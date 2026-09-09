@@ -44,14 +44,30 @@ var recoveredConfigFetchTimeout = 10 * time.Second
 
 var fetchRecoveredRemoteBranch = git.FetchRemoteBranch
 
+// runCancel ends one run under a cause and reports whether that actually
+// happened. A run with a live goroutine cancels its context and cannot fail,
+// so it reports nil; a deferred run has no goroutine and ends by writing its
+// terminal row instead, and that write can fail. Reporting the failure is what
+// keeps `axi abort` from telling an operator it stopped a run that is still
+// running.
+type runCancel func(cause error) error
+
+// cancelCause adapts a run goroutine's context cancellation to runCancel.
+func cancelCause(cancel context.CancelCauseFunc) runCancel {
+	return func(cause error) error {
+		cancel(cause)
+		return nil
+	}
+}
+
 // RunManager tracks active pipeline executors and manages run lifecycle.
 type RunManager struct {
 	mu           sync.Mutex
-	executors    map[string]*pipeline.Executor      // runID → executor
-	cancels      map[string]context.CancelCauseFunc // runID → cancel function with cause
-	dones        map[string]chan struct{}           // runID → closed when goroutine exits
-	wg           sync.WaitGroup                     // tracks background run goroutines
-	shuttingDown atomic.Bool                        // prevents new runs during shutdown
+	executors    map[string]*pipeline.Executor // runID → executor
+	cancels      map[string]runCancel          // runID → cancel function with cause
+	dones        map[string]chan struct{}      // runID → closed when goroutine exits
+	wg           sync.WaitGroup                // tracks background run goroutines
+	shuttingDown atomic.Bool                   // prevents new runs during shutdown
 	// drainedAlive marks the managed-service outcome where a drain_only
 	// request left the latch set and the process running, waiting for its
 	// supervisor to perform the exit. If that exit never lands the daemon
@@ -110,7 +126,7 @@ func NewRunManager(database *db.DB, p *paths.Paths, stepFactory StepFactory) *Ru
 	}
 	return &RunManager{
 		executors:     make(map[string]*pipeline.Executor),
-		cancels:       make(map[string]context.CancelCauseFunc),
+		cancels:       make(map[string]runCancel),
 		dones:         make(map[string]chan struct{}),
 		shutdownCh:    make(chan struct{}),
 		db:            database,
@@ -235,7 +251,10 @@ func (m *RunManager) gateStepRowsOf(runID string) ([]*db.StepResult, error) {
 // a stuck marker alone never wins a branch. A step read that fails leaves the
 // claim unproven rather than refuted, so that run stays a candidate and the
 // caller resolves the ambiguity conservatively.
-func preservedBranchRuns(runs []*db.Run, stepsOf gateStepReader) []*db.Run {
+//
+// Which preserved shapes count is the caller's, because the two callers are
+// asking different questions; see preservedShape.
+func preservedBranchRuns(runs []*db.Run, stepsOf gateStepReader, shapes preservedShape) []*db.Run {
 	var keep []*db.Run
 	for _, run := range runs {
 		stepRows, err := stepsOf(run.ID)
@@ -249,10 +268,34 @@ func preservedBranchRuns(runs []*db.Run, stepsOf gateStepReader) []*db.Run {
 		}
 		if lifecycle.ParkedAtGate(run, stepRows) {
 			keep = append(keep, run)
+			continue
+		}
+		if shapes == preservedGatesAndCIMonitors && lifecycle.ResumableCIMonitor(run, stepRows) {
+			keep = append(keep, run)
 		}
 	}
 	return keep
 }
+
+// preservedShape selects which preserved run shapes a branch-contention caller
+// treats as a candidate.
+//
+// Startup admits both resume points: a preserved CI monitor is meant to be
+// re-entered, and leaving it out of the candidate set let a leftover active
+// row on the same branch supersede it, ending the run the previous stop
+// promised to resume.
+//
+// The live push path admits only gates. A push arriving while CI is being
+// monitored is the ordinary way an author corrects a red check, and that push
+// legitimately supersedes the monitor: its branch moved, so what the monitor
+// is polling is already stale. A gate, by contrast, holds unpushed pipeline
+// commits and an unanswered question, so the newer push loses to it.
+type preservedShape int
+
+const (
+	preservedGatesOnly preservedShape = iota
+	preservedGatesAndCIMonitors
+)
 
 // branchContention is how startup divides the active runs of contended
 // branches. superseded holds the runs a start ends to clear the branch;
@@ -287,7 +330,7 @@ func branchContentionOf(runs []*db.Run, stepsOf gateStepReader) branchContention
 		if len(group) < 2 {
 			continue
 		}
-		keep := preservedBranchRuns(group, stepsOf)
+		keep := preservedBranchRuns(group, stepsOf, preservedGatesAndCIMonitors)
 		if len(keep) > 1 {
 			ids := make([]string, 0, len(keep))
 			for _, run := range keep {
@@ -318,26 +361,40 @@ func branchContentionOf(runs []*db.Run, stepsOf gateStepReader) branchContention
 func (m *RunManager) registerDeferredRun(run *db.Run) {
 	runID := run.ID
 	done := make(chan struct{})
-	var once sync.Once
-	cancel := func(cause error) {
+	// A plain mutex and flag rather than a sync.Once: the teardown runs at
+	// most once, but only after the write that ends the row succeeds, and a
+	// Once cannot be re-armed after its function returns.
+	var endMu sync.Mutex
+	ended := false
+	cancel := func(cause error) error {
 		if errors.Is(cause, pipeline.ErrDaemonShutdown) {
-			return
+			return nil
 		}
-		once.Do(func() {
-			reason := types.RunCancelReasonAbortedByUser
-			if cause != nil {
-				reason = cause.Error()
-			}
-			if _, err := m.db.FailActiveRunWithReason(runID, reason); err != nil {
-				slog.Error("failed to terminate a deferred run", "run_id", runID, "error", err)
-			}
-			m.mu.Lock()
-			delete(m.cancels, runID)
-			delete(m.dones, runID)
-			m.mu.Unlock()
-			m.closeSubscribers(runID)
-			close(done)
-		})
+		endMu.Lock()
+		defer endMu.Unlock()
+		if ended {
+			return nil
+		}
+		reason := types.RunCancelReasonAbortedByUser
+		if cause != nil {
+			reason = cause.Error()
+		}
+		if _, err := m.db.FailActiveRunWithReason(runID, reason); err != nil {
+			// The row is still running. Leaving the manager entry and the done
+			// channel in place keeps the run reachable for another attempt;
+			// tearing them down here would report a successful abort while
+			// making the row unreachable forever.
+			slog.Error("failed to terminate a deferred run", "run_id", runID, "error", err)
+			return fmt.Errorf("terminate deferred run %s: %w", runID, err)
+		}
+		ended = true
+		m.mu.Lock()
+		delete(m.cancels, runID)
+		delete(m.dones, runID)
+		m.mu.Unlock()
+		m.closeSubscribers(runID)
+		close(done)
+		return nil
 	}
 	m.mu.Lock()
 	m.cancels[runID] = cancel
@@ -723,7 +780,7 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 	done := make(chan struct{})
 	m.mu.Lock()
 	m.executors[plan.run.ID] = executor
-	m.cancels[plan.run.ID] = cancel
+	m.cancels[plan.run.ID] = cancelCause(cancel)
 	m.dones[plan.run.ID] = done
 	m.mu.Unlock()
 
@@ -954,6 +1011,16 @@ func (m *RunManager) removeRunWorktree(repoID, runID, gateDir, wtDir, reason str
 	}
 	if refusal := protectedPathCleanupReason(m.db, run); refusal != "" {
 		slog.Warn("preserving run worktree", "run_id", runID, "path", wtDir, "reason", refusal)
+		return
+	}
+	// A run the daemon ended as an interrupted CI monitor has an open PR and a
+	// worktree that can hold a repair commit it never published, so the stop
+	// that ended it does not also delete it. Startup's skipWorktreeCleanup
+	// owns the eventual decision, once its head can be compared against the
+	// head the run recorded.
+	if run != nil && run.Status == types.RunCIMonitorInterrupted {
+		slog.Warn("preserving run worktree", "run_id", runID, "path", wtDir,
+			"reason", "ci monitor interrupted; the worktree may hold unpushed repair commits")
 		return
 	}
 	if err := git.WorktreeRemove(context.Background(), gateDir, wtDir); err != nil {
@@ -2206,7 +2273,7 @@ func (m *RunManager) registerActiveRun(runID string, executor *pipeline.Executor
 		return false
 	}
 	m.executors[runID] = executor
-	m.cancels[runID] = cancel
+	m.cancels[runID] = cancelCause(cancel)
 	m.dones[runID] = done
 	return true
 }
@@ -2568,7 +2635,7 @@ func (m *RunManager) Shutdown() {
 	m.signalShutdown()
 
 	m.mu.Lock()
-	cancels := make(map[string]context.CancelCauseFunc, len(m.cancels))
+	cancels := make(map[string]runCancel, len(m.cancels))
 	for id, cancel := range m.cancels {
 		cancels[id] = cancel
 	}
@@ -2583,7 +2650,13 @@ func (m *RunManager) Shutdown() {
 	sort.Strings(ids)
 
 	for _, id := range ids {
-		cancels[id](pipeline.ErrDaemonShutdown)
+		// A deferred run treats a shutdown cause as preservation and writes
+		// nothing, so nothing here can fail today; the error is logged rather
+		// than dropped so a future cancel that can fail is not silent.
+		if err := cancels[id](pipeline.ErrDaemonShutdown); err != nil {
+			slog.Error("failed to signal a run to stop for shutdown", "run_id", id, "error", err)
+			continue
+		}
 		slog.Info("signalled run to stop for shutdown", "run_id", id)
 	}
 
@@ -2647,8 +2720,9 @@ func (m *RunManager) HandleCancel(runID string) error {
 		return fmt.Errorf("no active run %s", runID)
 	}
 
-	cancel(fmt.Errorf(types.RunCancelReasonAbortedByUser))
-	return nil
+	// A deferred run ends by writing its row here, so a failed write must
+	// reach the operator rather than read as a successful abort.
+	return cancel(fmt.Errorf(types.RunCancelReasonAbortedByUser))
 }
 
 // cancelActiveRuns cancels any in-progress runs for the given repo+branch
@@ -2679,7 +2753,7 @@ func (m *RunManager) cancelActiveRuns(repoID, branch string) error {
 	// The live path decides branch contention by the same owner startup uses:
 	// a parked or deferred run holds unpushed pipeline commits it was promised
 	// would survive, so the newer push loses instead of destroying it.
-	if preserved := preservedBranchRuns(active, m.gateStepRowsOf); len(preserved) > 0 {
+	if preserved := preservedBranchRuns(active, m.gateStepRowsOf, preservedGatesOnly); len(preserved) > 0 {
 		return fmt.Errorf("run %s is parked at a gate on branch %q and would be destroyed by a new run; resolve or abort it first", preserved[0].ID, branch)
 	}
 
@@ -2693,7 +2767,11 @@ func (m *RunManager) cancelActiveRuns(repoID, branch string) error {
 			continue
 		}
 
-		cancel(fmt.Errorf(types.RunCancelReasonSuperseded))
+		// A run that could not be ended still owns the branch, so the newer
+		// push is refused rather than started alongside it.
+		if err := cancel(fmt.Errorf(types.RunCancelReasonSuperseded)); err != nil {
+			return fmt.Errorf("could not supersede run %s on branch %q: %w", run.ID, branch, err)
+		}
 		slog.Info("cancelled active run", "run_id", run.ID, "repo_id", repoID, "branch", branch)
 		if done != nil {
 			toWait = append(toWait, done)

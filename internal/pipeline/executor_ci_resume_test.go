@@ -12,12 +12,23 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	_ "modernc.org/sqlite"
 )
 
 const testCIPRURL = "https://github.com/test/repo/pull/7"
+
+// headSHAOf reports the commit a test worktree is sitting on.
+func headSHAOf(t *testing.T, dir string) string {
+	t.Helper()
+	head, err := git.HeadSHA(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(head)
+}
 
 // seedCIMonitorRun writes the rows a run leaves behind while its CI step polls
 // an open PR: every earlier step completed and the ci row running. It returns
@@ -578,14 +589,18 @@ func TestExecutor_ResumedCIMonitorKeepsItsEarlierElapsedTime(t *testing.T) {
 //
 // The fixture is the shape a real live monitor has, because that is what
 // preservation requires: a real git worktree with nothing uncommitted in it,
-// and a run carrying the PR URL a resumed monitor would poll. A caller that
-// wants one of those facts missing removes it in before.
+// sitting at the head the run recorded, and a run carrying the PR URL a
+// resumed monitor would poll. A caller that wants one of those facts missing
+// removes it in before.
 func runCancelledCIStep(t *testing.T, cause error, before func(sctx *StepContext)) (*db.DB, *db.StepResult, error) {
 	t.Helper()
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
 	initGitRepo(t, workDir)
 	if err := database.UpdateRunPRURL(run.ID, "https://github.com/o/r/pull/7"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateRunHeadSHA(run.ID, headSHAOf(t, workDir)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -716,5 +731,40 @@ func TestExecutor_CancellationThatIsNotACleanShutdownStillFailsTheCIStep(t *test
 	}
 	if ciRow.Status != types.StepStatusFailed {
 		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
+	}
+}
+
+// TestExecutor_CleanStopDoesNotPreserveACIMonitorAheadOfTheRunHead drives the
+// commit-then-stop window steps.commitRepair opens: the repair is committed
+// before recordRepair writes the new head, so a clean stop landing there finds
+// a clean worktree one commit ahead of run.HeadSHA. lifecycle.WorktreeMatchesRun
+// refuses exactly that on the next start, so preserving it would promise a
+// resume the next start then declines. The run ends as an interrupted monitor
+// instead of a plain failure, which is what spares the worktree holding the
+// only copy of that commit.
+func TestExecutor_CleanStopDoesNotPreserveACIMonitorAheadOfTheRunHead(t *testing.T) {
+	database, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
+		writeTestFile(t, sctx.WorkDir, "repair.go", "package repaired\n")
+		execGit(t, sctx.WorkDir, "add", ".")
+		execGit(t, sctx.WorkDir, "commit", "-m", "ci auto-fix repair")
+	})
+	if errors.Is(err, ErrParkPreserved) {
+		t.Fatalf("Execute() error = %v, want NOT ErrParkPreserved for a head ahead of the run head", err)
+	}
+	if !errors.Is(err, ErrCIMonitorInterrupted) {
+		t.Fatalf("Execute() error = %v, want it to report an interrupted ci monitor", err)
+	}
+	if ciRow.Status != types.StepStatusFailed {
+		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
+	}
+	run, getErr := database.GetRun(ciRow.RunID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if run.Status != types.RunCIMonitorInterrupted {
+		t.Fatalf("run status = %s, want %s so the worktree survives the stop", run.Status, types.RunCIMonitorInterrupted)
+	}
+	if run.Error == nil || !strings.Contains(*run.Error, "not recorded as its head") {
+		t.Errorf("run error = %v, want the concrete unpublished-commit reason rather than the cancellation cause", run.Error)
 	}
 }

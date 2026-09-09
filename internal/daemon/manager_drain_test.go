@@ -63,7 +63,7 @@ func registerFakeRun(t *testing.T, m *RunManager, database *db.DB, repo *db.Repo
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan struct{})
 	m.mu.Lock()
-	m.cancels[run.ID] = cancel
+	m.cancels[run.ID] = cancelCause(cancel)
 	m.dones[run.ID] = done
 	m.mu.Unlock()
 	return run, ctx, done

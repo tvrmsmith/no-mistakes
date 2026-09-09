@@ -768,3 +768,39 @@ func findInterruptedWire(runs []ipc.DrainInterruptedRun, id string) (ipc.DrainIn
 	}
 	return ipc.DrainInterruptedRun{}, false
 }
+
+// TestShutdown_DrainOnlyWithoutDrainIsRejected covers the one wire shape the
+// CLI never builds but a version-skewed or third-party client can: drain
+// options with Drain unset. Taking the immediate-shutdown branch there would
+// kill the daemon a DrainOnly caller asked to stay alive, so the handler
+// refuses the request and the daemon keeps answering.
+func TestShutdown_DrainOnlyWithoutDrainIsRejected(t *testing.T) {
+	p, _ := startTestDaemon(t)
+
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatalf("dial daemon: %v", err)
+	}
+	defer client.Close()
+
+	inverted := []ipc.ShutdownParams{
+		{DrainOnly: true},
+		{DrainTimeoutMS: 2000},
+	}
+	for _, params := range inverted {
+		var result ipc.ShutdownResult
+		if err := client.Call(ipc.MethodShutdown, &params, &result); err == nil {
+			t.Fatalf("shutdown(%+v) succeeded with %+v, want an error", params, result)
+		} else if !strings.Contains(err.Error(), "drain=true") {
+			t.Fatalf("shutdown(%+v) error = %v, want it to name the required drain flag", params, err)
+		}
+	}
+
+	var health ipc.HealthResult
+	if err := client.Call(ipc.MethodHealth, &ipc.HealthParams{}, &health); err != nil {
+		t.Fatalf("daemon stopped answering after a rejected shutdown: %v", err)
+	}
+	if health.Drained {
+		t.Fatalf("health.Drained = true, want the refuse-new-runs latch untouched")
+	}
+}
