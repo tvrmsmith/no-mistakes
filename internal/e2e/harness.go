@@ -146,6 +146,12 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	// daemon re-execs itself, also inheriting them.
 	t.Setenv("PATH", h.BinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", h.HomeDir)
+	// zsh reads its startup files from $ZDOTDIR when that is set, falling back
+	// to $HOME only when it is not, so overriding HOME alone leaves a developer
+	// who exports ZDOTDIR (a common dotfiles layout) running their real
+	// .zshenv/.zshrc inside the harness. The daemon's login-shell probe then
+	// adopts that PATH, which puts a real gh/tea ahead of the BinDir stubs.
+	t.Setenv("ZDOTDIR", h.HomeDir)
 	t.Setenv("NM_HOME", h.NMHome)
 	t.Setenv("FAKEAGENT_LOG", h.AgentLog)
 	if h.Scenario != "" {
@@ -191,9 +197,17 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	return h
 }
 
+// writeLoginShellPathSeed puts BinDir first on the PATH the daemon adopts.
+// The daemon replaces its own environment with the login shell's
+// (internal/shellenv), so the process PATH the test exports is not the PATH a
+// step's `gh`, `tea`, or agent lookup sees. Without the seed a real
+// system gh on /opt/homebrew/bin shadows the BinDir stub and the pipeline
+// talks to github.com. The zsh files only take effect together with the
+// ZDOTDIR override in NewHarness: zsh reads $ZDOTDIR, not $HOME, so a
+// developer who exports ZDOTDIR gets their own dotfiles instead of these.
 func (h *Harness) writeLoginShellPathSeed() {
 	line := "export PATH=" + shellQuote(h.BinDir) + ":$PATH\n"
-	for _, name := range []string{".zshenv", ".zprofile", ".bash_profile", ".profile"} {
+	for _, name := range []string{".zshenv", ".zprofile", ".zshrc", ".bash_profile", ".bashrc", ".profile"} {
 		if err := os.WriteFile(filepath.Join(h.HomeDir, name), []byte(line), 0o644); err != nil {
 			h.t.Fatalf("write %s: %v", name, err)
 		}
