@@ -852,6 +852,29 @@ func TestCreatePRStreamsBodyThroughStdin(t *testing.T) {
 	}
 }
 
+func TestCreatePRAddsDraftFlagWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	const body = "## What Changed\n\n- open as draft"
+	host := NewWithFork(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr create --head feature/draft --base main --repo test/repo --draft --title fix: draft --body-file -": {
+			stdout:    "https://github.com/test/repo/pull/7\n",
+			wantStdin: body,
+		},
+	}), nil, "", "test/repo", "", true)
+
+	pr, err := host.CreatePR(context.Background(), "feature/draft", "main", scm.PRContent{
+		Title: "fix: draft",
+		Body:  body,
+	})
+	if err != nil {
+		t.Fatalf("CreatePR() error = %v", err)
+	}
+	if pr == nil || pr.Number != "7" {
+		t.Fatalf("CreatePR() PR = %+v, want #7", pr)
+	}
+}
+
 func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	t.Parallel()
 
@@ -1348,6 +1371,56 @@ func TestFetchFailedCheckLogsSelectsMatchingRunForHeadSHA(t *testing.T) {
 	}
 }
 
+func TestFetchFailedCheckTargetLogsSelectsProviderIdentityOverName(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run list --branch feature --commit abc123 --status failure --limit 20 --json databaseId,headSha,name,displayTitle,workflowName": {
+			stdout: `[{"databaseId":102,"name":"CI"}]` + "\n",
+		},
+		"gh run view 102 --json jobs":     {stdout: `{"jobs":[{"databaseId":201,"name":"build","conclusion":"failure"},{"databaseId":202,"name":"build","conclusion":"failure"}]}` + "\n"},
+		"gh run view 102 --job 202 --log": {stdout: "selected build failed\n"},
+	}), nil, "", "")
+
+	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{Name: "build", ProviderID: "github-check-run:202"}})
+	if err != nil {
+		t.Fatalf("FetchFailedCheckTargetLogs() error = %v", err)
+	}
+	if len(logs) != 1 || logs[0].Output != "selected build failed" {
+		t.Fatalf("FetchFailedCheckTargetLogs() = %+v, want selected check's logs", logs)
+	}
+}
+
+func TestFetchFailedCheckTargetLogsReturnsPartialLogsWithRetrievalError(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run list --branch feature --commit abc123 --status failure --limit 20 --json databaseId,headSha,name,displayTitle,workflowName": {stdout: `[{"databaseId":102,"name":"CI"}]` + "\n"},
+		"gh run view 102 --json jobs":     {stdout: `{"jobs":[{"databaseId":201,"name":"build","conclusion":"failure"},{"databaseId":202,"name":"lint","conclusion":"failure"}]}` + "\n"},
+		"gh run view 102 --job 201 --log": {stdout: "build failed\n"},
+		"gh run view 102 --job 202 --log": {stderr: "expired", code: 1},
+	}), nil, "", "")
+
+	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{ProviderID: "github-check-run:201"}, {ProviderID: "github-check-run:202"}})
+	if err != nil || len(logs) != 2 || logs[0].Output != "build failed" || logs[1].Err == nil || !strings.Contains(logs[1].Err.Error(), "job 202") {
+		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want retained partial logs and job 202 error", logs, err)
+	}
+}
+
+func TestFetchFailedCheckTargetLogsReportsMissingSelectedJob(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run list --branch feature --commit abc123 --status failure --limit 20 --json databaseId,headSha,name,displayTitle,workflowName": {stdout: `[{"databaseId":102,"name":"CI"}]` + "\n"},
+		"gh run view 102 --json jobs": {stdout: `{"jobs":[{"databaseId":201,"name":"build","conclusion":"failure"}]}` + "\n"},
+	}), nil, "", "")
+
+	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{ProviderID: "github-check-run:999"}})
+	if err != nil || len(logs) != 1 || logs[0].Err == nil || !strings.Contains(logs[0].Err.Error(), "github-check-run:999") {
+		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want explicit missing-target error", logs, err)
+	}
+}
+
 // A GitHub Actions action-download outage fails a job inside "Set up job",
 // before any repository step runs. PreRunFailures must flag exactly that job -
 // read structurally from the setup step's conclusion, never from log text - and
@@ -1442,7 +1515,7 @@ func TestFindPRForkUsesBareHeadAndFiltersOwner(t *testing.T) {
 				`{"number":42,"url":"https://github.com/parent/repo/pull/42","baseRefName":"main","headRefName":"feature/refactor","headRepositoryOwner":{"login":"fork-owner"}}` +
 				`]` + "\n",
 		},
-	}), nil, "", "parent/repo", "fork-owner/repo")
+	}), nil, "", "parent/repo", "fork-owner/repo", false)
 
 	pr, err := host.FindPR(context.Background(), branch, "main")
 	if err != nil {
@@ -1562,7 +1635,7 @@ func TestFindPRForkRejectsMissingHeadIdentity(t *testing.T) {
 				"gh pr list --head " + branch + " --base main --repo parent/repo --state open --json number,url,baseRefName,headRefName,headRepositoryOwner": {
 					stdout: tc.output + "\n",
 				},
-			}), nil, "", "parent/repo", "fork-owner/repo")
+			}), nil, "", "parent/repo", "fork-owner/repo", false)
 
 			pr, err := host.FindPR(context.Background(), branch, "main")
 			if err == nil {

@@ -21,7 +21,8 @@ import (
 // canonicalStaleMonitorPhrases are the load-bearing claims of the corrected
 // "PR fell behind / conflicted after checks pass" guidance: the live CI monitor
 // auto-rebases and re-pushes such a PR, so the agent runs no command and never
-// hand-rebases, and `no-mistakes rerun` is only the dead-monitor recovery.
+// hand-rebases, and `no-mistakes rerun` is only the dead-monitor recovery,
+// subject to its clean caller-head check.
 //
 // The last two phrases bound that recovery. `rerun` re-runs the gate branch tip
 // (daemon.RunManager.HandleRerun), while `axi run` pushes the caller's local
@@ -89,6 +90,16 @@ var canonicalCustodyRecoveryPhrases = []string{
 var canonicalAbortScopePhrases = []string{
 	"abort or rerun while a gate awaits your response or a step is actively working",
 	"unless you are deliberately discarding that run",
+}
+
+var canonicalRerunRecoveryPhrases = []string{
+	"known clean caller",
+	"selected",
+	"refuses",
+	"no-mistakes axi status",
+	"next_action.command",
+	"no-mistakes axi run",
+	"custody",
 }
 
 var canonicalPreserveGateFixPhrases = []string{
@@ -166,6 +177,22 @@ func TestStaleMonitorGuidance_SyncedAcrossSurfaces(t *testing.T) {
 	// historical substring let any reworded promise through, while the reattach
 	// condition and the sync-first order in canonicalStaleMonitorPhrases are
 	// what a surface actually has to carry.
+
+	// Detailed rerun conditions belong to the skill and live guidance; the
+	// agents guide links to the CLI reference instead of duplicating them.
+	for name, content := range map[string]string{
+		"skill body":      skill.Markdown(),
+		"axi help string": staleMonitorGuidance,
+		"human recovery summary": humanSyncSummary(branchsync.State{
+			State: branchsync.StatePipelineOwned, Safety: "blocked_pipeline_owned_recoverable",
+		}),
+	} {
+		for _, phrase := range canonicalRerunRecoveryPhrases {
+			if !strings.Contains(content, phrase) {
+				t.Errorf("%s is missing rerun recovery guidance %q", name, phrase)
+			}
+		}
+	}
 }
 
 // TestCustodyRecoveryGuidance_SyncedAcrossSurfaces pins the recover_custody
@@ -249,7 +276,7 @@ func TestStaleMonitorGuidance_InChecksPassedOutput(t *testing.T) {
 	}
 
 	got := out.String()
-	for _, phrase := range canonicalStaleMonitorPhrases {
+	for _, phrase := range append(canonicalStaleMonitorPhrases, canonicalRerunRecoveryPhrases...) {
 		if !strings.Contains(got, phrase) {
 			t.Errorf("checks-passed output missing stale-monitor guidance phrase %q in:\n%s", phrase, got)
 		}
@@ -284,6 +311,29 @@ func TestBranchSyncGuidance_SyncedAcrossStaticAndLiveSurfaces(t *testing.T) {
 			if !strings.Contains(content, phrase) {
 				t.Errorf("%s is missing branch-sync guidance phrase %q", name, phrase)
 			}
+		}
+	}
+}
+
+func TestBranchSyncGuidance_EmittedForBoundArchiveRecovery(t *testing.T) {
+	f := newCLIDivergentArchiveFixture(t)
+	if out, err := executeCmd("axi", "sync", "--bind-archive-ref", f.archiveRef); err != nil {
+		t.Fatalf("bind archive: %v\n%s", err, out)
+	}
+
+	out, err := executeCmd("axi")
+	if err != nil {
+		t.Fatalf("axi home: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"branch_sync:",
+		"code: recover_custody",
+		"command: no-mistakes axi sync --recover --keep-local",
+		"bound archive preserves a divergent later head",
+		"custody returns at the reported required head",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("axi home missing recovery guidance %q:\n%s", want, out)
 		}
 	}
 }
@@ -338,7 +388,10 @@ func TestGateStepBoundaryGuidance_SyncedAcrossSurfaces(t *testing.T) {
 
 func TestNormalDriveOutputDoesNotFloodBranchSyncGuidance(t *testing.T) {
 	got := renderDriveResultForGuidanceTest(t, true, types.RunRunning)
-	if strings.Contains(got, branchSyncAgentGuidance) || strings.Contains(got, "branch_sync.next_action") {
+	// Stale-monitor recovery help may name custody actions for a future head
+	// mismatch; ordinary runs still must not emit unrelated sync guidance.
+	withoutMonitorHelp := strings.ReplaceAll(got, staleMonitorGuidance, "")
+	if strings.Contains(got, branchSyncAgentGuidance) || strings.Contains(withoutMonitorHelp, "branch_sync.next_action") {
 		t.Fatalf("ordinary drive output included irrelevant branch-sync guidance:\n%s", got)
 	}
 }

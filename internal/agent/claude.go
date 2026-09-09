@@ -301,7 +301,7 @@ func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage To
 			fmt.Sprintf("claude error: subtype=%s", result.Subtype), stream))
 	}
 	if len(schema) > 0 && result.StructuredOutput == nil {
-		return nil, errNoStructuredOutput
+		return nil, rejectStructuredOutput(errNoStructuredOutput)
 	}
 
 	return &Result{

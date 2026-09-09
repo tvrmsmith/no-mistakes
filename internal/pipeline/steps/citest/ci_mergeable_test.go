@@ -41,7 +41,7 @@ func TestCIStep_TimeoutWithOpenPRNeedsApprovalAndDoesNotSleepPastDeadline(t *tes
 		now = now.Add(interval)
 		return nil
 	})
-	outcome, err := step.Execute(sctx)
+	outcome, err := stepstest.ExecuteWithAutoFix(t, step, sctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestCIStep_UnknownMergeableStateDoesNotExitCleanly(t *testing.T) {
 	})
 
 	pinCIMonitorClock(step)
-	_, err := step.Execute(sctx)
+	_, err := stepstest.ExecuteWithAutoFix(t, step, sctx, 0)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected polling to continue until canceled, got %v", err)
 	}
@@ -129,7 +129,7 @@ func TestCIStep_MergeableLookupErrorDoesNotReportReadyWhenChecksPass(t *testing.
 	})
 
 	pinCIMonitorClock(step)
-	_, err := step.Execute(sctx)
+	_, err := stepstest.ExecuteWithAutoFix(t, step, sctx, 0)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected polling to continue after passing checks, got %v", err)
 	}
@@ -175,7 +175,7 @@ func TestCIStep_PRStateLookupErrorDoesNotReportReadyWhenChecksPass(t *testing.T)
 	})
 
 	pinCIMonitorClock(step)
-	_, err := step.Execute(sctx)
+	_, err := stepstest.ExecuteWithAutoFix(t, step, sctx, 0)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected polling to continue after passing checks, got %v", err)
 	}
@@ -217,7 +217,7 @@ func TestCIStep_TimeoutWithUnknownMergeableState_NeedsApproval(t *testing.T) {
 		return nil
 	})
 
-	outcome, err := step.Execute(sctx)
+	outcome, err := stepstest.ExecuteWithAutoFix(t, step, sctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestCIStep_TimeoutWithKnownFailureAndPendingCheck_NeedsApproval(t *testing.
 		return nil
 	})
 
-	outcome, err := step.Execute(sctx)
+	outcome, err := stepstest.ExecuteWithAutoFix(t, step, sctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestCIStep_TimeoutWithMergeConflictAndCheckLookupError_NeedsApproval(t *tes
 		return nil
 	})
 
-	outcome, err := step.Execute(sctx)
+	outcome, err := stepstest.ExecuteWithAutoFix(t, step, sctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestCIStep_WaitsForPendingChecksBeforeFixing(t *testing.T) {
 		return nil
 	})
 	pinCIMonitorClock(step)
-	_, err := step.Execute(sctx)
+	_, err := stepstest.ExecuteWithAutoFix(t, step, sctx, 0)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("unexpected error: %v", err)
 	}

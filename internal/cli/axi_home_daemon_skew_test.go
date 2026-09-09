@@ -53,12 +53,10 @@ func TestAxiHome_SkewedDaemonReadsAsRunning(t *testing.T) {
 		},
 	}
 
-	fingerprints := map[string]string{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stubDaemonIsRunning(t, tt.alive, tt.err)
-			out, fingerprint := runAxiHomeForTest(t)
-			fingerprints[tt.name] = fingerprint
+			out := runAxiHomeForTest(t)
 			for _, want := range tt.wantIn {
 				if !strings.Contains(out, want) {
 					t.Errorf("axi home missing %q in:\n%s", want, out)
@@ -70,14 +68,6 @@ func TestAxiHome_SkewedDaemonReadsAsRunning(t *testing.T) {
 				}
 			}
 		})
-	}
-
-	// The daemon state feeds the read-surface telemetry fingerprint, which
-	// only re-emits when the fingerprint changes. A skew resolved by a daemon
-	// restart is a state change an operator cares about, so it must not hide
-	// behind the same fingerprint a healthy daemon produces.
-	if fingerprints["skewed daemon"] == fingerprints["healthy daemon"] {
-		t.Errorf("skewed and healthy daemon share fingerprint %q", fingerprints["healthy daemon"])
 	}
 }
 
@@ -96,7 +86,7 @@ func stubDaemonIsRunning(t *testing.T, alive bool, err error) {
 
 // runAxiHomeForTest renders the home view against an isolated NM_HOME and a
 // throwaway repository, never the operator's real root.
-func runAxiHomeForTest(t *testing.T) (output, fingerprint string) {
+func runAxiHomeForTest(t *testing.T) string {
 	t.Helper()
 	repoDir := t.TempDir()
 	nmHome := t.TempDir()
@@ -128,9 +118,8 @@ func runAxiHomeForTest(t *testing.T) (output, fingerprint string) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 	cmd.SetOut(&out)
-	fingerprint, err = runAxiHome(cmd)
-	if err != nil {
+	if err := runAxiHome(cmd); err != nil {
 		t.Fatalf("axi home: %v\n%s", err, out.String())
 	}
-	return out.String(), fingerprint
+	return out.String()
 }

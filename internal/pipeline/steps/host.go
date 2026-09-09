@@ -108,7 +108,8 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, hos
 			// the plain slug (without host prefix) is correct here.
 			forkRepo = github.RepoSlug(sctx.Repo.ForkURL)
 		}
-		return github.NewWithFork(scmCLIFactory(sctx, cmdFactory), func() bool { return stepCLIAvailable(sctx, provider) }, host, repo, forkRepo), hostSkip{}
+		draft := sctx.Config != nil && sctx.Config.Providers.GitHub.DraftPullRequests
+		return github.NewWithFork(scmCLIFactory(sctx, cmdFactory), func() bool { return stepCLIAvailable(sctx, provider) }, host, repo, forkRepo, draft), hostSkip{}
 	case scm.ProviderGitLab:
 		if sctx.Repo.ForkURL != "" {
 			// Fork MR routing for GitLab is intentionally not half-wired.
@@ -116,11 +117,13 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, hos
 			// GitLab source-project routing is implemented end to end.
 			return nil, hostSkip{Reason: "fork PR routing for GitLab is not implemented"}
 		}
-		return gitlab.New(
+		draft := sctx.Config != nil && sctx.Config.Providers.GitLab.DraftPullRequests
+		return gitlab.NewWithDraft(
 			cmdFactory,
 			func() bool { return stepCLIAvailable(sctx, provider) },
 			resolvedHost(sctx, sctx.Repo.UpstreamURL),
 			gitlab.ProjectPath(sctx.Repo.UpstreamURL),
+			draft,
 		), hostSkip{}
 	case scm.ProviderBitbucket:
 		if sctx.Repo.ForkURL != "" {
@@ -137,7 +140,8 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, hos
 		if err != nil {
 			return nil, unnameableRepo(err.Error())
 		}
-		return bitbucket.NewHost(client, repo), hostSkip{}
+		draft := sctx.Config != nil && sctx.Config.Providers.Bitbucket.DraftPullRequests
+		return bitbucket.NewHost(client, repo, draft), hostSkip{}
 	case scm.ProviderAzureDevOps:
 		if sctx.Repo.ForkURL != "" {
 			// Fork PR routing for Azure DevOps is intentionally not half-wired,
@@ -153,7 +157,8 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, hos
 		if !ok {
 			return nil, unnameableRepo("could not resolve Azure DevOps organization, project, and repository from the remote URL")
 		}
-		return azuredevops.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo), hostSkip{}
+		draft := sctx.Config != nil && sctx.Config.Providers.AzureDevOps.DraftPullRequests
+		return azuredevops.NewWithDraft(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo, draft), hostSkip{}
 	case scm.ProviderForgejo:
 		if sctx.Repo.ForkURL != "" {
 			return nil, skipReasonf("fork PR routing for Forgejo is not implemented")
