@@ -23,6 +23,14 @@ skip_steps:
   - pr
   - ci
 
+# personal-build, not main, is where this clone's work integrates. Rebase reads
+# this too, so leaving it unset made every feature branch here replay onto
+# origin/main and fail: the branches fork from personal-build, which carries
+# commits main does not have. The pr step stays skipped above, so this selects
+# the rebase and merge-conflict base rather than opening anything.
+pr:
+  base_branch: personal-build
+
 # Documentation ownership map for the document step's placement policy.
 document:
   instructions: |
