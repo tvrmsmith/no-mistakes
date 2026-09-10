@@ -346,6 +346,75 @@ func TestEvaluateMetricsOutput_StrayOpeningBracesDoNotHideAFollowingReport(t *te
 	}
 }
 
+// A command that wraps its report in an envelope of its own, and whose envelope
+// carries no top-level functions key, is what the top-level-only scan jumped
+// straight over: it recorded the wrapper, rejected it, and never looked inside.
+func TestEvaluateMetricsOutput_AReportNestedInABalancedWrapperStillParses(t *testing.T) {
+	stdout := "starting\n{\"tool\":\"wrapper\",\"result\":\n" +
+		`{"metric":"crap","functions":[{"file":"a.go","function":"F","line":1,"score":55}]}` +
+		"\n}\n"
+
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
+
+	if !verdict.FromJSON {
+		t.Fatal("want FromJSON true: the report is nested inside the wrapper")
+	}
+	if len(verdict.Breaches) != 1 || verdict.Breaches[0].Function != "F" {
+		t.Errorf("Breaches = %+v, want the single function F", verdict.Breaches)
+	}
+}
+
+// A report bigger than the old fixed tail bound, with output in front of it, is
+// what the byte cut severed: the cut landed inside the report, so its opening
+// brace was gone and the gate fell back to the exit code on a breaching
+// repository.
+func TestEvaluateMetricsOutput_AReportLargerThanTheOldTailBoundStillParses(t *testing.T) {
+	const oldTailBound = 1 << 20
+	var entries strings.Builder
+	functions := 0
+	for entries.Len() < oldTailBound+(1<<16) {
+		if functions > 0 {
+			entries.WriteString(",")
+		}
+		entries.WriteString(fmt.Sprintf(`{"file":"pkg/dir%d/file%d.go","function":"Function%d","line":%d,"score":55}`, functions, functions, functions, functions+1))
+		functions++
+	}
+	stdout := "measuring the whole repository...\n" +
+		`{"metric":"crap","functions":[` + entries.String() + "]}\n"
+	if len(stdout) <= oldTailBound {
+		t.Fatalf("fixture is %d bytes, want more than the old %d-byte tail bound", len(stdout), oldTailBound)
+	}
+
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
+
+	if !verdict.FromJSON {
+		t.Fatal("want FromJSON true: a report is not lost for being large")
+	}
+	if verdict.Measured != functions {
+		t.Errorf("Measured = %d, want %d", verdict.Measured, functions)
+	}
+	if !verdict.Breached {
+		t.Error("want Breached true")
+	}
+}
+
+// An unpaired quote in a log line must not desynchronise the string skipping for
+// the rest of the output. JSON forbids a raw newline inside a string, so the
+// line ending resynchronises the scan.
+func TestEvaluateMetricsOutput_AnUnpairedQuoteInALogLineDoesNotHideTheReport(t *testing.T) {
+	stdout := "warning: unknown flag \"--verbose\n" +
+		`{"metric":"crap","functions":[{"file":"a.go","function":"F","line":1,"score":55}]}` + "\n"
+
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
+
+	if !verdict.FromJSON {
+		t.Fatal("want FromJSON true: the unpaired quote ends at the line break")
+	}
+	if len(verdict.Breaches) != 1 || verdict.Breaches[0].Function != "F" {
+		t.Errorf("Breaches = %+v, want the single function F", verdict.Breaches)
+	}
+}
+
 // metricsJSONEscape renders a path safe to paste into the report fixture, so a Windows
 // separator reaches the decoder as a literal backslash.
 func metricsJSONEscape(s string) string {

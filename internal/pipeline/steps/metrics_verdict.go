@@ -40,6 +40,12 @@ type metricsVerdict struct {
 // the verdict the step gates on. It is pure, so a test states a command's
 // output rather than installing a metrics tool.
 //
+// stdout is the command's standard output ALONE. The step captures the two
+// streams separately for exactly this reason: a report longer than the pipe
+// buffer interleaves with anything the command writes to stderr, and a
+// corrupted report reads as no report at all, which fails open onto the exit
+// code. stderr still reaches the log and the failure output.
+//
 // A non-exempt function breaches when its score is STRICTLY above the
 // threshold, so a threshold is the highest score a repository accepts rather
 // than the first score it rejects.
@@ -75,94 +81,89 @@ func evaluateMetricsOutput(stdout string, exitCode int, threshold float64, exemp
 	return verdict
 }
 
-// maxMetricsOutputScanBytes bounds how much of the command's stdout the report
-// scan reads. The report is the last thing a well behaved command prints, so
-// only the tail is searched and a command dumping megabytes of noise before it
-// cannot make the scan expensive.
-const maxMetricsOutputScanBytes = 1 << 20
-
-// maxMetricsUnbalancedStarts bounds how many opening braces that never balance
-// the scan walks past. Each one costs a walk to the end of the tail, so stdout
-// full of stray braces would otherwise be quadratic. A brace that does balance
-// costs nothing extra, because the scan jumps over the whole object, so the
-// number of real candidates is unbounded.
-const maxMetricsUnbalancedStarts = 64
+// maxMetricsReportCandidates bounds how many balanced objects the scan keeps as
+// candidates. It bounds work rather than input: the scan reads all of stdout,
+// because cutting the output to a fixed tail severs the opening brace of any
+// report bigger than the cut and loses it entirely. The report closes at or near
+// the end of a run's output, so the most recently closed objects are the ones
+// worth keeping and everything older is dropped as the scan goes.
+const maxMetricsReportCandidates = 256
 
 // parseMetricsReport reads the metrics report out of the command's stdout.
 //
 // The whole trimmed output is tried first, which is what a command that prints
-// nothing but its report produces. Failing that, one forward pass over the tail
-// records every TOP-LEVEL balanced object, jumping past each object it finds so
-// the report's own per-function entries are never candidates, and the recorded
-// objects are then tried newest first. Scanning backwards from every brace
-// spent its budget on those nested entries, so a report listing more functions
-// than the budget allowed went unparsed and the gate fell back to the exit
-// code. Matching a line at a time would not do either: most tools pretty-print,
-// so no single line parses on its own, and the rule preferred a trailing debug
-// dump over the real report.
+// nothing but its report produces. Failing that, one linear pass matches braces
+// with a stack and records every balanced object it closes, AT EVERY DEPTH, and
+// the recorded objects are tried newest first. Depth matters because a report
+// can arrive nested inside a wrapper object that carries no top-level functions
+// key, and recording only top-level objects jumped straight over it. Trying
+// newest first still prefers the outer object of a nesting, since an enclosing
+// object closes after everything inside it.
+//
+// The stack is what makes the pass immune to unmatched braces in log noise: an
+// unmatched opening brace is simply never popped, and an unmatched closing brace
+// with nothing on the stack is dropped. Probing each brace for its match instead
+// cost a walk to the end of the output per stray brace, which needed a cap that
+// then hid real reports behind it.
+//
+// Matching a line at a time would not do either: most tools pretty-print, so no
+// single line parses on its own, and the rule preferred a trailing debug dump
+// over the real report.
 func parseMetricsReport(stdout string) (metricsReport, bool) {
 	if report, ok := decodeMetricsReport([]byte(strings.TrimSpace(stdout))); ok {
 		return report, true
 	}
 
-	tail := stdout
-	if len(tail) > maxMetricsOutputScanBytes {
-		tail = tail[len(tail)-maxMetricsOutputScanBytes:]
-	}
-
-	type objectSpan struct{ start, end int }
-	var spans []objectSpan
-	unbalanced := 0
-	for i := 0; i < len(tail); i++ {
-		if tail[i] != '{' {
-			continue
-		}
-		objectEnd, balanced := metricsObjectEnd(tail, i)
-		if !balanced {
-			unbalanced++
-			if unbalanced == maxMetricsUnbalancedStarts {
-				break
-			}
-			continue
-		}
-		spans = append(spans, objectSpan{start: i, end: objectEnd})
-		i = objectEnd - 1
-	}
-
+	spans := metricsObjectSpans(stdout)
 	for i := len(spans) - 1; i >= 0; i-- {
-		if report, ok := decodeMetricsReport([]byte(tail[spans[i].start:spans[i].end])); ok {
+		if report, ok := decodeMetricsReport([]byte(stdout[spans[i].start:spans[i].end])); ok {
 			return report, true
 		}
 	}
 	return metricsReport{}, false
 }
 
-// metricsObjectEnd walks forward from the opening brace at start and returns the
-// index just past the brace that balances it. String literals are skipped whole
-// so a brace inside a summary or a filename does not shift the depth, and a
-// backslash escape inside one cannot end it early.
-func metricsObjectEnd(s string, start int) (int, bool) {
-	depth := 0
+// metricsObjectSpan is one balanced JSON object found in the command's output.
+type metricsObjectSpan struct{ start, end int }
+
+// metricsObjectSpans returns the balanced objects in s, in the order they
+// close, keeping at most the most recent maxMetricsReportCandidates.
+//
+// String literals are skipped whole so a brace inside a summary or a filename
+// does not shift the depth, and a backslash escape inside one cannot end it
+// early. A raw newline also ends a string, because JSON forbids a literal
+// control character inside one: without that the scan stays desynchronised for
+// the rest of the output after a single unpaired quote in a log line.
+func metricsObjectSpans(s string) []metricsObjectSpan {
+	var opens []int
+	var spans []metricsObjectSpan
 	inString := false
-	for i := start; i < len(s); i++ {
-		switch {
-		case inString && s[i] == '\\':
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '\n':
+			inString = false
+		case inString && c == '\\':
 			i++
-		case inString && s[i] == '"':
+		case inString && c == '"':
 			inString = false
 		case inString:
-		case s[i] == '"':
+		case c == '"':
 			inString = true
-		case s[i] == '{':
-			depth++
-		case s[i] == '}':
-			depth--
-			if depth == 0 {
-				return i + 1, true
+		case c == '{':
+			opens = append(opens, i)
+		case c == '}':
+			if len(opens) == 0 {
+				continue
+			}
+			start := opens[len(opens)-1]
+			opens = opens[:len(opens)-1]
+			spans = append(spans, metricsObjectSpan{start: start, end: i + 1})
+			if len(spans) > maxMetricsReportCandidates {
+				spans = spans[1:]
 			}
 		}
 	}
-	return 0, false
+	return spans
 }
 
 // decodeMetricsReport decodes one JSON object and answers whether it is a

@@ -159,24 +159,7 @@ Previous test findings to address:
 	var covered []config.TestUnit
 	ran := map[string]bool{}
 
-	// The changed-file list a unit command reads can lose paths: the whole list
-	// when it exceeds the byte cap, and individual paths a newline or carriage
-	// return makes unreadable. Either way a command that takes its targets from
-	// the variable validates less than the change, so the omission is a warning
-	// finding on every outcome rather than a log line alone. The count variable
-	// still carries the true total, which is the machine-readable signal a
-	// command can compare against.
-	changedFilesEnv, omittedChangedFiles := changedFilesEnvValue(changed)
-	var omissionFindings []Finding
-	if omittedChangedFiles > 0 {
-		omission := fmt.Sprintf("%s omits %d of %d changed paths, so a command that reads it validates less than the change; %s carries the true total", envTestChangedFiles, omittedChangedFiles, len(changed), envTestChangedFileCount)
-		sctx.Log(omission)
-		omissionFindings = []Finding{{
-			Severity:    types.FindingSeverityWarning,
-			Action:      types.ActionAskUser,
-			Description: omission,
-		}}
-	}
+	changedFilesEnv, omissionFindings := changedFilesEnvAdvisory(sctx, changed, "validates")
 
 	// withOmission puts the changed-file omission in front of whatever a path
 	// found, so every outcome the step can return carries it.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -44,28 +45,6 @@ func (s *MetricsStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome
 	metricsCmd := sctx.Config.Commands.Metrics
 	baseSHA := resolveBranchBaseSHA(sctx.Ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
 
-	changed, err := changedPathsSince(sctx.Ctx, sctx.WorkDir, baseSHA, sctx.Run.HeadSHA, sctx.Fixing)
-	if err != nil {
-		return nil, err
-	}
-	// The changed-file list the metrics command reads can lose paths: the whole
-	// list when it exceeds the byte cap, and individual paths a newline or
-	// carriage return makes unreadable. A command that scopes its analysis to
-	// the variable then measures less than the change, so the omission rides on
-	// every outcome rather than living in the log alone, exactly as the Test
-	// step reports it on the same env contract.
-	changedFilesEnv, omittedChangedFiles := changedFilesEnvValue(changed)
-	var advisories []Finding
-	if omittedChangedFiles > 0 {
-		omission := fmt.Sprintf("%s omits %d of %d changed paths, so a command that reads it measures less than the change; %s carries the true total", envTestChangedFiles, omittedChangedFiles, len(changed), envTestChangedFileCount)
-		sctx.Log(omission)
-		advisories = append(advisories, Finding{
-			Severity:    types.FindingSeverityWarning,
-			Action:      types.ActionNoOp,
-			Description: omission,
-		})
-	}
-
 	var fixSummary string
 	if sctx.Fixing {
 		summary, err := executeFixMode(sctx, s.Name(), fixExecutionOptions{
@@ -80,8 +59,21 @@ func (s *MetricsStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome
 		fixSummary = summary
 	}
 
+	// The changed-file set is read AFTER the fix round, as the Test step reads
+	// it, so a repair's untracked new files are in the set the command measures.
+	changed, err := changedPathsSince(sctx.Ctx, sctx.WorkDir, baseSHA, sctx.Run.HeadSHA, sctx.Fixing)
+	if err != nil {
+		return nil, err
+	}
+	changedFilesEnv, advisories := changedFilesEnvAdvisory(sctx, changed, "measures")
+
 	sctx.Log(fmt.Sprintf("running metrics command: %s", metricsCmd))
-	output, exitCode, err := runStepShellCommandEnv(sctx, metricsCmd, []string{
+	// The report is read from stdout alone. Both streams reach the log and the
+	// failure output, because a command that fails still needs its diagnostics
+	// visible, but a single combined pipe interleaves stderr into a report
+	// longer than the pipe buffer and the corrupted report then fails open onto
+	// the exit code.
+	reportOut, diagnosticsOut, exitCode, err := runStepShellCommandEnvSplit(sctx, metricsCmd, []string{
 		envTestBaseSHA + "=" + baseSHA,
 		envTestChangedFiles + "=" + changedFilesEnv,
 		envTestChangedFileCount + "=" + strconv.Itoa(len(changed)),
@@ -90,9 +82,9 @@ func (s *MetricsStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome
 	if err != nil {
 		return nil, fmt.Errorf("run metrics command: %w", err)
 	}
-	projectedOutput := logConfiguredCommandOutput(sctx, output, types.StepMetrics)
+	projectedOutput := logConfiguredCommandOutput(sctx, joinCommandStreams(reportOut, diagnosticsOut), types.StepMetrics)
 
-	verdict := evaluateMetricsOutput(output, exitCode, sctx.Config.Metrics.Threshold, sctx.Config.Metrics.ExemptPaths, sctx.WorkDir)
+	verdict := evaluateMetricsOutput(reportOut, exitCode, sctx.Config.Metrics.Threshold, sctx.Config.Metrics.ExemptPaths, sctx.WorkDir)
 
 	// Evidence is written before the gate, so a run that parks on a breach and
 	// is never resumed still leaves its verdict on disk.
@@ -113,6 +105,7 @@ func (s *MetricsStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome
 			advisories = append(advisories, Finding{
 				Severity:    types.FindingSeverityWarning,
 				Action:      types.ActionNoOp,
+				ID:          metricsUnparseableFindingID,
 				Description: unmeasured,
 			})
 		}
@@ -184,6 +177,18 @@ Previous metrics findings to address:
 // body alike, so the remainder is summarised in one trailing item.
 const maxMetricsBreachFindings = 20
 
+// The IDs of the items that are not one breaching function. Every item this
+// step emits carries an ID, because types.FilterFindings and
+// types.ExcludeFindings key on it and an item with none is only reachable by
+// the positional ID types.NormalizeFindings assigns, which moves whenever the
+// list around it changes.
+const (
+	metricsUnparseableFindingID   = "metrics-output-unparseable"
+	metricsPartialReportFindingID = "metrics-report-may-be-partial"
+	metricsBreachRemainderID      = "metrics-breach-remainder"
+	metricsNoCoverageFindingID    = "metrics-no-coverage"
+)
+
 // metricsBreachFindings renders the breach as findings a maintainer and a fix
 // round both read.
 func metricsBreachFindings(verdict metricsVerdict) []Finding {
@@ -194,23 +199,26 @@ func metricsBreachFindings(verdict metricsVerdict) []Finding {
 		return []Finding{{
 			Severity: types.FindingSeverityWarning,
 			Action:   types.ActionAutoFix,
+			ID:       metricsUnparseableFindingID,
 			Description: fmt.Sprintf(
 				"the metrics command exited %d and its output did not parse as a metrics report, so the exit code alone is the verdict and no function-level breach is known",
 				verdict.ExitCode),
 		}}
 	}
 
-	// Each item carries its own ID, because types.FilterFindings and
-	// types.ExcludeFindings key on it: one shared literal would make
-	// `--findings <id>` select every breaching function at once and leave an
-	// operator no way to decide one of them.
+	// A breach is identified by the function it names, so its ID is derived
+	// from the file and the function rather than from its position in the
+	// list. The list is sorted by score, so a positional ID moves to a
+	// different function as scores change between rounds and an operator's
+	// `--findings <id>` then silently decides some other function.
 	items := make([]Finding, 0, len(verdict.Breaches)+1)
+	used := make(map[string]int, len(verdict.Breaches))
 	for i, fn := range verdict.Breaches {
 		if i == maxMetricsBreachFindings {
 			items = append(items, Finding{
 				Severity:    types.FindingSeverityError,
 				Action:      types.ActionAutoFix,
-				ID:          "metrics-breach-remainder",
+				ID:          metricsBreachRemainderID,
 				Description: fmt.Sprintf("%d more function(s) breached the %s threshold of %s", len(verdict.Breaches)-i, metricName(verdict), formatMetricsScore(verdict.Threshold)),
 			})
 			break
@@ -218,7 +226,7 @@ func metricsBreachFindings(verdict metricsVerdict) []Finding {
 		items = append(items, Finding{
 			Severity:    types.FindingSeverityError,
 			Action:      types.ActionAutoFix,
-			ID:          fmt.Sprintf("metrics-breach-%d", i+1),
+			ID:          metricsBreachID(fn, used),
 			File:        fn.File,
 			Line:        fn.Line,
 			Description: metricsBreachDescription(verdict, fn),
@@ -228,10 +236,57 @@ func metricsBreachFindings(verdict metricsVerdict) []Finding {
 		items = append(items, Finding{
 			Severity:    types.FindingSeverityWarning,
 			Action:      types.ActionAutoFix,
+			ID:          metricsPartialReportFindingID,
 			Description: fmt.Sprintf("the metrics command exited %d after emitting its report, so the report may be partial", verdict.ExitCode),
 		})
 	}
 	return items
+}
+
+// maxMetricsBreachIDSlugBytes bounds the derived part of a breach ID, keeping
+// its tail. A deeply nested path would otherwise produce an ID nobody can type,
+// and the function name at the end is the distinguishing half.
+const maxMetricsBreachIDSlugBytes = 80
+
+// metricsBreachID names one breaching function stably across rounds. Two
+// reports of the same function in the same file collide by design, which is
+// what makes the ID stable; used disambiguates the genuine duplicates a
+// language with overloads or nested functions can produce, in the sorted order
+// the list already fixes.
+func metricsBreachID(fn metricsFunction, used map[string]int) string {
+	slug := metricsIDSlug(fn.File + "-" + fn.Function)
+	if slug == "" {
+		slug = "unnamed"
+	}
+	id := "metrics-breach-" + slug
+	used[id]++
+	if seen := used[id]; seen > 1 {
+		id = fmt.Sprintf("%s-%d", id, seen)
+	}
+	return id
+}
+
+// metricsIDSlug renders free-form command text as an ID segment: lowercase
+// alphanumerics, every other run collapsed to a single dash.
+func metricsIDSlug(text string) string {
+	var b strings.Builder
+	dashed := true
+	for _, r := range strings.ToLower(text) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			dashed = false
+			continue
+		}
+		if !dashed {
+			b.WriteByte('-')
+			dashed = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if len(slug) > maxMetricsBreachIDSlugBytes {
+		slug = strings.TrimPrefix(slug[len(slug)-maxMetricsBreachIDSlugBytes:], "-")
+	}
+	return slug
 }
 
 // metricsBreachDescription names the lever a maintainer would pull. Complexity
@@ -320,6 +375,7 @@ func noCoverageOutcome(sctx *pipeline.StepContext) *pipeline.StepOutcome {
 	findings := Findings{Items: []Finding{{
 		Severity:    types.FindingSeverityError,
 		Action:      types.ActionAskUser,
+		ID:          metricsNoCoverageFindingID,
 		Description: description,
 	}}}
 	findingsJSON, _ := json.Marshal(findings)

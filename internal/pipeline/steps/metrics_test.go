@@ -554,6 +554,147 @@ func TestMetricsStep_GreenAttemptReportsTheDroppedChangedFileList(t *testing.T) 
 	}
 }
 
+// TestMetricsStep_StderrDoesNotCorruptTheReport pins the read source. A command
+// that writes progress to stderr while its report is still going out on stdout
+// had that line spliced into the middle of the report by the shared capture
+// buffer, and the corrupted report failed OPEN onto the exit code.
+func TestMetricsStep_StderrDoesNotCorruptTheReport(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	command := `printf '%s' '{"metric":"crap","functions":[{"file":"a.go","function":"Hairball","line":42,"score":42.5}'` + "\n" +
+		`printf 'measuring a.go\n' >&2` + "\n" +
+		`printf '%s\n' ']}'`
+
+	ag := &mockAgent{name: "test"}
+	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, command, 30)
+
+	step := &MetricsStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NeedsApproval {
+		t.Fatal("expected the breach in the report to park the gate")
+	}
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 {
+		t.Fatalf("len(findings.Items) = %d, want the one breaching function: %s", len(findings.Items), outcome.Findings)
+	}
+	if item := findings.Items[0]; !strings.Contains(item.Description, "Hairball") {
+		t.Errorf("Description = %q, want the parsed per-function breach rather than an exit-code fallback", item.Description)
+	}
+}
+
+// TestMetricsStep_FixModeMeasuresTheUntrackedRepairFile pins the ordering. A
+// metrics repair commonly writes a new test file, and reading the changed-file
+// set before the fix round left that file out of the set the command measures,
+// so the re-run scored the same tree the round was meant to change.
+func TestMetricsStep_FixModeMeasuresTheUntrackedRepairFile(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if err := os.WriteFile(filepath.Join(dir, "hairball_test.go"), []byte("package main\n"), 0o644); err != nil {
+				return nil, err
+			}
+			return &agent.Result{Output: json.RawMessage(`{"summary":"add tests for Hairball"}`)}, nil
+		},
+	}
+	probe := filepath.Join(t.TempDir(), "changed.txt")
+	command := "printf '%s' \"$NO_MISTAKES_CHANGED_FILES\" > " + probe + "\n" +
+		echoMetricsReport(`{"metric":"crap","functions":[]}`)
+	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, command, 30)
+	sctx.Fixing = true
+
+	step := &MetricsStep{}
+	if _, err := step.Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "hairball_test.go") {
+		t.Errorf("NO_MISTAKES_CHANGED_FILES = %q, want the repair's new file in it", raw)
+	}
+}
+
+// TestMetricsBreachFindings_IDsAreStableAcrossAReorder pins what a breach ID
+// identifies. The list is sorted by score, so a positional ID names a different
+// function as scores move between rounds and an operator's `--findings`
+// selection then silently decides the wrong one.
+func TestMetricsBreachFindings_IDsAreStableAcrossAReorder(t *testing.T) {
+	t.Parallel()
+	hairball := metricsFunction{File: "internal/a.go", Function: "Hairball", Line: 42, Score: 55}
+	tangle := metricsFunction{File: "internal/b.go", Function: "Tangle", Line: 7, Score: 44}
+
+	idsFor := func(breaches ...metricsFunction) map[string]string {
+		items := metricsBreachFindings(metricsVerdict{
+			Threshold: 30, Metric: "crap", FromJSON: true, Breaches: breaches,
+		})
+		byFunction := map[string]string{}
+		for i, item := range items {
+			byFunction[breaches[i].Function] = item.ID
+		}
+		return byFunction
+	}
+
+	first := idsFor(hairball, tangle)
+	// The next round improves Hairball's coverage, so Tangle sorts first.
+	second := idsFor(tangle, hairball)
+
+	for _, name := range []string{"Hairball", "Tangle"} {
+		if first[name] == "" {
+			t.Fatalf("%s got no ID", name)
+		}
+		if first[name] != second[name] {
+			t.Errorf("%s ID = %q then %q, want one stable ID across the reorder", name, first[name], second[name])
+		}
+	}
+	if first["Hairball"] == first["Tangle"] {
+		t.Errorf("both functions share the ID %q, so selecting it decides both", first["Hairball"])
+	}
+}
+
+// Every item this step emits has to be selectable on its own, which means an
+// explicit ID: a blank one is reachable only through the positional ID
+// types.NormalizeFindings assigns, and that moves with the list around it.
+func TestMetricsBreachFindings_EveryItemCarriesAnID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		verdict metricsVerdict
+	}{
+		{name: "unparseable output", verdict: metricsVerdict{Threshold: 30, ExitCode: 2}},
+		{name: "partial report", verdict: func() metricsVerdict {
+			verdict := metricsBreachVerdict(2)
+			verdict.ExitCode = 3
+			return verdict
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			items := metricsBreachFindings(tc.verdict)
+			if len(items) == 0 {
+				t.Fatal("no items")
+			}
+			for _, item := range items {
+				if item.ID == "" {
+					t.Errorf("item %+v has no ID, so --findings cannot select it", item)
+				}
+			}
+		})
+	}
+}
+
 func TestMetricsStep_FixModeCommitsTheAgentRepairAndRestartsFromFormat(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
