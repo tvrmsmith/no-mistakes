@@ -224,6 +224,63 @@ func TestCombinedOutputShellCommand_WaitDelayBoundsEscapedPipeHolder(t *testing.
 	}
 }
 
+// TestSplitOutputShellCommand_ReturnsCleanExitWithInheritedPipeGrandchild is
+// the two-pipe counterpart of the combined case. A backgrounded grandchild
+// inherits BOTH pipes, so both copies block after the leader exits, and the
+// step wedges unless the group kill releases each of them.
+func TestSplitOutputShellCommand_ReturnsCleanExitWithInheritedPipeGrandchild(t *testing.T) {
+	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c",
+		"printf 'leader done\\n'; printf 'leader diagnostics\\n' >&2; sleep 30 & exit 0")
+	ConfigureShellCommand(cmd)
+	cmd.WaitDelay = 100 * time.Millisecond
+
+	stdout, stderr, err := SplitOutputShellCommand(cmd)
+	if err != nil {
+		t.Fatalf("SplitOutputShellCommand() error = %v; stdout %q stderr %q", err, stdout, stderr)
+	}
+	if got, want := string(stdout), "leader done\n"; got != want {
+		t.Errorf("stdout = %q, want %q: the streams must not cross", got, want)
+	}
+	if got, want := string(stderr), "leader diagnostics\n"; got != want {
+		t.Errorf("stderr = %q, want %q: the streams must not cross", got, want)
+	}
+}
+
+// TestSplitOutputShellCommand_WaitDelayBoundsEscapedStderrHolder pins the
+// asymmetric drain: an escaped process holding stderr ALONE leaves the stdout
+// copy finished and the stderr copy blocked, so WaitDelay has to release the
+// reader that is still open. A metrics command that backgrounds a logger is
+// exactly this shape, and the failure mode is a permanently wedged step.
+func TestSplitOutputShellCommand_WaitDelayBoundsEscapedStderrHolder(t *testing.T) {
+	readyFile := filepath.Join(t.TempDir(), "ready")
+	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestShellOutputPipeHelper$")
+	cmd.Env = append(os.Environ(),
+		"NM_SHELLENV_PIPE_HELPER=leader",
+		"NM_SHELLENV_PIPE_HOLD=stderr",
+		"NM_SHELLENV_PIPE_READY="+readyFile,
+	)
+	ConfigureShellCommand(cmd)
+	cmd.WaitDelay = 100 * time.Millisecond
+
+	stdout, stderr, err := SplitOutputShellCommand(cmd)
+	escapedPID := parseEscapedPID(t, string(stdout))
+	t.Cleanup(func() {
+		_ = syscall.Kill(escapedPID, syscall.SIGKILL)
+	})
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("SplitOutputShellCommand() error = %v, want %v; stdout %q stderr %q", err, exec.ErrWaitDelay, stdout, stderr)
+	}
+	if !strings.Contains(string(stdout), "leader done\n") {
+		t.Errorf("stdout = %q, want the leader's report", stdout)
+	}
+	if strings.Contains(string(stdout), "leader diagnostics") {
+		t.Errorf("stdout = %q, want the diagnostics on stderr instead", stdout)
+	}
+	if !strings.Contains(string(stderr), "leader diagnostics\n") {
+		t.Errorf("stderr = %q, want the leader's diagnostics", stderr)
+	}
+}
+
 func TestShellOutputPipeHelper(t *testing.T) {
 	switch os.Getenv("NM_SHELLENV_PIPE_HELPER") {
 	case "leader":
@@ -234,12 +291,24 @@ func TestShellOutputPipeHelper(t *testing.T) {
 		)
 		child.Stdout = os.Stdout
 		child.Stderr = os.Stderr
+		// Holding stderr alone is the split-capture case: the stdout reader
+		// reaches EOF when the leader exits while the stderr reader stays open,
+		// so the drain loop has to finish one copy and still be released from
+		// the other by WaitDelay.
+		if os.Getenv("NM_SHELLENV_PIPE_HOLD") == "stderr" {
+			devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+			if err != nil {
+				os.Exit(4)
+			}
+			child.Stdout = devNull
+		}
 		if err := child.Start(); err != nil {
 			os.Exit(2)
 		}
 		if !waitForHelperReady(os.Getenv("NM_SHELLENV_PIPE_READY"), 5*time.Second) {
 			os.Exit(3)
 		}
+		_, _ = os.Stderr.WriteString("leader diagnostics\n")
 		_, _ = os.Stdout.WriteString("leader done\nescaped pid " + strconv.Itoa(child.Process.Pid) + "\n")
 		os.Exit(0)
 	case "escaped":

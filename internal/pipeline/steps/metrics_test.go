@@ -257,6 +257,100 @@ func TestMetricsStep_AbsoluteReportedPathIsPublishedRepositoryRelative(t *testin
 	}
 }
 
+// A worktree reached through a symlink is named one way by the daemon and
+// another by an analyser that resolved it, and the strip is a literal prefix
+// match. Without the resolved root the daemon host's absolute path rides into
+// Finding.File and into metrics.json, which reaches the evidence branch
+// unredacted.
+func TestMetricsStep_SymlinkedWorktreeStillPublishesRepositoryRelativePaths(t *testing.T) {
+	t.Parallel()
+	real, baseSHA, headSHA := setupGitRepo(t)
+	link := filepath.Join(t.TempDir(), "worktree-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == link {
+		t.Skip("the temp dir is not reached through a symlink on this host")
+	}
+	gitCmd(t, link, "checkout", "--detach", headSHA)
+
+	report := fmt.Sprintf(
+		`{"metric":"crap","functions":[{"file":%q,"function":"Hairball","line":42,"score":42.5}]}`,
+		filepath.Join(resolved, "a.go"),
+	)
+	ag := &mockAgent{name: "test"}
+	sctx := coveredMetricsContext(t, ag, link, baseSHA, headSHA, echoMetricsReport(report), 30)
+	sctx.Config.Metrics.ExemptPaths = []string{"vendor/**"}
+	sctx.Config.Test.Evidence.StoreInRepo = true
+
+	step := &MetricsStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 {
+		t.Fatalf("len(findings.Items) = %d, want 1", len(findings.Items))
+	}
+	if got := findings.Items[0].File; got != "a.go" {
+		t.Errorf("Finding.File = %q, want a.go: the resolved worktree root was not stripped", got)
+	}
+	evidence := readMetricsEvidence(t, sctx)
+	if len(evidence.Breaches) != 1 {
+		t.Fatalf("len(breaches) = %d, want 1", len(evidence.Breaches))
+	}
+	if got := evidence.Breaches[0].File; got != "a.go" {
+		t.Errorf("evidence breach file = %q, want a.go", got)
+	}
+}
+
+// A command that never ran names no function, so metricsFixPrompt would open
+// by asserting a breach nobody measured. That decision belongs to a human.
+func TestMetricsStep_MissingBinaryParksForTheMaintainer(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test"}
+	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, "no-mistakes-crap-binary-that-does-not-exist", 30)
+
+	step := &MetricsStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NeedsApproval {
+		t.Fatal("expected a metrics command that could not run to park")
+	}
+	if outcome.AutoFixable {
+		t.Error("AutoFixable = true, want false: no agent round can repair a command that did not run")
+	}
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 {
+		t.Fatalf("len(findings.Items) = %d, want 1", len(findings.Items))
+	}
+	item := findings.Items[0]
+	if item.ID != metricsUnparseableFindingID {
+		t.Errorf("ID = %q, want %q", item.ID, metricsUnparseableFindingID)
+	}
+	if item.Action != types.ActionAskUser {
+		t.Errorf("Action = %q, want ask_user", item.Action)
+	}
+	if len(ag.calls) != 0 {
+		t.Errorf("expected no agent calls, got %d", len(ag.calls))
+	}
+}
+
 // metricsBreachVerdict builds a breached verdict carrying count functions, so
 // the rendering rules can be read without a shell command in the way.
 func metricsBreachVerdict(count int) metricsVerdict {
@@ -392,8 +486,8 @@ func TestMetricsStep_UnparseableOutputWithANonzeroExitParks(t *testing.T) {
 	if !outcome.NeedsApproval {
 		t.Error("expected a nonzero exit to park the gate")
 	}
-	if !outcome.AutoFixable {
-		t.Error("expected the fallback verdict to be auto-fixable")
+	if outcome.AutoFixable {
+		t.Error("expected the fallback verdict to park for the maintainer, not an agent round")
 	}
 	if outcome.ExitCode != 2 {
 		t.Errorf("ExitCode = %d, want 2", outcome.ExitCode)
@@ -482,10 +576,12 @@ func TestMetricsStep_PassingUnparseableOutputCarriesAWarningFinding(t *testing.T
 	}
 }
 
-// TestMetricsStep_ParsedReportWithANonzeroExitParksAutoFixable pins the
+// TestMetricsStep_ParsedReportWithANonzeroExitParksForTheMaintainer pins the
 // fail-closed half of the verdict at the step level: a report that reads clean
-// followed by a crash still blocks, and the gate says the report may be partial.
-func TestMetricsStep_ParsedReportWithANonzeroExitParksAutoFixable(t *testing.T) {
+// followed by a crash still blocks, and the gate says the report may be
+// partial. It names no breaching function, so there is nothing for an agent to
+// bring under the threshold and the decision is the maintainer's.
+func TestMetricsStep_ParsedReportWithANonzeroExitParksForTheMaintainer(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -502,8 +598,8 @@ func TestMetricsStep_ParsedReportWithANonzeroExitParksAutoFixable(t *testing.T) 
 	if !outcome.NeedsApproval {
 		t.Fatal("expected a nonzero exit to park even with a clean-looking report")
 	}
-	if !outcome.AutoFixable {
-		t.Error("expected the park to be auto-fixable")
+	if outcome.AutoFixable {
+		t.Error("AutoFixable = true, want false: the report named no breaching function")
 	}
 	if outcome.ExitCode != 3 {
 		t.Errorf("ExitCode = %d, want 3", outcome.ExitCode)
@@ -519,7 +615,10 @@ func TestMetricsStep_ParsedReportWithANonzeroExitParksAutoFixable(t *testing.T) 
 	if item.Severity != types.FindingSeverityWarning {
 		t.Errorf("Severity = %q, want warning", item.Severity)
 	}
-	for _, want := range []string{"exited 3", "may be partial"} {
+	if item.Action != types.ActionAskUser {
+		t.Errorf("Action = %q, want ask_user", item.Action)
+	}
+	for _, want := range []string{"exited 3", "may be partial", "no function breached"} {
 		if !strings.Contains(item.Description, want) {
 			t.Errorf("Description = %q, want it to contain %q", item.Description, want)
 		}

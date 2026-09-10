@@ -124,11 +124,23 @@ func (s *MetricsStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome
 	findingsJSON, _ := json.Marshal(findings)
 	return &pipeline.StepOutcome{
 		NeedsApproval: true,
-		AutoFixable:   true,
+		AutoFixable:   metricsMeasuredABreach(verdict),
 		Findings:      string(findingsJSON),
 		ExitCode:      verdict.ExitCode,
 		FixSummary:    fixSummary,
 	}, nil
+}
+
+// metricsMeasuredABreach answers whether the verdict names a function an agent
+// could actually work on, which is what decides who resolves the gate.
+//
+// A verdict breached only because the command exited nonzero names no function
+// at all: the binary was missing, the analyser crashed, or it emitted something
+// that is not a report. An agent cannot repair "the metrics command did not
+// run", and metricsFixPrompt would open by asserting a breach nobody measured,
+// so that case parks for the maintainer exactly as absent coverage does.
+func metricsMeasuredABreach(verdict metricsVerdict) bool {
+	return len(verdict.Breaches) > 0
 }
 
 // metricsFixPrompt asks the agent to bring the breaching functions under the
@@ -195,10 +207,11 @@ func metricsBreachFindings(verdict metricsVerdict) []Finding {
 	if !verdict.FromJSON {
 		// A fallback verdict is a materially weaker gate than a parsed report,
 		// so the finding says so rather than leaving that only in the evidence
-		// file. The operator is deciding on an exit code alone.
+		// file. The operator is deciding on an exit code alone, and no agent
+		// round can repair a command that did not produce a report.
 		return []Finding{{
 			Severity: types.FindingSeverityWarning,
-			Action:   types.ActionAutoFix,
+			Action:   types.ActionAskUser,
 			ID:       metricsUnparseableFindingID,
 			Description: fmt.Sprintf(
 				"the metrics command exited %d and its output did not parse as a metrics report, so the exit code alone is the verdict and no function-level breach is known",
@@ -233,11 +246,21 @@ func metricsBreachFindings(verdict metricsVerdict) []Finding {
 		})
 	}
 	if verdict.ExitCode != 0 {
+		action := types.ActionAutoFix
+		description := fmt.Sprintf("the metrics command exited %d after emitting its report, so the report may be partial", verdict.ExitCode)
+		if len(verdict.Breaches) == 0 {
+			// The report parsed clean and named no breaching function, so the
+			// exit code is the only thing blocking and there is nothing for an
+			// agent to bring under the threshold.
+			action = types.ActionAskUser
+			description = fmt.Sprintf("the metrics command exited %d after emitting a report in which no function breached the %s threshold of %s, so the report may be partial and the exit code alone is the verdict",
+				verdict.ExitCode, metricName(verdict), formatMetricsScore(verdict.Threshold))
+		}
 		items = append(items, Finding{
 			Severity:    types.FindingSeverityWarning,
-			Action:      types.ActionAutoFix,
+			Action:      action,
 			ID:          metricsPartialReportFindingID,
-			Description: fmt.Sprintf("the metrics command exited %d after emitting its report, so the report may be partial", verdict.ExitCode),
+			Description: description,
 		})
 	}
 	return items
