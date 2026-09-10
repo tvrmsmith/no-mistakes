@@ -48,7 +48,23 @@ func (s *MetricsStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome
 	if err != nil {
 		return nil, err
 	}
-	changedFilesEnv, _ := changedFilesEnvValue(changed)
+	// The changed-file list the metrics command reads can lose paths: the whole
+	// list when it exceeds the byte cap, and individual paths a newline or
+	// carriage return makes unreadable. A command that scopes its analysis to
+	// the variable then measures less than the change, so the omission rides on
+	// every outcome rather than living in the log alone, exactly as the Test
+	// step reports it on the same env contract.
+	changedFilesEnv, omittedChangedFiles := changedFilesEnvValue(changed)
+	var advisories []Finding
+	if omittedChangedFiles > 0 {
+		omission := fmt.Sprintf("%s omits %d of %d changed paths, so a command that reads it measures less than the change; %s carries the true total", envTestChangedFiles, omittedChangedFiles, len(changed), envTestChangedFileCount)
+		sctx.Log(omission)
+		advisories = append(advisories, Finding{
+			Severity:    types.FindingSeverityWarning,
+			Action:      types.ActionNoOp,
+			Description: omission,
+		})
+	}
 
 	var fixSummary string
 	if sctx.Fixing {
@@ -76,19 +92,39 @@ func (s *MetricsStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome
 	}
 	projectedOutput := logConfiguredCommandOutput(sctx, output, types.StepMetrics)
 
-	verdict := evaluateMetricsOutput(output, exitCode, sctx.Config.Metrics.Threshold, sctx.Config.Metrics.ExemptPaths)
+	verdict := evaluateMetricsOutput(output, exitCode, sctx.Config.Metrics.Threshold, sctx.Config.Metrics.ExemptPaths, sctx.WorkDir)
 
 	// Evidence is written before the gate, so a run that parks on a breach and
 	// is never resumed still leaves its verdict on disk.
 	writeMetricsEvidence(sctx, verdict)
 
 	if !verdict.Breached {
-		sctx.Log(fmt.Sprintf("metrics passed: %d function(s) measured against a %s threshold of %s",
-			verdict.Measured, metricName(verdict), formatMetricsScore(verdict.Threshold)))
-		return &pipeline.StepOutcome{FixSummary: fixSummary}, nil
+		if verdict.FromJSON {
+			sctx.Log(fmt.Sprintf("metrics passed: %d function(s) measured against a %s threshold of %s",
+				verdict.Measured, metricName(verdict), formatMetricsScore(verdict.Threshold)))
+		} else {
+			// The pass-side counterpart of the honesty finding
+			// metricsBreachFindings emits: nothing was measured, so the exit
+			// code alone carried this green and the operator has to see that
+			// in the durable record rather than only in the log.
+			unmeasured := fmt.Sprintf("the metrics command exited 0 but its output did not parse as a metrics report, so no function was measured against the %s threshold of %s and the exit code alone is the verdict",
+				metricName(verdict), formatMetricsScore(verdict.Threshold))
+			sctx.Log(unmeasured)
+			advisories = append(advisories, Finding{
+				Severity:    types.FindingSeverityWarning,
+				Action:      types.ActionNoOp,
+				Description: unmeasured,
+			})
+		}
+		outcome := &pipeline.StepOutcome{FixSummary: fixSummary}
+		if len(advisories) > 0 {
+			findingsJSON, _ := json.Marshal(Findings{Items: advisories})
+			outcome.Findings = string(findingsJSON)
+		}
+		return outcome, nil
 	}
 
-	findings := Findings{Items: metricsBreachFindings(verdict)}
+	findings := Findings{Items: append(advisories, metricsBreachFindings(verdict)...)}
 	if !verdict.FromJSON {
 		findings.Summary = projectedOutput
 	}
@@ -164,13 +200,17 @@ func metricsBreachFindings(verdict metricsVerdict) []Finding {
 		}}
 	}
 
+	// Each item carries its own ID, because types.FilterFindings and
+	// types.ExcludeFindings key on it: one shared literal would make
+	// `--findings <id>` select every breaching function at once and leave an
+	// operator no way to decide one of them.
 	items := make([]Finding, 0, len(verdict.Breaches)+1)
 	for i, fn := range verdict.Breaches {
 		if i == maxMetricsBreachFindings {
 			items = append(items, Finding{
 				Severity:    types.FindingSeverityError,
 				Action:      types.ActionAutoFix,
-				ID:          "metrics-breach",
+				ID:          "metrics-breach-remainder",
 				Description: fmt.Sprintf("%d more function(s) breached the %s threshold of %s", len(verdict.Breaches)-i, metricName(verdict), formatMetricsScore(verdict.Threshold)),
 			})
 			break
@@ -178,7 +218,7 @@ func metricsBreachFindings(verdict metricsVerdict) []Finding {
 		items = append(items, Finding{
 			Severity:    types.FindingSeverityError,
 			Action:      types.ActionAutoFix,
-			ID:          "metrics-breach",
+			ID:          fmt.Sprintf("metrics-breach-%d", i+1),
 			File:        fn.File,
 			Line:        fn.Line,
 			Description: metricsBreachDescription(verdict, fn),
@@ -204,9 +244,21 @@ func metricsBreachDescription(verdict metricsVerdict, fn metricsFunction) string
 		description += fmt.Sprintf("; complexity %d", *fn.Complexity)
 	}
 	if fn.Coverage != nil {
-		description += fmt.Sprintf("; coverage %s%%", formatMetricsScore(*fn.Coverage*100))
+		description += "; " + metricsCoverageText(*fn.Coverage)
 	}
 	return description
+}
+
+// metricsCoverageText renders coverage as a percentage. The output contract
+// declares coverage a fraction in [0,1]; a value outside that range is passed
+// through unscaled rather than rendered as an impossible percentage, because a
+// command reporting 85 would otherwise read as "coverage 8500%" to the
+// maintainer and the fix agent alike.
+func metricsCoverageText(coverage float64) string {
+	if coverage < 0 || coverage > 1 {
+		return fmt.Sprintf("coverage %s (outside the documented [0,1] fraction)", formatMetricsScore(coverage))
+	}
+	return fmt.Sprintf("coverage %s%%", formatMetricsScore(coverage*100))
 }
 
 // metricName falls back to a neutral word, because `metric` is a free-form

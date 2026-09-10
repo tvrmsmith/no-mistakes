@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -10,7 +11,7 @@ import (
 const metricsFixtureReport = `{"metric":"crap","functions":[{"file":"internal/pipeline/steps/metrics.go","function":"execute","line":42,"score":42.5,"complexity":7,"coverage":0},{"file":"internal/config/config.go","function":"Merge","line":3000,"score":12,"complexity":4,"coverage":0.9},{"file":"vendor/lib/gen.go","function":"Big","line":1,"score":90,"complexity":30,"coverage":0}],"summary":"3 functions measured"}`
 
 func TestEvaluateMetricsOutput_ScoreAboveThresholdBreaches(t *testing.T) {
-	verdict := evaluateMetricsOutput(metricsFixtureReport, 0, 30, nil)
+	verdict := evaluateMetricsOutput(metricsFixtureReport, 0, 30, nil, "")
 
 	if !verdict.Breached {
 		t.Error("want Breached true")
@@ -45,7 +46,7 @@ func TestEvaluateMetricsOutput_ScoreAboveThresholdBreaches(t *testing.T) {
 }
 
 func TestEvaluateMetricsOutput_EveryScoreUnderThresholdPasses(t *testing.T) {
-	verdict := evaluateMetricsOutput(metricsFixtureReport, 0, 100, nil)
+	verdict := evaluateMetricsOutput(metricsFixtureReport, 0, 100, nil, "")
 
 	if verdict.Breached {
 		t.Error("want Breached false")
@@ -62,7 +63,7 @@ func TestEvaluateMetricsOutput_EveryScoreUnderThresholdPasses(t *testing.T) {
 }
 
 func TestEvaluateMetricsOutput_ExemptPathsClearTheBreach(t *testing.T) {
-	verdict := evaluateMetricsOutput(metricsFixtureReport, 0, 30, []string{"vendor/**", "internal/pipeline/**"})
+	verdict := evaluateMetricsOutput(metricsFixtureReport, 0, 30, []string{"vendor/**", "internal/pipeline/**"}, "")
 
 	if verdict.Breached {
 		t.Error("want Breached false")
@@ -81,25 +82,25 @@ func metricsOneFunctionReport(file string, score string) string {
 }
 
 func TestEvaluateMetricsOutput_ThresholdComparisonIsStrictlyGreater(t *testing.T) {
-	if evaluateMetricsOutput(metricsOneFunctionReport("a.go", "30"), 0, 30, nil).Breached {
+	if evaluateMetricsOutput(metricsOneFunctionReport("a.go", "30"), 0, 30, nil, "").Breached {
 		t.Error("score 30 at threshold 30: want Breached false")
 	}
-	if !evaluateMetricsOutput(metricsOneFunctionReport("a.go", "30.5"), 0, 30, nil).Breached {
+	if !evaluateMetricsOutput(metricsOneFunctionReport("a.go", "30.5"), 0, 30, nil, "").Breached {
 		t.Error("score 30.5 at threshold 30: want Breached true")
 	}
 }
 
 func TestEvaluateMetricsOutput_ZeroThresholdBreachesAnyPositiveScore(t *testing.T) {
-	if evaluateMetricsOutput(metricsOneFunctionReport("a.go", "0"), 0, 0, nil).Breached {
+	if evaluateMetricsOutput(metricsOneFunctionReport("a.go", "0"), 0, 0, nil, "").Breached {
 		t.Error("score 0 at threshold 0: want Breached false")
 	}
-	if !evaluateMetricsOutput(metricsOneFunctionReport("a.go", "0.1"), 0, 0, nil).Breached {
+	if !evaluateMetricsOutput(metricsOneFunctionReport("a.go", "0.1"), 0, 0, nil, "").Breached {
 		t.Error("score 0.1 at threshold 0: want Breached true")
 	}
 }
 
 func TestEvaluateMetricsOutput_EmptyFunctionsArrayPasses(t *testing.T) {
-	verdict := evaluateMetricsOutput(`{"metric":"crap","functions":[]}`, 0, 30, nil)
+	verdict := evaluateMetricsOutput(`{"metric":"crap","functions":[]}`, 0, 30, nil, "")
 
 	if !verdict.FromJSON {
 		t.Error("want FromJSON true")
@@ -113,7 +114,7 @@ func TestEvaluateMetricsOutput_EmptyFunctionsArrayPasses(t *testing.T) {
 }
 
 func TestEvaluateMetricsOutput_NullFunctionsIsAReport(t *testing.T) {
-	verdict := evaluateMetricsOutput(`{"metric":"crap","functions":null}`, 0, 30, nil)
+	verdict := evaluateMetricsOutput(`{"metric":"crap","functions":null}`, 0, 30, nil, "")
 
 	if !verdict.FromJSON {
 		t.Error("want FromJSON true")
@@ -127,7 +128,7 @@ func TestEvaluateMetricsOutput_NullFunctionsIsAReport(t *testing.T) {
 }
 
 func TestEvaluateMetricsOutput_ObjectWithoutFunctionsIsNotAReport(t *testing.T) {
-	verdict := evaluateMetricsOutput(`{"metric":"crap"}`, 0, 30, nil)
+	verdict := evaluateMetricsOutput(`{"metric":"crap"}`, 0, 30, nil, "")
 
 	if verdict.FromJSON {
 		t.Error("want FromJSON false")
@@ -140,8 +141,12 @@ func TestEvaluateMetricsOutput_ObjectWithoutFunctionsIsNotAReport(t *testing.T) 
 	}
 }
 
+// The exit code is the whole verdict when nothing parses. The gate stays
+// exactly this on both sides of the parse; what a clean exit here does NOT mean
+// is that anything was measured, which the step reports as a warning finding on
+// the pass (TestMetricsStep_PassingUnparseableOutputCarriesAWarningFinding).
 func TestEvaluateMetricsOutput_UnparseableOutputFallsBackToTheExitCode(t *testing.T) {
-	clean := evaluateMetricsOutput("crap: command not found\n", 0, 30, nil)
+	clean := evaluateMetricsOutput("crap: command not found\n", 0, 30, nil, "")
 	if clean.FromJSON {
 		t.Error("exit 0: want FromJSON false")
 	}
@@ -149,7 +154,7 @@ func TestEvaluateMetricsOutput_UnparseableOutputFallsBackToTheExitCode(t *testin
 		t.Error("exit 0: want Breached false")
 	}
 
-	failed := evaluateMetricsOutput("crap: command not found\n", 3, 30, nil)
+	failed := evaluateMetricsOutput("crap: command not found\n", 3, 30, nil, "")
 	if failed.FromJSON {
 		t.Error("exit 3: want FromJSON false")
 	}
@@ -162,7 +167,7 @@ func TestEvaluateMetricsOutput_UnparseableOutputFallsBackToTheExitCode(t *testin
 }
 
 func TestEvaluateMetricsOutput_NonzeroExitBlocksEvenWhenTheReportIsClean(t *testing.T) {
-	verdict := evaluateMetricsOutput(metricsFixtureReport, 1, 100, nil)
+	verdict := evaluateMetricsOutput(metricsFixtureReport, 1, 100, nil, "")
 
 	if !verdict.Breached {
 		t.Error("want Breached true")
@@ -188,7 +193,7 @@ scanned 3 files
   ]
 }
 `
-	verdict := evaluateMetricsOutput(stdout, 0, 30, nil)
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
 
 	if !verdict.FromJSON {
 		t.Fatal("want FromJSON true")
@@ -205,7 +210,7 @@ func TestEvaluateMetricsOutput_ATrailingLogObjectDoesNotHideTheReport(t *testing
 	stdout := `{"metric":"crap","functions":[{"file":"a.go","function":"F","line":1,"score":55}]}
 {"level":"info","msg":"done"}
 `
-	verdict := evaluateMetricsOutput(stdout, 0, 30, nil)
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
 
 	if !verdict.FromJSON {
 		t.Fatal("want FromJSON true")
@@ -219,7 +224,7 @@ func TestEvaluateMetricsOutput_ABraceInsideAStringDoesNotConfuseTheScan(t *testi
 	stdout := `noise {not json
 {"metric":"crap","summary":"a } brace","functions":[{"file":"a.go","function":"F","line":1,"score":55}]}
 `
-	verdict := evaluateMetricsOutput(stdout, 0, 30, nil)
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
 
 	if !verdict.FromJSON {
 		t.Fatal("want FromJSON true")
@@ -240,7 +245,7 @@ func TestEvaluateMetricsOutput_AnEscapedQuoteInsideAStringDoesNotEndIt(t *testin
 	stdout := `noise {not json
 {"metric":"crap","summary":"it printed \"{\" once","functions":[{"file":"a.go","function":"F","line":1,"score":55}]}
 `
-	verdict := evaluateMetricsOutput(stdout, 0, 30, nil)
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
 
 	if !verdict.FromJSON {
 		t.Fatal("want FromJSON true")
@@ -255,7 +260,7 @@ func TestEvaluateMetricsOutput_AnEscapedQuoteInsideAStringDoesNotEndIt(t *testin
 
 func TestEvaluateMetricsOutput_ExemptMatchNormalisesThePath(t *testing.T) {
 	for _, file := range []string{"./vendor/lib/gen.go", `vendor\lib\gen.go`} {
-		verdict := evaluateMetricsOutput(metricsOneFunctionReport(metricsJSONEscape(file), "90"), 0, 30, []string{"vendor/**"})
+		verdict := evaluateMetricsOutput(metricsOneFunctionReport(metricsJSONEscape(file), "90"), 0, 30, []string{"vendor/**"}, "")
 
 		if verdict.Exempted != 1 {
 			t.Errorf("%s: Exempted = %d, want 1", file, verdict.Exempted)
@@ -263,6 +268,81 @@ func TestEvaluateMetricsOutput_ExemptMatchNormalisesThePath(t *testing.T) {
 		if verdict.Breached {
 			t.Errorf("%s: want Breached false", file)
 		}
+	}
+}
+
+// An analyser is free to name the file absolutely, and most default to it, so
+// an exempt glob a maintainer wrote repository-relative has to keep matching or
+// the run parks on a file the maintainer waived.
+func TestEvaluateMetricsOutput_AnAbsolutePathStillMatchesARelativeExemptGlob(t *testing.T) {
+	workDir := "/tmp/no-mistakes/worktree"
+	verdict := evaluateMetricsOutput(
+		metricsOneFunctionReport(workDir+"/internal/generated/api.go", "90"),
+		0, 30, []string{"internal/generated/**"}, workDir)
+
+	if verdict.Exempted != 1 {
+		t.Errorf("Exempted = %d, want 1", verdict.Exempted)
+	}
+	if verdict.Breached {
+		t.Error("want Breached false: the maintainer exempted this path")
+	}
+}
+
+func TestEvaluateMetricsOutput_APathOutsideTheWorkDirIsNotStripped(t *testing.T) {
+	verdict := evaluateMetricsOutput(
+		metricsOneFunctionReport("/elsewhere/internal/generated/api.go", "90"),
+		0, 30, []string{"internal/generated/**"}, "/tmp/no-mistakes/worktree")
+
+	if verdict.Exempted != 0 {
+		t.Errorf("Exempted = %d, want 0", verdict.Exempted)
+	}
+	if !verdict.Breached {
+		t.Error("want Breached true: the file is not under the worktree the globs describe")
+	}
+}
+
+// A report longer than the old candidate budget preceded by a single log line is
+// exactly the input the backwards scan dropped: it spent the budget on the
+// report's own per-function objects, never reached the outermost brace, and the
+// gate passed a breaching repository on the exit code alone.
+func TestEvaluateMetricsOutput_ALongReportAfterALogLineStillParses(t *testing.T) {
+	const functions = 200
+	entries := make([]string, 0, functions)
+	for i := 0; i < functions; i++ {
+		entries = append(entries, fmt.Sprintf(`{"file":"a%d.go","function":"F%d","line":%d,"score":55}`, i, i, i+1))
+	}
+	stdout := "measuring...\n{\n  \"metric\": \"crap\",\n  \"functions\": [\n    " +
+		strings.Join(entries, ",\n    ") + "\n  ]\n}\n"
+
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
+
+	if !verdict.FromJSON {
+		t.Fatal("want FromJSON true: the report must parse behind the log line")
+	}
+	if verdict.Measured != functions {
+		t.Errorf("Measured = %d, want %d", verdict.Measured, functions)
+	}
+	if len(verdict.Breaches) != functions {
+		t.Errorf("len(Breaches) = %d, want %d", len(verdict.Breaches), functions)
+	}
+	if !verdict.Breached {
+		t.Error("want Breached true")
+	}
+}
+
+// A tail full of opening braces that never balance must not make the scan
+// expensive, and must not stop it from reading a report that follows them.
+func TestEvaluateMetricsOutput_StrayOpeningBracesDoNotHideAFollowingReport(t *testing.T) {
+	stdout := strings.Repeat("{ stray\n", 8) +
+		`{"metric":"crap","functions":[{"file":"a.go","function":"F","line":1,"score":55}]}` + "\n"
+
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
+
+	if !verdict.FromJSON {
+		t.Fatal("want FromJSON true")
+	}
+	if len(verdict.Breaches) != 1 || verdict.Breaches[0].Function != "F" {
+		t.Errorf("Breaches = %+v, want the single function F", verdict.Breaches)
 	}
 }
 
@@ -278,7 +358,7 @@ func TestEvaluateMetricsOutput_BreachesSortTieBreaksOnFileThenLine(t *testing.T)
 		`{"file":"a.go","function":"A9","line":9,"score":55},` +
 		`{"file":"a.go","function":"A2","line":2,"score":55}]}`
 
-	verdict := evaluateMetricsOutput(stdout, 0, 30, nil)
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
 
 	want := []struct {
 		file string
@@ -295,7 +375,7 @@ func TestEvaluateMetricsOutput_BreachesSortTieBreaksOnFileThenLine(t *testing.T)
 }
 
 func TestEvaluateMetricsOutput_EmptyOutputWithAZeroExitPasses(t *testing.T) {
-	verdict := evaluateMetricsOutput("", 0, 30, nil)
+	verdict := evaluateMetricsOutput("", 0, 30, nil, "")
 
 	if verdict.FromJSON {
 		t.Error("want FromJSON false")

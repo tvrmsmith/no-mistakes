@@ -49,7 +49,7 @@ type metricsVerdict struct {
 // because a command that emitted a partial report and then crashed is otherwise
 // indistinguishable from a clean repository. The contract the other side of
 // that rule is short: a command that emits a valid report exits 0.
-func evaluateMetricsOutput(stdout string, exitCode int, threshold float64, exemptPaths []string) metricsVerdict {
+func evaluateMetricsOutput(stdout string, exitCode int, threshold float64, exemptPaths []string, workDir string) metricsVerdict {
 	verdict := metricsVerdict{Threshold: threshold, ExitCode: exitCode}
 
 	if report, ok := parseMetricsReport(stdout); ok {
@@ -59,7 +59,7 @@ func evaluateMetricsOutput(stdout string, exitCode int, threshold float64, exemp
 		if report.Functions != nil {
 			for _, fn := range *report.Functions {
 				verdict.Measured++
-				if metricsPathExempt(fn.File, exemptPaths) {
+				if metricsPathExempt(fn.File, exemptPaths, workDir) {
 					verdict.Exempted++
 					continue
 				}
@@ -81,20 +81,25 @@ func evaluateMetricsOutput(stdout string, exitCode int, threshold float64, exemp
 // cannot make the scan expensive.
 const maxMetricsOutputScanBytes = 1 << 20
 
-// maxMetricsJSONCandidates bounds how many balanced objects the scan decodes.
-// Each candidate costs a forward walk over the remaining tail, so without a cap
-// stdout full of open braces would be quadratic.
-const maxMetricsJSONCandidates = 64
+// maxMetricsUnbalancedStarts bounds how many opening braces that never balance
+// the scan walks past. Each one costs a walk to the end of the tail, so stdout
+// full of stray braces would otherwise be quadratic. A brace that does balance
+// costs nothing extra, because the scan jumps over the whole object, so the
+// number of real candidates is unbounded.
+const maxMetricsUnbalancedStarts = 64
 
 // parseMetricsReport reads the metrics report out of the command's stdout.
 //
 // The whole trimmed output is tried first, which is what a command that prints
-// nothing but its report produces. Failing that, the tail is searched backwards
-// for balanced JSON objects and each is tried newest first, so a command that
-// logs progress before a pretty-printed report still reads as JSON. Matching a
-// line at a time would not do: most tools pretty-print, so no single line
-// parses on its own, and the rule preferred a trailing debug dump over the real
-// report.
+// nothing but its report produces. Failing that, one forward pass over the tail
+// records every TOP-LEVEL balanced object, jumping past each object it finds so
+// the report's own per-function entries are never candidates, and the recorded
+// objects are then tried newest first. Scanning backwards from every brace
+// spent its budget on those nested entries, so a report listing more functions
+// than the budget allowed went unparsed and the gate fell back to the exit
+// code. Matching a line at a time would not do either: most tools pretty-print,
+// so no single line parses on its own, and the rule preferred a trailing debug
+// dump over the real report.
 func parseMetricsReport(stdout string) (metricsReport, bool) {
 	if report, ok := decodeMetricsReport([]byte(strings.TrimSpace(stdout))); ok {
 		return report, true
@@ -105,17 +110,27 @@ func parseMetricsReport(stdout string) (metricsReport, bool) {
 		tail = tail[len(tail)-maxMetricsOutputScanBytes:]
 	}
 
-	for candidates, end := 0, len(tail); candidates < maxMetricsJSONCandidates; candidates++ {
-		start := strings.LastIndexByte(tail[:end], '{')
-		if start < 0 {
-			break
-		}
-		end = start
-		objectEnd, balanced := metricsObjectEnd(tail, start)
-		if !balanced {
+	type objectSpan struct{ start, end int }
+	var spans []objectSpan
+	unbalanced := 0
+	for i := 0; i < len(tail); i++ {
+		if tail[i] != '{' {
 			continue
 		}
-		if report, ok := decodeMetricsReport([]byte(tail[start:objectEnd])); ok {
+		objectEnd, balanced := metricsObjectEnd(tail, i)
+		if !balanced {
+			unbalanced++
+			if unbalanced == maxMetricsUnbalancedStarts {
+				break
+			}
+			continue
+		}
+		spans = append(spans, objectSpan{start: i, end: objectEnd})
+		i = objectEnd - 1
+	}
+
+	for i := len(spans) - 1; i >= 0; i-- {
+		if report, ok := decodeMetricsReport([]byte(tail[spans[i].start:spans[i].end])); ok {
 			return report, true
 		}
 	}
@@ -171,17 +186,32 @@ func decodeMetricsReport(candidate []byte) (metricsReport, bool) {
 }
 
 // metricsPathExempt answers whether any exempt glob covers the reported file.
-// The metrics command names the file however its own analyser does, so the path
-// is normalised to the "/"-separated, repository-relative form
-// matchIgnorePattern expects before matching.
-func metricsPathExempt(file string, exemptPaths []string) bool {
-	normalised := strings.TrimPrefix(strings.ReplaceAll(file, `\`, "/"), "./")
+// The published contract asks for a repository-relative path, but the metrics
+// command names the file however its own analyser does and absolute paths are
+// the common default, so the path is normalised to the "/"-separated,
+// repository-relative form matchIgnorePattern expects before matching. Without
+// the workDir strip a maintainer's waiver silently misses and the run parks on
+// a file the maintainer explicitly exempted.
+func metricsPathExempt(file string, exemptPaths []string, workDir string) bool {
+	normalised := metricsRelativePath(file, workDir)
 	for _, pattern := range exemptPaths {
 		if matchIgnorePattern(normalised, pattern) {
 			return true
 		}
 	}
 	return false
+}
+
+// metricsRelativePath renders one reported file in the repository-relative form
+// the exempt globs are written against.
+func metricsRelativePath(file, workDir string) string {
+	normalised := strings.ReplaceAll(file, `\`, "/")
+	if root := strings.TrimSuffix(strings.ReplaceAll(workDir, `\`, "/"), "/"); root != "" {
+		if rest, ok := strings.CutPrefix(normalised, root+"/"); ok {
+			normalised = rest
+		}
+	}
+	return strings.TrimPrefix(normalised, "./")
 }
 
 // sortMetricsBreaches orders the breach list worst first, then by file and line

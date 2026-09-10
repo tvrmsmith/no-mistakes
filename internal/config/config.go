@@ -374,9 +374,10 @@ type RepoConfig struct {
 
 // MetricsRaw is the YAML representation of the metrics block.
 type MetricsRaw struct {
-	// Threshold is the score at or above which a measured function breaches.
-	// nil means unset, so the built-in default applies. Zero is a legal
-	// calibration value meaning every measured function breaches.
+	// Threshold is the highest score the repository accepts: a measured
+	// function breaches when its score is strictly above it. nil means unset,
+	// so the built-in default applies. Zero is a legal calibration value
+	// meaning every function scoring above zero breaches.
 	Threshold *float64 `yaml:"threshold"`
 	// ExemptPaths lists the globs whose matching files the gate does not judge.
 	ExemptPaths []string `yaml:"exempt_paths"`
@@ -2522,8 +2523,8 @@ func validateRestartRaw(restart RestartRaw) error {
 // The rules stay minimal on purpose. The daemon's
 // assertGateTrustedConfigReadable aborts EVERY run of a repository whose
 // default-branch config fails to validate, so each rule added here is a way to
-// take the whole repository offline. Zero is legal: it means every measured
-// function breaches, which is a real calibration value.
+// take the whole repository offline. Zero is legal: it means every function
+// scoring above zero breaches, which is a real calibration value.
 func validateMetricsRaw(metrics MetricsRaw) error {
 	if metrics.Threshold != nil {
 		threshold := *metrics.Threshold

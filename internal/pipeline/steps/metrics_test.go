@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -210,6 +211,89 @@ func TestMetricsStep_BreachParksAutoFixable(t *testing.T) {
 	}
 }
 
+// metricsBreachVerdict builds a breached verdict carrying count functions, so
+// the rendering rules can be read without a shell command in the way.
+func metricsBreachVerdict(count int) metricsVerdict {
+	verdict := metricsVerdict{Threshold: 30, Metric: "crap", FromJSON: true, Measured: count}
+	for i := 0; i < count; i++ {
+		verdict.Breaches = append(verdict.Breaches, metricsFunction{
+			File:     "a" + strconv.Itoa(i) + ".go",
+			Function: "F" + strconv.Itoa(i),
+			Line:     i + 1,
+			Score:    55,
+		})
+	}
+	return verdict
+}
+
+// TestMetricsBreachFindings_FoldsTheRemainderIntoOneItem pins the cap a
+// repository adopting the gate hits immediately: a findings list hundreds long
+// is unreadable in the gate prompt and the PR body alike, so the tail folds into
+// one item that still names how many functions it stands for.
+func TestMetricsBreachFindings_FoldsTheRemainderIntoOneItem(t *testing.T) {
+	t.Parallel()
+	items := metricsBreachFindings(metricsBreachVerdict(maxMetricsBreachFindings + 2))
+
+	if len(items) != maxMetricsBreachFindings+1 {
+		t.Fatalf("len(items) = %d, want %d", len(items), maxMetricsBreachFindings+1)
+	}
+	remainder := items[len(items)-1]
+	if !strings.Contains(remainder.Description, "2 more function(s)") {
+		t.Errorf("remainder description = %q, want it to name the 2 folded functions", remainder.Description)
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		if item.ID == "" {
+			t.Fatalf("item %+v has no ID, so --findings cannot select it", item)
+		}
+		if seen[item.ID] {
+			t.Fatalf("ID %q is reused, so selecting it decides more than one function", item.ID)
+		}
+		seen[item.ID] = true
+	}
+}
+
+func TestMetricsBreachFindings_UnderTheCapReportsEveryFunction(t *testing.T) {
+	t.Parallel()
+	items := metricsBreachFindings(metricsBreachVerdict(maxMetricsBreachFindings))
+
+	if len(items) != maxMetricsBreachFindings {
+		t.Fatalf("len(items) = %d, want %d with no remainder item", len(items), maxMetricsBreachFindings)
+	}
+}
+
+// The pair of numbers is what tells the maintainer and the fix agent which
+// lever to pull, so the percent conversion has to be right and a value the
+// contract does not allow must not be silently scaled into nonsense.
+func TestMetricsBreachDescription_RendersComplexityAndCoverage(t *testing.T) {
+	t.Parallel()
+	verdict := metricsVerdict{Threshold: 30, Metric: "crap", FromJSON: true}
+	complexity := 7
+	for _, tc := range []struct {
+		name     string
+		coverage float64
+		want     string
+	}{
+		{name: "fraction", coverage: 0.9, want: "coverage 90%"},
+		{name: "zero", coverage: 0, want: "coverage 0%"},
+		{name: "out of range", coverage: 85, want: "coverage 85 (outside the documented [0,1] fraction)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			coverage := tc.coverage
+			got := metricsBreachDescription(verdict, metricsFunction{
+				File: "a.go", Function: "Hairball", Line: 42, Score: 42.5,
+				Complexity: &complexity, Coverage: &coverage,
+			})
+			if !strings.Contains(got, "complexity 7") {
+				t.Errorf("description = %q, want it to carry complexity 7", got)
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("description = %q, want it to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMetricsStep_ExemptPathClearsTheBreach(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -288,6 +372,89 @@ func TestMetricsStep_UnparseableOutputWithAZeroExitPasses(t *testing.T) {
 	}
 }
 
+// TestMetricsStep_PassingUnparseableOutputCarriesAWarningFinding pins the
+// pass-side counterpart of the breach path's honesty finding. Nothing was
+// measured, so the operator has to read that on the durable record and in the
+// PR body rather than only in the step log.
+func TestMetricsStep_PassingUnparseableOutputCarriesAWarningFinding(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test"}
+	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, "echo 'nothing to report'", 30)
+
+	step := &MetricsStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.NeedsApproval {
+		t.Fatal("the warning must not park the gate: the exit code was clean")
+	}
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 {
+		t.Fatalf("len(findings.Items) = %d, want 1: %s", len(findings.Items), outcome.Findings)
+	}
+	item := findings.Items[0]
+	if item.Severity != types.FindingSeverityWarning {
+		t.Errorf("Severity = %q, want warning", item.Severity)
+	}
+	if item.Action != types.ActionNoOp {
+		t.Errorf("Action = %q, want no-op", item.Action)
+	}
+	if !strings.Contains(item.Description, "did not parse") {
+		t.Errorf("Description = %q, want it to say the output did not parse", item.Description)
+	}
+}
+
+// TestMetricsStep_ParsedReportWithANonzeroExitParksAutoFixable pins the
+// fail-closed half of the verdict at the step level: a report that reads clean
+// followed by a crash still blocks, and the gate says the report may be partial.
+func TestMetricsStep_ParsedReportWithANonzeroExitParksAutoFixable(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test"}
+	command := echoMetricsReport(`{"metric":"crap","functions":[{"file":"a.go","function":"Fine","line":3,"score":12}]}`) + "\nexit 3"
+	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, command, 30)
+
+	step := &MetricsStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NeedsApproval {
+		t.Fatal("expected a nonzero exit to park even with a clean-looking report")
+	}
+	if !outcome.AutoFixable {
+		t.Error("expected the park to be auto-fixable")
+	}
+	if outcome.ExitCode != 3 {
+		t.Errorf("ExitCode = %d, want 3", outcome.ExitCode)
+	}
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 {
+		t.Fatalf("len(findings.Items) = %d, want 1: %s", len(findings.Items), outcome.Findings)
+	}
+	item := findings.Items[0]
+	if item.Severity != types.FindingSeverityWarning {
+		t.Errorf("Severity = %q, want warning", item.Severity)
+	}
+	for _, want := range []string{"exited 3", "may be partial"} {
+		if !strings.Contains(item.Description, want) {
+			t.Errorf("Description = %q, want it to contain %q", item.Description, want)
+		}
+	}
+}
+
 func TestMetricsStep_CommandReceivesTheCoverageRootAndTheChangedFileSet(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -296,7 +463,7 @@ func TestMetricsStep_CommandReceivesTheCoverageRootAndTheChangedFileSet(t *testi
 	// The probe writes outside the worktree so the observation itself cannot
 	// dirty the tree the step is gating.
 	probe := filepath.Join(t.TempDir(), "env.txt")
-	command := "printf '%s|%s|%s|%s' \"$NO_MISTAKES_COVERAGE_ROOT\" \"$NO_MISTAKES_BASE_SHA\" \"$NO_MISTAKES_CHANGED_FILE_COUNT\" \"${NO_MISTAKES_COVERAGE_DIR:-unset}\" > " + probe + "\n" +
+	command := "printf '%s|%s|%s|%s|%s' \"$NO_MISTAKES_COVERAGE_ROOT\" \"$NO_MISTAKES_BASE_SHA\" \"$NO_MISTAKES_CHANGED_FILE_COUNT\" \"$NO_MISTAKES_CHANGED_FILES\" \"${NO_MISTAKES_COVERAGE_DIR:-unset}\" > " + probe + "\n" +
 		echoMetricsReport(`{"metric":"crap","functions":[]}`)
 
 	ag := &mockAgent{name: "test"}
@@ -312,8 +479,8 @@ func TestMetricsStep_CommandReceivesTheCoverageRootAndTheChangedFileSet(t *testi
 		t.Fatal(err)
 	}
 	fields := strings.Split(string(raw), "|")
-	if len(fields) != 4 {
-		t.Fatalf("probe wrote %q, want 4 fields", raw)
+	if len(fields) != 5 {
+		t.Fatalf("probe wrote %q, want 5 fields", raw)
 	}
 	if fields[0] != sctx.CoverageDir {
 		t.Errorf("NO_MISTAKES_COVERAGE_ROOT = %q, want %q", fields[0], sctx.CoverageDir)
@@ -321,11 +488,69 @@ func TestMetricsStep_CommandReceivesTheCoverageRootAndTheChangedFileSet(t *testi
 	if fields[1] != baseSHA {
 		t.Errorf("NO_MISTAKES_BASE_SHA = %q, want %q", fields[1], baseSHA)
 	}
-	if fields[2] == "" {
-		t.Error("NO_MISTAKES_CHANGED_FILE_COUNT is empty, want the changed-file total")
+	// The exact list and the exact count, because a regression to an empty list
+	// still writes a non-empty "0" into the count.
+	wantChanged := gitCmd(t, dir, "diff", "--name-only", baseSHA, headSHA)
+	if wantChanged == "" {
+		t.Fatal("the fixture's base..head diff is empty, so this test proves nothing")
 	}
-	if fields[3] != "unset" {
-		t.Errorf("NO_MISTAKES_COVERAGE_DIR = %q, want it unset: that name is the Test step's per-unit write target", fields[3])
+	if fields[3] != wantChanged {
+		t.Errorf("NO_MISTAKES_CHANGED_FILES = %q, want %q", fields[3], wantChanged)
+	}
+	if want := strconv.Itoa(len(strings.Split(wantChanged, "\n"))); fields[2] != want {
+		t.Errorf("NO_MISTAKES_CHANGED_FILE_COUNT = %q, want %q", fields[2], want)
+	}
+	if fields[4] != "unset" {
+		t.Errorf("NO_MISTAKES_COVERAGE_DIR = %q, want it unset: that name is the Test step's per-unit write target", fields[4])
+	}
+}
+
+// TestMetricsStep_GreenAttemptReportsTheDroppedChangedFileList proves the
+// omission reaches the durable record and not only the run log. A metrics
+// command that scopes its analysis to NO_MISTAKES_CHANGED_FILES measured less
+// than the change, so a green verdict still has to say so.
+func TestMetricsStep_GreenAttemptReportsTheDroppedChangedFileList(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, _ := setupGitRepo(t)
+
+	// One path per file whose names together exceed the cap, so
+	// changedFilesEnvValue empties the value rather than truncating it.
+	long := strings.Repeat("n", 200)
+	for i := 0; i < 600; i++ {
+		name := filepath.Join(dir, long+"-"+strconv.Itoa(i)+".go")
+		if err := os.WriteFile(name, []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "many files")
+	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	ag := &mockAgent{name: "test"}
+	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, echoMetricsReport(`{"metric":"crap","functions":[]}`), 30)
+
+	step := &MetricsStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.NeedsApproval {
+		t.Fatal("the omission must not park a clean verdict")
+	}
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 {
+		t.Fatalf("len(findings.Items) = %d, want 1: %s", len(findings.Items), outcome.Findings)
+	}
+	item := findings.Items[0]
+	if item.Severity != types.FindingSeverityWarning {
+		t.Errorf("Severity = %q, want warning", item.Severity)
+	}
+	if !strings.Contains(item.Description, envTestChangedFiles) {
+		t.Errorf("Description = %q, want it to name the dropped changed-file list", item.Description)
 	}
 }
 

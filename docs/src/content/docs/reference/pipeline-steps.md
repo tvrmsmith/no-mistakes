@@ -184,7 +184,7 @@ Runs the repository's metrics command against the coverage the Test step produce
 }
 ```
 
-`complexity`, `coverage`, and `summary` are optional. The step tries the whole trimmed stdout first; failing that it scans the tail backwards for balanced JSON objects, so a command that logs progress before a pretty-printed report still reads as JSON. A candidate counts as a report only when it carries a `functions` key.
+`complexity`, `coverage`, and `summary` are optional. `file` is expected repository-relative, although an absolute path inside the worktree is tolerated and reduced to that form before the exempt globs are matched. `coverage` is a fraction in `[0,1]`, rendered as a percentage in the findings; a value outside that range is reported unscaled instead. The step tries the whole trimmed stdout first; failing that one forward pass over the tail records every top-level balanced JSON object and tries them newest first, so a command that logs progress before a pretty-printed report still reads as JSON however many functions the report lists. A candidate counts as a report only when it carries a `functions` key.
 
 **Verdict:**
 
@@ -194,7 +194,7 @@ Runs the repository's metrics command against the coverage the Test step produce
 - Policy lives in the step, not the command. The command measures and the step applies the trusted threshold and exemptions, so a contributor cannot reach the numbers that decide their own breach.
 - A command that cannot be launched at all fails the run, the same as Lint.
 
-**Approval:** a breach parks with `error` findings, one per breaching function, naming the file, the line, the score, the threshold, and the reported complexity and coverage. The findings are `auto-fix`-eligible. Advisory behavior is reached by setting a high threshold, not by a separate mode.
+**Approval:** a breach parks with `error` findings, one per breaching function, naming the file, the line, the score, the threshold, and the reported complexity and coverage. Each carries its own finding ID, so `--findings` can select one function rather than all of them. The findings are `auto-fix`-eligible. Advisory behavior is reached by setting a high threshold, not by a separate mode. A pass does not park, but it still carries a non-blocking `warning` finding when the output did not parse, since nothing was measured and the exit code alone produced that green, and another when `NO_MISTAKES_CHANGED_FILES` could not carry the whole changed-file list.
 
 **Auto-fix:** a fix round is the only agent turn this step ever takes; there is no non-fix Metrics agent pass. The fix agent receives the breaching functions plus any per-finding user notes, any selected user-authored findings, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step, then the command re-runs. The prompt requires the agent to state in its summary whether it added tests or reduced complexity, because coverage enters the CRAP formula cubed and adding tests to a hairball is the cheap remedy the formula over-rewards.
 
