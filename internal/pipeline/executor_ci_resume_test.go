@@ -693,7 +693,7 @@ func TestExecutor_CleanShutdownDoesNotPreserveACIStepHoldingAnAgentPID(t *testin
 // evidence that survives, and preserving it would let the next repair's
 // git add -A commit those edits under a message describing a different repair.
 func TestExecutor_CleanShutdownDoesNotPreserveACIStepWithUncommittedRepairWork(t *testing.T) {
-	_, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
+	database, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
 		if wErr := os.WriteFile(filepath.Join(sctx.WorkDir, "half-written.go"), []byte("package broken\n"), 0o644); wErr != nil {
 			t.Error(wErr)
 		}
@@ -703,6 +703,44 @@ func TestExecutor_CleanShutdownDoesNotPreserveACIStepWithUncommittedRepairWork(t
 	}
 	if ciRow.Status != types.StepStatusFailed {
 		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
+	}
+	// The dirty edits can sit beside a repair commit an earlier round already
+	// made and never published, so refusing to preserve must not also cost the
+	// checkout that holds it.
+	assertRunIsAnInterruptedMonitor(t, database, ciRow.RunID)
+}
+
+// A worktree whose git directory cannot be read is an incomplete read, not
+// evidence that there is nothing to keep, and it can still hold an unpublished
+// repair commit. The refusal ends the run as an interrupted monitor so the
+// daemon spares the checkout instead of sweeping it as a failed run's
+// leftovers.
+func TestExecutor_CleanShutdownDoesNotPreserveACIStepWhoseWorktreeCannotBeRead(t *testing.T) {
+	database, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
+		if rmErr := os.RemoveAll(filepath.Join(sctx.WorkDir, ".git")); rmErr != nil {
+			t.Error(rmErr)
+		}
+	})
+	if errors.Is(err, ErrParkPreserved) {
+		t.Fatalf("Execute() error = %v, want NOT ErrParkPreserved for an unreadable worktree", err)
+	}
+	if ciRow.Status != types.StepStatusFailed {
+		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
+	}
+	assertRunIsAnInterruptedMonitor(t, database, ciRow.RunID)
+}
+
+// assertRunIsAnInterruptedMonitor pins the terminal status that keeps a refused
+// CI monitor's worktree: RunManager.removeRunWorktree spares exactly this
+// status, so a refusal recorded as a plain failure deletes the checkout.
+func assertRunIsAnInterruptedMonitor(t *testing.T, database *db.DB, runID string) {
+	t.Helper()
+	run, err := database.GetRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != types.RunCIMonitorInterrupted {
+		t.Fatalf("run status = %s, want %s so the worktree survives the stop", run.Status, types.RunCIMonitorInterrupted)
 	}
 }
 
@@ -757,12 +795,10 @@ func TestExecutor_CleanStopDoesNotPreserveACIMonitorAheadOfTheRunHead(t *testing
 	if ciRow.Status != types.StepStatusFailed {
 		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
 	}
+	assertRunIsAnInterruptedMonitor(t, database, ciRow.RunID)
 	run, getErr := database.GetRun(ciRow.RunID)
 	if getErr != nil {
 		t.Fatal(getErr)
-	}
-	if run.Status != types.RunCIMonitorInterrupted {
-		t.Fatalf("run status = %s, want %s so the worktree survives the stop", run.Status, types.RunCIMonitorInterrupted)
 	}
 	if run.Error == nil || !strings.Contains(*run.Error, "not recorded as its head") {
 		t.Errorf("run error = %v, want the concrete unpublished-commit reason rather than the cancellation cause", run.Error)

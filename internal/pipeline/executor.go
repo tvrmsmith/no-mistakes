@@ -953,26 +953,44 @@ const ciMonitorPreserveCheckTimeout = 10 * time.Second
 //     immediately after each turn, so uncommitted work here means an
 //     interrupted turn, whose leftovers the next repair's git add -A would
 //     otherwise commit under a message describing a different repair.
-//   - The worktree head is the head the run recorded. This is the same rule
-//     lifecycle.WorktreeMatchesRun applies on the next start, read here so a
-//     stop never promises preservation a start then refuses. It is a distinct
-//     fact from cleanliness because steps.commitRepair commits before
-//     recordRepair writes the new head, so a stop landing in that window finds
-//     a clean worktree one commit ahead of run.HeadSHA. Recovery's rule is
+//   - The worktree head is the head the run recorded. It is a distinct fact
+//     from cleanliness because steps.commitRepair commits before recordRepair
+//     writes the new head, so a stop landing in that window finds a clean
+//     worktree one commit ahead of run.HeadSHA. The rule matches what
+//     lifecycle.WorktreeMatchesRun applies on the next start, so a stop never
+//     promises preservation a start then refuses, and recovery's rule is
 //     deliberately left strict rather than widened to accept a descendant: on
-//     the gate-parked path a descendant head is exactly the adverse evidence
-//     it exists to catch.
+//     the gate-parked path a descendant head is exactly the adverse evidence it
+//     exists to catch. This is a second copy of that rule rather than a call
+//     into its owner, because lifecycle imports pipeline and the dependency
+//     cannot be reversed here. Two differences are known and intended: the
+//     owner resolves the checkout through worktrees.RecordedDir while this
+//     takes workDir already resolved and trims both sides of the comparison,
+//     and the owner reports a failed read as unavailable evidence while every
+//     refusal here is non-preservable.
 //
 // Every read fails closed. An unproven claim must not keep a run alive,
 // because the ordinary failure path is recoverable and a wrongly preserved
 // worktree quietly corrupts the PR.
 //
-// The head-mismatch refusal alone wraps ErrCIMonitorInterrupted, because it is
-// the one refusal that names committed work the run never published: the
-// caller ends the run as types.RunCIMonitorInterrupted so the worktree holding
-// that commit is spared for an operator instead of being swept as a failed
-// run's leftovers.
+// Failing closed never costs the worktree. Every refusal, incomplete read and
+// completed adverse fact alike, wraps ErrCIMonitorInterrupted through the one
+// wrap below, so the caller ends the run as types.RunCIMonitorInterrupted and
+// the checkout is spared for an operator rather than swept as a failed run's
+// leftovers. A dirty or unreadable checkout can hold a repair commit an earlier
+// round already made and never published, beside the interrupted turn's edits.
+// The wrap is structural so a refusal added to this function later cannot land
+// on the destructive side by omission.
 func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir string) error {
+	if refusal := e.ciMonitorPreservationRefusal(stepID, run, workDir); refusal != nil {
+		return fmt.Errorf("%w: %s", ErrCIMonitorInterrupted, refusal)
+	}
+	return nil
+}
+
+// ciMonitorPreservationRefusal holds the facts ciMonitorPreservable checks. It
+// reports a plain error so its caller owns the one place a refusal is wrapped.
+func (e *Executor) ciMonitorPreservationRefusal(stepID string, run *db.Run, workDir string) error {
 	current, err := e.db.GetStepResult(stepID)
 	if err != nil {
 		return fmt.Errorf("could not re-read the ci step row: %w", err)
@@ -1016,8 +1034,8 @@ func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir stri
 		return fmt.Errorf("could not read the worktree head: %w", err)
 	}
 	if strings.TrimSpace(head) != strings.TrimSpace(latest.HeadSHA) {
-		return fmt.Errorf("%w: the worktree holds commit %s, which the run has not recorded as its head",
-			ErrCIMonitorInterrupted, strings.TrimSpace(head))
+		return fmt.Errorf("the worktree holds commit %s, which the run has not recorded as its head",
+			strings.TrimSpace(head))
 	}
 	return nil
 }
@@ -1261,14 +1279,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				}
 				slog.Warn("clean stop is not preserving this ci step; failing it instead",
 					"run_id", run.ID, "step", stepName, "reason", refusal)
-				// A refusal that found unpushed repair work is not a pipeline
-				// failure: the PR is open, the work is on disk, and the run
-				// records that concrete reason instead of the cancellation
-				// cause so an operator can resolve it.
-				if errors.Is(refusal, ErrCIMonitorInterrupted) {
-					interruptedMonitor = true
-					redactedErr = safeurl.RedactText(refusal.Error())
-				}
+				// A refusal is not a pipeline failure: the PR is open, the
+				// worktree can hold repair work the run never published, and
+				// the run records that concrete reason instead of the
+				// cancellation cause so an operator can resolve it.
+				interruptedMonitor = true
+				redactedErr = safeurl.RedactText(refusal.Error())
 			}
 			if dbErr := e.db.FailStep(sr.ID, redactedErr, durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)

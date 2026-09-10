@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -94,6 +95,43 @@ func TestLivePushStillSupersedesACIMonitor(t *testing.T) {
 	}
 	if kept := preservedBranchRuns([]*db.Run{monitor}, stepsOf, preservedGatesAndCIMonitors); len(kept) != 1 {
 		t.Errorf("startup path kept %d run(s), want the ci monitor preferred", len(kept))
+	}
+}
+
+// TestBranchContentionStepReadFailureLeavesACIMonitorUnproven covers the shape
+// that cannot corroborate itself with the awaiting-agent marker, because a CI
+// monitor never sets one. A transient step read failure must leave its claim
+// unproven rather than refuted, so the group defers to an operator instead of
+// superseding a run whose worktree can hold an unpushed repair commit.
+func TestBranchContentionStepReadFailureLeavesACIMonitorUnproven(t *testing.T) {
+	monitor := &db.Run{ID: "monitor", RepoID: "repo1", Branch: "feature", Status: types.RunRunning, PRURL: prURL()}
+	other := &db.Run{ID: "other", RepoID: "repo1", Branch: "feature", Status: types.RunRunning}
+	stepsOf := func(runID string) ([]*db.StepResult, error) {
+		if runID == "monitor" {
+			return nil, errors.New("database is locked")
+		}
+		return []*db.StepResult{{StepName: types.StepReview, Status: types.StepStatusRunning}}, nil
+	}
+
+	contention := branchContentionOf([]*db.Run{monitor, other}, stepsOf)
+
+	if contention.superseded["monitor"] {
+		t.Errorf("an unreadable ci monitor was superseded, want its claim treated as unproven")
+	}
+	if !contention.superseded["other"] {
+		t.Errorf("the competing run was not superseded, want the sole candidate to win the branch")
+	}
+}
+
+// TestBranchContentionStepReadFailureStillRefutesARunWithNoPreservedShape keeps
+// the fallback from admitting everything: a run with no marker and no PR URL
+// has no preserved shape left to establish once its step rows are unreadable.
+func TestBranchContentionStepReadFailureStillRefutesARunWithNoPreservedShape(t *testing.T) {
+	bare := &db.Run{ID: "bare", RepoID: "repo1", Branch: "feature", Status: types.RunRunning}
+	stepsOf := func(string) ([]*db.StepResult, error) { return nil, errors.New("database is locked") }
+
+	if kept := preservedBranchRuns([]*db.Run{bare}, stepsOf, preservedGatesAndCIMonitors); len(kept) != 0 {
+		t.Errorf("kept %d run(s), want none: nothing establishes a preserved shape here", len(kept))
 	}
 }
 

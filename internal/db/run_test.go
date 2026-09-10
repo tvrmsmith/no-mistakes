@@ -1363,13 +1363,18 @@ func TestEndActiveRunWithStatus_ClearsTheAwaitingAgentMarkerAndFoldsParkedTime(t
 	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
 		t.Fatal(err)
 	}
-	// now() has second resolution, so a park started and ended within the same
-	// test cannot be trusted to measure a real elapsed second; seed a known
-	// parked floor instead and assert it survives the fold undiminished.
+	// Seed an earlier park that must survive the fold undiminished.
 	if err := d.AddRunParkedDuration(run.ID, 5000); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	// now() has second resolution, so a park started and ended inside this test
+	// measures nothing. Backdating the marker gives the fold a real interval to
+	// find, which is the half of this test's name the seeded floor cannot check.
+	const backdatedSeconds = 7
+	if _, err := d.sql.Exec(`UPDATE runs SET awaiting_agent_since = awaiting_agent_since - ? WHERE id = ?`, backdatedSeconds, run.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1381,8 +1386,8 @@ func TestEndActiveRunWithStatus_ClearsTheAwaitingAgentMarkerAndFoldsParkedTime(t
 	if got.AwaitingAgentSince != nil {
 		t.Fatalf("awaiting agent since = %v, want nil", got.AwaitingAgentSince)
 	}
-	if got.ParkedMS < 5000 {
-		t.Fatalf("parked ms = %d, want at least the seeded 5000ms folded in", got.ParkedMS)
+	if want := int64(5000 + backdatedSeconds*1000); got.ParkedMS < want {
+		t.Fatalf("parked ms = %d, want at least %d: the seeded floor plus the backdated park folded in", got.ParkedMS, want)
 	}
 }
 

@@ -48,6 +48,9 @@ func (s *mockCIMonitorStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepO
 	s.mu.Lock()
 	s.attempts++
 	first := s.attempts == 1
+	// A resumed monitor can legitimately drive further executions, so only the
+	// second attempt closes the channel and later ones keep counting.
+	signalResume := s.attempts == 2
 	if !first && sctx.Run != nil && sctx.Run.PRURL != nil {
 		s.resumedPRURL = *sctx.Run.PRURL
 	}
@@ -58,7 +61,9 @@ func (s *mockCIMonitorStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepO
 		<-sctx.Ctx.Done()
 		return nil, sctx.Ctx.Err()
 	}
-	close(s.resumed)
+	if signalResume {
+		close(s.resumed)
+	}
 	return &pipeline.StepOutcome{}, nil
 }
 

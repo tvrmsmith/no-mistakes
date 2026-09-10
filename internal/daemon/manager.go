@@ -259,9 +259,15 @@ func preservedBranchRuns(runs []*db.Run, stepsOf gateStepReader, shapes preserve
 	for _, run := range runs {
 		stepRows, err := stepsOf(run.ID)
 		if err != nil {
-			slog.Warn("could not read steps while resolving branch contention; treating the run as possibly parked",
+			slog.Warn("could not read steps while resolving branch contention; treating the run as possibly preserved",
 				"run_id", run.ID, "error", err)
-			if run.AwaitingAgentSince != nil {
+			// Each shape keeps whatever evidence survives without step rows.
+			// A gate leaves the awaiting-agent marker; a CI monitor never sets
+			// that marker at all, so what remains of lifecycle.ResumableCIMonitor
+			// is a running run holding a PR URL. Reading less than the predicate
+			// asks for turns unproven into refuted for exactly the shape that
+			// cannot corroborate itself any other way.
+			if run.AwaitingAgentSince != nil || (shapes == preservedGatesAndCIMonitors && ciShapedWithoutSteps(run)) {
 				keep = append(keep, run)
 			}
 			continue
@@ -275,6 +281,15 @@ func preservedBranchRuns(runs []*db.Run, stepsOf gateStepReader, shapes preserve
 		}
 	}
 	return keep
+}
+
+// ciShapedWithoutSteps is the part of lifecycle.ResumableCIMonitor a caller can
+// still establish when the step rows are unreadable.
+func ciShapedWithoutSteps(run *db.Run) bool {
+	if run == nil || run.Status != types.RunRunning {
+		return false
+	}
+	return run.PRURL != nil && strings.TrimSpace(*run.PRURL) != ""
 }
 
 // preservedShape selects which preserved run shapes a branch-contention caller

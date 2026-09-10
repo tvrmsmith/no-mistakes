@@ -239,6 +239,9 @@ func TestDrain_CIMonitorIsExemptNotCut(t *testing.T) {
 	if len(report.Interrupted) != 0 {
 		t.Fatalf("Interrupted = %v, want empty: the monitor is left for Shutdown's preserve-and-resume path", report.Interrupted)
 	}
+	if containsRunID(report.Finished, run.ID) {
+		t.Fatalf("Finished = %v, want it to exclude %s: the monitor is still polling, not completed work", report.Finished, run.ID)
+	}
 }
 
 // TestDrain_CIMonitorHoldingAnAgentPIDIsWaitedOnNotExempt is the case status
