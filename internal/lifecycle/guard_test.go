@@ -132,7 +132,7 @@ func TestSplitActiveRuns(t *testing.T) {
 		runningParked.ID: gateStep(types.StepStatusAwaitingApproval),
 	}
 
-	blocking, parked := splitActiveRuns(runs, stepsByRun, nil, guardCorroboration{})
+	blocking, parked := splitActiveRuns(runs, stepsByRun, nil, nil)
 	if len(blocking) != 2 || blocking[0] != pending || blocking[1] != runningNotParked {
 		t.Errorf("blocking = %v, want [pending, runningNotParked]", blocking)
 	}
@@ -143,7 +143,7 @@ func TestSplitActiveRuns(t *testing.T) {
 	// The same predicate the live guard splits on: a required plan the run
 	// cannot prove it matches moves it back into the blocking set.
 	requiredPlan := []types.StepName{types.StepReview}
-	blocking, parked = splitActiveRuns(runs, stepsByRun, requiredPlan, guardCorroboration{})
+	blocking, parked = splitActiveRuns(runs, stepsByRun, requiredPlan, nil)
 	if len(parked) != 0 {
 		t.Errorf("parked(required plan) = %v, want none exempt", parked)
 	}

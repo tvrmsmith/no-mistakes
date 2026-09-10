@@ -552,3 +552,47 @@ func TestASecondCleanStopPreservesAnAlreadyResumedCIMonitor(t *testing.T) {
 		t.Fatalf("twice-resumed run status = %s (error %v), want %s", completed.Status, completed.Error, types.RunCompleted)
 	}
 }
+
+// TestCIMonitorWithUncommittedWorkIsNotResumed covers the recovery half of the
+// cleanliness rule. A repair turn killed between its edits and its commit
+// leaves the row running with no pid, a PR URL, and a head still equal to the
+// run's, so every other precondition passes; re-entering the monitor would let
+// the next repair's git add -A commit those leftovers under a message
+// describing a different repair and push that to the open PR. The run is
+// refused with the concrete reason and keeps its checkout, because those edits
+// can sit beside a repair commit an earlier round never published.
+func TestCIMonitorWithUncommittedWorkIsNotResumed(t *testing.T) {
+	monitor := newMockCIMonitorStep()
+	steps := func() []pipeline.Step { return []pipeline.Step{monitor} }
+	first := startTestDaemonInstance(t, steps)
+	p, d := first.paths, first.db
+
+	repo, runID := startCIMonitorRun(t, p, d, "ci-dirty-worktree-repo", monitor)
+
+	if err := first.stopAndWait(t); err != nil {
+		t.Fatalf("first daemon exited with error: %v", err)
+	}
+
+	workDir := p.WorktreeDir(repo.ID, runID)
+	if err := os.WriteFile(filepath.Join(workDir, "half-written.go"), []byte("package broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	restartTestDaemonInstance(t, p, d, steps)
+
+	run := waitForRunStatus(t, d, runID, types.RunCIMonitorInterrupted)
+	if run.Error == nil {
+		t.Fatal("refused ci monitor recorded no error")
+	}
+	if !strings.Contains(*run.Error, "uncommitted") {
+		t.Fatalf("run error = %q, want it to name the uncommitted work", *run.Error)
+	}
+	select {
+	case <-monitor.resumed:
+		t.Fatal("recovery re-entered a monitor whose worktree holds an interrupted repair")
+	case <-time.After(time.Second):
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "half-written.go")); err != nil {
+		t.Fatalf("the refused monitor lost the interrupted repair's work: %v", err)
+	}
+}

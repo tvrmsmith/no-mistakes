@@ -932,6 +932,36 @@ func (e *Executor) autoFixLimit(stepName types.StepName) int {
 // daemon is mid-shutdown, so it must not be able to wait indefinitely.
 const ciMonitorPreserveCheckTimeout = 10 * time.Second
 
+// CIMonitorWorktreeClean is the single owner of the clean-worktree precondition
+// a resumable CI monitor has to meet, and every site that decides the question
+// reads it: the stop path below, the destructive lifecycle guard and startup
+// recovery through lifecycle.ResumePreconditionsMet, and the drain through
+// lifecycle.PreservableCIMonitor. The rule lives here rather than in lifecycle
+// because lifecycle imports pipeline and the dependency cannot be reversed.
+//
+// A checkout with uncommitted work under a monitor is an interrupted auto-fix
+// turn: steps.commitRepair commits everything immediately after each turn, so
+// the next repair's git add -A would otherwise sweep those leftovers into a
+// commit whose message describes a different repair and push it to the open PR.
+//
+// A read that could not be completed comes back as
+// ErrRecoveryEvidenceUnavailable so a caller can tell it from an established
+// adverse fact. No caller may treat either answer as clean, and none may cost
+// the run its worktree on the refusal.
+func CIMonitorWorktreeClean(ctx context.Context, workDir string) error {
+	if strings.TrimSpace(workDir) == "" {
+		return errors.New("the run has no worktree to check for interrupted work")
+	}
+	dirty, err := git.HasUncommittedChanges(ctx, workDir)
+	if err != nil {
+		return evidenceUnavailable(fmt.Errorf("check the worktree for interrupted work: %w", err))
+	}
+	if dirty {
+		return errors.New("an interrupted auto-fix left uncommitted work in the worktree")
+	}
+	return nil
+}
+
 // ciMonitorPreservable reports whether the CI step a clean stop just cancelled
 // is a bare monitor the next daemon start can re-enter. It returns nil when it
 // is, and otherwise the reason it is not.
@@ -946,13 +976,11 @@ const ciMonitorPreserveCheckTimeout = 10 * time.Second
 //     with "no PR URL found". Preserving inside that window leaves a row
 //     recovery refuses, and the blanket sweep then reports a clean operator
 //     stop as "daemon crashed during execution".
-//   - The worktree is clean. The pid cannot carry this on its own: every agent
-//     adapter emits its exit event on a cancelled turn and the executor's
-//     handler clears the pid, so a repair killed mid-edit reaches here looking
-//     exactly like a bare monitor. steps.commitRepair commits everything
-//     immediately after each turn, so uncommitted work here means an
-//     interrupted turn, whose leftovers the next repair's git add -A would
-//     otherwise commit under a message describing a different repair.
+//   - The worktree is clean, read through CIMonitorWorktreeClean, which every
+//     other site deciding this same question reads too. The pid cannot carry
+//     the fact on its own: every agent adapter emits its exit event on a
+//     cancelled turn and the executor's handler clears the pid, so a repair
+//     killed mid-edit reaches here looking exactly like a bare monitor.
 //   - The worktree head is the head the run recorded. It is a distinct fact
 //     from cleanliness because steps.commitRepair commits before recordRepair
 //     writes the new head, so a stop landing in that window finds a clean
@@ -1038,17 +1066,10 @@ func (e *Executor) ciMonitorPreservationRefusal(stepID string, run *db.Run, work
 	if latest.PRURL == nil || strings.TrimSpace(*latest.PRURL) == "" {
 		return errors.New("the run has no PR URL for a resumed monitor to poll")
 	}
-	if strings.TrimSpace(workDir) == "" {
-		return errors.New("the run has no worktree to check for interrupted work")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), ciMonitorPreserveCheckTimeout)
 	defer cancel()
-	dirty, err := git.HasUncommittedChanges(ctx, workDir)
-	if err != nil {
-		return fmt.Errorf("could not check the worktree for interrupted work: %w", err)
-	}
-	if dirty {
-		return errors.New("an interrupted auto-fix left uncommitted work in the worktree")
+	if err := CIMonitorWorktreeClean(ctx, workDir); err != nil {
+		return err
 	}
 	head, err := git.HeadSHA(ctx, workDir)
 	if err != nil {

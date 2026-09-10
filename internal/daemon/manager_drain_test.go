@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -60,6 +61,7 @@ func registerFakeRun(t *testing.T, m *RunManager, database *db.DB, repo *db.Repo
 		t.Fatal(err)
 	}
 	run.Status = types.RunRunning
+	seedRunWorktree(t, m, database, run)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan struct{})
 	m.mu.Lock()
@@ -67,6 +69,33 @@ func registerFakeRun(t *testing.T, m *RunManager, database *db.DB, repo *db.Repo
 	m.dones[run.ID] = done
 	m.mu.Unlock()
 	return run, ctx, done
+}
+
+// seedRunWorktree gives a fake run the checkout a preserved CI monitor has to
+// have: a real one-commit worktree sitting at the exact head the run records.
+// The drain reads both facts through lifecycle.PreservableCIMonitor, so a run
+// with nothing on disk describes a monitor the stop would refuse rather than
+// one it preserves.
+func seedRunWorktree(t *testing.T, m *RunManager, database *db.DB, run *db.Run) {
+	t.Helper()
+	dir := m.paths.WorktreeDir(run.RepoID, run.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("run head\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "init", "-b", "main")
+	gitCmd(t, dir, "config", "user.email", "test@test.com")
+	gitCmd(t, dir, "config", "user.name", "Test")
+	gitCmd(t, dir, "config", "commit.gpgsign", "false")
+	gitCmd(t, dir, "add", ".")
+	gitCmd(t, dir, "commit", "-m", "run head")
+	head := gitOutput(t, dir, "rev-parse", "HEAD")
+	if err := database.UpdateRunHeadSHA(run.ID, head); err != nil {
+		t.Fatal(err)
+	}
+	run.HeadSHA = head
 }
 
 // parkRunAwaitingAgent marks a run as parked at an approval gate, the way the
@@ -286,18 +315,30 @@ func TestDrain_CIMonitorHoldingAnAgentPIDIsWaitedOnNotExempt(t *testing.T) {
 // exemption is not a latch. A run whose CI monitor ends mid-drain is back to
 // work the stop would kill, so it rejoins the wait and the report.
 func TestDrainReadmitsARunThatStopsMonitoringCI(t *testing.T) {
-	shortenDrainReclassify(t, 20*time.Millisecond)
+	// No tick fires, so the readmission can only come from the pass the drain
+	// makes when the wait runs out of runs, which is the line under test.
+	shortenDrainReclassify(t, time.Hour)
 	m, database, repo := newDrainTestManager(t)
 	monitor, _, _ := registerFakeRun(t, m, database, repo, "feature")
 	markCIMonitorActive(t, database, monitor)
-	// A second in-flight run keeps the wait alive long enough for a
-	// reclassify tick to observe the transition.
-	_, _, _ = registerFakeRun(t, m, database, repo, "other")
+	// Two ordinary runs with unbuffered done channels order the whole test
+	// without a sleep. The first send completes only once the funnel
+	// goroutines exist, which is after classification, so the monitor is
+	// provably exempt before the CI step ends; the second send is what empties
+	// the wait, and it happens after that write, so the pass that follows
+	// cannot read the monitor as still live.
+	_, _, classifiedDone := registerFakeRun(t, m, database, repo, "classified")
+	_, _, emptyTheWaitDone := registerFakeRun(t, m, database, repo, "empty-the-wait")
 
 	stopErr := make(chan error, 1)
 	go func() {
-		time.Sleep(60 * time.Millisecond)
-		stopErr <- stopCIMonitorErr(database, monitor)
+		classifiedDone <- struct{}{}
+		if err := stopCIMonitorErr(database, monitor); err != nil {
+			stopErr <- err
+			return
+		}
+		emptyTheWaitDone <- struct{}{}
+		stopErr <- nil
 	}()
 
 	report := m.Drain(context.Background(), time.Second)
@@ -326,13 +367,16 @@ func TestDrainReportDoesNotClaimItInterruptedAPreservedCIMonitor(t *testing.T) {
 	m, database, repo := newDrainTestManager(t)
 	run, _, _ := registerFakeRun(t, m, database, repo, "feature")
 
+	// The hook places the transition in the only window that produces the
+	// state under test: the run reaches its monitor after the wait has already
+	// ended, so nothing but the report's own pass can keep it out of
+	// Interrupted.
 	markErr := make(chan error, 1)
-	go func() {
-		time.Sleep(50 * time.Millisecond)
+	withDrainBeforeReportHook(t, func() {
 		markErr <- markCIMonitorActiveErr(database, run)
-	}()
+	})
 
-	report := m.Drain(context.Background(), 300*time.Millisecond)
+	report := m.Drain(context.Background(), 100*time.Millisecond)
 
 	if err := <-markErr; err != nil {
 		t.Fatalf("mark run as a CI monitor mid-drain: %v", err)
@@ -1280,5 +1324,85 @@ func TestDrainedAndAlive_SeparatesARecoverableDaemonFromAnExitingOne(t *testing.
 
 	if !m.DrainedAndAlive() {
 		t.Fatal("a drain_only that left the process running did not report the state an operator has to recover from")
+	}
+}
+
+// TestDrain_CIMonitorWithUncommittedWorkIsWaitedOnNotExempt is the case the
+// monitor's shape alone cannot see. An auto-fix turn killed mid-edit leaves the
+// row running with no pid and the head still equal to run.HeadSHA, so the run
+// looks exactly like a bare monitor; only the uncommitted edits give it away,
+// and the stop refuses to preserve on exactly those. Exempting it here would
+// release the run from the wait, leave it out of the report entirely, and the
+// stop would end it anyway.
+func TestDrain_CIMonitorWithUncommittedWorkIsWaitedOnNotExempt(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
+	markCIMonitorActive(t, database, run)
+	dirty := filepath.Join(m.paths.WorktreeDir(run.RepoID, run.ID), "half-written.go")
+	if err := os.WriteFile(dirty, []byte("package broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	close(done)
+
+	report := m.Drain(context.Background(), 5*time.Second)
+
+	if cause := context.Cause(ctx); cause != nil {
+		t.Fatalf("cancel cause = %v, want nil: Drain waits a run out rather than cutting it", cause)
+	}
+	if !containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want the dirty monitor %s, which the stop refuses to preserve", report.Waited, run.ID)
+	}
+	if !containsRunID(report.Finished, run.ID) {
+		t.Fatalf("Finished = %v, want it to contain %s", report.Finished, run.ID)
+	}
+}
+
+// TestDrain_CIMonitorWhoseWorktreeIsGoneIsWaitedOnNotExempt keeps the failed
+// read on the same side as the adverse one. Recovery refuses a run whose
+// checkout is missing, so promising the operator this monitor comes back is a
+// promise the next start declines.
+func TestDrain_CIMonitorWhoseWorktreeIsGoneIsWaitedOnNotExempt(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, _, done := registerFakeRun(t, m, database, repo, "feature")
+	markCIMonitorActive(t, database, run)
+	if err := os.RemoveAll(m.paths.WorktreeDir(run.RepoID, run.ID)); err != nil {
+		t.Fatal(err)
+	}
+	close(done)
+
+	report := m.Drain(context.Background(), 5*time.Second)
+
+	if !containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want the monitor %s whose worktree is gone", report.Waited, run.ID)
+	}
+}
+
+// TestDrain_StaleAwaitingMarkerWithoutAGateRowIsWaitedOn pins the same
+// corroboration the report pass already applies. The awaiting-agent write is
+// best-effort, so a marker left over from an earlier gate does not prove the
+// run is parked now, and a run doing real work must not be released from the
+// wait on that evidence alone.
+func TestDrain_StaleAwaitingMarkerWithoutAGateRowIsWaitedOn(t *testing.T) {
+	m, database, repo := newDrainTestManager(t)
+	run, _, done := registerFakeRun(t, m, database, repo, "feature")
+	sr, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.StartStepWithAutoFixLimit(sr.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(done)
+
+	report := m.Drain(context.Background(), 5*time.Second)
+
+	if !containsRunID(report.Waited, run.ID) {
+		t.Fatalf("Waited = %v, want the working run %s: a stale marker is not a gate", report.Waited, run.ID)
+	}
+	if !containsRunID(report.Finished, run.ID) {
+		t.Fatalf("Finished = %v, want it to contain %s", report.Finished, run.ID)
 	}
 }

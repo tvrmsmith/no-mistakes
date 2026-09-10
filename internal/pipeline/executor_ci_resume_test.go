@@ -818,3 +818,95 @@ func TestExecutor_CleanStopDoesNotPreserveACIMonitorAheadOfTheRunHead(t *testing
 		t.Errorf("run error = %v, want the concrete unpublished-commit reason rather than the cancellation cause", run.Error)
 	}
 }
+
+// ciPreservationFixture builds exactly what a live CI monitor leaves behind at
+// stop time: a running ci row with no agent pid, a run carrying the PR URL a
+// resumed monitor would poll, and a clean checkout sitting at the run's head.
+// A test then faults one of the database reads ciMonitorPreservable makes and
+// checks which side of the refusal it lands on, which the cancellation fixture
+// above cannot reach because it needs a working database to drive Execute.
+func ciPreservationFixture(t *testing.T) (*db.DB, *paths.Paths, *Executor, *db.Run, string, string) {
+	t.Helper()
+	database, p, run, _ := setupTest(t)
+	workDir := t.TempDir()
+	initGitRepo(t, workDir)
+	if err := database.UpdateRunPRURL(run.ID, testCIPRURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateRunHeadSHA(run.ID, headSHAOf(t, workDir)); err != nil {
+		t.Fatal(err)
+	}
+	rows := seedCIMonitorRun(t, database, run, ciMonitorPlan())
+	exec := NewExecutor(database, p, nil, nil, nil, nil)
+	return database, p, exec, mustGetRun(t, database, run.ID), rows[len(rows)-1].ID, workDir
+}
+
+func TestExecutor_ABareMonitorOnItsRecordedHeadIsPreservable(t *testing.T) {
+	_, _, exec, run, stepID, workDir := ciPreservationFixture(t)
+	if err := exec.ciMonitorPreservable(stepID, run, workDir); err != nil {
+		t.Fatalf("ciMonitorPreservable() error = %v, want nil for a bare monitor", err)
+	}
+}
+
+// A database read that cannot complete proves nothing about the checkout, and
+// the run already reached its PR, so the refusal has to carry
+// ErrCIMonitorInterrupted or the caller reclaims a worktree that can hold an
+// unpublished repair commit. runReachedItsPR answers yes on a failed read for
+// that reason, and its own read is broken here too.
+func TestExecutor_PreservationRefusalOnAnUnreadableDatabaseStillSparesTheWorktree(t *testing.T) {
+	database, _, exec, run, stepID, workDir := ciPreservationFixture(t)
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err := exec.ciMonitorPreservable(stepID, run, workDir)
+	if err == nil {
+		t.Fatal("ciMonitorPreservable() error = nil, want a refusal when no row can be read")
+	}
+	if !errors.Is(err, ErrCIMonitorInterrupted) {
+		t.Fatalf("ciMonitorPreservable() error = %v, want it wrapped as an interrupted monitor", err)
+	}
+}
+
+func TestExecutor_PreservationRefusalOnAMissingStepRowSparesTheWorktree(t *testing.T) {
+	_, _, exec, run, _, workDir := ciPreservationFixture(t)
+	err := exec.ciMonitorPreservable("no-such-step", run, workDir)
+	if err == nil {
+		t.Fatal("ciMonitorPreservable() error = nil, want a refusal when the ci row is gone")
+	}
+	if !errors.Is(err, ErrCIMonitorInterrupted) {
+		t.Fatalf("ciMonitorPreservable() error = %v, want it wrapped as an interrupted monitor", err)
+	}
+	if !strings.Contains(err.Error(), "ci step row is gone") {
+		t.Errorf("ciMonitorPreservable() error = %v, want the missing-row reason", err)
+	}
+}
+
+// deleteRunRow removes the run row alone, through a handle with no foreign-key
+// enforcement so the step rows stay behind. That is the shape the refusal's
+// missing-run branch reads.
+func deleteRunRow(t *testing.T, p *paths.Paths, runID string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", p.DB()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`DELETE FROM runs WHERE id = ?`, runID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutor_PreservationRefusalOnAMissingRunRowSparesTheWorktree(t *testing.T) {
+	_, p, exec, run, stepID, workDir := ciPreservationFixture(t)
+	deleteRunRow(t, p, run.ID)
+	err := exec.ciMonitorPreservable(stepID, run, workDir)
+	if err == nil {
+		t.Fatal("ciMonitorPreservable() error = nil, want a refusal when the run row is gone")
+	}
+	if !errors.Is(err, ErrCIMonitorInterrupted) {
+		t.Fatalf("ciMonitorPreservable() error = %v, want it wrapped as an interrupted monitor", err)
+	}
+	if !strings.Contains(err.Error(), "run row is gone") {
+		t.Errorf("ciMonitorPreservable() error = %v, want the missing-run reason", err)
+	}
+}

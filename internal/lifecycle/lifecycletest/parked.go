@@ -180,6 +180,21 @@ func initWorktree(t *testing.T, dir string) string {
 	return gitCmd(t, dir, "rev-parse", "HEAD")
 }
 
+// CommitInWorktree adds one commit to a seeded worktree and returns the new
+// head, for a test standing in for the window steps.commitRepair opens: the
+// repair is committed before the run records the head, so the checkout is
+// clean and one commit ahead of the run.
+func CommitInWorktree(t *testing.T, dir, name, contents string) string {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644); err != nil {
+		t.Fatalf("write worktree file: %v", err)
+	}
+	gitCmd(t, dir, "add", ".")
+	gitCmd(t, dir, "commit", "-m", "unrecorded repair commit")
+	return gitCmd(t, dir, "rev-parse", "HEAD")
+}
+
 func gitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 

@@ -1,10 +1,15 @@
 package lifecycle
 
 import (
+	"context"
+	"errors"
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/kunchenguid/no-mistakes/internal/worktrees"
 )
 
 // ciMonitorActiveStatuses is the wider set db.failActiveRuns' interrupted-CI
@@ -43,6 +48,36 @@ func ResumableCIMonitor(run *db.Run, steps []*db.StepResult) bool {
 	return ciMonitorShape(run, steps, func(step *db.StepResult) bool {
 		return step.Status == types.StepStatusRunning && step.AgentPID == nil
 	})
+}
+
+// PreservableCIMonitor reports whether run is a CI monitor the coming stop will
+// actually preserve, which is a stronger question than ResumableCIMonitor's
+// shape alone. Executor.ciMonitorPreservable refuses a monitor whose worktree
+// holds uncommitted work or sits at a commit the run never recorded, so a
+// caller that reads only the shape hands an operator a promise the same stop
+// then breaks: the drain would release such a run from its wait, leave it out
+// of the report, and the stop would end it anyway.
+//
+// Every read here fails closed, and the two worktree facts come from the sites
+// that own them, pipeline.CIMonitorWorktreeClean and WorktreeMatchesRun, rather
+// than being restated.
+func PreservableCIMonitor(ctx context.Context, p *paths.Paths, run *db.Run, steps []*db.StepResult) bool {
+	if !ResumableCIMonitor(run, steps) {
+		return false
+	}
+	if err := WorktreeMatchesRun(ctx, p, run); err != nil {
+		return false
+	}
+	return ciMonitorWorktreeClean(ctx, p, run) == nil
+}
+
+// ciMonitorWorktreeClean resolves the run's checkout and asks the owner of the
+// cleanliness rule about it, so lifecycle keeps one path to that rule.
+func ciMonitorWorktreeClean(ctx context.Context, p *paths.Paths, run *db.Run) error {
+	if p == nil || run == nil {
+		return errors.New("the run has no worktree to check for interrupted work")
+	}
+	return pipeline.CIMonitorWorktreeClean(ctx, worktrees.RecordedDir(p, run.WorktreePath(), run.RepoID, run.ID))
 }
 
 // CIMonitorRun reports the wider CI-monitor shape db.failActiveRuns' lift

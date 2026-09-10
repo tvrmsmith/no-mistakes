@@ -53,9 +53,22 @@ func WorktreeMatchesRun(ctx context.Context, p *paths.Paths, run *db.Run) error 
 // next daemon start pick it up as it stands? Recovery calls it before resuming
 // and the guard calls it before promising preservation, so an operator is never
 // told a run survives a stop that the next start would terminally fail.
-func ResumePreconditionsMet(ctx context.Context, database *db.DB, p *paths.Paths, run *db.Run, resumeSteps []pipeline.Step) error {
+//
+// steps are the run's step rows, and they decide which of the two resume points
+// this run is at. A CI monitor additionally has to hold a clean worktree, the
+// condition Executor.ciMonitorPreservable refuses on at stop time: resuming one
+// as a bare monitor would let the next repair's git add -A commit an
+// interrupted turn's leftovers under a message describing a different repair
+// and push that to the open PR. A gate park keeps its exemption, because a gate
+// legitimately holds the pipeline work an operator is being asked about.
+func ResumePreconditionsMet(ctx context.Context, database *db.DB, p *paths.Paths, run *db.Run, steps []*db.StepResult, resumeSteps []pipeline.Step) error {
 	if err := WorktreeMatchesRun(ctx, p, run); err != nil {
 		return err
+	}
+	if !ParkedAtGate(run, steps) && ResumableCIMonitor(run, steps) {
+		if err := ciMonitorWorktreeClean(ctx, p, run); err != nil {
+			return err
+		}
 	}
 	return pipeline.ValidateRecoveredRun(database, run, resumeSteps)
 }

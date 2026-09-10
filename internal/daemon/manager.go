@@ -558,8 +558,10 @@ func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*rec
 	// owner: the two must decide resumability by one rule, not two.
 	// That owner already separates the two: a read that did not complete comes
 	// back as pipeline.ErrRecoveryEvidenceUnavailable, so everything else it
-	// reports is an established adverse fact.
-	if err := lifecycle.ResumePreconditionsMet(ctx, m.db, m.paths, run, execSteps); err != nil {
+	// reports is an established adverse fact. It reads the step rows because a
+	// CI monitor must also hold a clean worktree to be resumed, which is what
+	// keeps an interrupted repair's leftovers out of the next repair's commit.
+	if err := lifecycle.ResumePreconditionsMet(ctx, m.db, m.paths, run, stepRows, execSteps); err != nil {
 		if errors.Is(err, pipeline.ErrRecoveryEvidenceUnavailable) {
 			return nil, err
 		}
@@ -2260,17 +2262,38 @@ var (
 	drainFinishDeliveredHook func()
 )
 
-// liveCIMonitor reports whether a run is sitting in a resumable CI monitor,
-// the second shape a clean stop preserves. A step read that fails answers
-// false, so Drain treats the run as ordinary in-flight work and waits on it,
-// bounded by the deadline, which is the safe reading.
-func (m *RunManager) liveCIMonitor(run *db.Run) bool {
+// drainPreserveCheckTimeout bounds the worktree reads the drain's
+// classification makes. The daemon is on its way down, so a stuck filesystem
+// must not hold the drain open past its own deadline.
+const drainPreserveCheckTimeout = 10 * time.Second
+
+// atAPreservedResumePoint reports whether the coming stop will preserve this
+// run, which is the whole question Drain's wait and its report both ask. Both
+// resume points are read from their owners against one step-row read: the
+// awaiting-agent marker is a best-effort write and proves nothing on its own,
+// so lifecycle.ParkedAtGate corroborates it against a real gate row, and
+// lifecycle.PreservableCIMonitor answers the CI half including the worktree
+// conditions the stop itself refuses on.
+//
+// Any read that fails answers false, so Drain treats the run as ordinary
+// in-flight work and waits on it, bounded by the deadline. Exempting a run the
+// stop then ends is the outcome to avoid: it appears in none of Waited,
+// Finished, or Interrupted.
+func (m *RunManager) atAPreservedResumePoint(run *db.Run) bool {
+	if run == nil {
+		return false
+	}
 	steps, err := m.db.GetStepsByRun(run.ID)
 	if err != nil {
 		slog.Warn("drain: failed to read run steps for classification; treating as a normal in-flight run", "run_id", run.ID, "error", err)
 		return false
 	}
-	return lifecycle.ResumableCIMonitor(run, steps)
+	if lifecycle.ParkedAtGate(run, steps) {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), drainPreserveCheckTimeout)
+	defer cancel()
+	return lifecycle.PreservableCIMonitor(ctx, m.paths, run, steps)
 }
 
 // registerActiveRun publishes a run's executor, cancel, and done channel, and
@@ -2313,27 +2336,18 @@ func (m *RunManager) refuseStartedRun(runID string, ag agent.Agent, cancel conte
 	}
 }
 
-// runPreservedByShutdown reports whether a run is at one of the two resume
-// points the coming stop preserves: parked at an approval gate, or sitting in
-// a live CI monitor. Either way the next daemon start picks it up, so the
-// report must not claim the stop cut it off. A DB read that fails answers
-// false, so Drain treats the run as ordinary in-flight work, which is the safe
-// reading.
+// runPreservedByShutdown is atAPreservedResumePoint for the report pass, which
+// holds a run ID rather than a row. Either way the next daemon start picks the
+// run up, so the report must not claim the stop cut it off. A DB read that
+// fails answers false, so Drain treats the run as ordinary in-flight work,
+// which is the safe reading.
 func (m *RunManager) runPreservedByShutdown(runID string) bool {
 	run, err := m.db.GetRun(runID)
 	if err != nil {
 		slog.Warn("failed to read run while checking for a preserved resume point; treating it as in-flight", "run_id", runID, "error", err)
 		return false
 	}
-	if run == nil {
-		return false
-	}
-	steps, err := m.db.GetStepsByRun(runID)
-	if err != nil {
-		slog.Warn("failed to read steps while checking for a preserved resume point; treating it as in-flight", "run_id", runID, "error", err)
-		return false
-	}
-	return lifecycle.ParkedAtGate(run, steps) || lifecycle.ResumableCIMonitor(run, steps)
+	return m.atAPreservedResumePoint(run)
 }
 
 // drainWaitEntry is one run Drain is waiting on: its done channel, branch (for
@@ -2399,7 +2413,7 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 			continue
 		}
 		entry := &drainWaitEntry{runID: id, branch: run.Branch, done: done}
-		if run.AwaitingAgentSince != nil || m.liveCIMonitor(run) {
+		if m.atAPreservedResumePoint(run) {
 			// At a preserved resume point: exempt from the wait from the start,
 			// and left for Shutdown, whose ErrDaemonShutdown cause preserves it
 			// for the next start if it is still there when the drain ends. It is
@@ -2494,7 +2508,7 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 			if err != nil || run == nil {
 				continue
 			}
-			if run.AwaitingAgentSince != nil || m.liveCIMonitor(run) {
+			if m.atAPreservedResumePoint(run) {
 				if !e.exempt {
 					e.exempt = true
 					release(id)
