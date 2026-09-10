@@ -1,6 +1,8 @@
 package lifecycle
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,6 +133,53 @@ func TestExemptFromGuard_ALiveCIMonitorIsPreserved(t *testing.T) {
 	}
 	if !strings.Contains(decision.ParkedNotice(), "will be preserved and resumed") {
 		t.Errorf("ParkedNotice() = %q, want the preservation promise", decision.ParkedNotice())
+	}
+}
+
+// TestExemptFromGuard_ACIMonitorWithUncommittedWorkIsNotPreserved is the case
+// recovery's own preconditions cannot see. A CI auto-fix turn killed mid-edit
+// leaves the row running with no pid, a PR URL, and a head still equal to
+// run.HeadSHA, so the worktree exists and matches; only the uncommitted edits
+// underneath give it away, and Executor.ciMonitorPreservable refuses on exactly
+// those. Without the guard's own cleanliness read the operator is promised a
+// resume the same stop then refuses.
+func TestExemptFromGuard_ACIMonitorWithUncommittedWorkIsNotPreserved(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	plan := lifecycletest.Plan(types.StepReview, types.StepPush, types.StepCI)
+	monitor := lifecycletest.SeedResumableCIMonitorRun(t, p, "/tmp/project", "feature", "https://github.com/o/r/pull/7", plan)
+	if err := os.WriteFile(filepath.Join(monitor.WorkDir, "half-written.go"), []byte("package broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	decision, err := Decide(p, plan, SameBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.Blocking) != 1 || len(decision.Parked) != 0 {
+		t.Fatalf("Decide(dirty ci monitor) = %d blocking / %d preserved, want 1 / 0", len(decision.Blocking), len(decision.Parked))
+	}
+	if decision.ParkedNotice() != "" {
+		t.Errorf("ParkedNotice() = %q, want empty: the stop refuses this monitor", decision.ParkedNotice())
+	}
+}
+
+// TestExemptFromGuard_AGateParkedRunWithUncommittedWorkIsStillPreserved keeps
+// the cleanliness read on the CI branch alone. A gate park is expected to hold
+// pipeline work in its worktree, and the stop preserves it regardless.
+func TestExemptFromGuard_AGateParkedRunWithUncommittedWorkIsStillPreserved(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	plan := lifecycletest.Plan(types.StepReview, types.StepTest)
+	parked := lifecycletest.SeedResumableParkedRun(t, p, "/tmp/project", "feature", plan)
+	if err := os.WriteFile(filepath.Join(parked.WorkDir, "pending.go"), []byte("package pending\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	decision, err := Decide(p, plan, SameBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.Blocking) != 0 || len(decision.Parked) != 1 {
+		t.Fatalf("Decide(dirty gate park) = %d blocking / %d preserved, want 0 / 1", len(decision.Blocking), len(decision.Parked))
 	}
 }
 

@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/kunchenguid/no-mistakes/internal/worktrees"
 )
 
 // ParkedAtGate reports whether run is parked at an awaiting_approval or
@@ -53,31 +55,50 @@ func StepPlanDrifted(run *db.Run, want []types.StepName) bool {
 	return false
 }
 
+// guardCorroboration holds the live reads a guard surface makes about a
+// candidate. A nil field is a caller with no state to corroborate against.
+type guardCorroboration struct {
+	// resumable is recovery's own precondition check: could the next start
+	// pick this run up as it stands?
+	resumable func(*db.Run) bool
+	// ciWorktreeClean answers the one preservation condition recovery does not
+	// read, and only the CI branch needs it. Executor.ciMonitorPreservable
+	// refuses a monitor whose worktree holds uncommitted work, so without this
+	// the guard promises a resume the same stop then refuses. A failed read
+	// counts as not clean, matching that refusal's own fail-closed posture.
+	ciWorktreeClean func(*db.Run) bool
+}
+
 // exemptFromGuard is the single predicate every guard surface splits on: the
 // run is at one of the two resume points a stop preserves (genuinely parked at
 // a gate, or sitting in a live CI monitor), the plan that would resume it still
 // matches the one it was started under, and recovery's own preconditions
-// corroborate that the next start could actually pick it up. resumable is nil
-// only where a caller has no state to corroborate against.
+// corroborate that the next start could actually pick it up. A stop must never
+// promise a resume the next start refuses, so a CI monitor carries the extra
+// cleanliness read the stop itself applies.
 //
 // Including the CI monitor deliberately stops stop/restart/update refusing
 // while one is live: the monitor now survives the stop instead of being cut.
-func exemptFromGuard(run *db.Run, steps []*db.StepResult, requiredStepPlan []types.StepName, resumable func(*db.Run) bool) bool {
-	if !ParkedAtGate(run, steps) && !ResumableCIMonitor(run, steps) {
+func exemptFromGuard(run *db.Run, steps []*db.StepResult, requiredStepPlan []types.StepName, corroborate guardCorroboration) bool {
+	gateParked := ParkedAtGate(run, steps)
+	if !gateParked && !ResumableCIMonitor(run, steps) {
 		return false
 	}
 	if StepPlanDrifted(run, requiredStepPlan) {
 		return false
 	}
-	return resumable == nil || resumable(run)
+	if !gateParked && corroborate.ciWorktreeClean != nil && !corroborate.ciWorktreeClean(run) {
+		return false
+	}
+	return corroborate.resumable == nil || corroborate.resumable(run)
 }
 
 // splitActiveRuns divides the active runs into the ones a stop/restart/update
 // would actually disrupt and the exempt complement that survives it and
 // resumes when the daemon starts again. Order is preserved from the input.
-func splitActiveRuns(runs []*db.Run, stepsByRun map[string][]*db.StepResult, requiredStepPlan []types.StepName, resumable func(*db.Run) bool) (blocking, parked []*db.Run) {
+func splitActiveRuns(runs []*db.Run, stepsByRun map[string][]*db.StepResult, requiredStepPlan []types.StepName, corroborate guardCorroboration) (blocking, parked []*db.Run) {
 	for _, run := range runs {
-		if run != nil && exemptFromGuard(run, stepsByRun[run.ID], requiredStepPlan, resumable) {
+		if run != nil && exemptFromGuard(run, stepsByRun[run.ID], requiredStepPlan, corroborate) {
 			parked = append(parked, run)
 			continue
 		}
@@ -152,20 +173,41 @@ func Decide(p *paths.Paths, resumeSteps []pipeline.Step, resuming ResumingBinary
 	if err != nil {
 		return GuardDecision{}, err
 	}
-	var resumable func(*db.Run) bool
+	var corroborate guardCorroboration
 	if resumeSteps != nil {
-		resumable = func(run *db.Run) bool {
+		corroborate.resumable = func(run *db.Run) bool {
 			ctx, cancel := context.WithTimeout(context.Background(), corroborationTimeout)
 			defer cancel()
 			return ResumePreconditionsMet(ctx, database, p, run, resumeSteps) == nil
 		}
+		corroborate.ciWorktreeClean = func(run *db.Run) bool {
+			ctx, cancel := context.WithTimeout(context.Background(), corroborationTimeout)
+			defer cancel()
+			return worktreeClean(ctx, p, run)
+		}
 	}
-	blocking, parked := splitActiveRuns(runs, stepsByRun, stepPlanOf(resumeSteps), resumable)
+	blocking, parked := splitActiveRuns(runs, stepsByRun, stepPlanOf(resumeSteps), corroborate)
 	return GuardDecision{
 		Blocking:   blocking,
 		Parked:     parked,
 		binarySwap: resuming == ReplacementBinary,
 	}, nil
+}
+
+// worktreeClean reports whether run's checkout holds nothing uncommitted. It
+// is the guard's copy of the cleanliness clause in
+// Executor.ciMonitorPreservable, which is where a stop decides the same
+// question; the dependency cannot be reversed, since pipeline cannot import
+// lifecycle's paths resolution and lifecycle already imports pipeline.
+//
+// A read that cannot be completed answers false, so the guard understates what
+// survives rather than promising a resume the stop then refuses.
+func worktreeClean(ctx context.Context, p *paths.Paths, run *db.Run) bool {
+	if p == nil || run == nil {
+		return false
+	}
+	dirty, err := git.HasUncommittedChanges(ctx, worktrees.RecordedDir(p, run.WorktreePath(), run.RepoID, run.ID))
+	return err == nil && !dirty
 }
 
 // stepPlanOf renders the ordered plan a run must have recorded to be resumable

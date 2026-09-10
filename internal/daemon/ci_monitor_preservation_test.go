@@ -1,10 +1,14 @@
 package daemon
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -135,6 +139,31 @@ func TestBranchContentionStepReadFailureStillRefutesARunWithNoPreservedShape(t *
 	}
 }
 
+// TestBranchContentionStepReadFailureStillSupersedesACIMonitorForALivePush is
+// the live-push half of the same fallback. Admitting a CI monitor there would
+// refuse an author's corrective push every time a step read transiently fails,
+// which is the hazard preservedGatesOnly exists to avoid.
+func TestBranchContentionStepReadFailureStillSupersedesACIMonitorForALivePush(t *testing.T) {
+	monitor := &db.Run{ID: "monitor", RepoID: "repo1", Branch: "feature", Status: types.RunRunning, PRURL: prURL()}
+	stepsOf := func(string) ([]*db.StepResult, error) { return nil, errors.New("database is locked") }
+
+	if kept := preservedBranchRuns([]*db.Run{monitor}, stepsOf, preservedGatesOnly); len(kept) != 0 {
+		t.Errorf("live push path kept %d run(s), want an unreadable ci monitor to stay supersedable", len(kept))
+	}
+}
+
+// TestBranchContentionStepReadFailureRefutesATerminalRunHoldingAPRURL keeps the
+// fallback tied to a live run: a run that already ended is no longer a monitor
+// anything could re-enter, PR URL or not.
+func TestBranchContentionStepReadFailureRefutesATerminalRunHoldingAPRURL(t *testing.T) {
+	ended := &db.Run{ID: "ended", RepoID: "repo1", Branch: "feature", Status: types.RunFailed, PRURL: prURL()}
+	stepsOf := func(string) ([]*db.StepResult, error) { return nil, errors.New("database is locked") }
+
+	if kept := preservedBranchRuns([]*db.Run{ended}, stepsOf, preservedGatesAndCIMonitors); len(kept) != 0 {
+		t.Errorf("kept %d run(s), want none: a terminal run is not a live monitor", len(kept))
+	}
+}
+
 // TestAbortOfADeferredRunReportsAFailedWrite pins that an abort the daemon
 // could not carry out is reported as one. A deferred run has no goroutine, so
 // its cancel ends the row by writing it; swallowing that write's failure would
@@ -160,11 +189,7 @@ func TestAbortOfADeferredRunReportsAFailedWrite(t *testing.T) {
 	m := NewRunManager(d, p, nil)
 	m.registerDeferredRun(run)
 
-	// A database that cannot be written is the reachable shape of the failure:
-	// the abort has nowhere to record the run's terminal state.
-	if err := d.Close(); err != nil {
-		t.Fatal(err)
-	}
+	release := blockTerminalRunWrites(t, p.DB())
 	if err := m.HandleCancel(run.ID); err == nil {
 		t.Fatal("HandleCancel() = nil, want the failed write reported to the operator")
 	}
@@ -173,7 +198,115 @@ func TestAbortOfADeferredRunReportsAFailedWrite(t *testing.T) {
 	_, stillOwned := m.cancels[run.ID]
 	m.mu.Unlock()
 	if !stillOwned {
-		t.Error("the deferred run lost its manager entry after a failed abort, leaving the row unreachable")
+		t.Fatal("the deferred run lost its manager entry after a failed abort, leaving the row unreachable")
+	}
+
+	// The write failure was transient, so the operator's second attempt has to
+	// go through. A sync.Once around the teardown would leave this run
+	// permanently un-abortable while the first assertion above still passed.
+	release()
+	if err := m.HandleCancel(run.ID); err != nil {
+		t.Fatalf("second HandleCancel() = %v, want the retry to succeed", err)
+	}
+	ended, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended.Status != types.RunCancelled {
+		t.Errorf("run status = %s, want %s", ended.Status, types.RunCancelled)
+	}
+	m.mu.Lock()
+	_, stillOwnedAfter := m.cancels[run.ID]
+	m.mu.Unlock()
+	if stillOwnedAfter {
+		t.Error("the manager still owns a run it successfully ended")
+	}
+}
+
+// blockTerminalRunWrites makes every attempt to write a run's terminal status
+// fail, and returns the function that lifts it again. A schema trigger is
+// visible to every connection, unlike a TEMP one, so the manager's own handle
+// sees it; dropping it restores an ordinary working database, which is what
+// makes the failure it models transient.
+func blockTerminalRunWrites(t *testing.T, dbPath string) func() {
+	t.Helper()
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TRIGGER block_run_status BEFORE UPDATE OF status ON runs BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	t.Cleanup(func() { raw.Close() })
+	return func() {
+		if released {
+			return
+		}
+		released = true
+		if _, err := raw.Exec(`DROP TRIGGER block_run_status`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestALivePushIsRefusedWhenADeferredRunOnItsBranchCannotBeEnded pins the other
+// consequence of a failed terminal write. A deferred run that could not be
+// ended still owns its branch, so starting a newer push alongside it would put
+// two worktrees behind one remote branch, driving push and PR from both.
+func TestALivePushIsRefusedWhenADeferredRunOnItsBranchCannotBeEnded(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "src"), "https://github.com/o/r", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "abc123", "def456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunPRURL(run.ID, "https://github.com/o/r/pull/7"); err != nil {
+		t.Fatal(err)
+	}
+	ciRow, err := d.InsertStepResult(run.ID, types.StepCI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StartStep(ciRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	live, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewRunManager(d, p, nil)
+	m.registerDeferredRun(live)
+	blockTerminalRunWrites(t, p.DB())
+
+	err = m.cancelActiveRuns(repo.ID, "feature")
+
+	if err == nil {
+		t.Fatal("cancelActiveRuns() = nil, want the newer push refused while the branch is still owned")
+	}
+	if !strings.Contains(err.Error(), "could not supersede run "+run.ID) {
+		t.Errorf("error = %v, want it to name the run that still owns the branch", err)
+	}
+	still, getErr := d.GetRun(run.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if still.Status != types.RunRunning {
+		t.Errorf("run status = %s, want %s: nothing ended it", still.Status, types.RunRunning)
 	}
 }
 
@@ -207,5 +340,38 @@ func TestInterruptedCIMonitorKeepsItsWorktreeAtStopTime(t *testing.T) {
 
 	if _, err := os.Stat(wtDir); err != nil {
 		t.Fatalf("an interrupted ci monitor lost its worktree at stop time: %v", err)
+	}
+}
+
+// TestAFailedRunStillLosesItsWorktreeAtStopTime is the other side of the same
+// sparing rule. A CI refusal on a run that never opened a PR ends as an
+// ordinary failure, and the sparing must not widen to cover it: nothing was
+// published, the checkout is clean, and leaving it behind hands the operator a
+// directory to reap for no gain.
+func TestAFailedRunStillLosesItsWorktreeAtStopTime(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	repo, headSHA := setupTestGitRepo(t, p, d, "repo1")
+	run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtDir := p.WorktreeDir(repo.ID, run.ID)
+	gitCmd(t, p.RepoDir(repo.ID), "worktree", "add", "--detach", wtDir, headSHA)
+	if _, err := d.EndActiveRunWithStatus(run.ID, types.RunFailed, "the run has no PR URL for a resumed monitor to poll"); err != nil {
+		t.Fatal(err)
+	}
+
+	NewRunManager(d, p, nil).removeRunWorktree(repo.ID, run.ID, p.RepoDir(repo.ID), wtDir, "test")
+
+	if _, err := os.Stat(wtDir); !os.IsNotExist(err) {
+		t.Fatalf("os.Stat(worktree) error = %v, want the failed run's checkout reclaimed", err)
 	}
 }

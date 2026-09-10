@@ -973,19 +973,40 @@ const ciMonitorPreserveCheckTimeout = 10 * time.Second
 // because the ordinary failure path is recoverable and a wrongly preserved
 // worktree quietly corrupts the PR.
 //
-// Failing closed never costs the worktree. Every refusal, incomplete read and
-// completed adverse fact alike, wraps ErrCIMonitorInterrupted through the one
-// wrap below, so the caller ends the run as types.RunCIMonitorInterrupted and
-// the checkout is spared for an operator rather than swept as a failed run's
-// leftovers. A dirty or unreadable checkout can hold a repair commit an earlier
-// round already made and never published, beside the interrupted turn's edits.
-// The wrap is structural so a refusal added to this function later cannot land
-// on the destructive side by omission.
+// Failing closed does not cost the worktree of a run that reached its PR.
+// Every refusal, incomplete read and completed adverse fact alike, passes
+// through the one wrap below, so a refusal added to this function later cannot
+// land on the destructive side by omission. The wrap applies
+// ErrCIMonitorInterrupted whenever the run holds a PR URL, and the caller then
+// ends it as types.RunCIMonitorInterrupted so the checkout is spared for an
+// operator rather than swept as a failed run's leftovers: a dirty or unreadable
+// checkout can hold a repair commit an earlier round already made and never
+// published, beside the interrupted turn's edits.
+//
+// A run with no PR URL has none of that. Nothing was pushed for a monitor to
+// poll and nothing downstream can be corrupted, so it ends as an ordinary
+// failure and its checkout is reclaimed, which also keeps the status honest:
+// types.RunCIMonitorInterrupted names an open PR that outlived the run.
 func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir string) error {
-	if refusal := e.ciMonitorPreservationRefusal(stepID, run, workDir); refusal != nil {
-		return fmt.Errorf("%w: %s", ErrCIMonitorInterrupted, refusal)
+	refusal := e.ciMonitorPreservationRefusal(stepID, run, workDir)
+	if refusal == nil {
+		return nil
 	}
-	return nil
+	if !e.runReachedItsPR(run.ID) {
+		return refusal
+	}
+	return fmt.Errorf("%w: %s", ErrCIMonitorInterrupted, refusal)
+}
+
+// runReachedItsPR reports whether the run has a PR URL recorded. A read that
+// fails answers yes, because sparing a worktree costs an operator a directory
+// while reclaiming one can cost an unpublished commit.
+func (e *Executor) runReachedItsPR(runID string) bool {
+	latest, err := e.db.GetRun(runID)
+	if err != nil || latest == nil {
+		return true
+	}
+	return latest.PRURL != nil && strings.TrimSpace(*latest.PRURL) != ""
 }
 
 // ciMonitorPreservationRefusal holds the facts ciMonitorPreservable checks. It
@@ -1279,11 +1300,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				}
 				slog.Warn("clean stop is not preserving this ci step; failing it instead",
 					"run_id", run.ID, "step", stepName, "reason", refusal)
-				// A refusal is not a pipeline failure: the PR is open, the
-				// worktree can hold repair work the run never published, and
-				// the run records that concrete reason instead of the
-				// cancellation cause so an operator can resolve it.
-				interruptedMonitor = true
+				// A refusal on a run that reached its PR is not a pipeline
+				// failure: the PR is open, the worktree can hold repair work
+				// the run never published, and the run records that concrete
+				// reason instead of the cancellation cause so an operator can
+				// resolve it.
+				interruptedMonitor = errors.Is(refusal, ErrCIMonitorInterrupted)
 				redactedErr = safeurl.RedactText(refusal.Error())
 			}
 			if dbErr := e.db.FailStep(sr.ID, redactedErr, durationMS); dbErr != nil {

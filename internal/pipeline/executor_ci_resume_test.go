@@ -749,7 +749,7 @@ func assertRunIsAnInterruptedMonitor(t *testing.T, database *db.DB, runID string
 // with no PR URL, so preserving inside that window would leave a row the next
 // start declines and the blanket sweep then reports as a crash.
 func TestExecutor_CleanShutdownDoesNotPreserveACIStepWithNoPRURL(t *testing.T) {
-	_, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
+	database, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
 		if dbErr := sctx.DB.UpdateRunPRURL(sctx.Run.ID, ""); dbErr != nil {
 			t.Error(dbErr)
 		}
@@ -759,6 +759,20 @@ func TestExecutor_CleanShutdownDoesNotPreserveACIStepWithNoPRURL(t *testing.T) {
 	}
 	if ciRow.Status != types.StepStatusFailed {
 		t.Errorf("ci step status = %s, want %s", ciRow.Status, types.StepStatusFailed)
+	}
+	// Nothing was pushed for a monitor to poll and the checkout is clean, so
+	// this is an ordinary failure. Labelling it an interrupted monitor would
+	// both misreport an open PR the run never had and leak the worktree, which
+	// RunManager.removeRunWorktree spares for exactly that status.
+	if errors.Is(err, ErrCIMonitorInterrupted) {
+		t.Fatalf("Execute() error = %v, want NOT an interrupted ci monitor for a run that never opened a PR", err)
+	}
+	run, getErr := database.GetRun(ciRow.RunID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if run.Status != types.RunFailed {
+		t.Errorf("run status = %s, want %s so the clean checkout is reclaimed", run.Status, types.RunFailed)
 	}
 }
 
