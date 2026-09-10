@@ -388,6 +388,53 @@ func TestEvaluateMetricsOutput_TrailingLogObjectsDoNotEvictTheReport(t *testing.
 	}
 }
 
+// The log objects in the test above carry no "functions" key, so the candidate
+// filter drops them before they ever compete for a slot. Objects that do carry
+// that key reach the bounded list, even though a string value there means none
+// of them decodes as a report, and that is what makes the eviction DIRECTION
+// load bearing:
+// dropping the newest instead of the oldest discards the report a well behaved
+// command prints last, and the gate then passes a breaching repository on a
+// clean exit. That is the defect this bound was rewritten to fix.
+func TestEvaluateMetricsOutput_ReportPrintedLastSurvivesACandidateListFullOfDecoys(t *testing.T) {
+	var out strings.Builder
+	for i := 0; i < maxMetricsReportCandidates+8; i++ {
+		out.WriteString(fmt.Sprintf(`{"level":"info","seq":%d,"functions":"counted"}`+"\n", i))
+	}
+	out.WriteString(`{"metric":"crap","functions":[{"file":"a.go","function":"Hairball","line":42,"score":55}]}` + "\n")
+
+	verdict := evaluateMetricsOutput(out.String(), 0, 30, nil, "")
+
+	if !verdict.FromJSON {
+		t.Fatal("want FromJSON true: eviction must drop the oldest candidate, not the report printed last")
+	}
+	if len(verdict.Breaches) != 1 || verdict.Breaches[0].Function != "Hairball" {
+		t.Errorf("Breaches = %+v, want the single function Hairball", verdict.Breaches)
+	}
+}
+
+// Two decodable reports in one stream is what makes the newest-first order load
+// bearing. A command that prints a cached or partial report before the real one
+// is gated on whichever the scan prefers, and preferring the older one reports a
+// clean repository while the measured breach sits further down the same output.
+func TestEvaluateMetricsOutput_TheLastOfTwoReportsIsTheOneGatedOn(t *testing.T) {
+	stdout := `{"metric":"crap","summary":"stale","functions":[{"file":"a.go","function":"Old","line":1,"score":10}]}
+{"metric":"crap","summary":"final","functions":[{"file":"a.go","function":"New","line":2,"score":55}]}
+`
+
+	verdict := evaluateMetricsOutput(stdout, 0, 30, nil, "")
+
+	if !verdict.FromJSON {
+		t.Fatal("want FromJSON true")
+	}
+	if verdict.Summary != "final" {
+		t.Errorf("Summary = %q, want the last report's summary %q", verdict.Summary, "final")
+	}
+	if len(verdict.Breaches) != 1 || verdict.Breaches[0].Function != "New" {
+		t.Errorf("Breaches = %+v, want the single function New from the last report", verdict.Breaches)
+	}
+}
+
 // A report bigger than the old fixed tail bound, with output in front of it, is
 // what the byte cut severed: the cut landed inside the report, so its opening
 // brace was gone and the gate fell back to the exit code on a breaching
