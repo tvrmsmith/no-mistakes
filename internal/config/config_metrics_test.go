@@ -177,6 +177,11 @@ func TestValidateMetricsRaw(t *testing.T) {
 		{name: "NaN threshold", raw: MetricsRaw{Threshold: float64Ptr(math.NaN())}, wantErr: "metrics.threshold must be a finite number"},
 		{name: "infinite threshold", raw: MetricsRaw{Threshold: float64Ptr(math.Inf(1))}, wantErr: "metrics.threshold must be a finite number"},
 		{name: "blank exempt path", raw: MetricsRaw{ExemptPaths: []string{"vendor/**", "   "}}, wantErr: "metrics.exempt_paths[1] must not be empty"},
+		// matchIgnorePattern answers false for a pattern path.Match rejects, so
+		// an unvalidated malformed waiver is inert and the run parks on the very
+		// file the maintainer exempted.
+		{name: "unclosed character class", raw: MetricsRaw{ExemptPaths: []string{"internal/[generated.go"}}, wantErr: "metrics.exempt_paths[0]"},
+		{name: "bare subtree pattern", raw: MetricsRaw{ExemptPaths: []string{"/**"}}, wantErr: "metrics.exempt_paths[0]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -231,6 +236,27 @@ auto_fix:
 func TestLoadRepoConfig_NegativeMetricsThresholdFailsTheLoad(t *testing.T) {
 	if _, err := LoadRepoFromBytes([]byte("metrics:\n  threshold: -1\n")); err == nil {
 		t.Fatal("LoadRepoFromBytes = nil error, want a load failure on a negative threshold")
+	}
+}
+
+// TestLoadRepoConfig_MalformedMetricsExemptGlobFailsTheLoad pins that a waiver
+// path.Match cannot compile is a config error rather than a silently inert
+// entry that lets the gate park on the exempted file.
+func TestLoadRepoConfig_MalformedMetricsExemptGlobFailsTheLoad(t *testing.T) {
+	if _, err := LoadRepoFromBytes([]byte("metrics:\n  exempt_paths:\n    - \"internal/[generated.go\"\n")); err == nil {
+		t.Fatal("LoadRepoFromBytes = nil error, want a load failure on a malformed exempt glob")
+	}
+}
+
+// TestLoadRepoConfig_ValidMetricsExemptGlobStillLoads pins that the new rule
+// did not narrow the patterns a maintainer can actually write.
+func TestLoadRepoConfig_ValidMetricsExemptGlobStillLoads(t *testing.T) {
+	cfg, err := LoadRepoFromBytes([]byte("metrics:\n  exempt_paths:\n    - \"vendor/**\"\n    - \"*_generated.go\"\n"))
+	if err != nil {
+		t.Fatalf("LoadRepoFromBytes: %v", err)
+	}
+	if !slices.Equal(cfg.Metrics.ExemptPaths, []string{"vendor/**", "*_generated.go"}) {
+		t.Errorf("Metrics.ExemptPaths = %v, want both valid globs", cfg.Metrics.ExemptPaths)
 	}
 }
 

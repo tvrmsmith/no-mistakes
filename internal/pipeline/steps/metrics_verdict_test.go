@@ -364,6 +364,30 @@ func TestEvaluateMetricsOutput_AReportNestedInABalancedWrapperStillParses(t *tes
 	}
 }
 
+// A command that prints its report and then keeps logging is what the plain
+// candidate ring evicted: the report closes first, so every trailing balanced
+// log object pushed it one slot closer to the front until it fell off entirely
+// and a breaching repository passed on exit 0.
+func TestEvaluateMetricsOutput_TrailingLogObjectsDoNotEvictTheReport(t *testing.T) {
+	var out strings.Builder
+	out.WriteString(`{"metric":"crap","functions":[{"file":"a.go","function":"Hairball","line":42,"score":55}]}` + "\n")
+	for i := 0; i < maxMetricsReportCandidates+8; i++ {
+		out.WriteString(fmt.Sprintf(`{"level":"info","seq":%d,"file":"pkg/file%d.go","msg":"measured"}`+"\n", i, i))
+	}
+
+	verdict := evaluateMetricsOutput(out.String(), 0, 30, nil, "")
+
+	if !verdict.FromJSON {
+		t.Fatal("want FromJSON true: trailing log objects must not evict the report")
+	}
+	if len(verdict.Breaches) != 1 || verdict.Breaches[0].Function != "Hairball" {
+		t.Errorf("Breaches = %+v, want the single function Hairball", verdict.Breaches)
+	}
+	if !verdict.Breached {
+		t.Error("want Breached true")
+	}
+}
+
 // A report bigger than the old fixed tail bound, with output in front of it, is
 // what the byte cut severed: the cut landed inside the report, so its opening
 // brace was gone and the gate fell back to the exit code on a breaching

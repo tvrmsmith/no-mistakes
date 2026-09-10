@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -157,6 +158,12 @@ func TestMetricsStep_CleanVerdictPasses(t *testing.T) {
 	if outcome.AutoFixable {
 		t.Error("expected no auto-fix on a clean verdict")
 	}
+	// An unparsed pass satisfies every assertion above, and it emits the
+	// metrics-output-unparseable warning. An empty findings list is what
+	// separates the two, so this test reds when the report stops parsing.
+	if outcome.Findings != "" {
+		t.Errorf("Findings = %q, want none: a measured clean verdict carries no advisory", outcome.Findings)
+	}
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("expected clean worktree after the metrics gate, got %q", status)
 	}
@@ -208,6 +215,45 @@ func TestMetricsStep_BreachParksAutoFixable(t *testing.T) {
 		if !strings.Contains(item.Description, want) {
 			t.Errorf("Description = %q, want it to contain %q", item.Description, want)
 		}
+	}
+}
+
+func TestMetricsStep_AbsoluteReportedPathIsPublishedRepositoryRelative(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+	report := fmt.Sprintf(
+		`{"metric":"crap","functions":[{"file":%q,"function":"Hairball","line":42,"score":42.5}]}`,
+		filepath.Join(dir, "a.go"),
+	)
+	ag := &mockAgent{name: "test"}
+	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, echoMetricsReport(report), 30)
+	sctx.Config.Test.Evidence.StoreInRepo = true
+
+	step := &MetricsStep{}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 {
+		t.Fatalf("len(findings.Items) = %d, want 1", len(findings.Items))
+	}
+	if got := findings.Items[0].File; got != "a.go" {
+		t.Errorf("Finding.File = %q, want a.go", got)
+	}
+	// metrics.json reaches the orphan evidence branch unredacted, so an absolute
+	// path here publishes the daemon host's worktree layout.
+	evidence := readMetricsEvidence(t, sctx)
+	if len(evidence.Breaches) != 1 {
+		t.Fatalf("len(breaches) = %d, want 1", len(evidence.Breaches))
+	}
+	if got := evidence.Breaches[0].File; got != "a.go" {
+		t.Errorf("evidence breach file = %q, want a.go", got)
 	}
 }
 
@@ -302,6 +348,7 @@ func TestMetricsStep_ExemptPathClearsTheBreach(t *testing.T) {
 	ag := &mockAgent{name: "test"}
 	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, echoMetricsReport(metricsStepFixtureReport), 30)
 	sctx.Config.Metrics.ExemptPaths = []string{"a.go"}
+	sctx.Config.Test.Evidence.StoreInRepo = true
 
 	step := &MetricsStep{}
 	outcome, err := step.Execute(sctx)
@@ -311,6 +358,22 @@ func TestMetricsStep_ExemptPathClearsTheBreach(t *testing.T) {
 	if outcome.NeedsApproval {
 		t.Error("expected an exempt breaching file to leave the gate clean")
 	}
+	// A verdict that never parsed also leaves the gate clean, so the counts are
+	// what prove the glob was consulted: the fixture reports two functions, one
+	// of them the breaching a.go the exemption waives.
+	evidence := readMetricsEvidence(t, sctx)
+	if evidence.Measured != 2 {
+		t.Errorf("measured = %d, want 2", evidence.Measured)
+	}
+	if evidence.Exempted != 1 {
+		t.Errorf("exempted = %d, want 1: the a.go glob did not waive the breach", evidence.Exempted)
+	}
+	if evidence.Breached {
+		t.Error("breached = true, want false once the only breaching file is exempt")
+	}
+	if !evidence.FromJSON {
+		t.Error("from_json = false, want true: the verdict came from the exit code, not the report")
+	}
 }
 
 func TestMetricsStep_UnparseableOutputWithANonzeroExitParks(t *testing.T) {
@@ -319,7 +382,7 @@ func TestMetricsStep_UnparseableOutputWithANonzeroExitParks(t *testing.T) {
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 	ag := &mockAgent{name: "test"}
-	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, "echo 'crap: boom' >&2; echo 'crap: boom'; exit 2", 30)
+	sctx := coveredMetricsContext(t, ag, dir, baseSHA, headSHA, "echo 'crap: boom on stderr' >&2; echo 'crap: boom on stdout'; exit 2", 30)
 
 	step := &MetricsStep{}
 	outcome, err := step.Execute(sctx)
@@ -351,6 +414,14 @@ func TestMetricsStep_UnparseableOutputWithANonzeroExitParks(t *testing.T) {
 	}
 	if !strings.Contains(item.Description, "did not parse") {
 		t.Errorf("Description = %q, want it to say the output did not parse", item.Description)
+	}
+	// Only stdout is parsed, but a diagnosis needs the other half: the reason a
+	// command failed is usually the text it wrote to stderr.
+	if !strings.Contains(findings.Summary, "boom on stderr") {
+		t.Errorf("Summary = %q, want the stderr text to survive the stream split", findings.Summary)
+	}
+	if !strings.Contains(findings.Summary, "boom on stdout") {
+		t.Errorf("Summary = %q, want the stdout text to survive the stream split", findings.Summary)
 	}
 }
 
@@ -807,6 +878,21 @@ type metricsEvidenceFile struct {
 		Line     int     `json:"line"`
 		Score    float64 `json:"score"`
 	} `json:"breaches"`
+}
+
+// readMetricsEvidence decodes the metrics.json the step published. The caller
+// must have enabled evidence storage on the context.
+func readMetricsEvidence(t *testing.T, sctx *pipeline.StepContext) metricsEvidenceFile {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(testEvidenceDir(sctx), "metrics.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got metricsEvidenceFile
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
 
 func TestMetricsStep_WritesTheVerdictToTheEvidenceDirWhenEvidenceIsEnabled(t *testing.T) {

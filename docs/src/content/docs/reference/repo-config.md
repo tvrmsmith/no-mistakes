@@ -345,7 +345,7 @@ metrics:
 
 A function breaches when its score is **strictly above** `threshold`, so the threshold is the highest score the repository accepts. The default of `30` is the conventional CRAP ceiling. Zero is legal and means every measured function scoring above zero breaches, which is a real calibration value. A negative or non-finite threshold fails the config load. Advisory behavior, where the gate reports but never blocks, is reached by setting a high threshold rather than by a separate mode.
 
-`exempt_paths` entries match the same way `ignore_patterns` and `restart.exempt_paths` do: no slash matches by basename, a trailing `/**` matches an entire subtree, and anything else is a full-path glob. A function whose file matches any entry is not judged. An entry that is empty after trimming fails the config load.
+`exempt_paths` entries match the same way `ignore_patterns` and `restart.exempt_paths` do: no slash matches by basename, a trailing `/**` matches an entire subtree, and anything else is a full-path glob. A function whose file matches any entry is not judged. An entry that is empty after trimming, or that is not a valid glob, fails the config load: a malformed pattern matches nothing, so the gate would park on the very file the waiver named.
 
 `threshold` is metric-blind. The `metric` field of the command's report is a free-form string the step only renders, so a repository that switches its command to a different metric must recalibrate its own threshold.
 

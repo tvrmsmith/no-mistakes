@@ -2,6 +2,7 @@ package steps
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -62,10 +63,12 @@ func evaluateMetricsOutput(stdout string, exitCode int, threshold float64, exemp
 		verdict.FromJSON = true
 		verdict.Metric = report.Metric
 		verdict.Summary = report.Summary
+		roots := metricsWorkDirRoots(workDir)
 		if report.Functions != nil {
 			for _, fn := range *report.Functions {
+				fn.File = metricsRelativePath(fn.File, roots)
 				verdict.Measured++
-				if metricsPathExempt(fn.File, exemptPaths, workDir) {
+				if metricsPathExempt(fn.File, exemptPaths) {
 					verdict.Exempted++
 					continue
 				}
@@ -84,10 +87,17 @@ func evaluateMetricsOutput(stdout string, exitCode int, threshold float64, exemp
 // maxMetricsReportCandidates bounds how many balanced objects the scan keeps as
 // candidates. It bounds work rather than input: the scan reads all of stdout,
 // because cutting the output to a fixed tail severs the opening brace of any
-// report bigger than the cut and loses it entirely. The report closes at or near
-// the end of a run's output, so the most recently closed objects are the ones
-// worth keeping and everything older is dropped as the scan goes.
+// report bigger than the cut and loses it entirely. Eviction drops the OLDEST
+// candidate, so only metricsFunctionsKey keeps this bound off a real report: a
+// command that prints its report and then a long trailing progress stream would
+// otherwise evict the report and pass a breaching repository on exit 0.
 const maxMetricsReportCandidates = 256
+
+// metricsFunctionsKey is the key decodeMetricsReport requires, so an object
+// whose text does not contain it can never be the report and takes a candidate
+// slot for nothing. Checking on close is what keeps a stream of log objects
+// from evicting the report.
+const metricsFunctionsKey = `"functions"`
 
 // parseMetricsReport reads the metrics report out of the command's stdout.
 //
@@ -157,6 +167,9 @@ func metricsObjectSpans(s string) []metricsObjectSpan {
 			}
 			start := opens[len(opens)-1]
 			opens = opens[:len(opens)-1]
+			if !strings.Contains(s[start:i+1], metricsFunctionsKey) {
+				continue
+			}
 			spans = append(spans, metricsObjectSpan{start: start, end: i + 1})
 			if len(spans) > maxMetricsReportCandidates {
 				spans = spans[1:]
@@ -186,30 +199,57 @@ func decodeMetricsReport(candidate []byte) (metricsReport, bool) {
 	return report, true
 }
 
-// metricsPathExempt answers whether any exempt glob covers the reported file.
-// The published contract asks for a repository-relative path, but the metrics
-// command names the file however its own analyser does and absolute paths are
-// the common default, so the path is normalised to the "/"-separated,
-// repository-relative form matchIgnorePattern expects before matching. Without
-// the workDir strip a maintainer's waiver silently misses and the run parks on
-// a file the maintainer explicitly exempted.
-func metricsPathExempt(file string, exemptPaths []string, workDir string) bool {
-	normalised := metricsRelativePath(file, workDir)
+// metricsPathExempt answers whether any exempt glob covers the reported file,
+// which arrives already in the repository-relative form matchIgnorePattern and
+// the maintainer's globs are both written against.
+func metricsPathExempt(file string, exemptPaths []string) bool {
 	for _, pattern := range exemptPaths {
-		if matchIgnorePattern(normalised, pattern) {
+		if matchIgnorePattern(file, pattern) {
 			return true
 		}
 	}
 	return false
 }
 
+// metricsWorkDirRoots renders the worktree in every "/"-separated form a
+// reported path can name it by.
+//
+// The symlink-resolved form is there because the strip is a literal prefix
+// match: a worktree reached through a symlink (macOS /var against /private/var,
+// or a symlinked NM_HOME) is named one way by the daemon and the other by an
+// analyser that resolved it, and a missed strip leaves an absolute path in the
+// findings and in published evidence. It is resolved once per report rather
+// than per function, so a report listing thousands of functions costs one
+// filesystem walk.
+func metricsWorkDirRoots(workDir string) []string {
+	root := strings.TrimSuffix(strings.ReplaceAll(workDir, `\`, "/"), "/")
+	if root == "" {
+		return nil
+	}
+	roots := []string{root}
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		if resolved = strings.TrimSuffix(strings.ReplaceAll(resolved, `\`, "/"), "/"); resolved != "" && resolved != root {
+			roots = append(roots, resolved)
+		}
+	}
+	return roots
+}
+
 // metricsRelativePath renders one reported file in the repository-relative form
-// the exempt globs are written against.
-func metricsRelativePath(file, workDir string) string {
+// every consumer reads.
+//
+// The published contract asks for a repository-relative path, but the metrics
+// command names the file however its own analyser does and absolute paths are
+// the common default. Normalising here, where the report is read, is what keeps
+// the daemon host's worktree path out of the findings the fix agent and the PR
+// body carry and out of metrics.json, which is published to the evidence branch
+// with no redaction of file contents.
+func metricsRelativePath(file string, roots []string) string {
 	normalised := strings.ReplaceAll(file, `\`, "/")
-	if root := strings.TrimSuffix(strings.ReplaceAll(workDir, `\`, "/"), "/"); root != "" {
+	for _, root := range roots {
 		if rest, ok := strings.CutPrefix(normalised, root+"/"); ok {
 			normalised = rest
+			break
 		}
 	}
 	return strings.TrimPrefix(normalised, "./")

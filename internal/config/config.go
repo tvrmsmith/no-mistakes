@@ -2525,6 +2525,11 @@ func validateRestartRaw(restart RestartRaw) error {
 // default-branch config fails to validate, so each rule added here is a way to
 // take the whole repository offline. Zero is legal: it means every function
 // scoring above zero breaches, which is a real calibration value.
+//
+// The glob rule earns that cost the same way restart.exempt_paths does.
+// matchIgnorePattern answers false for a pattern path.Match rejects, so an
+// unvalidated malformed waiver is inert: the run parks on the very file the
+// maintainer exempted and nothing says why.
 func validateMetricsRaw(metrics MetricsRaw) error {
 	if metrics.Threshold != nil {
 		threshold := *metrics.Threshold
@@ -2536,8 +2541,12 @@ func validateMetricsRaw(metrics MetricsRaw) error {
 		}
 	}
 	for i, pattern := range metrics.ExemptPaths {
-		if strings.TrimSpace(pattern) == "" {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed == "" {
 			return fmt.Errorf("metrics.exempt_paths[%d] must not be empty", i)
+		}
+		if err := validatePathInstructionGlob(trimmed); err != nil {
+			return fmt.Errorf("metrics.exempt_paths[%d] %q is not a valid glob: %w", i, pattern, err)
 		}
 	}
 	return nil
