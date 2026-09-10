@@ -45,7 +45,12 @@ func (m *MockAgent) Close() error { return nil }
 
 func GitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// A test that runs `git init` itself inherits the developer's global
+	// config, so a machine that signs every commit makes the fixture depend on
+	// a signing agent being unlocked and the commit fails when it is not.
+	// Every invocation carries the override, because the repository this runs
+	// against may have been created by any of them.
+	cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test",
@@ -57,7 +62,32 @@ func GitCmd(t *testing.T, dir string, args ...string) string {
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
+	if len(args) > 0 && args[0] == "init" {
+		// The -c flags above cover this helper's own commits. A step under
+		// test commits through internal/git, which only disables signing when
+		// the maintainer set sign_commits: false, so the repository itself
+		// carries the override too.
+		disableRepoCommitSigning(dir, args[1:])
+	}
 	return strings.TrimSpace(string(out))
+}
+
+// disableRepoCommitSigning writes the signing override into a freshly created
+// test repository's own config. initArgs are whatever followed `git init`, so a
+// trailing directory operand is honoured. The write is best effort: it is a
+// host-config workaround, not the behaviour under test.
+func disableRepoCommitSigning(dir string, initArgs []string) {
+	target := dir
+	for _, arg := range initArgs {
+		if !strings.HasPrefix(arg, "-") {
+			target = filepath.Join(dir, arg)
+		}
+	}
+	for _, key := range []string{"commit.gpgsign", "tag.gpgsign"} {
+		cmd := exec.Command("git", "config", key, "false")
+		cmd.Dir = target
+		_ = cmd.Run()
+	}
 }
 
 func GitStatusPorcelain(t *testing.T, dir string) string {
@@ -106,6 +136,11 @@ func EnsureGitRepoTemplate(t *testing.T) {
 		run("init")
 		run("config", "user.name", "test")
 		run("config", "user.email", "test@test.com")
+		// git init inherits the developer's global config, so a machine that
+		// signs every commit makes this fixture depend on a signing agent
+		// being unlocked. Every copy of the template carries this local
+		// override, so GitCmd's later commits are unsigned too.
+		run("config", "commit.gpgsign", "false")
 		run("checkout", "-b", "main")
 
 		os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base content"), 0o644)
