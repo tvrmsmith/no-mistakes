@@ -66,12 +66,12 @@ When a branch passes the gate, it means:
 
 - it was checked against fresh upstream and the pushed-branch target
 - the fixed pipeline ran in order
-- format, lint, tests, user-facing test evidence when available, docs, and review happened before the branch reached the configured push target
+- format, lint, tests, the metrics gate when configured, user-facing test evidence when available, docs, and review happened before the branch reached the configured push target
 - you had a chance to approve, fix, skip, or abort any blocking step
 
 ## What you get
 
-- A fixed, opinionated pipeline: `intent → rebase → format → lint → test → document → review → push → pr → ci`. Order is not configurable; what each step runs is.
+- A fixed, opinionated pipeline: `intent → rebase → format → lint → test → metrics → document → review → push → pr → ci`. Order is not configurable; what each step runs is.
 - Choice of agent: `claude`, `codex`, `grok`, `rovodev`, `opencode`, `pi`, `copilot`, `antigravity`, or `cursor` / `acp:<target>` via `acpx`, with per-repo override and ordered fallbacks; every gate requires a runnable configured pipeline agent.
 - A TUI to watch, approve, fix, skip, or abort any step.
 - A `/no-mistakes` agent skill so a coding agent can do a task and gate it, or gate existing committed work, backed by a non-interactive `no-mistakes axi` interface.

@@ -6,7 +6,7 @@ description: Reference for each step in the validation pipeline.
 This is the per-step reference. For the overview and rationale, see [Pipeline](/no-mistakes/concepts/pipeline/). For the fix loop, see [Auto-Fix Loop](/no-mistakes/concepts/auto-fix/).
 
 ```text
-intent → rebase → format → lint → test → document → review → push → pr → ci
+intent → rebase → format → lint → test → metrics → document → review → push → pr → ci
 ```
 
 Each step can produce findings, request approval, trigger auto-fix, or apply safe fixes during its own pass. Steps that encounter fatal errors stop the pipeline. Steps can also be pre-skipped when starting a run, skipped by the user, or skipped automatically by the pipeline.
@@ -16,7 +16,7 @@ This is a soft boundary, not OS-level sandbox enforcement.
 The steering still allows requested test evidence under the run's managed evidence directory, plus incidental temp or cache writes from normal development tools.
 Configured shell commands and one-shot agent subprocesses are scoped to their step: when the invocation exits, fails, or is cancelled, no-mistakes terminates remaining child processes it spawned so background workers do not outlive the run.
 When configured Test or Lint command output exceeds 64 KiB, the complete output remains in the authoritative step log while findings, IPC responses, and repair prompts receive a valid-UTF-8 head-and-tail projection capped at 64 KiB. The truncation marker reports the exact original and omitted byte counts and points to `no-mistakes axi logs --step <step> --full` for the complete output.
-Commits created by the shared Format, Lint, Test, Document, and Review fix path, plus CI repair commits, use the configurable [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message) template.
+Commits created by the shared Format, Lint, Test, Metrics, Document, and Review fix path, plus CI repair commits, use the configurable [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message) template.
 The shared correction commits are machine-authored records of pipeline output. Each is created with the complete local commit-hook family suppressed by combining `--no-verify` with an empty temporary `core.hooksPath` for that invocation, so `pre-commit`, `prepare-commit-msg`, `commit-msg`, and `post-commit` do not run. This lets a disposable run worktree commit a correction even when a tracked hook depends on generated untracked runtime files that do not exist there - the canonical case is `core.hooksPath=.husky` with a tracked hook that sources the absent `.husky/_/husky.sh`.
 The suppression is limited to those correction-commit invocations. It does not change the repository, Git configuration, or daemon environment; CI repair commits and all other commit paths keep normal hook behavior. Pipeline gates remain authoritative; whether a CI repair returns through the local gates before publication is controlled by [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs).
 Agent roles that can write, repair, or review tests reject tests whose only evidence is matching implementation source text, tokens, syntax, or incidental snapshots.
@@ -26,9 +26,9 @@ Review flags every newly added violation and requires same-pattern tests encount
 
 ## Validation restart
 
-Format, Lint, Test, Document, and Review share one exit path. When a round leaves the worktree unclean, that step commits the leftovers itself, and the commit is attributed to whoever produced it.
+Format, Lint, Test, Metrics, Document, and Review share one exit path. When a round leaves the worktree unclean, that step commits the leftovers itself, and the commit is attributed to whoever produced it.
 
-A commit made in a round that invoked an agent is agent-authored: nothing has judged it, so the run re-enters validation from Format, and the run's review approval is revoked in the same write that records the new head. Format, Lint, Test, Document, and Review then run again against that head. A commit a deterministic tool produced, such as a formatter rewriting whitespace, carries nothing new to judge and restarts nothing.
+A commit made in a round that invoked an agent is agent-authored: nothing has judged it, so the run re-enters validation from Format, and the run's review approval is revoked in the same write that records the new head. Format, Lint, Test, Metrics, Document, and Review then run again against that head. A commit a deterministic tool produced, such as a formatter rewriting whitespace, carries nothing new to judge and restarts nothing.
 
 A re-entry is not a fix round. The re-entered step receives the previous round's findings as context, and per-step auto-fix budgets do not refill across a restart, so a step cannot buy more attempts by restarting.
 
@@ -45,7 +45,7 @@ A run that skipped Format never rewinds into it, because that would re-mark Form
 
 When a human resolves a findings gate with Approve, Skip, or Abort without selecting a fix, no-mistakes records that the round's findings were declined. A gate with no findings records no decision. When the human selects only some findings to fix, the unselected complement is recorded as declined; findings merely left out by automatic filtering remain undecided.
 
-Lint, Test, Document, and Review agent prompts receive a sanitized history containing the current step's earlier rounds, decisions from other steps in the same run, and a bounded window of decisions from earlier runs on the same branch. A recorded decision takes precedence over conflicting user-intent wording, and later decisions about the same concern supersede earlier ones. Completing Review does not clear branch decisions.
+Format, Lint, Test, Metrics, Document, and Review agent prompts receive a sanitized history containing the current step's earlier rounds, decisions from other steps in the same run, and a bounded window of decisions from earlier runs on the same branch. A recorded decision takes precedence over conflicting user-intent wording, and later decisions about the same concern supersede earlier ones. Completing Review does not clear branch decisions. Metrics reaches an agent only in a fix round, so that fix prompt is the only Metrics prompt the history reaches.
 
 This context is advisory and fails open. It tells agents not to implement or re-report a declined finding unless the current code introduces a materially different problem, but it does not block a step or commit and is not a reversion detector. Rebase and CI fix prompts do not receive this decision history.
 
@@ -160,6 +160,50 @@ A repository that configures neither `test.units` nor `commands.test` therefore 
 
 **Default auto-fix limit:** `3`.
 
+## Metrics
+
+Runs the repository's metrics command against the coverage the Test step produced and gates the branch on a complexity-versus-coverage breach. The conventional metric is CRAP, which joins a function's cyclomatic complexity to how much of it the tests executed.
+[`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) and the [`metrics`](/no-mistakes/reference/repo-config/#metrics) block own the configuration contract.
+
+**Behavior:**
+
+- If `commands.metrics` is empty: the step logs that no metrics command is configured and skips. No agent runs. There is deliberately no agent fallback, unlike Lint and Document: a CRAP score needs measured complexity joined to measured coverage, and an agent producing those numbers by inspection is producing fiction.
+- If `commands.metrics` is set but the Test step produced no coverage: the step parks for a maintainer instead of passing. Three paths reach that state, the Test step's agent-evidence path (which runs no unit command and so writes no coverage profile), `--skip test`, and `skip_steps: [test]`. Running a metrics command against an empty directory yields an empty report that parses clean and passes, which is a vacuous green. An agent fix round cannot fix "the Test step produced no coverage", so the decision is the maintainer's.
+- Otherwise the step runs the command via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows) with [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_CHANGED_FILES`](/no-mistakes/reference/environment/#no_mistakes_changed_files), [`NO_MISTAKES_CHANGED_FILE_COUNT`](/no-mistakes/reference/environment/#no_mistakes_changed_file_count), and [`NO_MISTAKES_COVERAGE_ROOT`](/no-mistakes/reference/environment/#no_mistakes_coverage_root), the read-only directory holding every test unit's coverage subdirectory.
+- The metrics command itself is out of scope for no-mistakes. This step is generic: it runs a command, reads a verdict, and gates. The command that computes CRAP for a repository is built and distributed separately.
+
+**Output contract:** the command writes a JSON report to stdout.
+
+```json
+{
+  "metric": "crap",
+  "functions": [
+    {"file": "internal/pipeline/executor.go", "function": "executeStep", "line": 42, "score": 42.5, "complexity": 7, "coverage": 0.0}
+  ],
+  "summary": "3 functions above the threshold"
+}
+```
+
+`complexity`, `coverage`, and `summary` are optional. `file` is expected repository-relative, although an absolute path inside the worktree is tolerated and reduced to that form as the report is read, so the exempt globs, the findings, and the published `metrics.json` all carry the repository-relative path and no evidence names the daemon host's worktree. `coverage` is a fraction in `[0,1]`, rendered as a percentage in the findings; a value outside that range is reported unscaled instead. The report is read from **stdout alone**: the two streams are captured separately, so anything the command writes to stderr reaches the log and the failure output but can never interleave into a long report. The step tries the whole trimmed stdout first; failing that, one pass matches braces across all of stdout and records every balanced JSON object at every nesting depth, then tries them newest first. A command that logs progress before a pretty-printed report therefore still reads as JSON however many functions the report lists, however large the report is, and even when the report arrives nested inside a wrapper object. A candidate counts as a report only when it carries a `functions` key, which is also what keeps a long stream of JSON log lines after the report from crowding it out.
+
+**Verdict:**
+
+- A function breaches when its score is **strictly above** [`metrics.threshold`](/no-mistakes/reference/repo-config/#metrics), so the threshold is the highest score the repository accepts. The default is `30`, the conventional CRAP ceiling.
+- A function whose file matches a [`metrics.exempt_paths`](/no-mistakes/reference/repo-config/#metrics) glob is not judged.
+- A nonzero exit blocks either way. When the output did not parse there is nothing else to gate on, and the finding says so, because a fallback verdict is a weaker gate than a report. When the output did parse, a nonzero exit still blocks, because a command that emitted a partial report and then crashed is otherwise indistinguishable from a clean repository. The other half of the contract is short: a command that emits a valid report exits `0`.
+- Policy lives in the step, not the command. The command measures and the step applies the trusted threshold and exemptions, so a contributor cannot reach the numbers that decide their own breach.
+- A command that cannot be launched at all fails the run, the same as Lint.
+
+**Approval:** a breach parks with `error` findings, one per breaching function, naming the file, the line, the score, the threshold, and the reported complexity and coverage. The list is sorted by score and capped at the 20 worst functions, with one trailing item counting the rest, because a repository adopting the gate can breach on hundreds of functions at once and a list that long is unreadable in the gate prompt and the PR body alike. Each carries its own finding ID, derived from the file and the function rather than from its position in the list, so `--findings` selects one function rather than all of them and keeps selecting the same function as scores move between rounds. The findings are `auto-fix`-eligible. A park that names **no** breaching function is not: when the command could not run, its output did not parse, or its report was clean and it still exited nonzero, the gate parks for the maintainer with an `ask-user` finding, because an agent cannot repair a command that did not measure anything and the fix prompt would be asserting a breach nobody found. That is the same split the step already draws for absent coverage. Advisory behavior is reached by setting a high threshold, not by a separate mode. A pass does not park, but it still carries a non-blocking `warning` finding when the output did not parse, since nothing was measured and the exit code alone produced that green, and another when `NO_MISTAKES_CHANGED_FILES` could not carry the whole changed-file list.
+
+**Auto-fix:** a fix round is the only agent turn this step ever takes; there is no non-fix Metrics agent pass. The fix agent receives the breaching functions plus any per-finding user notes, any selected user-authored findings, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step, then the command re-runs. The prompt requires the agent to state in its summary whether it added tests or reduced complexity, because coverage enters the CRAP formula cubed and adding tests to a hairball is the cheap remedy the formula over-rewards.
+
+**Evidence:** when [`test.evidence.store_in_repo`](/no-mistakes/reference/global-config/#testevidence) is enabled, the step writes the verdict to the run's evidence directory as `metrics.json` before it gates, so a parked breach still leaves its verdict on disk. Raw coverage is never published. Two limits are worth knowing. Publication happens in the PR step, so a run that parks and is abandoned never publishes and a repository skipping `pr` never publishes at all. And the published path is keyed on the branch, not the run, so a second run on one branch overwrites the first; reading the trend across runs means reading the evidence branch's commit history.
+
+Like every validation step, Metrics commits a dirty worktree at its own exit through the shared path, and an agent-authored commit there sends the run back through [validation restart](#validation-restart) from Format.
+
+**Default auto-fix limit:** `3`.
+
 ## Document
 
 Updates matching documentation for code changes and reports only unresolved gaps.
@@ -181,7 +225,7 @@ Updates matching documentation for code changes and reports only unresolved gaps
 
 ## Review
 
-AI code review of your diff. Review runs last in the validation region: Format, Lint, Test, and Document have already run, so review reads the tree that will actually ship.
+AI code review of your diff. Review runs last in the validation region: Format, Lint, Test, Metrics, and Document have already run, so review reads the tree that will actually ship.
 
 **Behavior:**
 
@@ -249,7 +293,7 @@ A remote branch can move without being rejected when all remote commits are alre
 Any other out-of-band commit stops the push instead of being overwritten.
 Pre-skipping or later skipping Review leaves no approval binding, so Push fails closed unless Push is also skipped.
 
-This step never requires approval - it runs automatically after format, lint, test, document, and review pass.
+This step never requires approval - it runs automatically after format, lint, test, metrics, document, and review pass.
 
 ## PR
 
@@ -342,7 +386,7 @@ Monitors PR health after creation and auto-fixes CI failures. Mergeability polli
 - When a provider-attributed failure is the only remaining issue, pauses for user approval without spending an auto-fix attempt if no rerun is going to replace it. This includes a check cancelled again after its rerun and a detected GitHub setup failure that persists after its budget. On the default budget of `0`, once the budget is spent, or on a provider with no rerun API, a cancelled or stopped check itself reaches that gate. These outcomes are terminal and will not resolve on their own, there is nothing for the fix agent to repair, and the PR must not look green either
 - Keeps waiting, rather than pausing, while any check can still finish on its own, so a cancellation observed alongside a running check is decided only once the rollup has stopped moving
 - Never re-runs checks across a head change: if the published branch head no longer equals the commit the run delivered, the step clears any ready-to-merge signal and pauses for user approval with the expected and observed commits, because re-running checks would certify a revision this run never produced
-- On CI failure: fetches failed job logs (GitHub via `gh run view --log-failed`, GitLab via `glab ci trace`, Forgejo via the exact native check target plus `forgejo-axi run view --log-failed` when runtime routes are available, Bitbucket Cloud via failed pipeline step logs; Azure DevOps has no first-class build-log command, so the agent fixes from the failing-check list without logs), sends them to the agent with user intent when available, and, if the agent produces changes, commits them with [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message). The fixer is told to fix a genuine code, test, or build failure and to fix that instance narrowly, preferring a deeper root cause and simplification over machinery for the symptoms; it may conclude that no code change is warranted when the red check is not caused by the PR's code (a stale run, an infrastructure or attestation check such as `PR must be raised via no-mistakes` that fails only because a later pipeline push moved the head, or any failure external to the code). What happens next follows one rule on every CI-fix path: a repair is published without revalidating only when its continuity with the reviewed, published head can be proven, meaning the repaired head is the run's review-approved commit or a descendant of it. A provable repair is published immediately through the Push step's own guarded force-push path and the monitor keeps watching the same run; on GitHub, an existing pipeline attestation is rebound to that new head, and failure to settle that rewrite after retries reports the repair as unsettled instead of success. Hosts without a PR-body reader skip the rebind without failing the published repair. Anything else is held locally, the run's review approval is revoked, and validation restarts from Review so Push republishes it only after Review approves it. [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs) sets the intent identically on every path: `false` (default) publishes when it is provable, `true` revalidates outright. A merge-conflict repair rebases, so its continuity is never provable and it always revalidates. Forgejo status gating remains active when logs are unsupported or unavailable
+- On CI failure: fetches failed job logs (GitHub via `gh run view --log-failed`, GitLab via `glab ci trace`, Forgejo via the exact native check target plus `forgejo-axi run view --log-failed` when runtime routes are available, Bitbucket Cloud via failed pipeline step logs; Azure DevOps has no first-class build-log command, so the agent fixes from the failing-check list without logs), sends them to the agent with user intent when available, and, if the agent produces changes, commits them with [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message). The fixer is told to fix a genuine code, test, or build failure and to fix that instance narrowly, preferring a deeper root cause and simplification over machinery for the symptoms; it may conclude that no code change is warranted when the red check is not caused by the PR's code (a stale run, an infrastructure or attestation check such as `PR must be raised via no-mistakes` that fails only because a later pipeline push moved the head, or any failure external to the code). What happens next follows one rule on every CI-fix path: a repair is published without revalidating only when its continuity with the reviewed, published head can be proven, meaning the repaired head is the run's review-approved commit or a descendant of it. A provable repair is published immediately through the Push step's own guarded force-push path and the monitor keeps watching the same run; on GitHub, an existing pipeline attestation is rebound to that new head, and failure to settle that rewrite after retries reports the repair as unsettled instead of success. Hosts without a PR-body reader skip the rebind without failing the published repair. Anything else is held locally, the run's review approval is revoked, and validation restarts from Format so Push republishes it only after Review approves it. [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs) sets the intent identically on every path: `false` (default) publishes when it is provable, `true` revalidates outright. A merge-conflict repair rebases, so its continuity is never provable and it always revalidates. Forgejo status gating remains active when logs are unsupported or unavailable
 - On GitHub, includes unresolved review-thread comments from supported review bots (currently Greptile) in CI repair prompts when an auto-fix attempt starts; the comments are framed as untrusted external data and the rendered section is capped at 32 KiB
 - States the configured repair policy in the step log before the first poll, so a run's log says which of the two paths a repair would take without cross-referencing the config in force at the time
 - Settles the local gate mirror before atomically recording the published head and push binding, so a publication that stalls part way records nothing: the run stays on its pre-repair head and the next fix attempt re-enters the same path, finds the remote already at that commit, and completes it

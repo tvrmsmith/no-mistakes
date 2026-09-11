@@ -20,7 +20,25 @@ func TestMain(m *testing.M) {
 	// via GIT_CONFIG_COUNT/KEY_n/VALUE_n; tests that need it re-set it with
 	// t.Setenv (issue #362).
 	os.Unsetenv("GIT_CONFIG_COUNT")
-	os.Exit(m.Run())
+
+	// The fixtures here init repositories and commit into them, so an ambient
+	// ~/.gitconfig decides whether a fixture commit succeeds. commit.gpgsign
+	// against a locked signing agent is the one that costs most: the agent
+	// never answers, so setupTestRepo's initial commit blocks until the whole
+	// package hits its timeout and the failure reads as a hang rather than a
+	// signing error. internal/eval/main_test.go isolates the same way.
+	dir, err := os.MkdirTemp("", "nm-gate-test-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create gate test environment: %v\n", err)
+		os.Exit(1)
+	}
+	os.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(dir, "gitconfig"))
+	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	code := m.Run()
+
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 func TestProvisionGateDoesNotStampUnsupportedHookIsolation(t *testing.T) {

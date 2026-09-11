@@ -293,7 +293,7 @@ When set to a disabling value, telemetry stays off even if a runtime or embedded
 
 ## `NO_MISTAKES_BASE_SHA`
 
-Set by no-mistakes, not read from it. Every unit test command receives this as the base commit the run is validating against, so the command can scope itself the same way discovery did. That covers a [`test.units`](/no-mistakes/reference/repo-config/#testunits) command and a [`commands.test`](/no-mistakes/reference/repo-config/#commandstest) command alike, since discovery treats the latter as one implicit `repository` unit.
+Set by no-mistakes, not read from it. Every unit test command receives this as the base commit the run is validating against, so the command can scope itself the same way discovery did. That covers a [`test.units`](/no-mistakes/reference/repo-config/#testunits) command and a [`commands.test`](/no-mistakes/reference/repo-config/#commandstest) command alike, since discovery treats the latter as one implicit `repository` unit. A [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receives it too.
 
 |         |          |
 | ------- | -------- |
@@ -302,7 +302,7 @@ Set by no-mistakes, not read from it. Every unit test command receives this as t
 
 ## `NO_MISTAKES_CHANGED_FILES`
 
-Set by no-mistakes, not read from it. Every unit test command receives this as the run's changed paths, one per line.
+Set by no-mistakes, not read from it. Every unit test command and the [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receive this as the run's changed paths, one per line.
 
 Paths are newline-separated, because an environment variable cannot carry a NUL. A path containing a newline or a carriage return is therefore omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. Compare the line count with `NO_MISTAKES_CHANGED_FILE_COUNT` to detect either case.
 
@@ -313,7 +313,7 @@ Paths are newline-separated, because an environment variable cannot carry a NUL.
 
 ## `NO_MISTAKES_CHANGED_FILE_COUNT`
 
-Set by no-mistakes, not read from it. Every unit test command receives this as the number of paths the run changed. It is the true total even when `NO_MISTAKES_CHANGED_FILES` could not carry them all.
+Set by no-mistakes, not read from it. Every unit test command and the [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receive this as the number of paths the run changed. It is the true total even when `NO_MISTAKES_CHANGED_FILES` could not carry them all.
 
 |         |          |
 | ------- | -------- |
@@ -338,6 +338,19 @@ A coverage profile names files however its runner does. The step resolves both s
 | ------- | -------- |
 | Type    | `string` (absolute path) |
 | Default | (n/a; always set for a unit test command) |
+
+## `NO_MISTAKES_COVERAGE_ROOT`
+
+Set by no-mistakes, not read from it. The [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receives this as the run's coverage root, the directory holding one subdirectory per test unit. It is a read source. The metrics command reads the profiles the Test step's unit commands wrote there and must not write into it.
+
+It is deliberately a different name from `NO_MISTAKES_COVERAGE_DIR`, which is the Test step's per-unit write target and is emptied immediately before each unit's command runs. One repository shell function reading one name must not get a different directory depending on which step called it, and a metrics command pointed at a wiped per-unit directory would report an empty repository as clean. The Metrics step does not set `NO_MISTAKES_COVERAGE_DIR` at all, and the Test step does not set `NO_MISTAKES_COVERAGE_ROOT`.
+
+Like the per-unit directories inside it, the root lives outside the worktree and is deleted when the run ends, so no coverage artifact enters the branch under validation or its pull request diff.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` (absolute path) |
+| Default | (n/a; always set for a metrics command) |
 
 ## Environment the daemon sees
 

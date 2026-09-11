@@ -74,7 +74,7 @@ Classification also follows the remedy, not only the topic: when the smallest ho
 In the TUI, yolo mode is an explicit override that auto-resolves paused steps by treating `auto-fix` and `ask-user` findings as consent to run one fix round.
 Steps with only `no-op` findings are approved as-is.
 
-The `review`, `test`, and configured-command `lint` steps use this shared model directly. The `document` step also uses the same `action` field, but unresolved documentation findings pause for approval because the initial document pass already attempted the documentation updates it could make safely.
+The `review`, `test`, and configured-command `lint` steps use this shared model directly. The `metrics` step does too, and it decides the action itself from what the command measured: a named breaching function is `auto-fix`, while a gate nothing measured is `ask-user` (the [Metrics step reference](/no-mistakes/reference/pipeline-steps/#metrics) owns that split). The `document` step also uses the same `action` field, but unresolved documentation findings pause for approval because the initial document pass already attempted the documentation updates it could make safely.
 When `commands.lint` is empty, the lint step's own agent pass works the same way: its unresolved findings describe issues left after safe fixes, so blocking findings pause for approval instead of remaining eligible for another automatic fix loop.
 
 Documentation findings use the same approval UI, but the `document` step treats any finding as an unresolved documentation gap or judgment call that should pause for approval.
@@ -96,7 +96,7 @@ Yolo and AXI `--yes` approve that fix review automatically after their one fix r
 
 ## Fix commits
 
-When the Format, Review, Test, Document, Lint, or CI step commits auto-fix changes, its subject comes from `commit.fix_message`.
+When the Format, Review, Test, Metrics, Document, Lint, or CI step commits auto-fix changes, its subject comes from `commit.fix_message`.
 The [global config reference](/no-mistakes/reference/global-config/#commitfix_message) owns the template syntax, default, validation rules, size limits, and supported placeholders; the [repo config reference](/no-mistakes/reference/repo-config/#commitfix_message) owns the repository override and trust behavior.
 The pipeline validates the template, agent summary, predicted output size, and final rendered subject before `git add -A`, so a rejected value does not leave changes staged.
 

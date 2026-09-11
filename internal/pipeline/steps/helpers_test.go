@@ -44,7 +44,12 @@ func (m *mockAgent) Close() error { return nil }
 
 func gitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// A test that runs `git init` itself inherits the developer's global
+	// config, so a machine that signs every commit makes the fixture depend on
+	// a signing agent being unlocked and the commit fails when it is not. The
+	// cached template carries the same override in its local config; this one
+	// covers every repository a test creates directly.
+	cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test",
@@ -56,7 +61,32 @@ func gitCmd(t *testing.T, dir string, args ...string) string {
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
+	if len(args) > 0 && args[0] == "init" {
+		// The -c flags above cover this helper's own commits. A step under
+		// test commits through internal/git, which only disables signing when
+		// the maintainer set sign_commits: false, so the repository itself
+		// carries the override too.
+		disableRepoCommitSigning(dir, args[1:])
+	}
 	return strings.TrimSpace(string(out))
+}
+
+// disableRepoCommitSigning writes the signing override into a freshly created
+// test repository's own config. initArgs are whatever followed `git init`, so a
+// trailing directory operand is honoured. The write is best effort: it is a
+// host-config workaround, not the behaviour under test.
+func disableRepoCommitSigning(dir string, initArgs []string) {
+	target := dir
+	for _, arg := range initArgs {
+		if !strings.HasPrefix(arg, "-") {
+			target = filepath.Join(dir, arg)
+		}
+	}
+	for _, key := range []string{"commit.gpgsign", "tag.gpgsign"} {
+		cmd := exec.Command("git", "config", key, "false")
+		cmd.Dir = target
+		_ = cmd.Run()
+	}
 }
 
 func gitStatusPorcelain(t *testing.T, dir string) string {

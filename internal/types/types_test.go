@@ -22,11 +22,11 @@ func TestRunStatusTerminal(t *testing.T) {
 
 func TestAllStepsOrder(t *testing.T) {
 	steps := AllSteps()
-	if len(steps) != 10 {
-		t.Fatalf("expected 10 steps, got %d", len(steps))
+	if len(steps) != 11 {
+		t.Fatalf("expected 11 steps, got %d", len(steps))
 	}
 
-	expected := []StepName{StepIntent, StepRebase, StepFormat, StepLint, StepTest, StepDocument, StepReview, StepPush, StepPR, StepCI}
+	expected := []StepName{StepIntent, StepRebase, StepFormat, StepLint, StepTest, StepMetrics, StepDocument, StepReview, StepPush, StepPR, StepCI}
 	for i, s := range steps {
 		if s != expected[i] {
 			t.Errorf("step[%d] = %q, want %q", i, s, expected[i])
@@ -44,11 +44,12 @@ func TestStepNameOrder(t *testing.T) {
 		{StepFormat, 3},
 		{StepLint, 4},
 		{StepTest, 5},
-		{StepDocument, 6},
-		{StepReview, 7},
-		{StepPush, 8},
-		{StepPR, 9},
-		{StepCI, 10},
+		{StepMetrics, 6},
+		{StepDocument, 7},
+		{StepReview, 8},
+		{StepPush, 9},
+		{StepPR, 10},
+		{StepCI, 11},
 		{StepName("unknown"), 0},
 	}
 
@@ -60,7 +61,7 @@ func TestStepNameOrder(t *testing.T) {
 }
 
 // TestStepNameOrderAgreesWithAllSteps catches a duplicate entry in allSteps and
-// a future re-divergence of AllSteps and Order. The absolute 1..10 values stay
+// a future re-divergence of AllSteps and Order. The absolute 1..11 values stay
 // pinned by TestStepNameOrder.
 func TestStepNameOrderAgreesWithAllSteps(t *testing.T) {
 	for i, step := range AllSteps() {
@@ -80,7 +81,7 @@ func TestStepNameOrderAgreesWithAllSteps(t *testing.T) {
 // exists for: every cheap gate has run by the time Review judges the tree, and
 // nothing between Review and Push can change what Review certified.
 func TestReviewIsTheLastStepOfTheValidationRegion(t *testing.T) {
-	for _, step := range []StepName{StepFormat, StepLint, StepTest, StepDocument} {
+	for _, step := range []StepName{StepFormat, StepLint, StepTest, StepMetrics, StepDocument} {
 		if step.Order() >= StepReview.Order() {
 			t.Errorf("%q.Order() = %d, want less than %q at %d", step, step.Order(), StepReview, StepReview.Order())
 		}
