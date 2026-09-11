@@ -668,6 +668,8 @@ func TestDaemonStopCIMonitorInterruptionExitsZero(t *testing.T) {
 			Drained:  true,
 			Finished: []string{"run-1"},
 			Interrupted: []ipc.DrainInterruptedRun{
+				// This daemon no longer produces DrainInterruptedCIMonitor; this
+				// exercises the CLI rendering an older daemon's report.
 				{RunID: "run-2", Branch: "feature-x", Reason: ipc.DrainInterruptedCIMonitor},
 			},
 		}, nil
@@ -789,6 +791,8 @@ func TestDaemonStopDrainReportsOutcomeEvenWhenTheStopErrors(t *testing.T) {
 		return daemon.StopOutcome{
 			Drained: true,
 			Interrupted: []ipc.DrainInterruptedRun{
+				// This daemon no longer produces DrainInterruptedCIMonitor; this
+				// exercises the CLI rendering an older daemon's report.
 				{RunID: "run-7", Branch: "feature-w", Reason: ipc.DrainInterruptedCIMonitor},
 			},
 		}, fmt.Errorf("wait for exit: daemon still running")

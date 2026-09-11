@@ -561,6 +561,9 @@ func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
 	for _, run := range outcome.Interrupted {
 		switch run.Reason {
 		case ipc.DrainInterruptedCIMonitor:
+			// This daemon no longer produces this reason (a drain preserves a
+			// resumable CI monitor instead of cutting it); this arm renders the
+			// report of an older daemon binary that still does.
 			fmt.Fprintf(w, "  %s %s (%s): CI monitor cut by drain, PR remains open and CI is still running\n", sDim.Render("-"), run.RunID, run.Branch)
 		case ipc.DrainInterruptedDeadline:
 			fmt.Fprintf(w, "  %s %s (%s): forcibly stopped at the drain deadline\n", sDim.Render("-"), run.RunID, run.Branch)

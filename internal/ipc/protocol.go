@@ -243,7 +243,13 @@ type HealthParams struct{}
 // on its own the instant the drain finishes gets respawned into the window
 // before the supervisor's own stop lands, and that fresh daemon happily starts
 // new runs. DrainOnly leaves the refuse-new-runs latch set and the process
-// alive for the supervisor to stop. It is ignored unless Drain is set.
+// alive for the supervisor to stop.
+//
+// DrainOnly and DrainTimeoutMS modify a drain, so both require Drain. The
+// field layout keeps them independent for wire compatibility, which makes the
+// inverted combination representable, and the daemon rejects it rather than
+// guessing: {Drain: false, DrainOnly: true} read as an immediate shutdown
+// would kill the daemon the caller asked to keep alive.
 type ShutdownParams struct {
 	Drain          bool  `json:"drain,omitempty"`
 	DrainTimeoutMS int64 `json:"drain_timeout_ms,omitempty"`
@@ -366,6 +372,11 @@ type ShutdownResult struct {
 type DrainInterruptedReason string
 
 const (
+	// DrainInterruptedCIMonitor is no longer produced by this daemon: a drain
+	// now preserves a resumable CI monitor rather than cutting it (see
+	// lifecycle.ResumableCIMonitor). The value stays in the protocol because
+	// ProtocolVersion is still 1, so a current CLI can still connect to an
+	// older daemon binary that does report it.
 	DrainInterruptedCIMonitor DrainInterruptedReason = "ci_monitor"
 	DrainInterruptedDeadline  DrainInterruptedReason = "deadline"
 	// DrainInterruptedShutdown is a drain the daemon's own shutdown ended

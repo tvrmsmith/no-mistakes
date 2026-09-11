@@ -23,6 +23,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -229,21 +230,29 @@ var loginShellGuard sync.Once
 // (TestForkRouting and siblings) reporting an empty PR URL, hours away from
 // the environment leak that caused it, so the check reports the leak directly.
 //
-// A probe that cannot run is not a failure: shellenv itself degrades to
-// os.Environ() in exactly those cases, and that fallback keeps the exported
-// PATH with BinDir already first.
+// The probe runs for whatever login shell shellenv would resolve, not for an
+// allowlist of shells: shellenv probes any login shell and only drops -i for
+// one that is neither bash nor zsh, so fish and nushell adopt a PATH that never
+// read the seed files and are exactly the machines this guard has to cover.
+// The only skips left are the cases where shellenv itself falls back to
+// os.Environ(), which keeps the exported PATH with BinDir already first: a
+// probe that errors, one that prints no PATH, and Windows.
 func (h *Harness) assertStubsWinTheLoginShellPath() {
 	loginShellGuard.Do(func() {
-		shell := os.Getenv("SHELL")
-		if base := filepath.Base(shell); base != "zsh" && base != "bash" {
-			h.t.Logf("login-shell PATH guard skipped: $SHELL=%q is neither zsh nor bash", shell)
+		if runtime.GOOS == "windows" {
+			h.t.Logf("login-shell PATH guard skipped: shellenv uses the process environment on Windows")
 			return
+		}
+		shell := shellenv.LoginShell()
+		args := []string{"-l", "-c", "env -0"}
+		if shellenv.SupportsInteractive(shell) {
+			args = []string{"-l", "-i", "-c", "env -0"}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		// Same invocation shellenv uses, so the guard reads the PATH the daemon
-		// will actually resolve rather than an approximation of it.
-		out, err := exec.CommandContext(ctx, shell, "-l", "-i", "-c", "env -0").Output()
+		// Same shell and same arguments shellenv uses, so the guard reads the
+		// PATH the daemon will actually resolve rather than an approximation.
+		out, err := exec.CommandContext(ctx, shell, args...).Output()
 		if err != nil {
 			h.t.Logf("login-shell PATH guard skipped: probing %s failed: %v", shell, err)
 			return

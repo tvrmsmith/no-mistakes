@@ -949,7 +949,7 @@ func (d *DB) RecoverStaleRuns(errMsg string) (int, error) {
 // can be reconstructed safely.
 func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}) (int, error) {
 	placeholders, args := recoveryExclusionClause(preserved)
-	return d.failActiveRuns(errMsg, placeholders, args, recoverInterruptedCIMonitors)
+	return d.failActiveRuns(errMsg, "", placeholders, args, recoverInterruptedCIMonitors)
 }
 
 // Whether failActiveRuns first lifts a run interrupted mid-CI-monitor out of the
@@ -971,16 +971,29 @@ const (
 // types.TerminalStatusForReason, so an aborted or superseded run records
 // cancelled. Returns whether a row was actually ended.
 func (d *DB) FailActiveRunWithReason(id, errMsg string) (bool, error) {
-	count, err := d.failActiveRuns(errMsg, " AND id = ?", []any{id}, keepInterruptedCIMonitors)
+	count, err := d.failActiveRuns(errMsg, "", " AND id = ?", []any{id}, keepInterruptedCIMonitors)
+	return count > 0, err
+}
+
+// EndActiveRunWithStatus ends one pending/running run and its in-progress
+// steps with a concrete reason and a caller-chosen terminal status. It exists
+// for the caller that already knows what shape the run was in (for example, a
+// preserved CI monitor recovery declined) and must not have that shape
+// re-derived from the wording of its error message, the way
+// FailActiveRunWithReason infers cancelled/failed from the reason text.
+// Returns whether a row was actually ended.
+func (d *DB) EndActiveRunWithStatus(id string, status types.RunStatus, errMsg string) (bool, error) {
+	count, err := d.failActiveRuns(errMsg, status, " AND id = ?", []any{id}, keepInterruptedCIMonitors)
 	return count > 0, err
 }
 
 // failActiveRuns ends every pending/running run matching scope (an extra SQL
 // predicate on runs.id plus its arguments) together with that run's in-progress
-// steps, in one transaction. The run's terminal status comes from
+// steps, in one transaction. status pins the terminal status the caller already
+// knows; an empty status instead derives it from errMsg via
 // types.TerminalStatusForReason, the same owner the executor's own failure path
 // reads, so the two cannot disagree about what a cancellation records.
-func (d *DB) failActiveRuns(errMsg, scope string, args []any, recoverCIMonitors bool) (int, error) {
+func (d *DB) failActiveRuns(errMsg string, status types.RunStatus, scope string, args []any, recoverCIMonitors bool) (int, error) {
 	ts := now()
 
 	tx, err := d.sql.Begin()
@@ -1081,7 +1094,10 @@ func (d *DB) failActiveRuns(errMsg, scope string, args []any, recoverCIMonitors 
 	// failed) run is never reported as still parked awaiting the agent,
 	// accumulating the marker's elapsed time into the run's parked total so
 	// the parked evidence survives the crash.
-	runArgs := []any{types.TerminalStatusForReason(errMsg), errMsg, ts, ts, ts, types.RunPending, types.RunRunning}
+	if status == "" {
+		status = types.TerminalStatusForReason(errMsg)
+	}
+	runArgs := []any{status, errMsg, ts, ts, ts, types.RunPending, types.RunRunning}
 	runArgs = append(runArgs, args...)
 	result, err := tx.Exec(
 		`UPDATE runs SET status = ?, error = ?, push_active = 0,

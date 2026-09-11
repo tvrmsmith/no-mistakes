@@ -20,10 +20,23 @@ var ErrFatalGateReconciliation = errors.New("fatal gate reconciliation")
 var ErrDaemonShutdown = errors.New("daemon shutting down")
 
 // ErrParkPreserved is returned by Execute and Resume when a clean shutdown
-// interrupted a run parked at an approval gate. The run row is left running
-// and parked, the gate step row is untouched, and the caller must keep the
-// worktree so startup recovery can resume the run.
+// interrupted a run parked at an approval gate, or one sitting in a live CI
+// monitor. The run row is left running and parked, the active step row is
+// untouched, and the caller must keep the worktree so startup recovery can
+// resume the run.
+//
+// The gate case is unconditional. The CI case is not: Executor.ciMonitorPreservable
+// re-reads the row, the run, and the worktree first, and every one of those
+// reads fails closed, so a step the next start would decline to resume is
+// failed here instead.
 var ErrParkPreserved = errors.New("run left parked for daemon shutdown")
+
+// ErrCIMonitorInterrupted marks a CI monitor a clean stop could neither
+// preserve nor honestly call a pipeline failure: the PR is open and the
+// worktree holds a repair commit the run never published. failRun ends such a
+// run as types.RunCIMonitorInterrupted under its own concrete reason, which is
+// what keeps the worktree out of the orphan sweep.
+var ErrCIMonitorInterrupted = errors.New("ci monitor interrupted")
 
 // ErrRecoveryEvidenceUnavailable marks a recovery check that could not be
 // completed because a read failed, as opposed to one that completed and found

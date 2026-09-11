@@ -921,6 +921,13 @@ func removeOrphanWorktree(ctx context.Context, wt orphanWorktree) {
 // run.HeadSHA advances solely after a verified push, so a match proves nothing
 // local is unpushed - and fail safe to preservation on any mismatch or
 // unreadable HEAD so recoverable commits are never discarded.
+//
+// A matching head is not enough on its own, because a repair turn killed
+// between its edits and its commit leaves the run at exactly its recorded head
+// with the work still uncommitted underneath. That is the same fact
+// pipeline.CIMonitorWorktreeClean owns for the stop, the guard, recovery, and
+// the drain, and it is read here for the same reason: the refusal those sites
+// make must not then cost the run the checkout holding the work.
 func skipWorktreeCleanup(ctx context.Context, d *db.DB, runID, wtPath string) (bool, string) {
 	run, err := d.GetRun(runID)
 	if err != nil {
@@ -936,6 +943,9 @@ func skipWorktreeCleanup(ctx context.Context, d *db.DB, runID, wtPath string) (b
 		}
 		if strings.TrimSpace(head) != run.HeadSHA {
 			return true, fmt.Sprintf("run %s ci monitor interrupted; worktree may hold unpushed commits; preserving", runID)
+		}
+		if err := pipeline.CIMonitorWorktreeClean(ctx, wtPath); err != nil {
+			return true, fmt.Sprintf("run %s ci monitor interrupted; %v; preserving", runID, err)
 		}
 	}
 	return false, ""
@@ -1114,6 +1124,13 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("invalid params: %w", err)
 			}
+		}
+		// Drain false with a drain option set is not a request this daemon can
+		// serve: taking the branch below would kill the daemon outright, the
+		// exact opposite of what a DrainOnly caller asked for. A version-skewed
+		// or third-party client that builds that shape is told so instead.
+		if !p.Drain && (p.DrainOnly || p.DrainTimeoutMS != 0) {
+			return nil, fmt.Errorf("invalid params: drain options require drain=true (drain_only=%t, drain_timeout_ms=%d)", p.DrainOnly, p.DrainTimeoutMS)
 		}
 		if !p.Drain {
 			go shutdown()

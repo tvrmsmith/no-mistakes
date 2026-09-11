@@ -1140,6 +1140,36 @@ func TestRecoverStaleRunsExceptPreservesOnlyValidatedRuns(t *testing.T) {
 	}
 }
 
+// RecoverStaleRunsExcept passes an empty status to failActiveRuns so the
+// terminal status is derived from the reason by types.TerminalStatusForReason,
+// rather than pinned to failed at the call site. Every other test here hands it
+// a generic crash message, which derives to failed anyway, so a hardcoded
+// types.RunFailed would read identically. A cancellation reason is the only
+// input that tells the two apart.
+func TestRecoverStaleRunsExceptDerivesItsTerminalStatusFromTheReason(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/derive-project", "git@github.com:user/derive-project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := d.RecoverStaleRunsExcept(types.RunCancelReasonAbortedByUser, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("recovered count = %d, want 1", count)
+	}
+	got, _ := d.GetRun(run.ID)
+	if got.Status != types.RunCancelled {
+		t.Fatalf("run status = %q, want %q", got.Status, types.RunCancelled)
+	}
+	if got.Error == nil || *got.Error != types.RunCancelReasonAbortedByUser {
+		t.Fatalf("run error = %v, want %q", got.Error, types.RunCancelReasonAbortedByUser)
+	}
+}
+
 func TestRunSkippedStepsRoundTripAndDefaultEmpty(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/skip-project", "git@github.com:user/skip-project.git", "main")
@@ -1260,6 +1290,181 @@ func TestFailActiveRunWithReasonScopesToOneRun(t *testing.T) {
 	}
 	if again {
 		t.Fatal("FailActiveRunWithReason() = true for an already terminal run, want false")
+	}
+}
+
+func TestEndActiveRunWithStatus_RecordsTheChosenStatusWithTheConcreteReason(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/end-status-project", "git@github.com:user/end-status-project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	ended, err := d.EndActiveRunWithStatus(run.ID, types.RunCIMonitorInterrupted, "worktree is missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ended {
+		t.Fatal("EndActiveRunWithStatus() = false, want true for an active run")
+	}
+	got, _ := d.GetRun(run.ID)
+	if got.Status != types.RunCIMonitorInterrupted || got.Error == nil || *got.Error != "worktree is missing" {
+		t.Fatalf("run = %s / %v, want ci_monitor_interrupted with the concrete reason", got.Status, got.Error)
+	}
+}
+
+func TestEndActiveRunWithStatus_ScopesToOneRun(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/end-status-scope", "git@github.com:user/end-status-scope.git", "main")
+	target, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	bystander, _ := d.InsertRun(repo.ID, "feat-b", "ccc", "ddd")
+	if err := d.UpdateRunStatus(target.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunStatus(bystander.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.EndActiveRunWithStatus(target.ID, types.RunCIMonitorInterrupted, "worktree is missing"); err != nil {
+		t.Fatal(err)
+	}
+
+	gotBystander, _ := d.GetRun(bystander.ID)
+	if gotBystander.Status != types.RunRunning || gotBystander.Error != nil {
+		t.Fatalf("bystander run = %s / %v, want untouched running", gotBystander.Status, gotBystander.Error)
+	}
+}
+
+func TestEndActiveRunWithStatus_AlsoEndsTheRunsInProgressSteps(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/end-status-steps", "git@github.com:user/end-status-steps.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	d.StartStep(step.ID)
+
+	if _, err := d.EndActiveRunWithStatus(run.ID, types.RunCIMonitorInterrupted, "worktree is missing"); err != nil {
+		t.Fatal(err)
+	}
+
+	gotStep, _ := d.GetStepResult(step.ID)
+	if gotStep.Status != types.StepStatusFailed {
+		t.Fatalf("step status = %s, want %s", gotStep.Status, types.StepStatusFailed)
+	}
+}
+
+func TestEndActiveRunWithStatus_ClearsTheAwaitingAgentMarkerAndFoldsParkedTime(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/end-status-parked", "git@github.com:user/end-status-parked.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	// Seed an earlier park that must survive the fold undiminished.
+	if err := d.AddRunParkedDuration(run.ID, 5000); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	// now() has second resolution, so a park started and ended inside this test
+	// measures nothing. Backdating the marker gives the fold a real interval to
+	// find, which is the half of this test's name the seeded floor cannot check.
+	const backdatedSeconds = 7
+	if _, err := d.sql.Exec(`UPDATE runs SET awaiting_agent_since = awaiting_agent_since - ? WHERE id = ?`, backdatedSeconds, run.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.EndActiveRunWithStatus(run.ID, types.RunCIMonitorInterrupted, "worktree is missing"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := d.GetRun(run.ID)
+	if got.AwaitingAgentSince != nil {
+		t.Fatalf("awaiting agent since = %v, want nil", got.AwaitingAgentSince)
+	}
+	if want := int64(5000 + backdatedSeconds*1000); got.ParkedMS < want {
+		t.Fatalf("parked ms = %d, want at least %d: the seeded floor plus the backdated park folded in", got.ParkedMS, want)
+	}
+}
+
+func TestEndActiveRunWithStatus_DoesNotReclassifyTheRunAsAnInterruptedCIMonitor(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/end-status-shape", "git@github.com:user/end-status-shape.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunPRURL(run.ID, "https://example.invalid/pr/1"); err != nil {
+		t.Fatal(err)
+	}
+	ciStep, _ := d.InsertStepResult(run.ID, types.StepCI)
+	d.StartStep(ciStep.ID)
+
+	ended, err := d.EndActiveRunWithStatus(run.ID, types.RunFailed, "step plan drifted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ended {
+		t.Fatal("EndActiveRunWithStatus() = false, want true for an active run")
+	}
+
+	got, _ := d.GetRun(run.ID)
+	if got.Status != types.RunFailed || got.Error == nil || *got.Error != "step plan drifted" {
+		t.Fatalf("run = %s / %v, want failed with the chosen reason, not reclassified as an interrupted CI monitor", got.Status, got.Error)
+	}
+}
+
+func TestFailActiveRunWithReasonStillDerivesItsStatusFromTheReason(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/derive-status", "git@github.com:user/derive-status.git", "main")
+	cancelled, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	failed, _ := d.InsertRun(repo.ID, "feat-b", "ccc", "ddd")
+	if err := d.UpdateRunStatus(cancelled.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunStatus(failed.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.FailActiveRunWithReason(cancelled.ID, types.RunCancelReasonAbortedByUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.FailActiveRunWithReason(failed.ID, "some arbitrary failure"); err != nil {
+		t.Fatal(err)
+	}
+
+	gotCancelled, _ := d.GetRun(cancelled.ID)
+	if gotCancelled.Status != types.RunCancelled {
+		t.Fatalf("cancelled run status = %s, want %s", gotCancelled.Status, types.RunCancelled)
+	}
+	gotFailed, _ := d.GetRun(failed.ID)
+	if gotFailed.Status != types.RunFailed {
+		t.Fatalf("failed run status = %s, want %s", gotFailed.Status, types.RunFailed)
+	}
+}
+
+func TestEndActiveRunWithStatus_ReportsFalseWhenTheRunIsAlreadyTerminal(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/end-status-terminal", "git@github.com:user/end-status-terminal.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
+	if err := d.UpdateRunStatus(run.ID, types.RunCompleted); err != nil {
+		t.Fatal(err)
+	}
+
+	ended, err := d.EndActiveRunWithStatus(run.ID, types.RunCIMonitorInterrupted, "worktree is missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended {
+		t.Fatal("EndActiveRunWithStatus() = true for an already terminal run, want false")
+	}
+	got, _ := d.GetRun(run.ID)
+	if got.Status != types.RunCompleted || got.Error != nil {
+		t.Fatalf("run = %s / %v, want unchanged completed", got.Status, got.Error)
 	}
 }
 
