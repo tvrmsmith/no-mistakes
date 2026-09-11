@@ -406,6 +406,9 @@ func TestFinalizeTextResult_WithSchemaPreservesTypeErrorForValidJSON(t *testing.
 			if !strings.Contains(err.Error(), "JSON output must be object") {
 				t.Fatalf("expected object type error, got: %v", err)
 			}
+			if !IsStructuredOutputRejected(err) {
+				t.Fatalf("schema-invalid finalizer output was not classified as correctable: %v", err)
+			}
 		})
 	}
 }
@@ -520,6 +523,29 @@ func TestFinalizeTextResult_WithSchemaRejectsAmbiguousBareJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "multiple bare JSON objects") {
 		t.Fatalf("expected multiple bare JSON objects error, got %v", err)
+	}
+}
+
+func TestFinalizeTextResult_ACPAgentTakesTerminalBareJSON(t *testing.T) {
+	text := `Draft: {"findings":["a"],"summary":"draft"}. Final: {"findings":["a"],"summary":"final"}`
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"findings":{"type":"array"},
+			"summary":{"type":"string"}
+		},
+		"required":["findings","summary"]
+	}`)
+	result, err := finalizeTextResult("acp:omp", text, schema, TokenUsage{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var output map[string]any
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	if output["summary"] != "final" {
+		t.Errorf("expected summary=final, got %v", output["summary"])
 	}
 }
 

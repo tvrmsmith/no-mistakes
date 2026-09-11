@@ -49,11 +49,25 @@ const (
 type pipelineAttestation struct {
 	HeadSHA string                    `json:"head_sha"`
 	Steps   []pipelineAttestationStep `json:"steps"`
+	// LiveValidation is the machine-readable half of the Test step's
+	// live-validation contract, so a consumer asking "was this change live
+	// validated?" reads a field instead of parsing the Testing prose. It is
+	// omitted entirely for a run whose test step recorded no verdict (every
+	// run from before the contract), which is itself the answer: unknown.
+	LiveValidation *pipelineAttestationLiveValidation `json:"live_validation,omitempty"`
 }
 
 type pipelineAttestationStep struct {
 	Step   types.StepName   `json:"step"`
 	Status types.StepStatus `json:"status"`
+}
+
+// pipelineAttestationLiveValidation reports the run's verdict and how much of
+// its scenario list was driven against the real product.
+type pipelineAttestationLiveValidation struct {
+	Verdict string `json:"verdict"`
+	Live    int    `json:"live"`
+	Total   int    `json:"total"`
 }
 
 type testingArtifactRenderState struct {
@@ -78,6 +92,10 @@ type testingSummaryOptions struct {
 	// branch. It is nil when nothing was published, and the artifacts then
 	// render as local paths rather than as links that would not resolve.
 	evidence *evidenceLinks
+	// attachments maps a local evidence path to a GitHub user-attachments URL
+	// uploaded at PR render time. Nil means nothing was uploaded; the renderer
+	// then keeps today's local-path or commit-pinned link.
+	attachments map[string]string
 }
 
 // BuildPipelineSummary produces a deterministic markdown section from step results and rounds.
@@ -123,7 +141,7 @@ func BuildPipelineSummaryFor(steps []*db.StepResult, rounds map[string][]*db.Ste
 	b.WriteString(noMistakesPRSignature)
 	b.WriteString("\n\n")
 	if flavor == prBodyHTML {
-		b.WriteString(buildPipelineAttestation(steps, headSHA))
+		b.WriteString(buildPipelineAttestation(steps, rounds, headSHA))
 		b.WriteString("\n\n")
 	}
 	for i, detail := range detailBlocks {
@@ -140,7 +158,16 @@ func BuildPipelineSummaryFor(steps []*db.StepResult, rounds map[string][]*db.Ste
 // buildPipelineAttestation records the exact step lifecycle snapshot available
 // when no-mistakes writes the PR body. Its compact JSON is deliberately data
 // only: consumers decide their own policy from the step names and statuses.
-func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
+func buildPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string) string {
+	attestation := newPipelineAttestation(steps, rounds, headSHA)
+	payload, err := json.Marshal(attestation)
+	if err != nil {
+		return ""
+	}
+	return pipelineAttestationCommentPrefix + string(payload) + pipelineAttestationCommentClosingToken
+}
+
+func newPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string) pipelineAttestation {
 	attestation := pipelineAttestation{
 		HeadSHA: headSHA,
 		Steps:   make([]pipelineAttestationStep, 0, len(steps)),
@@ -161,11 +188,36 @@ func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
 		}
 		return left < right
 	})
-	payload, err := json.Marshal(attestation)
-	if err != nil {
-		return ""
+	attestation.LiveValidation = attestedLiveValidation(steps, rounds, headSHA)
+	return attestation
+}
+
+// attestedLiveValidation derives the live-validation payload from the test
+// step's recorded findings. It returns nil - and the field is then omitted -
+// whenever no verdict was recorded or the verdict belongs to another head.
+func attestedLiveValidation(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string) *pipelineAttestationLiveValidation {
+	for _, sr := range steps {
+		if sr == nil || sr.StepName != types.StepTest {
+			continue
+		}
+		for _, raw := range testingEvidenceFindingsJSON(sr, rounds[sr.ID]) {
+			if raw == nil || strings.TrimSpace(*raw) == "" {
+				continue
+			}
+			findings, err := types.ParseFindingsJSON(*raw)
+			if err != nil || !types.IsKnownTestVerdict(findings.Verdict) || findings.TestedHeadSHA != headSHA {
+				return nil
+			}
+			live, total := types.LiveScenarioCounts(findings.Scenarios)
+			return &pipelineAttestationLiveValidation{
+				Verdict: findings.Verdict,
+				Live:    live,
+				Total:   total,
+			}
+		}
+		return nil
 	}
-	return pipelineAttestationCommentPrefix + string(payload) + pipelineAttestationCommentClosingToken
+	return nil
 }
 
 // rebindPipelineAttestationHead rewrites the first live v1 attestation
@@ -174,7 +226,27 @@ func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
 // head changes. It returns the original body and false when no live
 // attestation is present, so callers cannot mint one for a PR that was not
 // raised through no-mistakes.
+//
+// This is the CI-repair-without-revalidation shape: review/test/document are
+// deliberately not re-run for that repair commit (see ciRepairContinuityGap),
+// so the only honest statuses to (re)publish are the ones the last real
+// attestation already carried.
 func rebindPipelineAttestationHead(body, newHeadSHA string) (string, bool) {
+	return rebindPipelineAttestationWithSteps(body, newHeadSHA, nil)
+}
+
+// rebindPipelineAttestationWithSteps rewrites the first live v1 attestation
+// comment to bind newHeadSHA. When steps is nil it behaves exactly like
+// rebindPipelineAttestationHead, keeping whatever step statuses the existing
+// attestation already carried. When steps is non-nil, it replaces the
+// attestation's step list outright with the caller's own statuses instead of
+// reusing the old ones - for a caller (the Push step) that attests a head it
+// is about to push using this run's own current step statuses, rather than
+// borrowing whatever an older, possibly different, attestation claimed. It
+// still returns the original body and false when no live attestation is
+// present, so a caller cannot mint one for a PR that was not raised through
+// no-mistakes.
+func rebindPipelineAttestationWithSteps(body, newHeadSHA string, steps []*db.StepResult) (string, bool) {
 	newHeadSHA = strings.TrimSpace(newHeadSHA)
 	if newHeadSHA == "" {
 		return body, false
@@ -193,14 +265,22 @@ func rebindPipelineAttestationHead(body, newHeadSHA string) (string, bool) {
 	if err := json.Unmarshal([]byte(body[payloadStart:end]), &attestation); err != nil {
 		return body, false
 	}
-	steps := make([]*db.StepResult, 0, len(attestation.Steps))
-	for _, s := range attestation.Steps {
-		steps = append(steps, &db.StepResult{StepName: s.Step, Status: s.Status})
+	if steps == nil {
+		steps = make([]*db.StepResult, 0, len(attestation.Steps))
+		for _, s := range attestation.Steps {
+			steps = append(steps, &db.StepResult{StepName: s.Step, Status: s.Status})
+		}
 	}
-	rebuilt := buildPipelineAttestation(steps, newHeadSHA)
-	if rebuilt == "" {
+	rebound := newPipelineAttestation(steps, nil, newHeadSHA)
+	// Step statuses may be republished for a head the pipeline did not
+	// re-validate. Live validation is a factual claim about one commit's
+	// behavior, so it is derived only from current step findings and never
+	// transferred from the standing attestation.
+	payload, err := json.Marshal(rebound)
+	if err != nil {
 		return body, false
 	}
+	rebuilt := pipelineAttestationCommentPrefix + string(payload) + pipelineAttestationCommentClosingToken
 	oldEnd := end + len(pipelineAttestationCommentClosingToken)
 	if body[start:oldEnd] == rebuilt {
 		return body, true
@@ -218,6 +298,10 @@ func BuildTestingSummaryForPR(steps []*db.StepResult, rounds map[string][]*db.St
 }
 
 func BuildTestingSummaryForPRWithProvider(steps []*db.StepResult, rounds map[string][]*db.StepRound, upstreamURL, ref, repoRoot, evidenceRoot string, links *evidenceLinks, provider scm.Provider) string {
+	return buildPRTestingSummary(steps, rounds, upstreamURL, ref, repoRoot, evidenceRoot, links, provider, nil)
+}
+
+func buildPRTestingSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound, upstreamURL, ref, repoRoot, evidenceRoot string, links *evidenceLinks, provider scm.Provider, attachments map[string]string) string {
 	opts := testingSummaryOptionsForGitHub(upstreamURL, ref)
 	opts.flavor = prBodyFlavorFor(provider)
 	opts.compactArtifacts = true
@@ -226,6 +310,7 @@ func BuildTestingSummaryForPRWithProvider(steps []*db.StepResult, rounds map[str
 	opts.repoRoot = repoRoot
 	opts.evidenceRoot = evidenceRoot
 	opts.evidence = links
+	opts.attachments = attachments
 	return buildTestingSummary(steps, rounds, opts)
 }
 
@@ -244,7 +329,9 @@ func buildTestingSummary(steps []*db.StepResult, rounds map[string][]*db.StepRou
 		testingSummary := collectTestingSummary(sr, stepRounds)
 		tested := collectTestingDetails(sr, stepRounds)
 		artifacts := collectTestingArtifacts(sr, stepRounds, opts)
-		if testingSummary == "" && len(tested) == 0 && len(artifacts) == 0 {
+		scenarios := collectTestingScenarios(sr, stepRounds)
+		liveValidation := renderLiveValidationLine(scenarios, collectTestingVerdict(sr, stepRounds))
+		if testingSummary == "" && len(tested) == 0 && len(artifacts) == 0 && liveValidation == "" {
 			return "## Testing\n\n- " + line
 		}
 
@@ -260,6 +347,19 @@ func buildTestingSummary(steps []*db.StepResult, rounds map[string][]*db.StepRou
 		} else if !opts.includeTestedDetails && len(tested) > 0 {
 			writeTestingSummary(&b, compactTestedSummary(len(tested)), opts)
 			wroteSummary = true
+		}
+		// The verdict and the scenario table come before the tested commands
+		// and the artifacts: they are the step's answer, and the commands and
+		// artifacts underneath are what it is based on.
+		if liveValidation != "" {
+			b.WriteString("- ")
+			b.WriteString(liveValidation)
+			b.WriteString("\n")
+		}
+		if table := renderScenarioTable(scenarios, opts.flavor); table != "" {
+			b.WriteString("\n")
+			b.WriteString(table)
+			b.WriteString("\n")
 		}
 		if opts.includeTestedDetails {
 			for _, detail := range tested {
@@ -437,7 +537,7 @@ func hasTestingEvidenceMetadata(raw *string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(findings.TestingSummary) != "" || len(findings.Tested) > 0 || len(findings.Artifacts) > 0
+	return strings.TrimSpace(findings.TestingSummary) != "" || len(findings.Tested) > 0 || len(findings.Artifacts) > 0 || len(findings.Scenarios) > 0
 }
 
 func appendTestingArtifacts(artifacts []types.TestArtifact, seen map[string]bool, raw *string, opts testingSummaryOptions) []types.TestArtifact {
@@ -584,13 +684,23 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 	localPath := localArtifactPath(artifact.Path, opts)
 	fileText, hasFile := embeddedArtifactText(artifact, opts, state)
 	caption := artifact.Content
+	attachment := opts.attachmentURL(artifact)
 
-	if target == "" && localPath == "" && caption == "" && !hasFile {
+	if target == "" && localPath == "" && caption == "" && !hasFile && attachment == "" {
 		return ""
 	}
 
-	// No embeddable text: render a link or local-file reference (images, videos, binaries).
+	// No embeddable text: render a link, attachment, or local-file reference
+	// (images, videos, binaries).
 	if caption == "" && !hasFile {
+		if attachment != "" {
+			var b strings.Builder
+			b.WriteString(renderAttachmentMarkdown(artifact, attachment, label))
+			if target != "" {
+				b.WriteString(fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target))
+			}
+			return b.String()
+		}
 		if target != "" {
 			return fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target)
 		}
@@ -605,7 +715,7 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 	var inner strings.Builder
 	if target != "" {
 		inner.WriteString(fmt.Sprintf("Source: [%s](%s)\n\n", html.EscapeString(label), target))
-	} else if !hasFile && localPath != "" {
+	} else if attachment == "" && !hasFile && localPath != "" {
 		inner.WriteString(renderLocalArtifactReference("Source", label, localPath, opts.flavor))
 		inner.WriteString("\n")
 	}
@@ -614,7 +724,28 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 		inner.WriteString("\n\n")
 	}
 	inner.WriteString(fmt.Sprintf("```text\n%s\n```\n", escapeMarkdownFence(escapePipelineFoldMarkers(fenceBody))))
-	return foldPRBlock("Evidence: "+html.EscapeString(label), inner.String(), opts.flavor)
+	folded := foldPRBlock("Evidence: "+html.EscapeString(label), inner.String(), opts.flavor)
+	if attachment == "" {
+		return folded
+	}
+	return renderAttachmentMarkdown(artifact, attachment, label) + "\n" + folded
+}
+
+func (opts testingSummaryOptions) attachmentURL(artifact types.TestArtifact) string {
+	if len(opts.attachments) == 0 || artifact.Path == "" {
+		return ""
+	}
+	if url := strings.TrimSpace(opts.attachments[artifact.Path]); url != "" {
+		return url
+	}
+	return strings.TrimSpace(opts.attachments[filepath.Clean(artifact.Path)])
+}
+
+func renderAttachmentMarkdown(artifact types.TestArtifact, url, label string) string {
+	if isVideoArtifact(artifact.Kind, artifact.Path) || isVideoArtifact(artifact.Kind, url) {
+		return url + "\n"
+	}
+	return fmt.Sprintf("![%s](%s)\n", markdownAltText(label), url)
 }
 
 // embeddedArtifactText reads a file artifact and returns its text content,
@@ -1035,7 +1166,7 @@ func buildStepEntry(sr *db.StepResult, rounds []*db.StepRound, flavor prBodyFlav
 	hasRoundParseFailure := roundsHaveParseFailure(rounds)
 	hadAnyFindings := hadFindings || hasFinalFindings || hasAnyRoundFindings
 	hasUnreadableFinalFindings := sr.FindingsJSON != nil && !finalFindingsParsed
-	wasFixed := hadFindings && len(rounds) > 1 && !hasUnreadableFinalFindings && !hasFinalFindings
+	findingsCleared := hadFindings && len(rounds) > 1 && !hasUnreadableFinalFindings && !hasFinalFindings
 	riskLevel := ""
 	if sr.StepName == types.StepReview {
 		src := finalFindings
@@ -1067,7 +1198,7 @@ func buildStepEntry(sr *db.StepResult, rounds []*db.StepRound, flavor prBodyFlav
 		return buildDetail(fmt.Sprintf("⚠️ **%s** - findings unavailable", name))
 	}
 
-	if wasFixed {
+	if findingsCleared {
 		result := buildFixResultText(rounds)
 		line := fmt.Sprintf("🔧 **%s** - %s ✅", name, result)
 		return buildDetail(line)
@@ -1186,11 +1317,18 @@ func buildFixResultText(rounds []*db.StepRound) string {
 		}
 	}
 
-	// Categorize fix rounds. Legacy "user_fix" rounds are rendered as auto-fix.
-	autoFixRounds := 0
+	var autoFixRounds, noChangeRounds, unreportedRounds int
 	for _, r := range rounds[1:] {
-		if r.IsFixRound() {
+		if !r.IsFixRound() {
+			continue
+		}
+		switch fixRoundOutcome(r) {
+		case fixOutcomeNoChange:
+			noChangeRounds++
+		case fixOutcomeApplied:
 			autoFixRounds++
+		case fixOutcomeUnreported:
+			unreportedRounds++
 		}
 	}
 
@@ -1201,10 +1339,19 @@ func buildFixResultText(rounds []*db.StepRound) string {
 
 	parts := []string{fmt.Sprintf("%d %s found", initialCount, noun)}
 
-	if autoFixRounds > 1 {
-		parts = append(parts, fmt.Sprintf("auto-fixed (%d)", autoFixRounds))
-	} else if autoFixRounds == 1 {
-		parts = append(parts, "auto-fixed")
+	for _, result := range []struct {
+		count int
+		text  string
+	}{
+		{autoFixRounds, "auto-fixed"},
+		{noChangeRounds, "no changes applied"},
+		{unreportedRounds, "fix attempted; result not reported"},
+	} {
+		if result.count == 1 {
+			parts = append(parts, result.text)
+		} else if result.count > 1 {
+			parts = append(parts, fmt.Sprintf("%s (%d)", result.text, result.count))
+		}
 	}
 
 	return strings.Join(parts, " → ")
@@ -1213,9 +1360,8 @@ func buildFixResultText(rounds []*db.StepRound) string {
 // buildStepDetails renders the collapsible body for a step as an
 // issue -> fix -> outcome narrative rather than a round-by-round log. Each
 // round is shown as the review state observed at its end; a fix round is
-// prefixed with the fix the agent applied (its commit summary) so a reader can
-// see what was wrong and what was done about it without mentally replaying
-// "rounds".
+// prefixed with its recorded outcome so a reader can follow the result without
+// mentally replaying rounds.
 func buildStepDetails(summaryLine string, sr *db.StepResult, rounds []*db.StepRound, flavor prBodyFlavor) string {
 	var inner strings.Builder
 	if len(rounds) == 0 {
@@ -1230,7 +1376,7 @@ func buildStepDetails(summaryLine string, sr *db.StepResult, rounds []*db.StepRo
 	for _, r := range rounds {
 		isFixRound := r.IsFixRound()
 		if isFixRound {
-			inner.WriteString(fixRoundLine(r, flavor))
+			inner.WriteString(fixRoundLine(r))
 			inner.WriteString("\n")
 		}
 
@@ -1308,17 +1454,38 @@ func isTautologicalStepInner(inner string) bool {
 	}
 }
 
-// fixRoundLine renders the one-line summary of the fix the agent applied in a
-// fix round, falling back to a generic note when no summary was captured.
-func fixRoundLine(r *db.StepRound, flavor prBodyFlavor) string {
-	summary := ""
-	if r.FixSummary != nil {
-		summary = strings.TrimSpace(*r.FixSummary)
+type fixOutcome uint8
+
+const (
+	fixOutcomeUnreported fixOutcome = iota
+	fixOutcomeNoChange
+	fixOutcomeApplied
+)
+
+func fixRoundOutcome(r *db.StepRound) fixOutcome {
+	if r.FixSummary == nil || strings.TrimSpace(*r.FixSummary) == "" {
+		return fixOutcomeUnreported
 	}
-	if summary == "" {
+	switch strings.TrimSpace(*r.FixSummary) {
+	case noChangesAppliedSummary:
+		return fixOutcomeNoChange
+	case changesAppliedSummary:
+		return fixOutcomeApplied
+	default:
+		return fixOutcomeUnreported
+	}
+}
+
+// fixRoundLine renders the one-line result of a fix round.
+func fixRoundLine(r *db.StepRound) string {
+	switch fixRoundOutcome(r) {
+	case fixOutcomeNoChange:
+		return "🔧 No changes applied."
+	case fixOutcomeApplied:
 		return "🔧 Fix applied."
+	default:
+		return "🔧 Fix attempted; result not reported."
 	}
-	return fmt.Sprintf("🔧 Fix: %s", escapePRText(summary, flavor))
 }
 
 // writeFindingItems renders each finding as a `file:line - description` bullet,
@@ -1339,11 +1506,27 @@ func writeFindingItems(b *strings.Builder, sr *db.StepResult, findings *types.Fi
 	writeTestedDetails(b, sr, findings, flavor)
 }
 
-// writeTestedDetails lists the commands the test step exercised. It is a no-op
-// for non-test steps.
+// writeTestedDetails lists what the test step exercised: its live-validation
+// verdict, the scenario table, and the commands it ran. It is a no-op for
+// non-test steps.
+//
+// The scenario table is rendered here as well as in the Testing section
+// because the Pipeline fold is the per-round story: a reader following a
+// fix round wants to see which scenario changed result between rounds, which
+// the single collapsed Testing section cannot show.
 func writeTestedDetails(b *strings.Builder, sr *db.StepResult, findings *types.Findings, flavor prBodyFlavor) {
 	if sr.StepName != types.StepTest {
 		return
+	}
+	if line := renderLiveValidationLine(findings.Scenarios, findings.Verdict); line != "" {
+		b.WriteString("- ")
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if table := renderScenarioTable(findings.Scenarios, flavor); table != "" {
+		b.WriteString("\n")
+		b.WriteString(table)
+		b.WriteString("\n")
 	}
 	for _, detail := range findings.Tested {
 		rendered := renderTestedDetailFor(detail, flavor)

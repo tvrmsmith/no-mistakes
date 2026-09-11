@@ -143,7 +143,7 @@ func TestReviewStep_NarrowsThePromptOnceRoundsPassTheThreshold(t *testing.T) {
 		t.Helper()
 		dir, baseSHA, headSHA := setupGitRepo(t)
 
-		findingsJSON, _ := json.Marshal(Findings{Summary: "clean"})
+		findingsJSON, _ := json.Marshal(cleanReviewFindings())
 		ag := &mockAgent{
 			name: "test",
 			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
@@ -220,7 +220,7 @@ func TestReviewStep_NarrowsOnRoundsEarlierRunsOnTheBranchAlreadySpent(t *testing
 
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
-	findingsJSON, _ := json.Marshal(Findings{Summary: "clean"})
+	findingsJSON, _ := json.Marshal(cleanReviewFindings())
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
@@ -284,7 +284,7 @@ func TestReviewStep_AnotherBranchesRoundsDoNotNarrowThisReview(t *testing.T) {
 
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
-	findingsJSON, _ := json.Marshal(Findings{Summary: "clean"})
+	findingsJSON, _ := json.Marshal(cleanReviewFindings())
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {

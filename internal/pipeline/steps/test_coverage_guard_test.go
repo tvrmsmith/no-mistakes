@@ -81,12 +81,15 @@ func newSourceRepo(t *testing.T, files map[string]string) (dir, baseSHA string) 
 }
 
 // fixRoundAgent stands in for the repair agent a fix round invokes. The repair
-// itself is staged on disk by the test, so this only has to answer.
+// itself is staged on disk by the test, so this only has to answer. The reply
+// carries the live-validation contract as well as the repair summary, because
+// the same agent also answers the unconditional evidence turn ahead of the
+// repair.
 func fixRoundAgent() agent.Agent {
 	return &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"summary":"added the missing test"}`)}, nil
+			return &agent.Result{Output: json.RawMessage(`{"summary":"added the missing test","findings":[],"tested":["live check"],"testing_summary":"drove the repair against the running product","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"live check","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
 }
@@ -282,9 +285,11 @@ func TestTestStep_CoverageOfAChangedFunctionPasses(t *testing.T) {
 	if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
 		t.Fatal(err)
 	}
+	// The evidence turn appends its own entries after the unit's, so the
+	// assertion is on the first one: the unit command this run actually ran.
 	want := "repository: " + command
-	if len(findings.Tested) != 1 || findings.Tested[0] != want {
-		t.Errorf("tested = %q, want [%q]", findings.Tested, want)
+	if len(findings.Tested) == 0 || findings.Tested[0] != want {
+		t.Errorf("tested = %q, want it to open with %q", findings.Tested, want)
 	}
 }
 
@@ -433,7 +438,7 @@ func TestTestStep_NoUnitCommandRanSkipsTheGuard(t *testing.T) {
 				// is empty and no command runs.
 				return &agent.Result{Output: json.RawMessage(`{"units":[{"name":"api","path":"services/api","command":"exit 0"}],"selected":[]}`)}, nil
 			}
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"testing_summary":"exercised the change by hand"}`)}, nil
+			return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 		},
 	}
 	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)

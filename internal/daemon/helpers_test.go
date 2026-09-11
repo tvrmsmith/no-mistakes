@@ -21,6 +21,15 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
+// daemonSocketBindTimeout bounds how long a test daemon may take to bind its
+// socket. It is one owner for both start helpers so the two cannot drift, and
+// it is deliberately far above the daemon's own startup cost: the gate
+// migration and orphan-process phases alone run for seconds on a loaded
+// machine. Both waits abandon early when the daemon goroutine returns an
+// error, so a real startup failure still reports in milliseconds and only a
+// genuine hang pays this bound.
+const daemonSocketBindTimeout = 30 * time.Second
+
 func TestMain(m *testing.M) {
 	switch os.Getenv("NM_DAEMON_HELPER_PROCESS") {
 	case "1":
@@ -110,11 +119,20 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 		errCh <- RunWithResources(p, d)
 	}()
 
-	// Wait for socket to appear.
-	deadline := time.Now().Add(3 * time.Second)
+	// Wait for socket to appear. The bound is generous because the daemon's
+	// own startup phases (gate migration, orphan-process sweep) routinely take
+	// several seconds on a loaded machine, and a bound near that median turns
+	// contention into a "no such file or directory" dial failure in whichever
+	// test happens to run then.
+	deadline := time.Now().Add(daemonSocketBindTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(p.Socket()); err == nil {
 			break
+		}
+		select {
+		case err := <-errCh:
+			t.Fatalf("daemon exited before binding its socket: %v", err)
+		default:
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -271,7 +289,7 @@ func restartTestDaemonInstance(t *testing.T, p *paths.Paths, d *db.DB, sf StepFa
 		instance.errCh <- RunWithOptions(p, d, sf)
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(daemonSocketBindTimeout)
 	for {
 		if _, err := os.Stat(p.Socket()); err == nil {
 			break
@@ -320,6 +338,11 @@ func setupTestGitRepoWithConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, 
 	gitCmd(t, workDir, "init")
 	gitCmd(t, workDir, "config", "user.email", "test@test.com")
 	gitCmd(t, workDir, "config", "user.name", "Test")
+	// A developer's global commit.gpgsign would make these commits wait on a
+	// signing agent that has nothing to do with the test, and a signing agent
+	// that cannot answer turns a fast unit test into a minutes-long timeout.
+	gitCmd(t, workDir, "config", "commit.gpgsign", "false")
+	gitCmd(t, workDir, "config", "tag.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(workDir, "test.txt"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -454,6 +477,40 @@ exit 1
 	return dir, logPath
 }
 
+// writeMockGHNoPR puts a gh on PATH that authenticates and reports that the
+// branch has no open pull request.
+//
+// Every push now writes a pipeline attestation for the head it is about to
+// publish, which asks the forge whether a PR exists (see the Pre-Push Pipeline
+// Attestation contract). Without a stub, that lookup leaves the test process:
+// on a developer machine with an authenticated gh it reaches github.com and
+// fails against the placeholder test/repo slug, so a push-behaviour test would
+// pass or fail depending on whose machine ran it. An empty PR list is the
+// honest answer for a repository this test never opened a PR on.
+func writeMockGHNoPR(t *testing.T, dir string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "gh.bat")
+		script := "@echo off\r\necho %* | findstr /C:\"auth status\" >nul && exit /b 0\r\necho %* | findstr /C:\"pr list\" >nul && (echo []& exit /b 0)\r\nexit /b 1\r\n"
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	path := filepath.Join(dir, "gh")
+	script := `#!/bin/sh
+case "$*" in
+  "auth status"*) exit 0 ;;
+  "pr list"*) printf '%s\n' '[]'; exit 0 ;;
+esac
+exit 1
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func shellQuoteForTest(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
@@ -562,4 +619,25 @@ func shutdownTestDaemonAndWaitForCleanup(t *testing.T, p *paths.Paths) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("daemon did not finish cleanup within 15s")
+}
+
+// breakTrustedRepoConfig commits an unparseable .no-mistakes.yaml on the
+// trusted default branch, so reading the trusted config completes and returns
+// adverse evidence. Recovery classifies that as unresumable and fails the run
+// terminally. Making the remote unreachable instead is a read that never
+// completed, which recovery defers rather than fails, so it cannot stand in
+// for this.
+func breakTrustedRepoConfig(t *testing.T, gateDir string) {
+	t.Helper()
+	clone := filepath.Join(t.TempDir(), "trusted")
+	gitCmd(t, "", "clone", gateDir, clone)
+	gitCmd(t, clone, "config", "user.email", "test@test.com")
+	gitCmd(t, clone, "config", "user.name", "Test")
+	gitCmd(t, clone, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(clone, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, clone, "add", ".no-mistakes.yaml")
+	gitCmd(t, clone, "commit", "-m", "unparseable trusted config")
+	gitCmd(t, clone, "push", "origin", "HEAD:refs/heads/main")
 }

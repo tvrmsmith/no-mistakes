@@ -64,7 +64,7 @@ Previous lint findings to address:
 ` + sanitizedPreviousFindingsForPrompt(sctx.PreviousFindings)
 		}
 		result, err := sctx.RunAgentContext(ctx, agent.RunOpts{
-			Prompt:     prompt,
+			Prompt:     fixerPrompt(prompt),
 			CWD:        sctx.WorkDir,
 			JSONSchema: findingsSchema,
 			OnChunk:    sctx.LogChunk,
@@ -75,11 +75,11 @@ Previous lint findings to address:
 		}
 
 		var findings Findings
-		if result.Output != nil {
-			if err := json.Unmarshal(result.Output, &findings); err != nil {
-				sctx.Log("could not parse structured output, using text response")
-				findings = Findings{Summary: result.Text}
-			}
+		if result.Output == nil {
+			return nil, errors.New("lint analyzer returned no structured findings")
+		}
+		if err := unmarshalRequiredFindings(result.Output, &findings, true); err != nil {
+			return nil, fmt.Errorf("validate lint analyzer findings: %w", err)
 		}
 		summary, err := extractCommitSummary(result)
 		if err != nil {
@@ -88,7 +88,8 @@ Previous lint findings to address:
 			}
 			sctx.Log(fmt.Sprintf("warning: could not parse lint summary: %v", err))
 		}
-		if err := commitAgentFixes(sctx, s.Name(), summary, "fix lint issues"); err != nil {
+		committed, err := commitAgentFixesWithResult(sctx, s.Name(), summary, "fix lint issues")
+		if err != nil {
 			return nil, err
 		}
 
@@ -98,7 +99,7 @@ Previous lint findings to address:
 			NeedsApproval: needsApproval,
 			AutoFixable:   false,
 			Findings:      string(findingsJSON),
-			FixSummary:    summary,
+			FixSummary:    fixResultSummary(committed),
 		}, nil
 	}
 
@@ -145,7 +146,10 @@ Previous lint findings to address:
 		fixSummary = summary
 	}
 
-	// Run configured lint command
+	// Run configured lint command after the run-scoped dependency preparation.
+	if err := ensurePrepared(sctx, s.Name()); err != nil {
+		return nil, fmt.Errorf("prepare lint dependencies: %w", err)
+	}
 	sctx.Log(fmt.Sprintf("running linter: %s", lintCmd))
 	output, exitCode, err := runStepShellCommand(sctx, lintCmd)
 	if err != nil {

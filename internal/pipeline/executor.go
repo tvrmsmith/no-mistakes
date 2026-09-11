@@ -64,10 +64,11 @@ type Executor struct {
 	// restart brings the run back to that step. Created per Execute.
 	restartFindings map[types.StepName]string
 
-	mu          sync.Mutex
-	approvalCh  chan approvalResponse // buffered channel for approval responses
-	waiting     bool                  // true when blocked on approval
-	waitingStep types.StepName        // which step is currently awaiting approval
+	mu                   sync.Mutex
+	approvalCh           chan approvalResponse // buffered channel for approval responses
+	waiting              bool                  // true when blocked on approval
+	waitingStep          types.StepName        // which step is currently awaiting approval
+	waitingProtectedPath bool                  // approval would skip work refused by protected_paths
 
 	gateReconcileInterval time.Duration
 	gateReconcileTimeout  time.Duration
@@ -214,6 +215,10 @@ func (e *Executor) RespondWithOverrides(step types.StepName, action types.Approv
 	if step != e.waitingStep {
 		e.mu.Unlock()
 		return fmt.Errorf("step mismatch: responding to %q but %q is awaiting approval", step, e.waitingStep)
+	}
+	if action == types.ActionApprove && e.waitingProtectedPath {
+		e.mu.Unlock()
+		return fmt.Errorf("cannot approve a protected-path refusal: resolve the reported edit, then use fix to retry %s; approval would skip unfinished work", step)
 	}
 	e.waiting = false
 	e.mu.Unlock()
@@ -484,6 +489,7 @@ func (e *Executor) initializeRunScopes(runID string, recovered bool) {
 type stepExecutionState struct {
 	fixing           bool
 	previousFindings string
+	deferredFindings string
 	roundNum         int
 	autoFixAttempts  int
 	executionMS      int64
@@ -516,16 +522,34 @@ type recoveredGate struct {
 	reviewedHeadSHA string
 }
 
+// resumePoint is where a recovered run re-enters its pipeline. Exactly one
+// field is non-nil.
+type resumePoint struct {
+	gate      *recoveredGate
+	ciMonitor *recoveredCIMonitor
+}
+
+// recoveredCIMonitor is a run whose only active step is a live CI monitor
+// polling an already-open PR.
+type recoveredCIMonitor struct {
+	index      int
+	stepResult *db.StepResult
+}
+
+// ValidateRecoveredRun reports whether run has a resume point this binary's
+// step plan can re-enter. It deliberately does not require the
+// awaiting-agent marker: a CI monitor never sets one, and for a gate the step
+// rows are the stronger evidence anyway, which recoveredResumePoint owns.
 func ValidateRecoveredRun(database *db.DB, run *db.Run, steps []Step) error {
-	if run == nil || run.Status != types.RunRunning || run.AwaitingAgentSince == nil {
+	if run == nil || run.Status != types.RunRunning {
 		return fmt.Errorf("run is not a recoverable parked run")
 	}
 	validator := &Executor{db: database, steps: steps}
 	// The run's own skip set is what explains an already-resolved step row, so
-	// validation must read the recovered gate under the same set the resumed
+	// validation must read the resume point under the same set the resumed
 	// executor will run with.
 	validator.SetSkippedSteps(run.SkippedSteps)
-	_, err := validator.recoveredGate(run.ID)
+	_, err := validator.recoveredResumePoint(run)
 	return err
 }
 
@@ -544,7 +568,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	if err := e.adoptRecordedSkips(run); err != nil {
 		return err
 	}
-	gate, err := e.recoveredGate(run.ID)
+	point, err := e.recoveredResumePoint(run)
 	if err != nil {
 		return err
 	}
@@ -554,6 +578,22 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	}
 	e.initializeRunScopes(run.ID, true)
 
+	if point.ciMonitor != nil {
+		return e.resumeCIMonitor(ctx, run, repo, workDir, logDir, point.ciMonitor)
+	}
+	gate := point.gate
+
+	// Only a gate carries the awaiting-agent marker, so this dereference
+	// belongs after the CI branch has already returned. It still needs its own
+	// guard: recoveredResumePoint selects the gate from the step rows alone,
+	// and the marker write is best-effort, so a real gate row can arrive with
+	// no marker. That is adverse evidence about a run recovery cannot fully
+	// account for, reported as a plain error the daemon records verbatim,
+	// rather than a panic that would fail the run unparked and delete the
+	// worktree this whole path exists to keep.
+	if run.AwaitingAgentSince == nil {
+		return fmt.Errorf("recovered gate at step %s has no awaiting-agent marker", gate.step.Name())
+	}
 	parkStart := time.Unix(*run.AwaitingAgentSince, 0)
 	duration := recoveredStepDuration(gate.stepResult)
 	completeRecoveredGate := func() error {
@@ -600,7 +640,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	// A cancellation observed here falls through to the wait below, whose single
 	// return funnel translates a clean shutdown into ErrParkPreserved before any
 	// write completes the gate.
-	reconciled, reconcileErr := e.reconcileApprovalGate(ctx, gate.step, reconcileCtx)
+	reconciled, reconcileErr := e.reconcileApprovalGate(ctx, gate.step, reconcileCtx, gate.findings)
 	if reconciled && ctx.Err() == nil {
 		if dbErr := e.db.CompleteRunAwaitingAgent(run.ID, time.Since(parkStart).Milliseconds()); dbErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("complete reconciled awaiting-agent state: %w", dbErr), ctx)
@@ -623,6 +663,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	e.mu.Lock()
 	e.waiting = true
 	e.waitingStep = gate.step.Name()
+	e.waitingProtectedPath = HasProtectedPathRefusal(gate.findings)
 	e.mu.Unlock()
 	e.emitStepEventWithFindingsAndError(
 		ipc.EventStepCompleted,
@@ -635,7 +676,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		gate.stepResult.DurationMS,
 	)
 
-	response, reconciled, err := e.waitForApprovalOrReconcile(ctx, gate.step, reconcileCtx, false)
+	response, reconciled, err := e.waitForApprovalOrReconcile(ctx, gate.step, reconcileCtx, gate.findings, false)
 	if errors.Is(err, ErrDaemonShutdown) {
 		// A clean shutdown interrupted the resumed run while it was still
 		// parked at this gate. Leave the run and gate step exactly as
@@ -674,6 +715,9 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		if err := e.discardApprovalResidue(gate.step, reconcileCtx); err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
+		if err := e.applyApprovalOverride(gate.step, reconcileCtx, gate.stepResult.ID); err != nil {
+			return e.failRun(run, repo, err, ctx)
+		}
 		if err := completeRecoveredGate(); err != nil {
 			return e.failRun(run, repo, fmt.Errorf("complete recovered step %s: %w", gate.step.Name(), err), ctx)
 		}
@@ -709,13 +753,14 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 				}
 			}
 		}
-		if dbErr := e.db.UpdateStepStatus(gate.stepResult.ID, types.StepStatusFixing); dbErr != nil {
+		if dbErr := e.db.StartStepFixRound(gate.stepResult.ID, e.autoFixLimit(gate.step.Name())); dbErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("mark recovered step %s fixing: %w", gate.step.Name(), dbErr), ctx)
 		}
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFixing), "", "", nil)
 		skipRemaining, restartFrom, err := e.executeStep(ctx, gate.step, gate.stepResult, run, repo, workDir, logDir, stepExecutionState{
 			fixing:           true,
 			previousFindings: merged,
+			deferredFindings: removeMatchingFindingsJSON(gate.findings, selected),
 			roundNum:         gate.round,
 			autoFixAttempts:  gate.autoFixes,
 			executionMS:      duration,
@@ -740,6 +785,57 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	}
 }
 
+// resumeCIMonitor re-enters the CI step of a run whose monitor was still
+// polling an open PR when the daemon went away. The step is nearly stateless:
+// it re-reads the PR rollup live and everything durable it needs (pr_url,
+// ci_rerun_state, head_sha, push_generation) is already persisted, so one
+// extra poll is the whole cost of the restart.
+func (e *Executor) resumeCIMonitor(ctx context.Context, run *db.Run, repo *db.Repo, workDir, logDir string, monitor *recoveredCIMonitor) error {
+	step := e.steps[monitor.index]
+	state, err := e.durableExecutionState(monitor.stepResult.ID)
+	if err != nil {
+		// A round read that did not complete proves nothing about the run, so
+		// it defers rather than failing it. See the parked-run section of
+		// AGENTS.md.
+		return evidenceUnavailable(fmt.Errorf("restore step %s execution state: %w", step.Name(), err))
+	}
+	// executeStep re-runs StartStepWithAutoFixLimit, which overwrites
+	// started_at, so seeding the already-elapsed time here is the only thing
+	// keeping the step's recorded duration from reading as "time since the
+	// last daemon start".
+	state.executionMS = elapsedSinceStepStart(monitor.stepResult)
+	skipRemaining, restartFrom, err := e.executeStep(ctx, step, monitor.stepResult, run, repo, workDir, logDir, state)
+	if err != nil {
+		// failRun returns ErrParkPreserved unchanged, so a second clean
+		// shutdown of the resumed monitor preserves it again.
+		return e.failRun(run, repo, err, ctx)
+	}
+	if skipRemaining {
+		return e.skipRecoveredRemainder(run, repo, monitor.index+1)
+	}
+	if restartFrom != "" {
+		restartIndex, indexErr := e.prepareRestart(run, restartFrom, monitor.index)
+		if indexErr != nil {
+			return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", step.Name(), restartFrom), ctx)
+		}
+		return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex, true)
+	}
+	return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, monitor.index+1, false)
+}
+
+// elapsedSinceStepStart reports how long a still-running recovered step row
+// had already been executing before the daemon went away.
+func elapsedSinceStepStart(step *db.StepResult) int64 {
+	if step == nil || step.StartedAt == nil {
+		return 0
+	}
+	elapsed := time.Since(time.Unix(*step.StartedAt, 0)).Milliseconds()
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed
+}
+
 func (e *Executor) runContext(ctx context.Context) context.Context {
 	if e.forge == nil {
 		return ctx
@@ -747,8 +843,16 @@ func (e *Executor) runContext(ctx context.Context) context.Context {
 	return git.WithEnvironment(ctx, e.forge.Environment)
 }
 
-func (e *Executor) recoveredGate(runID string) (*recoveredGate, error) {
-	results, err := e.db.GetStepsByRun(runID)
+// recoveredResumePoint resolves where a recovered run re-enters its pipeline.
+// Only the two step reads can fail as unavailable evidence; every other
+// return is a plain error, because the daemon reads a plain error as an
+// adverse fact that terminally fails the run and an evidenceUnavailable one
+// as a deferral. See errRunUnresumable in internal/daemon/manager.go.
+func (e *Executor) recoveredResumePoint(run *db.Run) (*resumePoint, error) {
+	if run == nil {
+		return nil, fmt.Errorf("recovered run is missing")
+	}
+	results, err := e.db.GetStepsByRun(run.ID)
 	if err != nil {
 		return nil, evidenceUnavailable(fmt.Errorf("get recovered steps: %w", err))
 	}
@@ -757,6 +861,11 @@ func (e *Executor) recoveredGate(runID string) (*recoveredGate, error) {
 	}
 
 	var gate *recoveredGate
+	// An unresolved row before the gate is only a violation once a gate is
+	// actually found. Holding the first one lets the same pass recognise the
+	// live CI monitor, whose own running row would otherwise read as one.
+	var preGateErr error
+	var active []int
 	for index, result := range results {
 		if result.StepName != e.steps[index].Name() {
 			return nil, fmt.Errorf("recovered step %d is %q, want %q", index, result.StepName, e.steps[index].Name())
@@ -797,8 +906,11 @@ func (e *Executor) recoveredGate(runID string) (*recoveredGate, error) {
 			continue
 		}
 		if gate == nil {
-			if result.Status != types.StepStatusCompleted && result.Status != types.StepStatusSkipped {
-				return nil, fmt.Errorf("recovered step %s is %s before approval gate", result.StepName, result.Status)
+			if result.Status == types.StepStatusRunning {
+				active = append(active, index)
+			}
+			if result.Status != types.StepStatusCompleted && result.Status != types.StepStatusSkipped && preGateErr == nil {
+				preGateErr = fmt.Errorf("recovered step %s is %s before approval gate", result.StepName, result.Status)
 			}
 			continue
 		}
@@ -806,10 +918,56 @@ func (e *Executor) recoveredGate(runID string) (*recoveredGate, error) {
 			return nil, fmt.Errorf("%w after approval gate", err)
 		}
 	}
-	if gate == nil {
-		return nil, fmt.Errorf("recovered run has no approval gate")
+	if gate != nil {
+		if preGateErr != nil {
+			return nil, preGateErr
+		}
+		return &resumePoint{gate: gate}, nil
 	}
-	return gate, nil
+	monitor, err := e.recoveredCIMonitor(run, results, active)
+	if err != nil {
+		return nil, err
+	}
+	return &resumePoint{ciMonitor: monitor}, nil
+}
+
+// recoveredCIMonitor resolves the second resume point: a run with no gate
+// whose only active step is a CI monitor polling an already-open PR. active
+// holds the indices of the running rows.
+func (e *Executor) recoveredCIMonitor(run *db.Run, results []*db.StepResult, active []int) (*recoveredCIMonitor, error) {
+	switch {
+	case len(active) == 0:
+		return nil, fmt.Errorf("recovered run has no approval gate and no live CI monitor")
+	case len(active) > 1:
+		return nil, fmt.Errorf("recovered run has %d active steps, want exactly one", len(active))
+	}
+	index := active[0]
+	row := results[index]
+	if row.StepName != types.StepCI {
+		return nil, fmt.Errorf("recovered active step %s is not a resume point", row.StepName)
+	}
+	// A live monitor holds no agent. A pid here means an auto-fix agent was
+	// mid-repair, whose half-written edits nothing durable explains.
+	if row.AgentPID != nil {
+		return nil, fmt.Errorf("recovered CI monitor still holds agent pid %d", *row.AgentPID)
+	}
+	// The PR is the whole state a re-entered monitor polls; without it there
+	// is nothing to resume onto.
+	if run.PRURL == nil || strings.TrimSpace(*run.PRURL) == "" {
+		return nil, fmt.Errorf("recovered CI monitor has no PR URL")
+	}
+	for before := 0; before < index; before++ {
+		status := results[before].Status
+		if status != types.StepStatusCompleted && status != types.StepStatusSkipped {
+			return nil, fmt.Errorf("recovered step %s is %s before the CI monitor", results[before].StepName, status)
+		}
+	}
+	for after := index + 1; after < len(results); after++ {
+		if _, err := e.recoveredStepHasWork(results[after], e.steps[after].Name(), false); err != nil {
+			return nil, fmt.Errorf("%w after the CI monitor", err)
+		}
+	}
+	return &recoveredCIMonitor{index: index, stepResult: row}, nil
 }
 
 func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, repo *db.Repo, workDir, logDir string, start int, revalidating bool) error {
@@ -956,23 +1114,184 @@ func recoveredLogPath(step *db.StepResult) string {
 	return ""
 }
 
+func (e *Executor) autoFixLimit(stepName types.StepName) int {
+	if e.config == nil {
+		return 0
+	}
+	return e.config.AutoFixLimit(stepName)
+}
+
 // executeStep runs a single step with approval coordination.
 // Returns whether to skip the remainder, an optional earlier restart step,
 // and any execution error.
+// ciMonitorPreserveCheckTimeout bounds the worktree read ciMonitorPreservable
+// makes. The step's own context is already cancelled by the time it runs, so
+// the read carries its own deadline rather than inheriting a dead one, and the
+// daemon is mid-shutdown, so it must not be able to wait indefinitely.
+const ciMonitorPreserveCheckTimeout = 10 * time.Second
+
+// CIMonitorWorktreeClean is the single owner of the clean-worktree precondition
+// a resumable CI monitor has to meet, and every site that decides the question
+// reads it: the stop path below, the destructive lifecycle guard and startup
+// recovery through lifecycle.ResumePreconditionsMet, and the drain through
+// lifecycle.PreservableCIMonitor. The rule lives here rather than in lifecycle
+// because lifecycle imports pipeline and the dependency cannot be reversed.
+//
+// A checkout with uncommitted work under a monitor is an interrupted auto-fix
+// turn: steps.commitRepair commits everything immediately after each turn, so
+// the next repair's git add -A would otherwise sweep those leftovers into a
+// commit whose message describes a different repair and push it to the open PR.
+//
+// A read that could not be completed comes back as
+// ErrRecoveryEvidenceUnavailable so a caller can tell it from an established
+// adverse fact. No caller may treat either answer as clean, and none may cost
+// the run its worktree on the refusal.
+func CIMonitorWorktreeClean(ctx context.Context, workDir string) error {
+	if strings.TrimSpace(workDir) == "" {
+		return errors.New("the run has no worktree to check for interrupted work")
+	}
+	dirty, err := git.HasUncommittedChanges(ctx, workDir)
+	if err != nil {
+		return evidenceUnavailable(fmt.Errorf("check the worktree for interrupted work: %w", err))
+	}
+	if dirty {
+		return errors.New("an interrupted auto-fix left uncommitted work in the worktree")
+	}
+	return nil
+}
+
+// ciMonitorPreservable reports whether the CI step a clean stop just cancelled
+// is a bare monitor the next daemon start can re-enter. It returns nil when it
+// is, and otherwise the reason it is not.
+//
+// Four facts have to hold together, each guarding a different way the
+// preservation promise goes wrong:
+//
+//   - The row is still a running CI row holding no agent pid, matching what
+//     lifecycle.ResumableCIMonitor accepts on the next start.
+//   - The run has a PR URL. ResumableCIMonitor requires one, and the CI row is
+//     already running while the step builds its host and before it bails out
+//     with "no PR URL found". Preserving inside that window leaves a row
+//     recovery refuses, and the blanket sweep then reports a clean operator
+//     stop as "daemon crashed during execution".
+//   - The worktree is clean, read through CIMonitorWorktreeClean, which every
+//     other site deciding this same question reads too. The pid cannot carry
+//     the fact on its own: every agent adapter emits its exit event on a
+//     cancelled turn and the executor's handler clears the pid, so a repair
+//     killed mid-edit reaches here looking exactly like a bare monitor.
+//   - The worktree head is the head the run recorded. It is a distinct fact
+//     from cleanliness because steps.commitRepair commits before recordRepair
+//     writes the new head, so a stop landing in that window finds a clean
+//     worktree one commit ahead of run.HeadSHA. The rule matches what
+//     lifecycle.WorktreeMatchesRun applies on the next start, so a stop never
+//     promises preservation a start then refuses, and recovery's rule is
+//     deliberately left strict rather than widened to accept a descendant: on
+//     the gate-parked path a descendant head is exactly the adverse evidence it
+//     exists to catch. This is a second copy of that rule rather than a call
+//     into its owner, because lifecycle imports pipeline and the dependency
+//     cannot be reversed here. Two differences are known and intended: the
+//     owner resolves the checkout through worktrees.RecordedDir while this
+//     takes workDir already resolved and trims both sides of the comparison,
+//     and the owner reports a failed read as unavailable evidence while every
+//     refusal here is non-preservable.
+//
+// Every read fails closed. An unproven claim must not keep a run alive,
+// because the ordinary failure path is recoverable and a wrongly preserved
+// worktree quietly corrupts the PR.
+//
+// Failing closed does not cost the worktree of a run that reached its PR.
+// Every refusal, incomplete read and completed adverse fact alike, passes
+// through the one wrap below, so a refusal added to this function later cannot
+// land on the destructive side by omission. The wrap applies
+// ErrCIMonitorInterrupted whenever the run holds a PR URL, and the caller then
+// ends it as types.RunCIMonitorInterrupted so the checkout is spared for an
+// operator rather than swept as a failed run's leftovers: a dirty or unreadable
+// checkout can hold a repair commit an earlier round already made and never
+// published, beside the interrupted turn's edits.
+//
+// A run with no PR URL has none of that. Nothing was pushed for a monitor to
+// poll and nothing downstream can be corrupted, so it ends as an ordinary
+// failure and its checkout is reclaimed, which also keeps the status honest:
+// types.RunCIMonitorInterrupted names an open PR that outlived the run.
+func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir string) error {
+	refusal := e.ciMonitorPreservationRefusal(stepID, run, workDir)
+	if refusal == nil {
+		return nil
+	}
+	if !e.runReachedItsPR(run.ID) {
+		return refusal
+	}
+	return fmt.Errorf("%w: %s", ErrCIMonitorInterrupted, refusal)
+}
+
+// runReachedItsPR reports whether the run has a PR URL recorded. A read that
+// fails answers yes, because sparing a worktree costs an operator a directory
+// while reclaiming one can cost an unpublished commit.
+func (e *Executor) runReachedItsPR(runID string) bool {
+	latest, err := e.db.GetRun(runID)
+	if err != nil || latest == nil {
+		return true
+	}
+	return latest.PRURL != nil && strings.TrimSpace(*latest.PRURL) != ""
+}
+
+// ciMonitorPreservationRefusal holds the facts ciMonitorPreservable checks. It
+// reports a plain error so its caller owns the one place a refusal is wrapped.
+func (e *Executor) ciMonitorPreservationRefusal(stepID string, run *db.Run, workDir string) error {
+	current, err := e.db.GetStepResult(stepID)
+	if err != nil {
+		return fmt.Errorf("could not re-read the ci step row: %w", err)
+	}
+	// GetStepResult reports a missing row as a nil result and a nil error.
+	if current == nil {
+		return errors.New("the ci step row is gone")
+	}
+	if current.Status != types.StepStatusRunning {
+		return fmt.Errorf("the ci step row is %s rather than running", current.Status)
+	}
+	if current.AgentPID != nil {
+		return fmt.Errorf("an auto-fix agent still holds pid %d", *current.AgentPID)
+	}
+	// The in-memory run predates the pr step's write, so the PR URL has to come
+	// from the row rather than from run.
+	latest, err := e.db.GetRun(run.ID)
+	if err != nil {
+		return fmt.Errorf("could not re-read the run row: %w", err)
+	}
+	if latest == nil {
+		return errors.New("the run row is gone")
+	}
+	if latest.PRURL == nil || strings.TrimSpace(*latest.PRURL) == "" {
+		return errors.New("the run has no PR URL for a resumed monitor to poll")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ciMonitorPreserveCheckTimeout)
+	defer cancel()
+	if err := CIMonitorWorktreeClean(ctx, workDir); err != nil {
+		return err
+	}
+	head, err := git.HeadSHA(ctx, workDir)
+	if err != nil {
+		return fmt.Errorf("could not read the worktree head: %w", err)
+	}
+	if strings.TrimSpace(head) != strings.TrimSpace(latest.HeadSHA) {
+		return fmt.Errorf("the worktree holds commit %s, which the run has not recorded as its head",
+			strings.TrimSpace(head))
+	}
+	return nil
+}
+
 func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult, run *db.Run, repo *db.Repo, workDir, logDir string, state stepExecutionState) (bool, types.StepName, error) {
 	stepName := step.Name()
 	logPath := filepath.Join(logDir, string(stepName)+".log")
 	finalExitCode := 0
-	autoFixLimit := 0
-	if e.config != nil {
-		autoFixLimit = e.config.AutoFixLimit(stepName)
-	}
+	autoFixLimit := e.autoFixLimit(stepName)
 
-	// Mark step as running
-	if err := e.db.StartStepWithAutoFixLimit(sr.ID, autoFixLimit); err != nil {
-		return false, "", fmt.Errorf("start step %s: %w", stepName, err)
+	if !state.fixing {
+		if err := e.db.StartStepWithAutoFixLimit(sr.ID, autoFixLimit); err != nil {
+			return false, "", fmt.Errorf("start step %s: %w", stepName, err)
+		}
+		e.emitStepEvent(ipc.EventStepStarted, run, repo, stepName, string(types.StepStatusRunning))
 	}
-	e.emitStepEvent(ipc.EventStepStarted, run, repo, stepName, string(types.StepStatusRunning))
 
 	// Track execution-only time, excluding approval wait periods.
 	phaseStart := time.Now()
@@ -1100,6 +1419,18 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		ciReadyNoCI = declaredNoCI
 		e.emitCIReadinessEvent(run, repo, ready, declaredNoCI)
 	}
+	// A fix round is marked fixing before the step re-executes and only
+	// changes status when Execute returns. A step whose fix round ends with
+	// ordinary execution (the CI monitor after a published repair) reports
+	// that here, so the durable status and every subscriber see running
+	// again; step_started is the event the TUI already maps to running.
+	markRunning := func() error {
+		if err := e.db.UpdateStepStatus(sr.ID, types.StepStatusRunning); err != nil {
+			return fmt.Errorf("return step status to running: %w", err)
+		}
+		e.emitStepEvent(ipc.EventStepStarted, run, repo, stepName, string(types.StepStatusRunning))
+		return nil
+	}
 	sctx := &StepContext{
 		Ctx:              ctx,
 		Run:              run,
@@ -1119,6 +1450,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		CoverageDir:      e.runCoverageDir(run.ID),
 		Fixing:           state.fixing,
 		PreviousFindings: state.previousFindings,
+		DeferredFindings: state.deferredFindings,
 		Log:              writeLog,
 		LogChunk:         writeLogChunk,
 		LogFile: func(text string) {
@@ -1126,6 +1458,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			touchLogActivity(text, true)
 		},
 		CIReadinessChanged: ciReadinessChanged,
+		MarkRunning:        markRunning,
 		OnPRMerged:         e.onPRMerged,
 	}
 	if stepName == types.StepReview {
@@ -1141,6 +1474,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	}
 	skipRemaining := false
 	stepSkipped := false
+	var skipReason string
 	currentRoundID := state.currentRoundID
 	var reviewApprovedHeadSHA string
 	var restartFrom types.StepName
@@ -1150,6 +1484,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		reviewStartingHeadSHA := run.HeadSHA
 		sctx.ReviewStartingHeadSHA = reviewStartingHeadSHA
 		outcome, err := step.Execute(sctx)
+		if refusal := ProtectedPathOutcome(err); refusal != nil {
+			outcome, err = refusal, nil
+		}
 		roundNum++
 		roundDuration := time.Since(phaseStart).Milliseconds()
 		if err != nil {
@@ -1163,10 +1500,41 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			redactedErr := safeurl.RedactText(err.Error())
 			fmt.Fprintf(logFile, "\nerror: %s\n", redactedErr)
 			touchLogActivity("error: "+redactedErr, true)
+			// A clean daemon stop of a live CI monitor preserves it for the
+			// next start instead of failing it: the monitor is nearly
+			// stateless, so re-entering it costs one extra poll.
+			//
+			// Only the CI step gets this. A CI row is the only resume point
+			// besides an approval gate, so preserving any other step would
+			// strand the run with nothing for recovery to re-enter.
+			//
+			// What may be preserved is decided by ciMonitorPreservable, which
+			// owns every fact that has to hold and fails closed on each one.
+			interruptedMonitor := false
+			if stepName == types.StepCI && errors.Is(context.Cause(sctx.Ctx), ErrDaemonShutdown) {
+				refusal := e.ciMonitorPreservable(sr.ID, run, workDir)
+				if refusal == nil {
+					// Write nothing: the running row and its worktree are what
+					// the next daemon start resumes from.
+					return false, "", ErrParkPreserved
+				}
+				slog.Warn("clean stop is not preserving this ci step; failing it instead",
+					"run_id", run.ID, "step", stepName, "reason", refusal)
+				// A refusal on a run that reached its PR is not a pipeline
+				// failure: the PR is open, the worktree can hold repair work
+				// the run never published, and the run records that concrete
+				// reason instead of the cancellation cause so an operator can
+				// resolve it.
+				interruptedMonitor = errors.Is(refusal, ErrCIMonitorInterrupted)
+				redactedErr = safeurl.RedactText(refusal.Error())
+			}
 			if dbErr := e.db.FailStep(sr.ID, redactedErr, durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
 			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", redactedErr, &durationMS)
+			if interruptedMonitor {
+				return false, "", fmt.Errorf("step %s failed: %s: %w", stepName, redactedErr, ErrCIMonitorInterrupted)
+			}
 			return false, "", fmt.Errorf("step %s failed: %s", stepName, redactedErr)
 		}
 		restartFrom = outcome.RestartFrom
@@ -1204,9 +1572,6 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		var inserted *db.StepRound
 		var dbErr error
 		roundTrigger := nextTrigger
-		if stepName == types.StepCI && restartFrom != "" && !sctx.Fixing {
-			roundTrigger = "auto_fix"
-		}
 		if stepName == types.StepReview {
 			if e.config != nil && e.config.CaptureEvalProvenance {
 				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, e.config.TrustedConfigSHA, e.config.ReplayGlobalYAML, e.config.ReplayRepoYAML, roundDuration)
@@ -1214,7 +1579,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, "", nil, nil, roundDuration)
 			}
 		} else {
-			inserted, dbErr = e.db.InsertStepRoundWithStartingHead(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewStartingHeadSHA, roundDuration)
+			inserted, dbErr = e.db.InsertStepRoundWithHeadAndRepair(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewStartingHeadSHA, outcome.RepairPublished, roundDuration)
 		}
 		if dbErr != nil {
 			currentRoundID = roundInsertID(currentRoundID, inserted, dbErr)
@@ -1260,8 +1625,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				executionMS += time.Since(phaseStart).Milliseconds()
 				fixCount := findingsCount(fixableFindings)
 				writeLog(fmt.Sprintf("auto-fix round %d/%d starting after round %d (%d %s)", autoFixAttempts, autoFixLimit, roundNum, fixCount, pluralize(fixCount, "finding", "findings")))
-				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
-					slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
+				if dbErr := e.db.StartStepFixRound(sr.ID, autoFixLimit); dbErr != nil {
+					slog.Warn("failed to start step fix round in db", "step", stepName, "error", dbErr)
 				}
 				if currentRoundID != "" {
 					if idsJSON := findingIDsJSON(fixableFindings); idsJSON != "" {
@@ -1274,6 +1639,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				phaseStart = time.Now()
 				sctx.Fixing = true
 				sctx.PreviousFindings = fixableFindings
+				sctx.DeferredFindings = removeMatchingFindingsJSON(outcome.Findings, fixableFindings)
 				nextTrigger = "auto_fix"
 				continue
 			}
@@ -1285,6 +1651,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// are acceptable and don't block the pipeline.
 			skipRemaining = outcome.SkipRemaining
 			stepSkipped = outcome.Skipped
+			skipReason = safeurl.RedactText(outcome.SkipReason)
 			break
 		}
 
@@ -1312,6 +1679,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		e.mu.Lock()
 		e.waiting = true
 		e.waitingStep = stepName
+		e.waitingProtectedPath = HasProtectedPathRefusal(outcome.Findings)
 		e.mu.Unlock()
 
 		// Parking starts before the gate becomes observable. This includes the
@@ -1334,7 +1702,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), outcome.Findings, "", &executionMS)
 
-		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, true)
+		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, outcome.Findings, true)
 		if errors.Is(err, ErrDaemonShutdown) {
 			// A clean shutdown interrupted the run while it was parked at this
 			// gate. Leave the run row, the awaiting-agent marker, and the gate
@@ -1378,6 +1746,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if err := e.discardApprovalResidue(step, sctx); err != nil {
 				return false, "", err
 			}
+			if err := e.applyApprovalOverride(step, sctx, sr.ID); err != nil {
+				return false, "", err
+			}
 			phaseStart = time.Now()
 			goto done
 
@@ -1404,13 +1775,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			phaseStart = time.Now()
 			selectedCount := selectedFindingCount(outcome.Findings, response.findingIDs)
 			writeLog(fmt.Sprintf("user-fix round starting after round %d (%d %s selected)", roundNum, selectedCount, pluralize(selectedCount, "finding", "findings")))
-			if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
-				slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
+			if dbErr := e.db.StartStepFixRound(sr.ID, autoFixLimit); dbErr != nil {
+				slog.Warn("failed to start step fix round in db", "step", stepName, "error", dbErr)
 			}
 			sctx.Fixing = true
 			selectedFindings := filterFindingsJSON(outcome.Findings, response.findingIDs)
 			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
 			sctx.PreviousFindings = mergedFindings
+			sctx.DeferredFindings = removeMatchingFindingsJSON(outcome.Findings, selectedFindings)
 			nextTrigger = "auto_fix"
 			if currentRoundID != "" {
 				allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, mergedFindings)
@@ -1456,6 +1828,10 @@ done:
 		reviewedHead := reviewApprovedHeadSHA
 		run.ReviewApprovedHeadSHA = &reviewedHead
 		ClearUncertifiedPipelineRangeIfCertified(ctx, e.db, repo.ID, run.Branch, reviewedHead, workDir)
+	} else if stepSkipped {
+		if err := e.db.CompleteSkippedStep(sr.ID, finalExitCode, durationMS, logPath, skipReason); err != nil {
+			return false, "", fmt.Errorf("complete skipped step %s: %w", stepName, err)
+		}
 	} else if err := e.db.CompleteStepWithStatus(sr.ID, status, finalExitCode, durationMS, logPath); err != nil {
 		return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 	}
@@ -1463,23 +1839,6 @@ done:
 	return skipRemaining, restartFrom, nil
 }
 
-// recordDeclinedRound persists an approve, skip, or abort resolution as a real
-// decision instead of leaving no trace.
-//
-// Before this existed, those three resolutions wrote no finding-level state at
-// all, so a round where the human read a blocking finding and said "ship it as
-// is" was byte-identical to a round with no findings. Nothing downstream could
-// tell the two apart, and the only durable statement of what the change must do
-// stayed the user-intent prose - which is how a later step could re-derive and
-// re-apply the very change the human had just declined.
-//
-// The decline is stored the way a partial selection already stores one: as the
-// complement of selected_finding_ids. Writing an explicit empty array with the
-// user_declined source is what makes "selected nothing" representable, since a
-// NULL column means "no decision was recorded".
-//
-// Best effort by design. This is advisory prompt context for later steps, so a
-// failed write degrades to today's behavior and must never fail the run.
 // discardApprovalResidue is what both ActionApprove sites route
 // through. A step that parked over work it deliberately refused to commit
 // (ApprovalResidueDiscarder) clears that work here, because approving such a
@@ -1505,6 +1864,62 @@ func (e *Executor) discardApprovalResidue(step Step, sctx *StepContext) error {
 	return nil
 }
 
+// applyApprovalOverride is the single place both ActionApprove sites (the
+// live wait in executeStep and the daemon-restart recovery path in Resume)
+// route through before completing a step on approval. If step raised its gate
+// over a live, re-checkable condition (ApprovalOverrideVerifier), this
+// re-checks it once and, only when it is still unresolved, records the
+// upcoming completion as an explicit override (db.SetStepOverrideReason)
+// instead of a silent plain pass - see ApprovalOverrideVerifier's doc for the
+// incident this exists to make impossible. It never blocks or changes the
+// approval itself: a human's ActionApprove always proceeds, and a step that
+// does not implement the interface (every step but CI today) is completely
+// unaffected. A verification error fails closed - it is recorded as an
+// unresolved condition, not silently treated as clear - but still never stops
+// the approval, only what it gets recorded as.
+//
+// Persisting that override marker is itself fail-closed: every downstream
+// surface (outcomeForRun, the run_completed CIOverrideReason delta, the TUI
+// banner) derives override status solely from step_results.override_reason, so
+// a swallowed write failure would complete the step as an ordinary clean pass -
+// the exact false-green this feature exists to prevent. When the marker cannot
+// be written this returns the error so the caller fails the run closed instead
+// of recording that plain pass.
+func (e *Executor) applyApprovalOverride(step Step, sctx *StepContext, stepResultID string) error {
+	verifier, ok := step.(ApprovalOverrideVerifier)
+	if !ok {
+		return nil
+	}
+	unresolved, err := verifier.VerifyApprovalOverride(sctx)
+	if err != nil {
+		unresolved = fmt.Sprintf("could not verify: %v", err)
+	}
+	if unresolved == "" {
+		return nil
+	}
+	if dbErr := e.db.SetStepOverrideReason(stepResultID, unresolved); dbErr != nil {
+		return fmt.Errorf("record approval override reason for step %s: %w", step.Name(), dbErr)
+	}
+	return nil
+}
+
+// recordDeclinedRound persists an approve, skip, or abort resolution as a real
+// decision instead of leaving no trace.
+//
+// Before this existed, those three resolutions wrote no finding-level state at
+// all, so a round where the human read a blocking finding and said "ship it as
+// is" was byte-identical to a round with no findings. Nothing downstream could
+// tell the two apart, and the only durable statement of what the change must do
+// stayed the user-intent prose - which is how a later step could re-derive and
+// re-apply the very change the human had just declined.
+//
+// The decline is stored the way a partial selection already stores one: as the
+// complement of selected_finding_ids. Writing an explicit empty array with the
+// user_declined source is what makes "selected nothing" representable, since a
+// NULL column means "no decision was recorded".
+//
+// Best effort by design. This is advisory prompt context for later steps, so a
+// failed write degrades to today's behavior and must never fail the run.
 func (e *Executor) recordDeclinedRound(roundID, findingsJSON string, stepName types.StepName, roundNum int) {
 	if e == nil || e.db == nil || roundID == "" {
 		return
@@ -1650,7 +2065,7 @@ func pluralize(n int, singular, plural string) string {
 // the same gate when the run resumes. A response and a cancellation that land
 // concurrently are still a genuine race, and the response may win that one.
 // The caller must set e.waiting and e.waitingStep before calling this method.
-func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sctx *StepContext, immediate bool) (approvalResponse, bool, error) {
+func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sctx *StepContext, findings string, immediate bool) (approvalResponse, bool, error) {
 	defer func() {
 		e.mu.Lock()
 		e.waiting = false
@@ -1692,7 +2107,7 @@ func (e *Executor) waitForApprovalOrReconcile(ctx context.Context, step Step, sc
 		case <-ctx.Done():
 			return approvalResponse{}, false, context.Cause(ctx)
 		case <-timer.C:
-			resolved, err := e.reconcileApprovalGate(ctx, step, sctx)
+			resolved, err := e.reconcileApprovalGate(ctx, step, sctx, findings)
 			if ctx.Err() != nil {
 				return approvalResponse{}, false, context.Cause(ctx)
 			}
@@ -1733,9 +2148,12 @@ func (e *Executor) claimGateReconciliation() bool {
 	return true
 }
 
-func (e *Executor) reconcileApprovalGate(ctx context.Context, step Step, sctx *StepContext) (bool, error) {
+func (e *Executor) reconcileApprovalGate(ctx context.Context, step Step, sctx *StepContext, findingsJSON string) (bool, error) {
 	reconciler, ok := step.(ApprovalGateReconciler)
 	if !ok {
+		return false, nil
+	}
+	if HasProtectedPathRefusal(findingsJSON) {
 		return false, nil
 	}
 	timeout := e.gateReconcileTimeout
@@ -1751,7 +2169,8 @@ func (e *Executor) reconcileApprovalGate(ctx context.Context, step Step, sctx *S
 
 // failRun marks a run as failed and returns the error, except for a run left
 // parked by a clean shutdown (ErrParkPreserved), which it returns unchanged
-// without writing anything.
+// without writing anything, and a CI monitor a clean stop could not preserve
+// (ErrCIMonitorInterrupted), which is recorded as an interrupted monitor.
 // It accepts an optional context; if the context was cancelled with a cause,
 // the cause message is used as the run's error (more informative than "context canceled").
 func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...context.Context) error {
@@ -1763,13 +2182,20 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 		return err
 	}
 	errMsg := err.Error()
-	for _, ctx := range ctxs {
-		if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
-			errMsg = cause.Error()
-			break
+	runStatus := types.RunCIMonitorInterrupted
+	// An interrupted CI monitor keeps its own reason rather than the
+	// cancellation cause: "daemon shutting down" would say nothing about the
+	// unpublished commit the operator has to resolve, and would map back to a
+	// plain failure.
+	if !errors.Is(err, ErrCIMonitorInterrupted) {
+		for _, ctx := range ctxs {
+			if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
+				errMsg = cause.Error()
+				break
+			}
 		}
+		runStatus = types.TerminalStatusForReason(errMsg)
 	}
-	runStatus := types.TerminalStatusForReason(errMsg)
 	verifiedHead, verified := e.reconcileTerminalRunHead(run)
 	var dbErr error
 	if verified {
@@ -1883,7 +2309,33 @@ func (e *Executor) emitRunEvent(eventType ipc.EventType, run *db.Run, repo *db.R
 		Error:  run.Error,
 		PRURL:  run.PRURL,
 	}
+	// A completed run may have passed with a CI approval override; the TUI
+	// banner reads the reason off the delta (like PRURL) so it never needs a
+	// snapshot to distinguish it from a genuinely green run. Derived from step
+	// rows so both ActionApprove sites (live wait and Resume) are covered.
+	// Gated on the terminal status, not the event type: errorRun emits the same
+	// event for failed/cancelled runs, whose banner never reads it.
+	if run.Status == types.RunCompleted {
+		if reason := e.runOverrideReason(run.ID); reason != "" {
+			event.CIOverrideReason = &reason
+		}
+	}
 	e.onEvent(event)
+}
+
+// runOverrideReason returns the first step OverrideReason recorded for the run,
+// deriving the run-level CI override reason the same way daemon.runToInfo does.
+func (e *Executor) runOverrideReason(runID string) string {
+	steps, err := e.db.GetStepsByRun(runID)
+	if err != nil {
+		return ""
+	}
+	for _, s := range steps {
+		if s.OverrideReason != nil && *s.OverrideReason != "" {
+			return *s.OverrideReason
+		}
+	}
+	return ""
 }
 
 func (e *Executor) emitCIReadinessEvent(run *db.Run, repo *db.Repo, ready, declaredNoCI bool) {

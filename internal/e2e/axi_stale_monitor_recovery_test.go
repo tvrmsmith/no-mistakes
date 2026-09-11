@@ -5,9 +5,6 @@ package e2e
 import (
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // staleMonitorFixture drives one full pipeline run that ends with pipeline fix
@@ -115,74 +112,45 @@ func TestAxiStaleMonitorSyncBeforeRerunReattaches(t *testing.T) {
 	}
 }
 
-// TestAxiStaleMonitorRerunBeforeSyncStrandsTheRecovery proves the claim the
-// guidance makes about the WRONG order, which two earlier revisions shipped as
-// the prescribed fallback: once `rerun` has created its pending run, that run
-// is the newest one branchsync selects, it carries no push binding, so it owns
-// the branch and the sync the agent was told to reach for is refused.
-func TestAxiStaleMonitorRerunBeforeSyncStrandsTheRecovery(t *testing.T) {
+// TestAxiStaleMonitorRerunBeforeSyncIsRefused covers the WRONG order, which two
+// earlier revisions shipped as the prescribed fallback. Rerun's clean-head rule
+// now ends it before it can do damage: the clone is clean and behind the gate
+// head rerun would select, so rerun refuses and creates no run at all. An
+// earlier revision of this test asserted the outcome that rule replaced, where
+// rerun's own pending run took ownership of the branch, the sync the agent was
+// told to reach for was then refused as `pipeline_owned`, and the clone was
+// left stranded behind the gate with no clean exit. Refusing up front is what
+// keeps the prescribed order reachable, so this asserts that too.
+func TestAxiStaleMonitorRerunBeforeSyncIsRefused(t *testing.T) {
 	branch := "feature/stale-rerun-first"
 	h, operator, pushedHead := staleMonitorFixture(t, branch)
 	behindHead := strings.TrimSpace(h.WorktreeRefSHA(branch))
 
 	rerunOut, err := h.RunInDir(operator, "rerun")
-	if err != nil {
-		t.Fatalf("rerun before sync: %v\n%s", err, rerunOut)
+	if err == nil {
+		t.Fatalf("rerun before sync should be refused:\n%s", rerunOut)
 	}
-	reran := h.ActiveRun(branch)
-	if reran == nil {
-		t.Fatalf("rerun left no active run:\n%s", rerunOut)
-	}
-	if reran.HeadSHA != pushedHead {
-		t.Fatalf("reran run head = %s, want gate head %s", reran.HeadSHA, pushedHead)
-	}
-
-	syncOut, syncErr := h.RunInDir(operator, "axi", "sync")
-	if syncErr == nil {
-		t.Fatalf("sync after rerun should be refused:\n%s", syncOut)
-	}
-	// Exact lines, because `blocked_pipeline_owned_recoverable` - the terminal
-	// custody classification of a different state - has the refused active
-	// state's safety value as a prefix and would satisfy a substring match.
-	for _, want := range []string{"state: pipeline_owned", "safety: blocked_pipeline_owned"} {
-		if !containsExactLine(syncOut, want) {
-			t.Fatalf("sync after rerun did not report the exact line %q:\n%s", want, syncOut)
+	// The refusal has to be the clean-head mismatch and not any other error
+	// that would also leave err non-nil, so it must name both heads and point
+	// at the command that resolves custody.
+	for _, want := range []string{"refusing rerun", pushedHead, behindHead, "no-mistakes axi status"} {
+		if !strings.Contains(rerunOut, want) {
+			t.Fatalf("rerun refusal did not name %q:\n%s", want, rerunOut)
 		}
+	}
+	if run := h.ActiveRun(branch); run != nil {
+		t.Fatalf("refused rerun still created active run %s:\n%s", run.ID, rerunOut)
 	}
 	if got := strings.TrimSpace(h.WorktreeRefSHA(branch)); got != behindHead {
-		t.Fatalf("refused sync moved the worktree to %s", got)
+		t.Fatalf("refused rerun moved the worktree to %s", got)
 	}
 
-	// And the run the agent was told to answer cannot be started from here
-	// either: the clone is still behind, so the trigger push is rejected.
-	runOut, runErr := h.RunInDir(operator, "axi", "run", "--intent", "answer the recovered run's gates")
-	if runErr == nil {
-		t.Fatalf("axi run from the stranded clone should fail:\n%s", runOut)
+	// The prescribed order is still open from here, which is the whole point of
+	// refusing rather than stranding: the sync the guidance names first works.
+	if syncOut, syncErr := h.RunInDir(operator, "axi", "sync"); syncErr != nil {
+		t.Fatalf("sync after the refused rerun: %v\n%s", syncErr, syncOut)
 	}
-	// The failure has to be that rejection and not any other error that would
-	// also leave runErr non-nil: it must name the push to the gate, the branch,
-	// and the ref rejection the behind clone earns.
-	for _, want := range []string{"push \\\"" + branch + "\\\" to gate", "! [rejected]", "(fetch first)"} {
-		if !strings.Contains(runOut, want) {
-			t.Fatalf("axi run from the stranded clone did not report the rejected trigger push (%q missing):\n%s", want, runOut)
-		}
+	if got := strings.TrimSpace(h.WorktreeRefSHA(branch)); got != pushedHead {
+		t.Fatalf("operator HEAD after sync = %s, want pushed head %s", got, pushedHead)
 	}
-
-	if out, err := h.RunInDir(operator, "axi", "abort", "--run", reran.ID); err != nil {
-		t.Fatalf("abort stranded rerun: %v\n%s", err, out)
-	}
-	if run := h.WaitForRun(branch, 30*time.Second); run.Status != types.RunCancelled {
-		t.Fatalf("stranded rerun status after abort = %s", run.Status)
-	}
-}
-
-// containsExactLine matches a whole rendered field line, so a value that is a
-// prefix of a sibling value cannot satisfy an assertion about the other.
-func containsExactLine(out, want string) bool {
-	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == want {
-			return true
-		}
-	}
-	return false
 }

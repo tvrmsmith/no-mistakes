@@ -18,6 +18,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/skill"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -46,6 +47,25 @@ func TestRunViewFromDBAwaitingStep(t *testing.T) {
 	}
 	if gate.Name != string(types.StepTest) {
 		t.Errorf("gate.Name = %q, want test", gate.Name)
+	}
+}
+
+// TestRunViewFromDBCarriesCIOverrideReason pins that a completed run whose step
+// recorded an approval override reads as passed-with-override on the DB-backed
+// status path, matching the live IPC path. Regression: runViewFromDB used to
+// drop step OverrideReason, so axi status reported a plain pass for an override.
+func TestRunViewFromDBCarriesCIOverrideReason(t *testing.T) {
+	run := &db.Run{ID: "r1", Branch: "feature/x", HeadSHA: "abcdef1234567890", Status: types.RunCompleted}
+	steps := []*db.StepResult{
+		{StepName: types.StepReview, Status: types.StepStatusCompleted},
+		{StepName: types.StepCI, Status: types.StepStatusCompleted, OverrideReason: strptr("live checks still failing: required-check")},
+	}
+	rv := runViewFromDB(run, steps)
+	if rv.CIOverrideReason != "live checks still failing: required-check" {
+		t.Errorf("CIOverrideReason = %q, want the step's override reason", rv.CIOverrideReason)
+	}
+	if got := outcomeForRun(rv); got != "passed-with-override" {
+		t.Errorf("outcomeForRun = %q, want passed-with-override", got)
 	}
 }
 
@@ -237,6 +257,7 @@ func TestRunObjectRendersActiveStepDiagnostics(t *testing.T) {
 	defer func() { nowUnix = restore }()
 
 	started := int64(1_000_000 - 20*60)
+	roundStarted := int64(1_000_000 - 30)
 	last := int64(1_000_000 - 11*60)
 	pid := 4242
 	rv := runView{
@@ -249,6 +270,7 @@ func TestRunObjectRendersActiveStepDiagnostics(t *testing.T) {
 				Name:             "review",
 				Status:           string(types.StepStatusFixing),
 				StartedAt:        &started,
+				RoundStartedAt:   &roundStarted,
 				LastActivityAt:   &last,
 				LastActivity:     "codex started pid=4242",
 				AgentPID:         &pid,
@@ -262,14 +284,38 @@ func TestRunObjectRendersActiveStepDiagnostics(t *testing.T) {
 	out := axiDoc(runObjectField(rv))
 
 	for _, want := range []string{
-		"active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:\n",
-		"review,fixing,20m0s",
+		"active_steps[1]{step,status,active_for,round_active_for,last_activity,agent_pid,round}:\n",
+		"review,fixing,20m0s,30s",
 		"quiet 11m0s ago: codex started pid=4242",
 		`,"4242",auto-fix 1/3`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("active diagnostics missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestRunObjectRendersLegacyActiveStepWithoutRoundClock(t *testing.T) {
+	restore := nowUnix
+	nowUnix = func() int64 { return 1_000_000 }
+	defer func() { nowUnix = restore }()
+
+	started := int64(1_000_000 - 2*60)
+	rv := runView{
+		ID:      "legacy-run",
+		Branch:  "feature/legacy",
+		Status:  string(types.RunRunning),
+		HeadSHA: "abcdef1234567890",
+		Steps: []stepView{{
+			Name:      "review",
+			Status:    string(types.StepStatusRunning),
+			StartedAt: &started,
+		}},
+	}
+
+	out := axiDoc(runObjectField(rv))
+	if !strings.Contains(out, `review,running,2m0s,"",unknown,"",starting`) {
+		t.Fatalf("legacy active step should retain its step clock and leave the unavailable round clock blank:\n%s", out)
 	}
 }
 
@@ -380,6 +426,65 @@ func TestWriteGateShape(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("gate missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderDriveResult_ProtectedPathGateHelp(t *testing.T) {
+	refusal := pipeline.ProtectedPathOutcome(&pipeline.ProtectedPathError{Path: "package.lock", Rule: "*.lock"})
+	for _, status := range []types.StepStatus{types.StepStatusAwaitingApproval, types.StepStatusFixReview} {
+		for _, tc := range []struct {
+			name     string
+			findings string
+			want     []string
+			absent   []string
+		}{
+			{
+				name:     "protected",
+				findings: refusal.Findings,
+				want: []string{
+					"explicit operator response", "Approve is rejected",
+					"operator inspect and resolve", "repository's authorized workflow",
+					"no-mistakes axi respond --action fix`", "retry the refused step",
+					"including its commit and publication",
+				},
+				absent: []string{"--action approve", "do not edit files yourself"},
+			},
+			{
+				name:     "ordinary",
+				findings: findingsJSON(t, []types.Finding{{ID: "doc-1", Action: types.ActionAskUser, Description: "clarify documentation"}}, "Documentation decision"),
+				want:     []string{"no-mistakes axi respond --action approve", "--action fix --findings <ids>", "do not edit files yourself"},
+				absent:   []string{"protected-path", "Approve is rejected"},
+			},
+		} {
+			t.Run(string(status)+"/"+tc.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				cmd := &cobra.Command{}
+				cmd.SetOut(&buf)
+				if err := renderDriveResult(cmd, &ipc.RunInfo{
+					ID: "run-1", Status: types.RunRunning,
+					Steps: []ipc.StepResultInfo{{StepName: types.StepDocument, Status: status, FindingsJSON: &tc.findings}},
+				}, false); err != nil {
+					t.Fatal(err)
+				}
+				var doc struct {
+					Help []string `toon:"help"`
+				}
+				if err := toon.Unmarshal(buf.Bytes(), &doc); err != nil {
+					t.Fatalf("decode emitted gate help: %v\n%s", err, buf.String())
+				}
+				help := strings.Join(doc.Help, "\n")
+				for _, want := range append(tc.want, "--action skip", "axi logs --step document --full", preserveGateFixCommitsGuidance) {
+					if !strings.Contains(help, want) {
+						t.Errorf("gate help missing %q:\n%s", want, help)
+					}
+				}
+				for _, absent := range tc.absent {
+					if strings.Contains(help, absent) {
+						t.Errorf("gate help includes inappropriate guidance %q:\n%s", absent, help)
+					}
+				}
+			})
 		}
 	}
 }
@@ -528,6 +633,43 @@ func TestOutcomeFor(t *testing.T) {
 	}
 }
 
+// TestOutcomeForRun pins that a run's outcome word distinguishes a genuinely
+// green completion from one where a human approved past a live CI failure
+// (rv.CIOverrideReason, see pipeline.ApprovalOverrideVerifier). Without this,
+// "outcome=passed" in axi's agent-facing output is ambiguous between the two -
+// exactly the ambiguity that let no-mistakes self-report a passing terminal
+// outcome while the live PR still showed a failed check.
+func TestOutcomeForRun(t *testing.T) {
+	cases := []struct {
+		name string
+		rv   runView
+		want string
+	}{
+		{
+			name: "clean pass has no override qualifier",
+			rv:   runView{Status: string(types.RunCompleted)},
+			want: "passed",
+		},
+		{
+			name: "override qualifies an otherwise-clean pass",
+			rv:   runView{Status: string(types.RunCompleted), CIOverrideReason: "live checks still failing: required-check"},
+			want: "passed-with-override",
+		},
+		{
+			name: "a failed run is unaffected by a stray override reason",
+			rv:   runView{Status: string(types.RunFailed), CIOverrideReason: "live checks still failing: required-check"},
+			want: "failed",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := outcomeForRun(tc.rv); got != tc.want {
+				t.Errorf("outcomeForRun(%+v) = %q, want %q", tc.rv, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTriggerRunDoesNotRerunAfterFailedPush(t *testing.T) {
 	if shouldRerunAfterNoActiveRun(errors.New("push failed")) {
 		t.Fatal("failed pushes must not fall back to rerun")
@@ -608,12 +750,15 @@ func TestConfigErrorForFreshAxiRunAllowsReattach(t *testing.T) {
 }
 
 func TestRerunParamsIncludeSkipSteps(t *testing.T) {
-	params := rerunParams("repo-1", "feature/x", []types.StepName{types.StepReview}, "user goal")
+	params := rerunParams("repo-1", "feature/x", []types.StepName{types.StepReview}, "user goal", "develop")
 	if params.RepoID != "repo-1" || params.Branch != "feature/x" || params.Intent != "user goal" {
 		t.Fatalf("unexpected rerun params: %#v", params)
 	}
 	if len(params.SkipSteps) != 1 || params.SkipSteps[0] != types.StepReview {
 		t.Fatalf("SkipSteps = %#v, want review", params.SkipSteps)
+	}
+	if params.PRBaseBranch != "develop" {
+		t.Fatalf("PRBaseBranch = %q, want develop", params.PRBaseBranch)
 	}
 }
 
@@ -633,6 +778,106 @@ func TestPreflightGuardReportsWorkingTreeCheckError(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "inspect working tree") {
 		t.Fatalf("expected working tree check error, got:\n%s", out.String())
+	}
+}
+
+func TestPreflightGuardDirtyTreeNamesUntrackedFiles(t *testing.T) {
+	dir := t.TempDir()
+	run(t, dir, "git", "init")
+	run(t, dir, "git", "config", "user.email", "test@test.com")
+	run(t, dir, "git", "config", "user.name", "Test")
+	run(t, dir, "git", "commit", "--allow-empty", "-m", "initial")
+	run(t, dir, "git", "checkout", "-b", "feature/x")
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "plans"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docs", "plans", "spec.md"), []byte("spec\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("scratch/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "scratch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch", "notes.md"), []byte("scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+	guard := preflightGuard(context.Background(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
+	if guard == nil {
+		t.Fatal("expected guard for uncommitted changes")
+	}
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	if err := guard(cmd); err == nil {
+		t.Fatal("expected structured preflight error")
+	}
+	got := out.String()
+	for _, want := range []string{
+		"uncommitted changes in the working tree",
+		"Untracked files (not in git yet): docs/plans/spec.md",
+		"git add <path>",
+		"`.git/info/exclude`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected hint %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "git add -A") {
+		t.Fatalf("hint must never recommend `git add -A`, got:\n%s", got)
+	}
+	if strings.Contains(got, "scratch") {
+		t.Fatalf("hint must not name ignored files, got:\n%s", got)
+	}
+}
+
+func TestPreflightGuardDirtyTreeTrackedOnlyHasNoUntrackedList(t *testing.T) {
+	dir := t.TempDir()
+	run(t, dir, "git", "init")
+	run(t, dir, "git", "config", "user.email", "test@test.com")
+	run(t, dir, "git", "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, dir, "git", "add", ".")
+	run(t, dir, "git", "commit", "-m", "initial")
+	run(t, dir, "git", "checkout", "-b", "feature/x")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+	guard := preflightGuard(context.Background(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
+	if guard == nil {
+		t.Fatal("expected guard for uncommitted changes")
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	if err := guard(cmd); err == nil {
+		t.Fatal("expected structured preflight error")
+	}
+	got := out.String()
+	if !strings.Contains(got, "uncommitted changes in the working tree") {
+		t.Fatalf("expected dirty-tree error, got:\n%s", got)
+	}
+	for _, forbidden := range []string{"Untracked files", "git add -A"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("tracked-only hint must not contain %q, got:\n%s", forbidden, got)
+		}
+	}
+}
+
+func TestUntrackedHintBoundsLongLists(t *testing.T) {
+	paths := []string{"a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "f.txt", "g.txt"}
+	hint := untrackedHint(paths)
+	if !strings.Contains(hint, "e.txt") || !strings.Contains(hint, "(+2 more)") {
+		t.Fatalf("expected first five paths and (+2 more), got:\n%s", hint)
+	}
+	if strings.Contains(hint, "f.txt") {
+		t.Fatalf("hint must not list the sixth path, got:\n%s", hint)
 	}
 }
 
@@ -703,7 +948,7 @@ func TestAxiHomeStartsCurrentBranchWhenOtherBranchIsActive(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 	cmd.SetOut(&out)
-	if _, err := runAxiHome(cmd); err != nil {
+	if err := runAxiHome(cmd); err != nil {
 		t.Fatalf("axi home: %v\n%s", err, out.String())
 	}
 	got := out.String()
@@ -726,26 +971,6 @@ func TestAxiHomeStartsCurrentBranchWhenOtherBranchIsActive(t *testing.T) {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("axi home should not tell the agent to act on another branch via %q, got:\n%s", forbidden, got)
 		}
-	}
-}
-
-func TestRenderedRunsFingerprintChangesForEveryDisplayedRun(t *testing.T) {
-	runs := []*db.Run{
-		{ID: "newer", Branch: "feature/newer", HeadSHA: "head-newer", Status: types.RunRunning},
-		{ID: "older", Branch: "feature/older", HeadSHA: "head-older", Status: types.RunCompleted},
-	}
-	before := renderedRunsFingerprint(runs, 10)
-	runs[1].Status = types.RunFailed
-	after := renderedRunsFingerprint(runs, 10)
-	if before == after {
-		t.Fatal("changing a displayed older run must change the fingerprint")
-	}
-
-	limitedBefore := renderedRunsFingerprint(runs, 1)
-	runs[1].Status = types.RunCompleted
-	limitedAfter := renderedRunsFingerprint(runs, 1)
-	if limitedBefore != limitedAfter {
-		t.Fatal("a hidden run must not change the displayed-run fingerprint")
 	}
 }
 
@@ -781,7 +1006,7 @@ func TestAxiStatusEscapesControlBytesInAwaitingTestGate(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 	cmd.SetOut(&out)
-	if _, err := runAxiStatus(cmd, dbRun.ID); err != nil {
+	if err := runAxiStatus(cmd, dbRun.ID); err != nil {
 		t.Fatalf("axi status: %v\n%s", err, out.String())
 	}
 	got := out.String()
@@ -823,7 +1048,7 @@ func TestAxiLogsFullEscapesControlByteOutsideTailWithoutRewritingLog(t *testing.
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 	cmd.SetOut(&out)
-	if _, err := runAxiLogs(cmd, "test", dbRun.ID, true); err != nil {
+	if err := runAxiLogs(cmd, "test", dbRun.ID, true); err != nil {
 		t.Fatalf("axi logs --full: %v\n%s", err, out.String())
 	}
 	got := out.String()
@@ -891,7 +1116,7 @@ func TestAxiStatusIgnoresInvalidGlobalConfig(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 	cmd.SetOut(&out)
-	if _, err := runAxiStatus(cmd, dbRun.ID); err != nil {
+	if err := runAxiStatus(cmd, dbRun.ID); err != nil {
 		t.Fatalf("axi status should not fail on invalid global config: %v\n%s", err, out.String())
 	}
 	got := out.String()
@@ -939,7 +1164,7 @@ func TestAxiRunReportsInvalidGlobalConfig(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 	cmd.SetOut(&out)
-	if err := runAxiRun(cmd, false, nil, "user goal"); err == nil {
+	if err := runAxiRun(cmd, false, nil, "user goal", ""); err == nil {
 		t.Fatalf("axi run should fail on invalid global config:\n%s", out.String())
 	}
 	got := out.String()

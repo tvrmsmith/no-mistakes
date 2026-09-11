@@ -49,7 +49,8 @@ func TestAgentCommitRestartsValidationEndToEnd(t *testing.T) {
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"docs already current"}`)}, nil
 		}
 		turns = append(turns, fmt.Sprintf("review agent turn %d", len(turns)+1-documentTurns))
-		return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"looks good"}`)}, nil
+		output, err := json.Marshal(cleanReviewFindings())
+		return &agent.Result{Output: output}, err
 	}}
 
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})

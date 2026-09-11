@@ -23,6 +23,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -147,6 +148,12 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	// daemon re-execs itself, also inheriting them.
 	t.Setenv("PATH", h.BinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", h.HomeDir)
+	// zsh reads its startup files from $ZDOTDIR when that is set, falling back
+	// to $HOME only when it is not, so overriding HOME alone leaves a developer
+	// who exports ZDOTDIR (a common dotfiles layout) running their real
+	// .zshenv/.zshrc inside the harness. The daemon's login-shell probe then
+	// adopts that PATH, which puts a real gh/tea ahead of the BinDir stubs.
+	t.Setenv("ZDOTDIR", h.HomeDir)
 	t.Setenv("NM_HOME", h.NMHome)
 	t.Setenv("FAKEAGENT_LOG", h.AgentLog)
 	if h.Scenario != "" {
@@ -176,6 +183,8 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	// update-check.json while testing.T is removing the temp directory.
 	t.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
 
+	h.assertStubsWinTheLoginShellPath()
+
 	h.writeGlobalConfig()
 	h.initGitRepos()
 
@@ -192,13 +201,95 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	return h
 }
 
+// writeLoginShellPathSeed puts BinDir first on the PATH the daemon adopts.
+// The daemon replaces its own environment with the login shell's
+// (internal/shellenv), so the process PATH the test exports is not the PATH a
+// step's `gh`, `tea`, or agent lookup sees. Without the seed a real
+// system gh on /opt/homebrew/bin shadows the BinDir stub and the pipeline
+// talks to github.com. The zsh files only take effect together with the
+// ZDOTDIR override in NewHarness: zsh reads $ZDOTDIR, not $HOME, so a
+// developer who exports ZDOTDIR gets their own dotfiles instead of these.
 func (h *Harness) writeLoginShellPathSeed() {
 	line := "export PATH=" + shellQuote(h.BinDir) + ":$PATH\n"
-	for _, name := range []string{".zshenv", ".zprofile", ".bash_profile", ".profile"} {
+	for _, name := range []string{".zshenv", ".zprofile", ".zshrc", ".bash_profile", ".bashrc", ".profile"} {
 		if err := os.WriteFile(filepath.Join(h.HomeDir, name), []byte(line), 0o644); err != nil {
 			h.t.Fatalf("write %s: %v", name, err)
 		}
 	}
+}
+
+// loginShellGuard bounds the probe below to one shell spawn per `go test`
+// process. What it checks is a property of the developer's machine, not of any
+// one test, so the first harness answers it for all of them.
+var loginShellGuard sync.Once
+
+// assertStubsWinTheLoginShellPath fails the suite when a real gh or tea would
+// beat the BinDir stub on the PATH the daemon adopts. The daemon replaces its
+// environment with the login shell's, so a shell that never reads the seed
+// files leaves the pipeline talking to the developer's authenticated
+// github.com CLI. That failed as four unrelated-looking tests
+// (TestForkRouting and siblings) reporting an empty PR URL, hours away from
+// the environment leak that caused it, so the check reports the leak directly.
+//
+// The probe runs for whatever login shell shellenv would resolve, not for an
+// allowlist of shells: shellenv probes any login shell and only drops -i for
+// one that is neither bash nor zsh, so fish and nushell adopt a PATH that never
+// read the seed files and are exactly the machines this guard has to cover.
+// The only skips left are the cases where shellenv itself falls back to
+// os.Environ(), which keeps the exported PATH with BinDir already first: a
+// probe that errors, one that prints no PATH, and Windows.
+func (h *Harness) assertStubsWinTheLoginShellPath() {
+	loginShellGuard.Do(func() {
+		if runtime.GOOS == "windows" {
+			h.t.Logf("login-shell PATH guard skipped: shellenv uses the process environment on Windows")
+			return
+		}
+		shell := shellenv.LoginShell()
+		args := []string{"-l", "-c", "env -0"}
+		if shellenv.SupportsInteractive(shell) {
+			args = []string{"-l", "-i", "-c", "env -0"}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		// Same shell and same arguments shellenv uses, so the guard reads the
+		// PATH the daemon will actually resolve rather than an approximation.
+		out, err := exec.CommandContext(ctx, shell, args...).Output()
+		if err != nil {
+			h.t.Logf("login-shell PATH guard skipped: probing %s failed: %v", shell, err)
+			return
+		}
+		resolved, ok := pathFromNulEnv(string(out))
+		if !ok {
+			h.t.Logf("login-shell PATH guard skipped: %s printed no PATH", shell)
+			return
+		}
+		for _, dir := range filepath.SplitList(resolved) {
+			if dir == h.BinDir {
+				return
+			}
+			for _, name := range []string{"gh", "tea"} {
+				candidate := filepath.Join(dir, executableName(name))
+				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+					h.t.Fatalf("login shell PATH puts a real %s (%s) ahead of the e2e stub dir %s; "+
+						"the daemon adopts this PATH, so every step would reach the live CLI. "+
+						"Check that the shell reads the seed files NewHarness writes into %s.",
+						name, candidate, h.BinDir, h.HomeDir)
+				}
+			}
+		}
+		h.t.Fatalf("login shell PATH omits the e2e stub dir %s entirely; the daemon adopts this PATH, "+
+			"so any step reaching for gh, tea, or an agent would find the machine's own copy", h.BinDir)
+	})
+}
+
+// pathFromNulEnv reads the PATH entry out of `env -0` output.
+func pathFromNulEnv(out string) (string, bool) {
+	for _, entry := range strings.Split(out, "\x00") {
+		if value, found := strings.CutPrefix(entry, "PATH="); found {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func shellQuote(value string) string {

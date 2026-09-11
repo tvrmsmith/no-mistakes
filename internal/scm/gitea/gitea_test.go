@@ -167,6 +167,9 @@ func TestFindPRMatchesByHeadBranch(t *testing.T) {
 	if pr.Number != "7" || pr.URL != "https://gitea.example.com/owner/repo/pulls/7" {
 		t.Fatalf("FindPR() = %+v, want PR #7", pr)
 	}
+	if pr.BaseBranch != "main" {
+		t.Fatalf("FindPR() BaseBranch = %q, want main", pr.BaseBranch)
+	}
 }
 
 func TestFindPRFiltersByBaseBranch(t *testing.T) {
@@ -371,6 +374,43 @@ func TestUpdatePRFallsBackToNumberFromURL(t *testing.T) {
 	pr := &scm.PR{URL: "http://gitea.example.com/owner/repo/pulls/7"}
 	if _, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "updated", Body: "body"}); err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
+	}
+}
+
+func TestSetPRBaseBranchPatchesPullViaTeaAPI(t *testing.T) {
+	t.Parallel()
+
+	host := New(giteaTestCmdFactory(map[string]giteaTestResponse{
+		"tea api --login work --method PATCH --field base=epic/feature /repos/owner/repo/pulls/7": {
+			stdout: `{"index":7,"base":{"ref":"epic/feature"}}`,
+		},
+	}), nil, "gitea.example.com", "work", "owner/repo")
+
+	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{Number: "7"}, "epic/feature"); err != nil {
+		t.Fatalf("SetPRBaseBranch() error = %v", err)
+	}
+}
+
+func TestSetPRBaseBranchFallsBackToNumberFromURL(t *testing.T) {
+	t.Parallel()
+
+	host := New(giteaTestCmdFactory(map[string]giteaTestResponse{
+		"tea api --login work --method PATCH --field base=epic/feature /repos/owner/repo/pulls/7": {
+			stdout: `{"index":7}`,
+		},
+	}), nil, "gitea.example.com", "work", "owner/repo")
+
+	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{URL: "https://gitea.example.com/owner/repo/pulls/7"}, "epic/feature"); err != nil {
+		t.Fatalf("SetPRBaseBranch() error = %v", err)
+	}
+}
+
+func TestSetPRBaseBranchFailsClosedWithoutIdentity(t *testing.T) {
+	t.Parallel()
+
+	host := New(giteaTestCmdFactory(nil), nil, "gitea.example.com", "work", "owner/repo")
+	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{}, "epic/feature"); err == nil {
+		t.Fatal("SetPRBaseBranch() with no PR identity: expected error, got nil")
 	}
 }
 
@@ -608,6 +648,64 @@ func TestFetchFailedCheckLogsStripsHeaderAndTargetsFailedJob(t *testing.T) {
 	}
 	if logs != "exit status 1\nJob 'build' failed" {
 		t.Fatalf("FetchFailedCheckLogs() = %q, want stripped log body", logs)
+	}
+}
+
+func TestFetchFailedCheckTargetLogsAggregatesEverySelectedJob(t *testing.T) {
+	t.Parallel()
+
+	host := New(giteaTestCmdFactory(map[string]giteaTestResponse{
+		"tea pulls 7 --repo owner/repo --login work --output json": {
+			stdout: `{"index":7,"state":"open","head":"feature/x","headSha":"abc123"}`,
+		},
+		"tea actions runs list --repo owner/repo --login work --branch feature/x --output json": {
+			stdout: `[{"id":"10","status":"completed","branch":"feature/x","event":"push"}]`,
+		},
+		"tea api --login work /repos/owner/repo/actions/runs/10/jobs": {
+			stdout: `{"jobs":[{"id":10,"name":"build","status":"completed","conclusion":"failure","head_sha":"abc123"},{"id":11,"name":"lint","status":"completed","conclusion":"failure","head_sha":"abc123"}]}`,
+		},
+		"tea actions runs logs 10 --job 10 --repo owner/repo --login work": {stdout: "Logs for job 10:\n---\nbuild failed\n"},
+		"tea actions runs logs 10 --job 11 --repo owner/repo --login work": {stdout: "Logs for job 11:\n---\nlint failed\n"},
+	}), nil, "gitea.example.com", "work", "owner/repo")
+
+	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{Name: "build", ProviderID: "gitea-job:10"}, {Name: "lint", ProviderID: "gitea-job:11"}})
+	if err != nil {
+		t.Fatalf("FetchFailedCheckTargetLogs() error = %v", err)
+	}
+	if len(logs) != 2 || logs[0].Output != "build failed" || logs[1].Output != "lint failed" {
+		t.Fatalf("FetchFailedCheckTargetLogs() = %+v, want target-separated logs", logs)
+	}
+}
+
+func TestFetchFailedCheckTargetLogsReturnsPartialLogsWithRetrievalError(t *testing.T) {
+	t.Parallel()
+
+	host := New(giteaTestCmdFactory(map[string]giteaTestResponse{
+		"tea pulls 7 --repo owner/repo --login work --output json":                              {stdout: `{"index":7,"state":"open","head":"feature/x","headSha":"abc123"}`},
+		"tea actions runs list --repo owner/repo --login work --branch feature/x --output json": {stdout: `[{"id":"10"}]`},
+		"tea api --login work /repos/owner/repo/actions/runs/10/jobs":                           {stdout: `{"jobs":[{"id":10,"name":"build","status":"completed","conclusion":"failure","head_sha":"abc123"},{"id":11,"name":"lint","status":"completed","conclusion":"failure","head_sha":"abc123"}]}`},
+		"tea actions runs logs 10 --job 10 --repo owner/repo --login work":                      {stdout: "Logs for job 10:\n---\nbuild failed\n"},
+		"tea actions runs logs 10 --job 11 --repo owner/repo --login work":                      {stderr: "expired", code: 1},
+	}), nil, "gitea.example.com", "work", "owner/repo")
+
+	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{ProviderID: "gitea-job:10"}, {ProviderID: "gitea-job:11"}})
+	if err != nil || len(logs) != 2 || logs[0].Output != "build failed" || logs[1].Err == nil || !strings.Contains(logs[1].Err.Error(), "job 11") {
+		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want retained partial logs and job 11 error", logs, err)
+	}
+}
+
+func TestFetchFailedCheckTargetLogsReportsMissingSelectedJob(t *testing.T) {
+	t.Parallel()
+
+	host := New(giteaTestCmdFactory(map[string]giteaTestResponse{
+		"tea pulls 7 --repo owner/repo --login work --output json":                              {stdout: `{"index":7,"state":"open","head":"feature/x","headSha":"abc123"}`},
+		"tea actions runs list --repo owner/repo --login work --branch feature/x --output json": {stdout: `[{"id":"10"}]`},
+		"tea api --login work /repos/owner/repo/actions/runs/10/jobs":                           {stdout: `{"jobs":[{"id":10,"name":"build","status":"completed","conclusion":"failure","head_sha":"abc123"}]}`},
+	}), nil, "gitea.example.com", "work", "owner/repo")
+
+	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{ProviderID: "gitea-job:999"}})
+	if err != nil || len(logs) != 1 || logs[0].Err == nil || !strings.Contains(logs[0].Err.Error(), "gitea-job:999") {
+		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want explicit missing-target error", logs, err)
 	}
 }
 

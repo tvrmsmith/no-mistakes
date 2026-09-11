@@ -61,7 +61,7 @@ func TestRunStart_SignCommitsFalseLetsUnattendedCommitsSucceed(t *testing.T) {
 				return []pipeline.Step{&commitInWorktreeStep{}}
 			})
 			t.Cleanup(manager.Shutdown)
-			runID, err := manager.startRun(context.Background(), repo, "main", head, refreshTestZeroSHA, "test", nil, "commit signing")
+			runID, err := manager.startRun(context.Background(), repo, "main", head, refreshTestZeroSHA, "test", nil, "commit signing", "")
 			if err != nil {
 				t.Fatalf("start run: %v", err)
 			}

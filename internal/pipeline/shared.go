@@ -83,6 +83,28 @@ type RunShared struct {
 	// residue records, per step, the worktree state that step's current round
 	// parked over instead of committing.
 	residue map[types.StepName]ValidationResidue
+	// prepared records that the run's one-time dependency preparation has
+	// already succeeded for this executor lifetime.
+	prepared bool
+}
+
+// EnsurePrepared runs prepare once successfully for this executor lifetime.
+// A failed attempt is not cached, so a caller may retry after the underlying
+// problem is corrected.
+func (s *RunShared) EnsurePrepared(prepare func() error) error {
+	if s == nil {
+		return prepare()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.prepared {
+		return nil
+	}
+	if err := prepare(); err != nil {
+		return err
+	}
+	s.prepared = true
+	return nil
 }
 
 // NewRunShared returns the run-scoped results holder a fresh run starts with.

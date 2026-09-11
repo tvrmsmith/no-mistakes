@@ -100,10 +100,21 @@ intent:
 test:
   evidence:
     store_in_repo: false
+    attach_media: true
     dir: .no-mistakes/evidence
     branch: no-mistakes/evidence
     retention: 336h
     max_runs: 200
+
+providers:
+  github:
+    draft_pull_requests: false
+  gitlab:
+    draft_pull_requests: false
+  bitbucket:
+    draft_pull_requests: false
+  azuredevops:
+    draft_pull_requests: false
 ```
 
 ## Fields
@@ -137,6 +148,7 @@ The list is filtered to entries available to the daemon at run startup, and the 
 After resolving `auto`, entries that resolve to the same ACP target are deduplicated in list order, so `cursor` and `acp:cursor` provide one fallback and preserve whichever spelling appears first.
 If no entry is available, the gate fails before its first pipeline step.
 If a pipeline invocation fails because that agent process cannot start or exits with an error, no-mistakes retries that invocation with the next available fallback.
+Fallback candidates share the invocation's existing bounded context and use only its remaining time; once that context expires or is cancelled, no further candidate is announced or started.
 Structured findings and schema/output validation problems do not trigger fallback.
 
 ### acpx_path
@@ -262,6 +274,37 @@ agent_args_override:
     - -m
     - o3
 ```
+
+### review_agents
+
+Optional, **global-only** harness and model/effort overrides for the review loop.
+Repository `.no-mistakes.yaml` cannot set these profiles. Omitted roles keep the
+normal `agent` selection and fallback chain; other pipeline steps are unchanged.
+
+```yaml
+review_agents:
+  reviewer:
+    agent: pi
+    model: anthropic-vertex/claude-opus-4-8
+    effort: max
+  fixer:
+    agent: pi
+    model: google-vertex/gemini-3.8-flash
+    effort: max
+```
+
+The only role keys are `reviewer` and `fixer`. Each configured role requires one
+explicit `agent` (the same harness names as `agent_config`; no `auto` or lists).
+Model and effort are optional and inherit `agent_config` for that harness when
+empty. Nonempty role values override that profile, but native
+`agent_args_override` flags still win. Model availability, credentials, and
+supported effort levels remain the harness/provider's responsibility.
+
+Both roles can use the same harness with different models. Reviews and rereviews
+always run fresh; only review fixes reuse the fixer's session when
+`session_reuse` is enabled and the fixer supports it. These settings do not
+select the agents repairing tests, documentation, or CI. Eval capture strips
+these profiles so replay candidates remain authoritative.
 
 ### agent_args_override
 
@@ -406,17 +449,18 @@ For older active runs that do not yet have activity rows, AXI falls back to the 
 
 Maximum wall-clock time for one pipeline agent invocation that does not already have a more specific deadline.
 This is the default-by-construction budget: Document, Lint, Rebase conflict repair, PR drafting, CI auto-fix, and any future agent-spawning step are bounded even if they forget to install their own timer.
-Review still uses [`review_agent_timeout`](#review_agent_timeout) as a per-round budget, Test still uses [`test_agent_timeout`](#test_agent_timeout) per invocation, and Intent keeps its five-minute extraction cap; any existing deadline is honored rather than capped.
+Review still uses [`review_agent_timeout`](#review_agent_timeout) for each review or fix invocation, Test still uses [`test_agent_timeout`](#test_agent_timeout) per invocation, and Intent keeps its five-minute extraction cap; any existing deadline is honored rather than capped.
 When this deadline expires, the agent is cancelled and the invocation returns a timeout diagnostic instead of remaining active indefinitely. Most agent-driven mutation steps fail the run, CI auto-fix parks for a user decision, and PR drafting follows its existing agent-error fallback and continues with deterministic content. The [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns the approval behavior.
 A late successful return after the deadline is rejected, so post-agent commits and PR content cannot use work from a timed-out turn.
 
-The diagnostic reports what was actually measured, not the budget restated. Evidence resets whenever a retry or fallback starts a replacement attempt, including provider fallback, failed session resume, and OpenCode's prompt-only structured-output fallback, so the diagnostic describes only the attempt that reached the deadline:
+The diagnostic identifies expiration as an **absolute wall-clock limit** and separately reports what activity was actually measured. Activity does not reset or extend the hard limit. Evidence resets whenever a retry or fallback starts a replacement attempt, including provider fallback, failed session resume, and OpenCode's prompt-only structured-output fallback, so the diagnostic describes only the attempt that reached the deadline:
 
 - `agent produced no output at all in 30m0s after its subprocess started (pid=1234)` - the current attempt launched and then emitted nothing. Check that the agent CLI is authenticated and responsive.
 - `agent last produced output 4s ago (312 observed)` - the current attempt was working right up to the deadline. The turn needs a larger budget, or the request is too large for one turn.
 - `agent produced no output at all in 30m0s and never reported a subprocess start` - the current attempt never reached a running agent process.
 
 Output means anything observable: streamed assistant text, or raw bytes on the agent subprocess's stdout or stderr. Subprocess bytes matter because an agent spends most of a long turn running tools rather than writing prose, so prose alone cannot tell a working agent from a wedged one.
+There is no activity-reset idle watchdog: [`step_quiet_warning`](#step_quiet_warning) is a separate status-only signal and does not cancel work. The absolute limit is the bounded safety policy for both active and no-output invocations.
 Any substantive report from the agent adapter - for a native agent, its exit status and captured stderr - is appended to the diagnostic as `agent reported: ...`; credential-bearing URLs are redacted and the report is length-bounded before it can reach logs or findings. A bare context cancellation is omitted because it adds no evidence.
 
 |         |                        |
@@ -431,9 +475,9 @@ It is global-only: repository config and environment variables cannot override i
 
 ### review_agent_timeout
 
-Maximum wall-clock time for the Review step's agent turns in one review round.
-The budget starts at that round's first agent turn and covers its optional review-fix turn plus the rereview turn together; every later auto-fix round starts a fresh budget.
-When the deadline expires, the review agent is cancelled and the run fails with a diagnostic naming the timeout instead of remaining active indefinitely.
+Maximum wall-clock time for **one** Review-step agent invocation.
+The optional fixer gets the full configured limit, and its fresh, session-free independent rereviewer gets a new full limit of its own. Every later fixer and rereviewer does the same; no invocation inherits time spent by an earlier turn.
+When an invocation reaches this absolute deadline, the review agent is cancelled and the run fails with a diagnostic naming the wall-clock limit instead of remaining active indefinitely.
 That diagnostic carries the same measured evidence and adapter report described under [`agent_timeout`](#agent_timeout).
 
 |         |                        |
@@ -743,7 +787,7 @@ Otherwise, accepted candidates are ranked by confidence, which combines the raw 
 ### test.evidence
 
 Test-step evidence storage settings.
-By default, evidence artifacts are written to `<NM_HOME>/evidence/<run-id>` and referenced by local path.
+By default, evidence artifacts are written to `<NM_HOME>/evidence/<run-id>`. On GitHub.com/GHEC, supported image and video artifacts are also uploaded when the PR is rendered; see `attach_media` below.
 
 |      |          |
 | ---- | -------- |
@@ -752,6 +796,7 @@ By default, evidence artifacts are written to `<NM_HOME>/evidence/<run-id>` and 
 | Field                         | Type     | Default                  | Description                                                                |
 | ----------------------------- | -------- | ------------------------ | -------------------------------------------------------------------------- |
 | `test.evidence.store_in_repo` | `bool`   | `false`                  | Publish test evidence artifacts to the repository's orphan evidence branch |
+| `test.evidence.attach_media`  | `bool`   | `true`                   | Upload image and video evidence to GitHub user-attachments when the PR is rendered |
 | `test.evidence.dir`           | `string` | `.no-mistakes/evidence`  | Directory prefix inside the evidence branch                                |
 | `test.evidence.branch`        | `string` | `no-mistakes/evidence`   | Name of the orphan evidence branch                                         |
 | `test.evidence.local_root`    | `string` | `<NM_HOME>/evidence`     | Absolute directory where run evidence is written on local disk             |
@@ -759,7 +804,10 @@ By default, evidence artifacts are written to `<NM_HOME>/evidence/<run-id>` and 
 | `test.evidence.max_runs`      | `int`    | `200`                    | How many run directories survive regardless of age; `0` disables the bound |
 
 The test step always collects evidence outside the worktree, so artifacts never enter the branch under validation.
+On GitHub.com and GitHub Enterprise Cloud, image and video artifacts that pass GitHub's attach rules (png, jpg, jpeg, gif, webp, svg, mp4, mov, webm; images at most 10 MiB and videos at most 100 MiB) are uploaded to GitHub user-attachments when the PR body is rendered, unless `attach_media` is false and `store_in_repo` is also false.
+The testing section embeds the returned image markdown or bare video URL so remote reviewers can open the media. Upload is fail-closed: any error, unsupported type, oversize file, GitHub Enterprise Server, non-GitHub forge, or GitHub App/Actions token keeps today's rendering (a commit-pinned evidence-branch link if `store_in_repo` published, otherwise a local path) rather than a dead attachment URL. Text artifacts stay inlined as they are today.
 When `store_in_repo` is true for a GitHub repository, the PR step copies that directory onto `branch` under `<dir>/<branch-slug>` in the code branch's push-target repository (the fork when fork routing is configured), pushes it, and links the artifacts from the pull request body.
+When both `attach_media` and `store_in_repo` apply, the testing section carries the user-attachments embed in addition to the commit-pinned git link.
 The branch is an orphan: it shares no history with your code branches, so evidence never reaches the default branch. Links use the evidence commit rather than the branch, so they keep resolving after later runs.
 Branch slashes become nested directories, unsafe branch characters are replaced, and an empty branch slug falls back to the run ID.
 `branch` must be a valid Git branch name; an invalid value fails the config with the offending key and value.
@@ -783,7 +831,7 @@ Reaping runs after each finished run and again at daemon startup. An upgraded da
 
 `local_root` must be an absolute path outside `<NM_HOME>/worktrees`; a relative or managed-worktree path fails daemon startup and prevents new or recovered runs from starting. Because `retention` bounds how long a PR body's local artifact links keep resolving, raise it rather than lowering it if your reviews run long.
 
-The publication fields are global defaults. Repo config can override `store_in_repo` and `dir`; it can override `branch` only through the trusted default-branch copy. `local_root`, `retention`, and `max_runs` are global-only: a repository does not get to name a filesystem path this machine's daemon writes to, or set the retention budget for a directory every repository on the machine shares.
+The publication fields are global defaults. Repo config can override `store_in_repo`, `attach_media`, and `dir`; it can override `branch` only through the trusted default-branch copy. `local_root`, `retention`, and `max_runs` are global-only: a repository does not get to name a filesystem path this machine's daemon writes to, or set the retention budget for a directory every repository on the machine shares.
 
 ### eval
 
@@ -793,16 +841,16 @@ Local review-evaluation corpus settings for [`no-mistakes eval`](/no-mistakes/re
 | ---- | -------- |
 | Type | `object` |
 
-| Field                      | Type   | Default | Description                                                            |
-| -------------------------- | ------ | ------- | ---------------------------------------------------------------------- |
-| `eval.capture_provenance`  | `bool` | `true`  | Record the exact commit and configuration inputs a replay needs        |
-| `eval.auto_capture`        | `bool` | `true`  | Freeze eligible finished runs' review passes into the local corpus     |
-| `eval.max_cases`           | `int`  | `200`   | Retention target for automatic collection; `0` keeps every case        |
-| `eval.diversified_size`    | `int`  | `32`    | Cap on the official gold-only `diversified` set; `0` is one gold case per stratum |
+| Field                     | Type   | Default | Description                                                            |
+| ------------------------- | ------ | ------- | ---------------------------------------------------------------------- |
+| `eval.capture_provenance` | `bool` | `true`  | Record the exact commit and configuration inputs a replay needs        |
+| `eval.auto_capture`       | `bool` | `true`  | Collect eligible review cases and fixed CI false negatives automatically |
+| `eval.max_cases`          | `int`  | `200`   | Retention target for automatic collection; `0` keeps every case        |
+| `eval.diversified_size`   | `int`  | `32`    | Cap on the official gold-only `diversified` set; `0` is one gold case per stratum |
 
 `capture_provenance` is what makes a review pass replayable at all. It is recorded when the round is written and cannot be added afterwards, because the pinned configuration is a point-in-time snapshot, so a run reviewed with it off can never be captured later.
 
-`auto_capture` collects those passes without any command: when an eligible run finishes, its decided review rounds become cases. It does nothing while `capture_provenance` is off. Collection runs after the pipeline has already reported its outcome and can never change it; a failure is logged and nothing else.
+`auto_capture` collects without any command: when an eligible run finishes, its decided review rounds become cases and fixed `ci-check` and `ci-review-bot` findings become Review false negatives. It does nothing while `capture_provenance` is off. Collection runs after the pipeline has already reported its outcome and can never change it; a failure is logged and nothing else. The [Evaluation toolkit](/no-mistakes/reference/eval/#how-cases-are-collected) owns eligibility and labeling details.
 
 `max_cases` sets the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. A case with a replay in progress, with recorded candidate replays, or pinned into the diversified holdout is protected, so the corpus can remain above the target rather than throw away evidence you have spent tokens on. Cases from the same repository share one local object pool, so a case costs its own records plus the objects its commits introduced rather than a copy of the repository. What protection covers and when a pass skips the prune entirely is documented under [Disk use and retention](/no-mistakes/reference/eval/#disk-use-and-retention).
 
@@ -862,6 +910,54 @@ trust_working_path_config: true
 Keep the working-path file untracked (`.git/info/exclude`). A tracked file is a footgun: checking out a contributor's branch in your primary worktree would put their commands into a trusted position, which is what the default-branch rule prevents. The daemon logs a warning when it finds the file tracked, but honors it — you opted in.
 
 This is global-only and therefore maintainer-owned. The working path is on the daemon host, and anyone who can write it can already set `agent_path_override` or `scm.cli_wrapper`, both of which choose what the daemon executes; honoring the working-path config grants no privilege that is not already held.
+
+### providers.github.draft_pull_requests
+
+Open pull requests created on GitHub as drafts (`gh pr create --draft`).
+
+| | |
+|---|---|
+| Type | `bool` |
+| Default | `false` |
+
+Only affects PR creation; existing PRs are not toggled between draft and ready. GitHub only — ignored for other providers.
+This is a global default. Per-repo config can override it via `providers.github.draft_pull_requests`.
+
+### providers.gitlab.draft_pull_requests
+
+Open merge requests created on GitLab as drafts (`glab mr create --draft`).
+
+| | |
+|---|---|
+| Type | `bool` |
+| Default | `false` |
+
+Only affects MR creation; existing MRs are not toggled between draft and ready. GitLab only — ignored for other providers.
+This is a global default. Per-repo config can override it via `providers.gitlab.draft_pull_requests`.
+
+### providers.bitbucket.draft_pull_requests
+
+Open pull requests created on Bitbucket Cloud as drafts (`"draft": true` in the create-PR API request).
+
+| | |
+|---|---|
+| Type | `bool` |
+| Default | `false` |
+
+Only affects PR creation; existing PRs are not toggled between draft and ready. Bitbucket only — ignored for other providers.
+This is a global default. Per-repo config can override it via `providers.bitbucket.draft_pull_requests`.
+
+### providers.azuredevops.draft_pull_requests
+
+Open pull requests created on Azure DevOps as drafts (`az repos pr create --draft true`).
+
+| | |
+|---|---|
+| Type | `bool` |
+| Default | `false` |
+
+Only affects PR creation; existing PRs are not toggled between draft and ready. Azure DevOps only — ignored for other providers.
+This is a global default. Per-repo config can override it via `providers.azuredevops.draft_pull_requests`.
 
 ## Environment variables
 

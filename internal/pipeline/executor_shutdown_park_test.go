@@ -479,7 +479,7 @@ func TestExecutor_CancellationBeatsABufferedResponse(t *testing.T) {
 
 				for i := 0; i < 50; i++ {
 					exec.approvalCh <- approvalResponse{action: types.ActionApprove}
-					response, reconciled, err := exec.waitForApprovalOrReconcile(ctx, tc.step, &StepContext{Ctx: ctx}, true)
+					response, reconciled, err := exec.waitForApprovalOrReconcile(ctx, tc.step, &StepContext{Ctx: ctx}, "", true)
 					if !errors.Is(err, cause) {
 						t.Fatalf("iteration %d: waitForApprovalOrReconcile() error = %v, want %v", i, err, cause)
 					}
@@ -578,7 +578,7 @@ func TestExecutor_ShutdownBeatsAResolvedReconciliation(t *testing.T) {
 	}
 	done := make(chan gateResult, 1)
 	go func() {
-		_, reconciled, err := exec.waitForApprovalOrReconcile(ctx, step, &StepContext{Ctx: ctx}, true)
+		_, reconciled, err := exec.waitForApprovalOrReconcile(ctx, step, &StepContext{Ctx: ctx}, "", true)
 		done <- gateResult{reconciled: reconciled, err: err}
 	}()
 
@@ -693,7 +693,7 @@ func TestExecutor_ShutdownStillCancelsAnUnansweredGate(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(ErrDaemonShutdown)
 
-	if _, _, err := exec.waitForApprovalOrReconcile(ctx, step, &StepContext{Ctx: ctx}, true); !errors.Is(err, ErrDaemonShutdown) {
+	if _, _, err := exec.waitForApprovalOrReconcile(ctx, step, &StepContext{Ctx: ctx}, "", true); !errors.Is(err, ErrDaemonShutdown) {
 		t.Fatalf("waitForApprovalOrReconcile() error = %v, want ErrDaemonShutdown", err)
 	}
 }

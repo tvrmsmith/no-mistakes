@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
@@ -24,6 +25,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/logstore"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/procreap"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
@@ -896,7 +898,7 @@ func defaultTreeOrphanWorktrees(d *db.DB, p *paths.Paths) (removable []orphanWor
 // names only the exact directories run records name, which is the same rule
 // eject applies (see gate.removeRepoWorktrees): nothing there is enumerated,
 // and a directory no run recorded is never even looked at. Whether a named
-// directory may go is still the active-run guard (see skipWorktreeCleanup).
+// directory may go is decided by removableOrphanWorktree.
 func recordedOrphanWorktrees(d *db.DB, p *paths.Paths, leftover []db.RunWorktree) []orphanWorktree {
 	var removable []orphanWorktree
 	for _, wt := range leftover {
@@ -911,11 +913,20 @@ func recordedOrphanWorktrees(d *db.DB, p *paths.Paths, leftover []db.RunWorktree
 	return removable
 }
 
-// removableOrphanWorktree reports whether cleanup may take this directory,
-// which is the active-run guard (see skipWorktreeCleanup). A directory it
-// spares is neither swept nor removed.
+// removableOrphanWorktree combines the active-run guard with refusal retention.
+// This removal decision does not exempt retained terminal runs from the
+// independent startup process sweep or evidence expiry.
 func removableOrphanWorktree(d *db.DB, wt orphanWorktree) bool {
 	if skip, reason := skipWorktreeCleanup(context.Background(), d, wt.runID, wt.dir); skip {
+		slog.Info("skipping worktree cleanup", "path", wt.dir, "reason", reason)
+		return false
+	}
+	run, err := d.GetRun(wt.runID)
+	if err != nil {
+		slog.Warn("preserving run worktree: cannot read run", "run_id", wt.runID, "error", err)
+		return false
+	}
+	if reason := protectedPathCleanupReason(d, run); reason != "" {
 		slog.Info("skipping worktree cleanup", "path", wt.dir, "reason", reason)
 		return false
 	}
@@ -947,8 +958,8 @@ func removeOrphanWorktree(ctx context.Context, wt orphanWorktree) {
 // "no matching run" directory is never one whose insert simply hasn't landed
 // yet - it is safe to remove immediately.
 //
-// A run marked RunCIMonitorInterrupted (the daemon restarted while monitoring
-// CI for an already-open PR, issue #361) is terminal and would otherwise leak
+// A run marked RunCIMonitorInterrupted (the daemon restarted or was drained
+// while monitoring CI for an already-open PR, issue #361) is terminal and would otherwise leak
 // its checkout on every future restart. Such a worktree is reclaimed like any
 // other terminal-run leftover EXCEPT when it may hold unpushed work: a CI
 // auto-fix commits locally before pushing (see steps/ci_fix.go), so a crash in
@@ -957,6 +968,13 @@ func removeOrphanWorktree(ctx context.Context, wt orphanWorktree) {
 // run.HeadSHA advances solely after a verified push, so a match proves nothing
 // local is unpushed - and fail safe to preservation on any mismatch or
 // unreadable HEAD so recoverable commits are never discarded.
+//
+// A matching head is not enough on its own, because a repair turn killed
+// between its edits and its commit leaves the run at exactly its recorded head
+// with the work still uncommitted underneath. That is the same fact
+// pipeline.CIMonitorWorktreeClean owns for the stop, the guard, recovery, and
+// the drain, and it is read here for the same reason: the refusal those sites
+// make must not then cost the run the checkout holding the work.
 func skipWorktreeCleanup(ctx context.Context, d *db.DB, runID, wtPath string) (bool, string) {
 	run, err := d.GetRun(runID)
 	if err != nil {
@@ -973,8 +991,36 @@ func skipWorktreeCleanup(ctx context.Context, d *db.DB, runID, wtPath string) (b
 		if strings.TrimSpace(head) != run.HeadSHA {
 			return true, fmt.Sprintf("run %s ci monitor interrupted; worktree may hold unpushed commits; preserving", runID)
 		}
+		if err := pipeline.CIMonitorWorktreeClean(ctx, wtPath); err != nil {
+			return true, fmt.Sprintf("run %s ci monitor interrupted; %v; preserving", runID, err)
+		}
 	}
 	return false, ""
+}
+
+// protectedPathCleanupReason protects only the index and working files. It must
+// not be used as a process-liveness or test-evidence retention predicate.
+func protectedPathCleanupReason(d *db.DB, run *db.Run) string {
+	if run == nil || (run.Status == types.RunCancelled && run.Error != nil && *run.Error == types.RunCancelReasonAbortedByUser) {
+		return ""
+	}
+	results, err := d.GetStepsByRun(run.ID)
+	if err != nil {
+		return fmt.Sprintf("cannot read protected-path refusals for run %s: %v", run.ID, err)
+	}
+	for _, step := range results {
+		if step.FindingsJSON == nil || !pipeline.HasProtectedPathRefusal(*step.FindingsJSON) || step.Status == types.StepStatusCompleted {
+			continue
+		}
+		if step.Status == types.StepStatusSkipped && (step.Error == nil || *step.Error != types.RunCIMonitorInterruptedReason) {
+			continue
+		}
+		if step.Error != nil && *step.Error == "aborted by user" {
+			continue
+		}
+		return fmt.Sprintf("run %s has an unresolved protected-path refusal; preserving index and worktree", run.ID)
+	}
+	return ""
 }
 
 type gateMigrationStats struct {
@@ -1085,6 +1131,11 @@ func migrateGateConfig(ctx context.Context, bareDir string) error {
 	return nil
 }
 
+// defaultDrainTimeout bounds a drain request that omits DrainTimeoutMS (or
+// sends a non-positive value), so a caller can't accidentally block a shutdown
+// forever by forgetting the field.
+const defaultDrainTimeout = 10 * time.Minute
+
 func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func()) {
 	classify := func(ctx context.Context, cwd string, markerPresent, skipManagedGit bool) (gatecontext.Result, error) {
 		return (gatecontext.Inspector{DB: d, Paths: mgr.paths}).Inspect(ctx, gatecontext.Request{
@@ -1107,15 +1158,84 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 	}
 
 	srv.Handle(ipc.MethodHealth, func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		return &ipc.HealthResult{Status: "ok", ProtocolVersion: ipc.ProtocolVersion}, nil
+		return &ipc.HealthResult{Status: "ok", ProtocolVersion: ipc.ProtocolVersion, Drained: mgr.RefusingNewRuns(), DrainedAlive: mgr.DrainedAndAlive()}, nil
 	})
 
-	srv.Handle(ipc.MethodShutdown, func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
+	var draining atomic.Bool
+	srv.Handle(ipc.MethodShutdown, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		if err := refuseNested(ctx, false); err != nil {
 			return nil, err
 		}
-		go shutdown()
-		return &ipc.ShutdownResult{OK: true}, nil
+		var p ipc.ShutdownParams
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("invalid params: %w", err)
+			}
+		}
+		// Drain false with a drain option set is not a request this daemon can
+		// serve: taking the branch below would kill the daemon outright, the
+		// exact opposite of what a DrainOnly caller asked for. A version-skewed
+		// or third-party client that builds that shape is told so instead.
+		if !p.Drain && (p.DrainOnly || p.DrainTimeoutMS != 0) {
+			return nil, fmt.Errorf("invalid params: drain options require drain=true (drain_only=%t, drain_timeout_ms=%d)", p.DrainOnly, p.DrainTimeoutMS)
+		}
+		if !p.Drain {
+			go shutdown()
+			return &ipc.ShutdownResult{OK: true}, nil
+		}
+		if !draining.CompareAndSwap(false, true) {
+			// A drain is already running on another connection; starting a
+			// second one would double-cut the same in-flight runs.
+			return &ipc.ShutdownResult{OK: true, Drained: false}, nil
+		}
+		defer draining.Store(false)
+		timeout := time.Duration(p.DrainTimeoutMS) * time.Millisecond
+		if p.DrainTimeoutMS <= 0 {
+			timeout = defaultDrainTimeout
+		}
+		// Drain runs synchronously on this handler goroutine so its report
+		// reaches the caller in this same RPC response, with no second RPC or
+		// DB read needed to learn what got interrupted. That's safe here:
+		// ipc/server.go gives every connection its own goroutine and doesn't
+		// close s.done until Close() is called, so blocking this one doesn't
+		// stall the listener or any other connection (see the concurrent
+		// MethodHealth test alongside this handler's tests).
+		//
+		// ctx is this connection's own context, which the server cancels the
+		// moment Close() runs. That is late: doShutdown runs mgr.Shutdown()
+		// first, so by then the runs the drain was waiting on have already
+		// been cancelled. mgr.Shutdown's own signal, closed before it cancels
+		// anything, is what Drain's wait loop reacts to, so a signal aborts an
+		// in-flight drain outright rather than waiting out its deadline and
+		// reports those runs as stopped mid-flight rather than as finished;
+		// that's intentional, not a bug to fix here. A caller that hangs up
+		// mid-drain is NOT observed: ipc/server.go detects a closed peer only
+		// on the stream path, and this connection's scanner loop is blocked
+		// inside this handler, so such a drain runs to its own deadline.
+		// What the drain hadn't finished by then is left for
+		// mgr.Shutdown() below to cancel, same as always, and since
+		// CancelCauseFunc keeps only the first cause, a run the drain meant to
+		// classify as a cut CI monitor can land as a plain shutdown-cancelled
+		// failure instead - an accepted, best-effort tradeoff of a signal
+		// racing a drain.
+		report := mgr.Drain(ctx, timeout)
+		// DrainOnly leaves the process alive with mgr's refuse-new-runs latch
+		// still set. Under launchd KeepAlive / systemd Restart=always, exiting
+		// here would be respawned into the gap before the supervisor's own stop
+		// arrives, and that replacement daemon would accept new runs; the
+		// supervisor performs the exit instead.
+		if p.DrainOnly {
+			mgr.MarkDrainedAlive()
+			slog.Warn("drain finished and this daemon is still running with new runs refused; its service manager owns the exit, and if that never lands, `no-mistakes daemon restart` recovers it")
+		} else {
+			go shutdown()
+		}
+		return &ipc.ShutdownResult{
+			OK:          true,
+			Drained:     true,
+			Finished:    report.Finished,
+			Interrupted: report.Interrupted,
+		}, nil
 	})
 
 	srv.Handle(ipc.MethodGetRun, func(_ context.Context, params json.RawMessage) (interface{}, error) {
@@ -1244,6 +1364,57 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		return &ipc.AdmitPushResult{Context: gateContextResult(result), ProtocolVersion: ipc.ProtocolVersion}, nil
 	})
 
+	srv.Handle(ipc.MethodClaimLaunchReceipt, func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p ipc.ClaimLaunchReceiptParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if err := validateLaunchNonce(p.LaunchNonce); err != nil {
+			return nil, err
+		}
+		if err := validateValidationGeneration(p.ValidationGeneration); err != nil {
+			return nil, err
+		}
+		prBaseBranch, err := normalizeRunPRBaseBranch(p.PRBaseBranch)
+		if err != nil {
+			return nil, err
+		}
+		run, claimed, err := d.ClaimLaunchReceipt(p.RepoID, p.Branch, p.LaunchNonce, p.SubmittedHeadSHA, p.ValidationGeneration, p.IntentDigest, prBaseBranch)
+		if err != nil {
+			return nil, fmt.Errorf("claim launch receipt: %w", err)
+		}
+		if run == nil {
+			return &ipc.ClaimLaunchReceiptResult{}, nil
+		}
+		if !launchPRBaseBranchMatches(run, prBaseBranch) {
+			return nil, conflictingLaunchPRBaseBranch(p.LaunchNonce)
+		}
+
+		receipt, err := receiptForRun(run, claimed)
+		if err != nil {
+			return nil, err
+		}
+		if receipt.SubmittedHeadSHA != p.SubmittedHeadSHA || receipt.ValidationGeneration != p.ValidationGeneration || receipt.IntentDigest != p.IntentDigest {
+			return nil, fmt.Errorf("conflicting launch_nonce is already bound to a different validation generation, submitted head, or intent")
+		}
+		return &ipc.ClaimLaunchReceiptResult{Receipt: &receipt}, nil
+	})
+
+	srv.Handle(ipc.MethodStartFreshRun, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		if err := refuseNested(ctx, false); err != nil {
+			return nil, err
+		}
+		var p ipc.StartFreshRunParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		receipt, err := mgr.HandleStartFreshRun(ctx, &p)
+		if err != nil {
+			return nil, err
+		}
+		return &ipc.StartFreshRunResult{Receipt: receipt}, nil
+	})
+
 	srv.Handle(ipc.MethodRerun, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		if err := refuseNested(ctx, false); err != nil {
 			return nil, err
@@ -1252,7 +1423,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		runID, err := mgr.HandleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent)
+		runID, err := mgr.HandleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent, p.PRBaseBranch, p.CallerHeadSHA)
 		if err != nil {
 			return nil, err
 		}
@@ -1388,6 +1559,7 @@ func runToInfo(d *db.DB, r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 		Error:              r.Error,
 		CIReady:            r.CIReadyAt != nil,
 		CIReadyNoCI:        r.CIReadyNoCI,
+		PRBaseBranch:       r.PRBaseBranch,
 		AwaitingAgent:      r.AwaitingAgentSince != nil,
 		AwaitingAgentSince: r.AwaitingAgentSince,
 		RestartCount:       r.RestartCount,
@@ -1397,7 +1569,11 @@ func runToInfo(d *db.DB, r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 	if len(steps) > 0 {
 		info.Steps = make([]ipc.StepResultInfo, 0, len(steps))
 		for _, s := range steps {
-			info.Steps = append(info.Steps, stepToInfo(d, s))
+			stepInfo := stepToInfo(d, s)
+			info.Steps = append(info.Steps, stepInfo)
+			if info.CIOverrideReason == "" && stepInfo.OverrideReason != "" {
+				info.CIOverrideReason = stepInfo.OverrideReason
+			}
 		}
 	}
 	return info
@@ -1415,10 +1591,17 @@ func stepToInfo(d *db.DB, s *db.StepResult) ipc.StepResultInfo {
 		FindingsJSON:   s.FindingsJSON,
 		Error:          s.Error,
 		StartedAt:      s.StartedAt,
+		RoundStartedAt: s.RoundStartedAt,
 		CompletedAt:    s.CompletedAt,
 		LastActivityAt: s.LastActivityAt,
 		LastActivity:   s.LastActivity,
 		AgentPID:       s.AgentPID,
+	}
+	if s.OverrideReason != nil {
+		info.OverrideReason = *s.OverrideReason
+	}
+	if s.SkipReason != nil {
+		info.SkipReason = *s.SkipReason
 	}
 	if s.AutoFixLimit != nil {
 		info.AutoFixLimit = *s.AutoFixLimit

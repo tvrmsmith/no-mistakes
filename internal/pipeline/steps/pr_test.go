@@ -348,7 +348,7 @@ func TestPRStep_ZeroBaseSHA(t *testing.T) {
 	}
 }
 
-func TestPRStep_CreatesNewPR(t *testing.T) {
+func TestPRStep_CreatesConfiguredDraftPR(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
@@ -359,6 +359,7 @@ func TestPRStep_CreatesNewPR(t *testing.T) {
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
+	sctx.Config.Providers.GitHub.DraftPullRequests = true
 	reviewStep, err := sctx.DB.InsertStepResult(sctx.Run.ID, types.StepReview)
 	if err != nil {
 		t.Fatal(err)
@@ -391,6 +392,9 @@ func TestPRStep_CreatesNewPR(t *testing.T) {
 	if !strings.Contains(ghLog, "pr create --head feature --base main") {
 		t.Fatalf("expected unset PR base to fall back to repository default branch, got:\n%s", ghLog)
 	}
+	if !strings.Contains(ghLog, "pr create --head feature --base main --repo test/repo --draft") {
+		t.Fatalf("expected configured GitHub PR creation to use --draft, got:\n%s", ghLog)
+	}
 	if !strings.Contains(ghLog, "--title chore: update pull request --body") {
 		t.Fatalf("expected fallback PR title to make no scope claim, got:\n%s", ghLog)
 	}
@@ -410,7 +414,13 @@ func TestPRStep_CreatesNewPR(t *testing.T) {
 		t.Fatal(err)
 	}
 	if run.PRURL == nil || *run.PRURL != "https://github.com/test/repo/pull/99" {
-		t.Errorf("PR URL = %v, want https://github.com/test/repo/pull/99", run.PRURL)
+		t.Fatalf("PR URL = %v, want https://github.com/test/repo/pull/99", run.PRURL)
+	}
+	for _, line := range strings.Split(ghLog, "\n") {
+		if strings.HasPrefix(line, "pr create ") {
+			t.Logf("provider command: gh %s\npersisted PR URL: %s", line, *run.PRURL)
+			break
+		}
 	}
 }
 
@@ -863,7 +873,7 @@ func TestPRStep_AppendsTestingSectionFromTestStep(t *testing.T) {
 	}
 	ghLog := string(logData)
 
-	wantOrder := "## Risk Assessment\n\n⚠️ Medium: touches critical error handling\n\n## Testing\n\n- 🔧 **Test** - 1 issue found → auto-fixed ✅\n\n## Pipeline"
+	wantOrder := "## Risk Assessment\n\n⚠️ Medium: touches critical error handling\n\n## Testing\n\n- 🔧 **Test** - 1 issue found → fix attempted; result not reported ✅\n\n## Pipeline"
 	if !strings.Contains(ghLog, wantOrder) {
 		t.Fatalf("expected testing section between risk assessment and pipeline, got:\n%s", ghLog)
 	}
@@ -1031,7 +1041,7 @@ func TestAssemblePRBody_RetainsAttestationWhenCoreExceedsAzureCap(t *testing.T) 
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusFailed},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, nil, testPipelineHeadSHA)
 	pipelineMD := pipelineMarkdownForTest(strings.Repeat("review detail 😀 ", 1000))
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 
@@ -1165,7 +1175,7 @@ func TestAppendGeneratedSections_RetainsPipelineAttestationWhenTruncated(t *test
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusSkipped},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, nil, testPipelineHeadSHA)
 	pipelineMD := pipelineMarkdownForTest(strings.Repeat("review round - "+strings.Repeat("x", 1000), 100))
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 
@@ -1182,7 +1192,7 @@ func TestAppendGeneratedSections_RetainsAttestationWhenEssentialSectionsOverflow
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusFailed},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, nil, testPipelineHeadSHA)
 	pipelineMD := pipelineMarkdownForTest("review round 001")
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 

@@ -73,6 +73,13 @@ Previous format findings to address:
 		return &pipeline.StepOutcome{FixSummary: fixSummary}, nil
 	}
 
+	// A formatter is a configured command like test and lint, so it needs the
+	// same materialized dependencies. Push ran the formatter before the
+	// reorder and prepared for it there; the duty moved here with the command.
+	if err := ensurePrepared(sctx, s.Name()); err != nil {
+		return nil, err
+	}
+
 	sctx.Log(fmt.Sprintf("running formatter: %s", fmtCmd))
 	output, exitCode, err := runStepShellCommand(sctx, fmtCmd)
 	if err != nil {

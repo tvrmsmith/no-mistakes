@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	toon "github.com/toon-format/toon-go"
 
@@ -18,6 +21,8 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/spf13/cobra"
@@ -32,6 +37,45 @@ const triggerWaitTimeout = 5 * time.Second
 // It is a variable only so regression tests can shorten the bounded wait;
 // production always uses the default.
 var abortStateWaitTimeout = 10 * time.Second
+
+// defaultAxiWait is the hold cap for axi run/respond. It sits under a typical
+// 10-minute agent tool budget so the command returns with a reattach error
+// instead of hanging until the harness kills it.
+const defaultAxiWait = 8 * time.Minute
+
+func bindAxiWaitFlag(cmd *cobra.Command, wait *time.Duration) {
+	cmd.Flags().DurationVar(wait, "wait", defaultAxiWait, "maximum time to block driving this run before returning so the caller can reattach")
+}
+
+func boundAxiWait(ctx context.Context, wait time.Duration) (context.Context, context.CancelFunc, error) {
+	if err := validateAxiWait(wait); err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	return ctx, cancel, nil
+}
+
+func validateAxiWait(wait time.Duration) error {
+	if wait <= 0 {
+		return fmt.Errorf("--wait must be a positive duration")
+	}
+	return nil
+}
+
+func isAxiWaitElapsed(parent, drive context.Context, err error) bool {
+	if err == nil || parent.Err() != nil || drive.Err() != context.DeadlineExceeded {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+func emitAxiWaitElapsed(cmd *cobra.Command, wait time.Duration, reattach string) error {
+	return emitError(cmd, 1, fmt.Sprintf("wait of %s elapsed while driving the run", wait),
+		"This bounded hold ended; it is not a pipeline failure and does not mean the daemon is dead.",
+		"Run `no-mistakes axi status` to inspect progress",
+		fmt.Sprintf("Re-run `%s` to reattach for another %s", reattach, wait),
+	)
+}
 
 // terminalStatus reports whether a run has reached a final state.
 func terminalStatus(status string) bool {
@@ -54,22 +98,52 @@ func outcomeFor(status string) string {
 	}
 }
 
+// outcomeForRun qualifies completed runs whose external checks were overridden
+// or whose publication/verification automatically skipped. Explicit per-run
+// skips carry no automatic cause and retain their existing outcome.
+func outcomeForRun(rv runView) string {
+	word := outcomeFor(rv.Status)
+	if word == "passed" && rv.CIOverrideReason != "" {
+		return "passed-with-override"
+	}
+	if word == "passed" && len(rv.automaticSkips()) > 0 {
+		return "passed-with-skips"
+	}
+	return word
+}
+
 func newAxiRunCmd() *cobra.Command {
 	var autoYes bool
 	var skipValue string
 	var intent string
+	var launchNonce string
+	var validationGeneration string
+	var baseBranch string
+	var wait time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Validate your code changes, blocking until a decision point or the outcome",
 		Long: "Triggers a pipeline run for the current branch and drives it. Without\n" +
 			"--yes it blocks until the first approval gate, CI-ready point, or final outcome and\n" +
-			"prints it. With --yes it auto-resolves every gate (fixing actionable\n" +
+			"prints it. With --yes it auto-resolves eligible gates (fixing actionable\n" +
 			"findings - including ask-user findings, with no escalation - then\n" +
-			"accepting the result) until a decision point or outcome.\n\n" +
+			"accepting the result) until a decision point or outcome.\n" +
+			"Protected-path refusals require an explicit response, even with --yes.\n\n" +
 			"--intent is required when starting a new run: pass what the user set out\n" +
 			"to accomplish (the goal behind the change, not a description of the diff)\n" +
 			"so no-mistakes uses it directly instead of inferring it from transcripts.\n\n" +
+			"--wait bounds this hold (default 8m) so an agent harness with a 10-minute\n" +
+			"tool cap gets a structured return instead of an unbounded hang. Elapsed wait\n" +
+			"is not a failed run: inspect with axi status and reattach. A slow live daemon\n" +
+			"is retried after a health probe rather than reported as I/O failure.\n\n" +
+			"--launch-nonce with --validation-generation enables strict proof mode.\n" +
+			"Before driving, AXI emits a receipt with the durable run ID, created or\n" +
+			"reused disposition, full submitted head, and a digest of the exact\n" +
+			"persisted intent; raw intent is never included.\n\n" +
+			"--base-branch targets an integration branch other than the repository default\n" +
+			"for this run only (for example an epic branch). It overrides pr.base_branch\n" +
+			"in repo config and is persisted on the run for rebase, PR, and CI steps.\n\n" +
 			"The calling agent drives AXI approval gates but does not become the pipeline\n" +
 			"agent. The daemon requires a supported native agent binary, the `agent: cursor`\n" +
 			"ACP alias, or an explicit `acp:<target>` through `acpx`, and fails before the\n" +
@@ -80,27 +154,45 @@ func newAxiRunCmd() *cobra.Command {
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return trackAxiSurface("axi-run", "/axi/run", telemetry.Fields{
-				"auto_yes":   autoYes,
-				"has_intent": strings.TrimSpace(intent) != "",
-				"has_skip":   strings.TrimSpace(skipValue) != "",
+				"auto_yes":         autoYes,
+				"has_intent":       strings.TrimSpace(intent) != "",
+				"has_skip":         strings.TrimSpace(skipValue) != "",
+				"has_base_branch":  strings.TrimSpace(baseBranch) != "",
+				"has_launch_nonce": launchNonce != "",
 			}, func() error {
 				skipSteps, err := parseSkipSteps(skipValue)
 				if err != nil {
 					return emitError(cmd, 2, err.Error(),
 						validStepsHelp())
 				}
-				return runAxiRun(cmd, autoYes, skipSteps, intent)
+				return runAxiRunWithLaunchProof(cmd, autoYes, skipSteps, intent, baseBranch, launchNonce, validationGeneration, wait)
 			})
 		},
 	}
-	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "auto-resolve every gate (fix findings, then accept) until a decision point or outcome")
+	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "auto-resolve eligible gates (fix findings, then accept) until a decision point or outcome; protected-path refusals require an explicit response")
 	cmd.Flags().StringVar(&skipValue, "skip", "", "comma-separated pipeline steps to skip")
 	cmd.Flags().StringVar(&intent, "intent", "", "what the user set out to accomplish (not a description of the diff); used instead of inferring from transcripts (required to start a run)")
+	cmd.Flags().StringVar(&launchNonce, "launch-nonce", "", "opaque nonce for a daemon-bound pre-drive launch receipt")
+	cmd.Flags().StringVar(&validationGeneration, "validation-generation", "", "opaque generation bound to --launch-nonce proof mode")
+	cmd.Flags().StringVar(&baseBranch, "base-branch", "", "integration branch to open the PR against for this run only (overrides pr.base_branch)")
+	bindAxiWaitFlag(cmd, &wait)
 	return cmd
 }
 
-func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, intent string) error {
+func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, intent, baseBranch string) error {
+	return runAxiRunWithLaunchProof(cmd, autoYes, skipSteps, intent, baseBranch, "", "", defaultAxiWait)
+}
+
+func runAxiRunWithLaunchProof(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, intent, baseBranch, launchNonce, validationGeneration string, wait time.Duration) error {
+	if err := validateAxiWait(wait); err != nil {
+		return emitError(cmd, 2, err.Error(), "Pass a positive duration such as --wait 8m")
+	}
 	ctx := cmd.Context()
+	driveCtx, cancel, err := boundAxiWait(ctx, wait)
+	if err != nil {
+		return emitError(cmd, 2, err.Error(), "Pass a positive duration such as --wait 8m")
+	}
+	defer cancel()
 	env, err := openAxiRunEnv()
 	if err != nil {
 		return emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
@@ -121,7 +213,45 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 		return emitError(cmd, 1, fmt.Sprintf("get current HEAD: %v", err))
 	}
 
-	runID := activeRunID(env, branch, headSHA)
+	if strings.TrimSpace(baseBranch) != "" {
+		if _, err := steps.ValidateRunPRBaseBranchName(baseBranch); err != nil {
+			return emitError(cmd, 2, fmt.Sprintf("--base-branch: %v", err))
+		}
+	}
+
+	runID := ""
+	var launchReceipt *ipc.LaunchReceipt
+	if launchNonce != "" {
+		if strings.TrimSpace(validationGeneration) == "" {
+			return emitError(cmd, 2, "--validation-generation is required with --launch-nonce")
+		}
+		receipt, err := claimLaunchReceipt(env.client, env.repo.ID, branch, launchNonce, headSHA, validationGeneration, digestLaunchIntent(intent), baseBranch)
+		if err != nil {
+			return emitError(cmd, 1, fmt.Sprintf("claim launch receipt: %v", err))
+		}
+		if receipt != nil {
+			launchReceipt = receipt
+			runID = receipt.RunID
+		}
+	} else {
+		if validationGeneration != "" {
+			return emitError(cmd, 2, "--validation-generation requires --launch-nonce")
+		}
+		active, err := activeRunInfo(driveCtx, env, branch, headSHA)
+		if err != nil {
+			if isAxiWaitElapsed(ctx, driveCtx, err) {
+				return emitAxiWaitElapsed(cmd, wait, "no-mistakes axi run")
+			}
+			return emitError(cmd, 1, fmt.Sprintf("get active run: %v", err))
+		}
+		if active != nil {
+			if err := conflictingActiveRunPRBaseBranch(active, baseBranch); err != nil {
+				return emitError(cmd, 2, err.Error(),
+					"Omit --base-branch to reattach, or abort the active run before starting a new one")
+			}
+			runID = active.ID
+		}
+	}
 	if runID == "" {
 		if err := configErrorForFreshAxiRun(env, runID); err != nil {
 			return emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
@@ -132,6 +262,9 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 		if strings.TrimSpace(intent) == "" {
 			return emitIntentRequiredError(cmd, inspectAxiBranchSync(ctx, env))
 		}
+		if err := validateAxiRunBaseBranch(ctx, baseBranch); err != nil {
+			return emitError(cmd, 2, err.Error())
+		}
 		// Starting a fresh run: apply the same pre-flight the human wizard
 		// enforces, but as structured errors the agent acts on rather than
 		// silent auto-branching/auto-committing. The gate validates committed
@@ -141,7 +274,14 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 			return guard(cmd)
 		}
 		var err error
-		runID, err = triggerRun(ctx, env, branch, headSHA, skipSteps, intent)
+		if launchNonce != "" {
+			launchReceipt, err = triggerProofRun(ctx, env, branch, headSHA, skipSteps, intent, baseBranch, launchNonce, validationGeneration)
+			if err == nil {
+				runID = launchReceipt.RunID
+			}
+		} else {
+			runID, err = triggerRun(ctx, env, branch, headSHA, skipSteps, intent, baseBranch)
+		}
 		if err != nil {
 			if ownershipErr, ok := err.(*branchOwnershipError); ok {
 				return emitBranchOwnershipError(cmd, ownershipErr)
@@ -149,12 +289,23 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 			return emitError(cmd, 1, err.Error())
 		}
 	}
+	if launchReceipt != nil {
+		emitLaunchReceipt(cmd, *launchReceipt)
+	}
 
-	run, ciReady, err := driveRun(ctx, cmd.ErrOrStderr(), env.client, env.p.Socket(), runID, autoYes)
+	run, ciReady, err := driveRun(driveCtx, cmd.ErrOrStderr(), env.client, env.p.Socket(), runID, autoYes)
 	if err != nil {
+		if isAxiWaitElapsed(ctx, driveCtx, err) {
+			return emitAxiWaitElapsed(cmd, wait, "no-mistakes axi run")
+		}
 		return emitError(cmd, 1, fmt.Sprintf("drive run: %v", err))
 	}
 	return renderDriveResult(cmd, run, ciReady)
+}
+
+func digestLaunchIntent(intent string) string {
+	sum := sha256.Sum256([]byte(intent))
+	return fmt.Sprintf("%x", sum)
 }
 
 func configErrorForFreshAxiRun(env *axiEnv, runID string) error {
@@ -164,13 +315,45 @@ func configErrorForFreshAxiRun(env *axiEnv, runID string) error {
 	return env.globalConfigErr
 }
 
-// activeRunID returns the ID of a non-terminal run for branch and head, or "" if none.
-func activeRunID(env *axiEnv, branch, headSHA string) string {
-	var active ipc.GetActiveRunResult
-	if err := env.client.Call(ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
-		return ""
+func validateAxiRunBaseBranch(ctx context.Context, baseBranch string) error {
+	normalized, err := steps.ValidateRunPRBaseBranchName(baseBranch)
+	if err != nil {
+		return fmt.Errorf("--base-branch: %w", err)
 	}
-	return activeRunIDForHead(&active, headSHA)
+	if normalized == "" {
+		return nil
+	}
+	return steps.VerifyRemoteBranchExists(ctx, ".", normalized)
+}
+
+// conflictingActiveRunPRBaseBranch reports when --base-branch would be
+// discarded by reattaching to an in-flight run that already has a different
+// (or empty) per-run PR target.
+func conflictingActiveRunPRBaseBranch(run *ipc.RunInfo, requested string) error {
+	requested = strings.TrimSpace(requested)
+	if requested == "" || run == nil {
+		return nil
+	}
+	stored := ""
+	if run.PRBaseBranch != nil {
+		stored = strings.TrimSpace(*run.PRBaseBranch)
+	}
+	if stored == requested {
+		return nil
+	}
+	if stored == "" {
+		return fmt.Errorf("active run %s is already in progress without --base-branch %s", run.ID, requested)
+	}
+	return fmt.Errorf("active run %s is already targeting %s, not %s", run.ID, stored, requested)
+}
+
+func activeRunInfo(ctx context.Context, env *axiEnv, branch, headSHA string) (*ipc.RunInfo, error) {
+	var active ipc.GetActiveRunResult
+	source := &ipcRunStateSource{socketPath: env.p.Socket()}
+	if err := source.callWithSlowReplyRetry(ctx, ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
+		return nil, err
+	}
+	return activeRunInfoForHead(active.Run, headSHA), nil
 }
 
 func activeRunIDForHead(active *ipc.GetActiveRunResult, headSHA string) string {
@@ -212,13 +395,46 @@ func preflightGuard(ctx context.Context, env *axiEnv, branch string) func(*cobra
 		}
 	}
 	if dirty {
+		help := []string{
+			"Commit the files that belong to this change (`git add <path> && git commit`), or gitignore / add the rest to `.git/info/exclude`",
+			"Run `git status` to see what is uncommitted",
+		}
+		if untracked, err := git.UntrackedFiles(ctx, "."); err == nil && len(untracked) > 0 {
+			help = append([]string{untrackedHint(untracked)}, help...)
+		}
 		return func(cmd *cobra.Command) error {
-			return emitError(cmd, 1, "uncommitted changes in the working tree",
-				"Commit your work before validating: `git add -A && git commit -m \"...\"`, then re-run",
-				"Run `git status` to see what is uncommitted")
+			return emitError(cmd, 1, "uncommitted changes in the working tree", help...)
 		}
 	}
 	return nil
+}
+
+// untrackedHint renders the untracked paths named in the dirty-worktree error,
+// bounded so a large untracked tree cannot bloat the error document. Paths stay
+// in git's order and the hint states how many were left out.
+func untrackedHint(untracked []string) string {
+	const maxUntrackedPaths = 5
+	const sep = ", "
+	shown := untracked
+	if len(shown) > maxUntrackedPaths {
+		shown = shown[:maxUntrackedPaths]
+	}
+	renderedPaths := make([]string, len(shown))
+	for i, path := range shown {
+		renderedPaths[i] = displayUntrackedPath(path)
+	}
+	rendered := strings.Join(renderedPaths, sep)
+	if dropped := len(untracked) - len(shown); dropped > 0 {
+		rendered += fmt.Sprintf("%s(+%d more)", sep, dropped)
+	}
+	return fmt.Sprintf("Untracked files (not in git yet): %s", rendered)
+}
+
+func displayUntrackedPath(path string) string {
+	if strings.TrimSpace(path) != path || strings.IndexFunc(path, func(r rune) bool { return !unicode.IsGraphic(r) }) >= 0 {
+		return strconv.QuoteToGraphic(path)
+	}
+	return path
 }
 
 // branchOwnershipError carries the shared branch-sync classification that
@@ -309,9 +525,12 @@ func freshRunBranchOwnershipState(ctx context.Context, env *axiEnv) *branchsync.
 // the gate to trigger a pipeline, and falls back to a rerun when the push was a
 // no-op (the gate already had this commit). Callers must check for an existing
 // active run first (see activeRunID) and apply pre-flight guards.
-func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSteps []types.StepName, intent string) (string, error) {
+func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSteps []types.StepName, intent, baseBranch string) (string, error) {
 	pushOptions := formatSkipPushOptions(skipSteps)
 	if opt := formatIntentPushOption(intent); opt != "" {
+		pushOptions = append(pushOptions, opt)
+	}
+	if opt := formatPRBaseBranchPushOption(baseBranch); opt != "" {
 		pushOptions = append(pushOptions, opt)
 	}
 	priorRunIDs, err := runIDsForHead(env.client, env.repo.ID, branch, headSHA)
@@ -340,13 +559,90 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 		return "", fmt.Errorf("push %q to gate: %v", branch, pushErr)
 	}
 
-	// No run appeared: the push was likely up-to-date. Rerun the latest gate
-	// head so `axi run` is still useful when there are no new commits.
+	// No run appeared: the push was likely up-to-date. Refresh the caller's
+	// clean-head evidence because it may have changed while waiting above.
 	var rr ipc.RerunResult
-	if err := env.client.Call(ipc.MethodRerun, rerunParams(env.repo.ID, branch, skipSteps, intent), &rr); err != nil {
+	params := rerunParams(env.repo.ID, branch, skipSteps, intent, baseBranch)
+	params.CallerHeadSHA, err = rerunCallerHead(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := env.client.Call(ipc.MethodRerun, params, &rr); err != nil {
 		return "", fmt.Errorf("no run started for %q: %v", branch, err)
 	}
 	return rr.RunID, nil
+}
+
+func claimLaunchReceipt(client *ipc.Client, repoID, branch, launchNonce, submittedHeadSHA, validationGeneration, intentDigest, baseBranch string) (*ipc.LaunchReceipt, error) {
+	var result ipc.ClaimLaunchReceiptResult
+	if err := client.Call(ipc.MethodClaimLaunchReceipt, &ipc.ClaimLaunchReceiptParams{
+		RepoID: repoID, Branch: branch, LaunchNonce: launchNonce,
+		SubmittedHeadSHA: submittedHeadSHA, ValidationGeneration: validationGeneration, IntentDigest: intentDigest, PRBaseBranch: baseBranch,
+	}, &result); err != nil {
+		return nil, err
+	}
+	return result.Receipt, nil
+}
+
+// triggerProofRun captures the immutable submitted commit and waits only for
+// the matching nonce-bound receipt. Ordinary active-run heuristics never prove
+// strict launch identity.
+func triggerProofRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSteps []types.StepName, intent, baseBranch, launchNonce, validationGeneration string) (*ipc.LaunchReceipt, error) {
+	pushOptions := formatSkipPushOptions(skipSteps)
+	pushOptions = append(pushOptions,
+		formatIntentPushOption(intent),
+		formatLaunchNoncePushOption(launchNonce),
+		formatValidationGenerationPushOption(validationGeneration),
+	)
+	if opt := formatPRBaseBranchPushOption(baseBranch); opt != "" {
+		pushOptions = append(pushOptions, opt)
+	}
+	if state := freshRunBranchOwnershipState(ctx, env); state != nil {
+		return nil, &branchOwnershipError{state: *state}
+	}
+	pushErr := git.PushCommitWithOptions(ctx, ".", gate.RemoteName, headSHA, "refs/heads/"+branch, "", false, pushOptions)
+	if pushErr != nil {
+		if state := freshRunBranchOwnershipState(ctx, env); state != nil {
+			return nil, &branchOwnershipError{state: *state}
+		}
+		return nil, fmt.Errorf("push %q to gate: %w", branch, pushErr)
+	}
+	if receipt, err := waitForLaunchReceipt(ctx, env.client, env.repo.ID, branch, launchNonce, headSHA, validationGeneration, intent, baseBranch, triggerWaitTimeout); err != nil {
+		return nil, err
+	} else if receipt != nil {
+		return receipt, nil
+	}
+	var result ipc.StartFreshRunResult
+	if err := env.client.Call(ipc.MethodStartFreshRun, &ipc.StartFreshRunParams{
+		RepoID: env.repo.ID, Branch: branch, HeadSHA: headSHA, SkipSteps: skipSteps,
+		Intent: intent, LaunchNonce: launchNonce, ValidationGeneration: validationGeneration, PRBaseBranch: baseBranch,
+	}, &result); err != nil {
+		return nil, fmt.Errorf("start fresh run: %w", err)
+	}
+	return &result.Receipt, nil
+}
+
+func waitForLaunchReceipt(ctx context.Context, client *ipc.Client, repoID, branch, launchNonce, submittedHeadSHA, validationGeneration, intent, baseBranch string, timeout time.Duration) (*ipc.LaunchReceipt, error) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(150 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		receipt, err := claimLaunchReceipt(client, repoID, branch, launchNonce, submittedHeadSHA, validationGeneration, digestLaunchIntent(intent), baseBranch)
+		if err != nil {
+			return nil, err
+		}
+		if receipt != nil {
+			return receipt, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline.C:
+			return nil, nil
+		case <-poll.C:
+		}
+	}
 }
 
 // runIDsForHead snapshots the run IDs already present for a repo's exact branch
@@ -427,8 +723,23 @@ func activeRunLookupParams(repoID, branch string) *ipc.GetActiveRunParams {
 	return &ipc.GetActiveRunParams{RepoID: repoID, Branch: branch}
 }
 
-func rerunParams(repoID, branch string, skipSteps []types.StepName, intent string) *ipc.RerunParams {
-	return &ipc.RerunParams{RepoID: repoID, Branch: branch, SkipSteps: skipSteps, Intent: intent}
+func rerunParams(repoID, branch string, skipSteps []types.StepName, intent, baseBranch string) *ipc.RerunParams {
+	return &ipc.RerunParams{RepoID: repoID, Branch: branch, SkipSteps: skipSteps, Intent: intent, PRBaseBranch: baseBranch}
+}
+
+// emitLaunchReceipt writes the proof before driveRun subscribes, so callers
+// retain the daemon-authored binding even if later driving blocks or fails.
+func emitLaunchReceipt(cmd *cobra.Command, receipt ipc.LaunchReceipt) {
+	emitDoc(cmd, toon.Field{Key: "launch_receipt", Value: toon.NewObject(
+		toon.Field{Key: "run_id", Value: receipt.RunID},
+		toon.Field{Key: "disposition", Value: receipt.Disposition},
+		toon.Field{Key: "launch_nonce", Value: receipt.LaunchNonce},
+		toon.Field{Key: "validation_generation", Value: receipt.ValidationGeneration},
+		toon.Field{Key: "branch", Value: receipt.Branch},
+		toon.Field{Key: "head_sha", Value: receipt.HeadSHA},
+		toon.Field{Key: "submitted_head_sha", Value: receipt.SubmittedHeadSHA},
+		toon.Field{Key: "intent_digest", Value: receipt.IntentDigest},
+	)})
 }
 
 // driveRun subscribes to a run and reconciles authoritative state on transition
@@ -441,7 +752,8 @@ func rerunParams(repoID, branch string, skipSteps []types.StepName, intent strin
 // findings is fixed (every finding selected), and the resulting fix_review is
 // accepted; gates with only non-actionable findings are approved. Each step is
 // fixed at most once so a finding the fix cannot clear converges to an approval
-// instead of looping forever.
+// instead of looping forever. Protected-path refusals always return their gate
+// for an explicit response, including under --yes.
 //
 // The CI step monitors an open PR until a human merges or closes it (a live
 // status the TUI shows), so it never reaches a terminal state on its own. An
@@ -474,6 +786,10 @@ func driveRunWithReconciler(ctx context.Context, progress io.Writer, client *ipc
 		}
 		if gate, ok := rv.awaitingStep(); ok {
 			if !autoApprove {
+				return run, false, nil
+			}
+			if pipeline.HasProtectedPathRefusal(gate.FindingsJSON) {
+				fmt.Fprintf(progress, "%s: protected-path refusal requires an explicit response; --yes leaves this gate awaiting a response\n", gate.Name)
 				return run, false, nil
 			}
 			gateKey := gate.Name + "\x00" + gate.Status
@@ -568,12 +884,8 @@ func waitStepLeavesGate(ctx context.Context, socketPath, runID, step, gateStatus
 	}
 }
 
-func getRunInfo(client *ipc.Client, runID string) (*ipc.RunInfo, error) {
-	var result ipc.GetRunResult
-	if err := client.Call(ipc.MethodGetRun, &ipc.GetRunParams{RunID: runID}, &result); err != nil {
-		return nil, err
-	}
-	return result.Run, nil
+func getRunInfo(ctx context.Context, socketPath, runID string) (*ipc.RunInfo, error) {
+	return (&ipcRunStateSource{socketPath: socketPath}).Reconcile(ctx, runID)
 }
 
 // sendRespond issues an approval action to the daemon for a step.
@@ -643,7 +955,7 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 		return nil
 	}
 
-	fields = append(fields, toon.Field{Key: "outcome", Value: outcomeFor(rv.Status)})
+	fields = append(fields, toon.Field{Key: "outcome", Value: outcomeForRun(rv)})
 	if run.Error != nil && *run.Error != "" {
 		fields = append(fields, toon.Field{Key: "error", Value: *run.Error})
 	}
@@ -652,6 +964,12 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 		fixes := rv.fixRows()
 		fields = appendFixesField(fields, fixes)
 		var help []string
+		if rv.CIOverrideReason != "" {
+			help = append(help, fmt.Sprintf("A human approved past a live CI failure: %s", rv.CIOverrideReason))
+		}
+		if len(rv.automaticSkips()) > 0 {
+			help = append(help, "Publication or CI verification did not run (see `run.automatic_skips` and `run.head_sha`). Report the missing evidence and its cause; this outcome does not establish CI readiness or a code failure.")
+		}
 		if rv.PRURL != "" {
 			help = append(help, fmt.Sprintf("Open the PR: %s", rv.PRURL))
 		}
@@ -665,7 +983,11 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 	}
 
 	if rv.Status == string(types.RunCIMonitorInterrupted) {
-		help := []string{"The daemon restarted while monitoring CI; the PR remains open and was not marked failed."}
+		cause := "The daemon restarted while monitoring CI"
+		if run.Error != nil && strings.TrimSpace(*run.Error) != types.RunCIMonitorInterruptedReason {
+			cause = strings.TrimRight(strings.TrimSpace(*run.Error), ".;")
+		}
+		help := []string{cause + "; the PR remains open and was not marked failed."}
 		if rv.PRURL != "" {
 			help = append(help, fmt.Sprintf("Open the PR: %s", rv.PRURL))
 		}
@@ -709,12 +1031,17 @@ func successReportHelp(fixes []fixRow) []string {
 func newAxiRespondCmd() *cobra.Command {
 	var action, step, findings, instructions, addFinding string
 	var autoYes bool
+	var wait time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "respond",
 		Short: "Answer the current approval gate and continue the run",
 		Long: "Sends approve/fix/skip for the step currently awaiting approval, then\n" +
 			"blocks until the next gate, CI-ready decision point, or final outcome.\n\n" +
+			"--wait bounds this hold (default 8m) so an agent harness with a 10-minute\n" +
+			"tool cap gets a structured return instead of an unbounded hang. Elapsed wait\n" +
+			"is not a failed run: inspect with axi status and reattach. A slow live daemon\n" +
+			"is retried after a health probe rather than reported as I/O failure.\n\n" +
 			preserveGateFixCommitsGuidance,
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
@@ -731,6 +1058,7 @@ func newAxiRespondCmd() *cobra.Command {
 					instructions: instructions,
 					addFinding:   addFinding,
 					autoYes:      autoYes,
+					wait:         wait,
 				})
 			})
 		},
@@ -740,7 +1068,8 @@ func newAxiRespondCmd() *cobra.Command {
 	cmd.Flags().StringVar(&findings, "findings", "", "comma-separated finding IDs to fix (with --action fix)")
 	cmd.Flags().StringVar(&instructions, "instructions", "", "guidance applied to the selected findings (with --action fix)")
 	cmd.Flags().StringVar(&addFinding, "add-finding", "", "JSON finding object to add and fix (with --action fix)")
-	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "auto-resolve every subsequent gate until a decision point or outcome")
+	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "auto-resolve subsequent eligible gates until a decision point or outcome; protected-path refusals require an explicit response")
+	bindAxiWaitFlag(cmd, &wait)
 	return cmd
 }
 
@@ -751,10 +1080,19 @@ type respondArgs struct {
 	instructions string
 	addFinding   string
 	autoYes      bool
+	wait         time.Duration
 }
 
 func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
+	if err := validateAxiWait(ra.wait); err != nil {
+		return emitError(cmd, 2, err.Error(), "Pass a positive duration such as --wait 8m")
+	}
 	ctx := cmd.Context()
+	driveCtx, cancel, err := boundAxiWait(ctx, ra.wait)
+	if err != nil {
+		return emitError(cmd, 2, err.Error(), "Pass a positive duration such as --wait 8m")
+	}
+	defer cancel()
 
 	act := types.ApprovalAction(strings.TrimSpace(ra.action))
 	switch act {
@@ -778,7 +1116,11 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 	}
 
 	var active ipc.GetActiveRunResult
-	if err := env.client.Call(ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
+	source := &ipcRunStateSource{socketPath: env.p.Socket()}
+	if err := source.callWithSlowReplyRetry(driveCtx, ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
+		if isAxiWaitElapsed(ctx, driveCtx, err) {
+			return emitAxiWaitElapsed(cmd, ra.wait, "no-mistakes axi respond --action approve|fix|skip")
+		}
 		return emitError(cmd, 1, fmt.Sprintf("get active run: %v", err))
 	}
 	if active.Run == nil {
@@ -787,9 +1129,15 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 	}
 	runID := active.Run.ID
 
-	run, err := getRunInfo(env.client, runID)
-	if err != nil || run == nil {
+	run, err := getRunInfo(driveCtx, env.p.Socket(), runID)
+	if err != nil {
+		if isAxiWaitElapsed(ctx, driveCtx, err) {
+			return emitAxiWaitElapsed(cmd, ra.wait, "no-mistakes axi respond --action approve|fix|skip")
+		}
 		return emitError(cmd, 1, fmt.Sprintf("load run: %v", err))
+	}
+	if run == nil {
+		return emitError(cmd, 1, "load run: daemon returned no run")
 	}
 	rv := runViewFromIPC(run)
 
@@ -834,12 +1182,18 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 
 	// Let the executor consume the response before we re-read state, so we
 	// don't immediately observe the same gate we just answered.
-	if err := waitStepLeavesGate(ctx, env.p.Socket(), runID, string(stepName), gateStatusFor(rv, string(stepName))); err != nil {
+	if err := waitStepLeavesGate(driveCtx, env.p.Socket(), runID, string(stepName), gateStatusFor(rv, string(stepName))); err != nil {
+		if isAxiWaitElapsed(ctx, driveCtx, err) {
+			return emitAxiWaitElapsed(cmd, ra.wait, "no-mistakes axi run")
+		}
 		return emitError(cmd, 1, fmt.Sprintf("wait for %s: %v", stepName, err))
 	}
 
-	final, ciReady, err := driveRun(ctx, cmd.ErrOrStderr(), env.client, env.p.Socket(), runID, ra.autoYes)
+	final, ciReady, err := driveRun(driveCtx, cmd.ErrOrStderr(), env.client, env.p.Socket(), runID, ra.autoYes)
 	if err != nil {
+		if isAxiWaitElapsed(ctx, driveCtx, err) {
+			return emitAxiWaitElapsed(cmd, ra.wait, "no-mistakes axi run")
+		}
 		return emitError(cmd, 1, fmt.Sprintf("drive run: %v", err))
 	}
 	return renderDriveResult(cmd, final, ciReady)

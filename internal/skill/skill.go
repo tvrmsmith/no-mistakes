@@ -115,9 +115,15 @@ committed, carry out the task first and come back to this loop - see
    ` + "```" + `
    ` + "`axi run`" + ` and every ` + "`axi respond`" + ` block synchronously - the review, test,
    and CI steps can each take **several minutes**, so a single call may not
-   return for a while. That is normal; allow a long timeout and do not cancel
-   or re-issue the command because it seems slow. To check progress without
-   disturbing the run, use ` + "`no-mistakes axi status`" + ` from a separate call.
+   return for a while. That is normal; do not cancel or re-issue the command
+   because it seems slow. Both commands default to ` + "`--wait 8m`" + ` so a harness
+   with a 10-minute tool cap gets a structured return instead of an unbounded
+   hang. If the command returns because that wait elapsed, it is not a failed
+   run and does not mean the daemon is dead: inspect with ` + "`no-mistakes axi status`" + `
+   and re-run ` + "`axi run`" + ` or ` + "`axi respond`" + ` to reattach. A slow live daemon is
+   retried after a health probe rather than treated as I/O failure. To check
+   progress without disturbing the run, use ` + "`no-mistakes axi status`" + ` from a
+   separate call.
    A long-running call is working, not stalled - background it if your harness
    needs to, but the run **never advances past a gate on its own**. Read every
    return; on a ` + "`gate:`" + `, respond; loop until an ` + "`outcome:`" + `. Never idle-wait
@@ -175,9 +181,10 @@ committed, carry out the task first and come back to this loop - see
    abort or rerun while a gate awaits your response or a step is actively
    working, unless you are deliberately discarding that run.
 
-   Each ` + "`respond`" + ` blocks until the next ` + "`gate:`" + `, ` + "`checks-passed`" + ` decision point, or final outcome.
+   Each ` + "`respond`" + ` blocks until the next ` + "`gate:`" + `, ` + "`checks-passed`" + ` decision point, or final outcome, subject to the same default ` + "`--wait 8m`" + ` hold.
 
-   Two extra flags are available on ` + "`respond`" + ` when you need them:
+   Extra flags on ` + "`respond`" + `:
+   - ` + "`--wait`" + ` bounds the hold (default 8m).
    - ` + "`--add-finding '<json>'`" + ` (with ` + "`--action fix`" + `) folds a finding you
      spotted yourself - one the pipeline did not surface - into the fix round,
      as a JSON finding object. Use it for a problem you noticed that is not in
@@ -202,8 +209,14 @@ committed, carry out the task first and come back to this loop - see
      green. no-mistakes keeps monitoring the PR in the background until it is
      merged, closed, or its configured idle timeout elapses, so a human can watch
      it in the TUI.
-   - ` + "`passed`" + ` - the changes cleared the gate and the PR was merged or closed.
+   - ` + "`passed`" + ` - the pipeline completed under the requested steps, including any
+     explicit per-run skips. This alone is not evidence that a PR was merged.
+   - ` + "`passed-with-skips`" + ` - publication or CI verification automatically skipped.
+     Report the missing evidence and its cause from ` + "`run.automatic_skips`" + `,
+     bound to the full ` + "`run.head_sha`" + `. This is neither CI readiness nor a
+     failing code verdict. Explicit per-run skips retain their existing behavior.
    - ` + "`failed`" + ` or ` + "`cancelled`" + ` - they did not; read the output and address it.
+     Follow the custody guidance in [` + SyncRecoveryFile + `](` + SyncRecoveryFile + `) before you fix anything.
      Fix whatever the output points at (a failing test, a lint error, a finding
      you skipped), commit the fix on the same feature branch, then start a fresh
      run with ` + "`no-mistakes axi run --intent \"...\"`" + `, which validates the new
@@ -225,9 +238,9 @@ that is merely behind but still clean needs nothing either, since the platform
 merges it. The one
 exception is when that monitor is no longer running - the PR was closed, the run
 was aborted or superseded, it idle-timed-out, or its auto-fix attempts were
-exhausted - in which case recover with ` + "`no-mistakes rerun`" + `, which cancels the
-stale monitor and re-runs the full pipeline including a deterministic rebase
-step. If the dead run left auto-fix or CI-rebase commits your clone lacks, take
+exhausted - in which case recover with ` + "`no-mistakes rerun`" + `, subject to the
+clean-head check above. An accepted rerun cancels the stale monitor and re-runs
+the full pipeline including a deterministic rebase step. If the dead run left auto-fix or CI-rebase commits your clone lacks, take
 them with the offered ` + "`branch_sync`" + ` ` + "`sync`" + ` action **before the rerun,
 not after**: the rerun's own pending run carries no push binding, so it owns
 the branch (` + "`pipeline_owned`" + `) and ` + "`no-mistakes axi sync`" + ` then refuses.
@@ -246,6 +259,17 @@ the running monitor and returns its output without rebasing.
 Before any post-pipeline local commit or fresh run, read the structured
 ` + "`branch_sync`" + ` object returned by AXI home, status, or a drive result and act
 on its ` + "`next_action.code`" + ` as [` + SyncRecoveryFile + `](` + SyncRecoveryFile + `) describes.
+
+` + "`no-mistakes rerun`" + ` selects the gate head, or the latest terminal run's
+verified unpublished preserved head while custody remains outstanding. If a
+known clean caller ` + "`HEAD`" + ` differs from that selected head, it refuses before
+starting or superseding any run and reports both full SHAs. It never
+substitutes the caller head or moves either branch to make them match. On
+refusal, inspect ` + "`no-mistakes axi status`" + `, run its exact
+` + "`branch_sync.next_action.command`" + ` for custody or synchronization, and follow
+the custody guidance in
+[` + SyncRecoveryFile + `](` + SyncRecoveryFile + `). Dirty callers and callers
+without clean-head evidence retain existing selection behavior.
 
 On a successful outcome (` + "`checks-passed`" + ` or ` + "`passed`" + `), close the loop with the
 user. If the output includes a ` + "`fixes`" + ` table, the pipeline fixed findings your
@@ -340,15 +364,15 @@ it to the user before you respond:
   ` + "`respond`" + ` call: ` + "`--action fix`" + ` (pass their guidance through
   ` + "`--instructions`" + `), ` + "`--action approve`" + `, or ` + "`--action skip`" + `.
 
-The one exception is
+The exception is
 [` + "`--yes`" + `](#drive-unattended-with---yes): it is the user's standing consent to
-drive every gate unattended, so under ` + "`--yes`" + ` you resolve ` + "`ask-user`" + `
-findings automatically instead of stopping to ask.
+drive eligible gates unattended, so under ` + "`--yes`" + ` you resolve ordinary
+` + "`ask-user`" + ` findings automatically instead of stopping to ask.
 
 ## Drive unattended with ` + "`--yes`" + `
 
 If you have clear consent to drive the run automatically, pass ` + "`--yes`" + ` to ` + "`axi run`" + `
-or ` + "`axi respond`" + `. It treats every actionable finding - ` + "`auto-fix`" + ` and
+or ` + "`axi respond`" + `. For eligible gates, it treats actionable findings - ` + "`auto-fix`" + ` and
 ` + "`ask-user`" + ` alike - as consent to fix it, selects every current finding for one
 fix round, accepts the resulting fix review, and approves gates with only
 ` + "`no-op`" + ` findings. Only use it when the user has asked you to drive the whole
@@ -359,6 +383,13 @@ once, so if the rereview of that fix still reports blocking findings, ` + "`--ye
 approves the gate and the run moves on rather than looping. A run driven this
 way can therefore reach a successful outcome with findings still outstanding -
 report them to the user.
+
+A ` + "`protected-path-refusal`" + ` gate still requires an explicit operator response
+under ` + "`--yes`" + `. Relay its path and rule; do not automatically fix, approve,
+or skip it. Approval is rejected. Have the operator inspect and resolve the
+reported edit, then send ` + "`--action fix`" + ` to retry the unfinished step.
+The [protected-path reference](https://kunchenguid.github.io/no-mistakes/reference/repo-config/#protected_paths)
+owns the staging guard's scope and limitations.
 
 ## Inspecting state
 
@@ -382,7 +413,7 @@ const readingOutput = `# Reading AXI output
 - ` + "`axi status`" + ` is scoped to your current branch when ` + "`--run`" + ` is omitted: with a known current branch, an implicitly resolved ` + "`run:`" + ` is this branch's. A run under ` + "`other_branch_run:`" + ` is one you named with ` + "`--run <id>`" + ` that belongs to another branch - never read its status or outcome as your own work. An explicit ` + "`--run <id>`" + ` rendered under ` + "`run:`" + ` while the current branch is unknown (detached ` + "`HEAD`" + ` or a branch-lookup failure) encodes no branch relationship. In a successful status response, no run object at all means this branch has no run yet, whatever the recent-runs table lists; an ` + "`error:`" + ` response proves nothing about run ownership, so act on the error instead of concluding the branch is idle.
 - The ` + "`help`" + ` list at the bottom of most responses tells you the next commands to run.
 - Errors are printed as ` + "`error: ...`" + ` on stdout with a ` + "`help`" + ` list; act on the suggestion.
-- A final state shows ` + "`outcome: <checks-passed|passed|failed|cancelled>`" + ` with no ` + "`findings`" + ` table.
+- A final state shows ` + "`outcome: <checks-passed|passed|passed-with-skips|failed|cancelled>`" + ` with no ` + "`findings`" + ` table.
 - Field names and exact columns vary by step and version, so read the actual ` + "`findings`" + ` header rather than assuming a layout.
 - A successful outcome may carry a ` + "`fixes[N]{step,summary}:`" + ` table - one row per fix round the pipeline applied, in step then round order, where ` + "`summary`" + ` describes what that round changed (a round that recorded no summary shows ` + "`fix applied (no summary recorded)`" + `). Acknowledge those misses and list each fix for the user.
 
@@ -408,7 +439,7 @@ help[4]:
 ` + "`axi status`" + ` and other non-terminal run objects report progress with these fields:
 
 - ` + "`awaiting_agent: parked <duration>`" + `, immediately after ` + "`status`" + `, means the run is parked at an approval or fix-review gate and waiting for you to send ` + "`axi respond`" + `. Only an implicitly resolved current-branch gate offers ` + "`axi respond`" + `; an explicit ` + "`--run <id>`" + ` status is inspection-only even when its branch matches, because the branch may have a newer active run. Follow the response's ` + "`help`" + `. It is observability only: it does not change gate resolution, auto-resume the run, or make ` + "`--yes`" + ` the default.
-- ` + "`active_steps`" + ` appears while a step is ` + "`running`" + ` or ` + "`fixing`" + `, with ` + "`active_for`" + `, ` + "`last_activity`" + `, a native ` + "`agent_pid`" + ` when a subprocess agent is running, and the current round such as ` + "`round 1`" + `, ` + "`auto-fix 1/3`" + `, or ` + "`fix 2`" + `.
+- ` + "`active_steps`" + ` appears while a step is ` + "`running`" + ` or ` + "`fixing`" + `, with ` + "`active_for`" + ` (the enclosing step duration), ` + "`round_active_for`" + ` (the displayed execution or fix round duration, which resets for a fix round and is empty on older runs without round timing), ` + "`last_activity`" + `, a native ` + "`agent_pid`" + ` when a subprocess agent is running, and the current round such as ` + "`round 1`" + `, ` + "`auto-fix 1/3`" + `, or ` + "`fix 2`" + `.
 - A ` + "`last_activity`" + ` prefixed with ` + "`quiet`" + ` means no step log or native-agent lifecycle activity has arrived for longer than ` + "`step_quiet_warning`" + `. Treat that as a liveness clue only.
 `
 
@@ -430,6 +461,7 @@ Every ` + "`next_action`" + ` carries both a ` + "`code`" + ` and the exact ` + 
 - ` + "`run_pipeline`" + ` - your local head is ahead of the pipeline-pushed head, so the way forward is a new run, not a synchronization.
 - ` + "`continue_active_run`" + ` - the pipeline still owns the branch: keep driving the active run rather than making local follow-up commits.
 - ` + "`recover_custody`" + ` - a terminal run left unpublished pipeline commits preserved in the local gate. Recover custody first with ` + "`no-mistakes axi sync --recover`" + `: it returns custody and moves a clean worktree to the preserved pipeline head, by fast-forward or by adopting a diverged preserved head proven to carry every local change - the ordinary result of the pipeline rebasing your commits onto a newer base - after anchoring your pre-recovery head under ` + "`refs/no-mistakes/recover-local/<run>`" + `. That proof is deliberately narrow, so a rebase whose fix rounds also rewrote your own lines refuses instead of being adopted: when nothing can tell a deliberate pipeline fix from a dropped change, the decision is yours. Then validate that head with ` + "`no-mistakes axi run --intent \"...\"`" + `, which starts and drives the run in one command. ` + "`no-mistakes rerun`" + ` also re-runs the preserved pipeline head, but it returns immediately without driving, and a following ` + "`no-mistakes axi run`" + ` reattaches only while your local HEAD equals that preserved head - so use it only after the recovery moved your worktree there. A dirty worktree, or divergence that cannot be proven contained, makes the recovery refuse with explicit choices; ` + "`--keep-local`" + ` keeps your current head while the preserved commits stay anchored under ` + "`refs/no-mistakes/recover/<run>`" + `.
+  Run the exact reported ` + "`next_action.command`" + ` rather than reconstructing one. It is ` + "`no-mistakes axi sync --recover --keep-local`" + ` in two cases: when an accessible gate confirms the verified preserved head is missing and you are explicitly discarding those unpublished commits, or when a bound archive proves divergent later work remains preserved while recovery keeps the branch at the exact reported required head and never selects, merges, or replays the archive. Do not substitute plain ` + "`--recover`" + ` or ` + "`rerun`" + ` for a reported keep-local action.
 - ` + "`inspect_worktree`" + ` and ` + "`inspect_and_reconcile_manually`" + ` - the operation refused and changed nothing. The reported command only shows you the situation; it does not resolve it.
 
 A ` + "`branch_sync.state`" + ` of ` + "`user_owned`" + ` means the run went terminal before changing the submitted head and cancellation released the branch: the exact branch and head are yours and immediately usable for whichever delivery path is authorized - no sync action is needed, and a repeated ` + "`--recover`" + ` there is a harmless no-op.

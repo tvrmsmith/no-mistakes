@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,14 +44,45 @@ var recoveredConfigFetchTimeout = 10 * time.Second
 
 var fetchRecoveredRemoteBranch = git.FetchRemoteBranch
 
+// runCancel ends one run under a cause and reports whether that actually
+// happened. A run with a live goroutine cancels its context and cannot fail,
+// so it reports nil; a deferred run has no goroutine and ends by writing its
+// terminal row instead, and that write can fail. Reporting the failure is what
+// keeps `axi abort` from telling an operator it stopped a run that is still
+// running.
+type runCancel func(cause error) error
+
+// cancelCause adapts a run goroutine's context cancellation to runCancel.
+func cancelCause(cancel context.CancelCauseFunc) runCancel {
+	return func(cause error) error {
+		cancel(cause)
+		return nil
+	}
+}
+
 // RunManager tracks active pipeline executors and manages run lifecycle.
 type RunManager struct {
 	mu           sync.Mutex
-	executors    map[string]*pipeline.Executor      // runID → executor
-	cancels      map[string]context.CancelCauseFunc // runID → cancel function with cause
-	dones        map[string]chan struct{}           // runID → closed when goroutine exits
-	wg           sync.WaitGroup                     // tracks background run goroutines
-	shuttingDown atomic.Bool                        // prevents new runs during shutdown
+	executors    map[string]*pipeline.Executor // runID → executor
+	cancels      map[string]runCancel          // runID → cancel function with cause
+	dones        map[string]chan struct{}      // runID → closed when goroutine exits
+	wg           sync.WaitGroup                // tracks background run goroutines
+	shuttingDown atomic.Bool                   // prevents new runs during shutdown
+	// drainedAlive marks the managed-service outcome where a drain_only
+	// request left the latch set and the process running, waiting for its
+	// supervisor to perform the exit. If that exit never lands the daemon
+	// refuses every push forever, so this is what lets `daemon status` and
+	// the refusal message name the state and its recovery command.
+	drainedAlive atomic.Bool
+	// shutdownCh is closed by Shutdown BEFORE it cancels a single run, so a
+	// Drain running concurrently learns the daemon is going away rather than
+	// watching the runs shutdown just killed close their done channels and
+	// reporting them as finished. The connection context Drain also selects
+	// on is cancelled far too late for that: the server cancels it at
+	// srv.Close(), which doShutdown reaches only after mgr.Shutdown() has
+	// cancelled every run and waited on them.
+	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
 	db           *db.DB
 	paths        *paths.Paths
 	steps        StepFactory
@@ -93,8 +126,9 @@ func NewRunManager(database *db.DB, p *paths.Paths, stepFactory StepFactory) *Ru
 	}
 	return &RunManager{
 		executors:     make(map[string]*pipeline.Executor),
-		cancels:       make(map[string]context.CancelCauseFunc),
+		cancels:       make(map[string]runCancel),
 		dones:         make(map[string]chan struct{}),
+		shutdownCh:    make(chan struct{}),
 		db:            database,
 		paths:         p,
 		steps:         stepFactory,
@@ -217,24 +251,66 @@ func (m *RunManager) gateStepRowsOf(runID string) ([]*db.StepResult, error) {
 // a stuck marker alone never wins a branch. A step read that fails leaves the
 // claim unproven rather than refuted, so that run stays a candidate and the
 // caller resolves the ambiguity conservatively.
-func preservedBranchRuns(runs []*db.Run, stepsOf gateStepReader) []*db.Run {
+//
+// Which preserved shapes count is the caller's, because the two callers are
+// asking different questions; see preservedShape.
+func preservedBranchRuns(runs []*db.Run, stepsOf gateStepReader, shapes preservedShape) []*db.Run {
 	var keep []*db.Run
 	for _, run := range runs {
 		stepRows, err := stepsOf(run.ID)
 		if err != nil {
-			slog.Warn("could not read steps while resolving branch contention; treating the run as possibly parked",
+			slog.Warn("could not read steps while resolving branch contention; treating the run as possibly preserved",
 				"run_id", run.ID, "error", err)
-			if run.AwaitingAgentSince != nil {
+			// Each shape keeps whatever evidence survives without step rows.
+			// A gate leaves the awaiting-agent marker; a CI monitor never sets
+			// that marker at all, so what remains of lifecycle.ResumableCIMonitor
+			// is a running run holding a PR URL. Reading less than the predicate
+			// asks for turns unproven into refuted for exactly the shape that
+			// cannot corroborate itself any other way.
+			if run.AwaitingAgentSince != nil || (shapes == preservedGatesAndCIMonitors && ciShapedWithoutSteps(run)) {
 				keep = append(keep, run)
 			}
 			continue
 		}
 		if lifecycle.ParkedAtGate(run, stepRows) {
 			keep = append(keep, run)
+			continue
+		}
+		if shapes == preservedGatesAndCIMonitors && lifecycle.ResumableCIMonitor(run, stepRows) {
+			keep = append(keep, run)
 		}
 	}
 	return keep
 }
+
+// ciShapedWithoutSteps is the part of lifecycle.ResumableCIMonitor a caller can
+// still establish when the step rows are unreadable.
+func ciShapedWithoutSteps(run *db.Run) bool {
+	if run == nil || run.Status != types.RunRunning {
+		return false
+	}
+	return run.PRURL != nil && strings.TrimSpace(*run.PRURL) != ""
+}
+
+// preservedShape selects which preserved run shapes a branch-contention caller
+// treats as a candidate.
+//
+// Startup admits both resume points: a preserved CI monitor is meant to be
+// re-entered, and leaving it out of the candidate set let a leftover active
+// row on the same branch supersede it, ending the run the previous stop
+// promised to resume.
+//
+// The live push path admits only gates. A push arriving while CI is being
+// monitored is the ordinary way an author corrects a red check, and that push
+// legitimately supersedes the monitor: its branch moved, so what the monitor
+// is polling is already stale. A gate, by contrast, holds unpushed pipeline
+// commits and an unanswered question, so the newer push loses to it.
+type preservedShape int
+
+const (
+	preservedGatesOnly preservedShape = iota
+	preservedGatesAndCIMonitors
+)
 
 // branchContention is how startup divides the active runs of contended
 // branches. superseded holds the runs a start ends to clear the branch;
@@ -269,7 +345,7 @@ func branchContentionOf(runs []*db.Run, stepsOf gateStepReader) branchContention
 		if len(group) < 2 {
 			continue
 		}
-		keep := preservedBranchRuns(group, stepsOf)
+		keep := preservedBranchRuns(group, stepsOf, preservedGatesAndCIMonitors)
 		if len(keep) > 1 {
 			ids := make([]string, 0, len(keep))
 			for _, run := range keep {
@@ -300,26 +376,40 @@ func branchContentionOf(runs []*db.Run, stepsOf gateStepReader) branchContention
 func (m *RunManager) registerDeferredRun(run *db.Run) {
 	runID := run.ID
 	done := make(chan struct{})
-	var once sync.Once
-	cancel := func(cause error) {
+	// A plain mutex and flag rather than a sync.Once: the teardown runs at
+	// most once, but only after the write that ends the row succeeds, and a
+	// Once cannot be re-armed after its function returns.
+	var endMu sync.Mutex
+	ended := false
+	cancel := func(cause error) error {
 		if errors.Is(cause, pipeline.ErrDaemonShutdown) {
-			return
+			return nil
 		}
-		once.Do(func() {
-			reason := types.RunCancelReasonAbortedByUser
-			if cause != nil {
-				reason = cause.Error()
-			}
-			if _, err := m.db.FailActiveRunWithReason(runID, reason); err != nil {
-				slog.Error("failed to terminate a deferred run", "run_id", runID, "error", err)
-			}
-			m.mu.Lock()
-			delete(m.cancels, runID)
-			delete(m.dones, runID)
-			m.mu.Unlock()
-			m.closeSubscribers(runID)
-			close(done)
-		})
+		endMu.Lock()
+		defer endMu.Unlock()
+		if ended {
+			return nil
+		}
+		reason := types.RunCancelReasonAbortedByUser
+		if cause != nil {
+			reason = cause.Error()
+		}
+		if _, err := m.db.FailActiveRunWithReason(runID, reason); err != nil {
+			// The row is still running. Leaving the manager entry and the done
+			// channel in place keeps the run reachable for another attempt;
+			// tearing them down here would report a successful abort while
+			// making the row unreachable forever.
+			slog.Error("failed to terminate a deferred run", "run_id", runID, "error", err)
+			return fmt.Errorf("terminate deferred run %s: %w", runID, err)
+		}
+		ended = true
+		m.mu.Lock()
+		delete(m.cancels, runID)
+		delete(m.dones, runID)
+		m.mu.Unlock()
+		m.closeSubscribers(runID)
+		close(done)
+		return nil
 	}
 	m.mu.Lock()
 	m.cancels[runID] = cancel
@@ -339,35 +429,53 @@ func boundedRecoveryReason(err error) string {
 }
 
 // rejectUnresumableRun records why an active run could not be resumed. A run
-// that was parked at a gate was promised preservation by the stop that left
-// it, so it must not inherit the blanket "daemon crashed during execution"
-// stamp the generic recovery pass applies: it records the concrete reason
-// instead. Every other active row is left to that pass.
+// at either resume point a clean stop preserves was promised preservation by
+// the stop that left it, so it must not inherit the blanket "daemon crashed
+// during execution" stamp the generic recovery pass applies: it records the
+// concrete reason instead. Every other active row is left to that pass.
 func (m *RunManager) rejectUnresumableRun(run *db.Run, reason error) {
 	slog.Warn("active run cannot be safely resumed", "run_id", run.ID, "error", reason)
 	parked := run.AwaitingAgentSince != nil
+	ciMonitor := false
 	stepRows, err := m.db.GetStepsByRun(run.ID)
 	if err != nil {
 		// The step rows exist to stop a stale marker from over-claiming
 		// preservation; recording a concrete rejection reason over-claims
 		// nothing, so a read failure falls back to the marker rather than
-		// dropping the run into the blanket crash stamp.
+		// dropping the run into the blanket crash stamp. A CI monitor has no
+		// marker to fall back to, so it takes that pass instead.
 		slog.Warn("could not read steps while rejecting an unresumable run; falling back to its parked marker",
 			"run_id", run.ID, "error", err, "records_reason", parked)
 	} else {
 		parked = lifecycle.ParkedAtGate(run, stepRows)
+		ciMonitor = !parked && lifecycle.CIMonitorRun(run, stepRows)
 	}
-	if !parked {
-		return
+	switch {
+	case parked:
+		m.recordRejectionReason(run, types.RunFailed,
+			fmt.Sprintf("run was parked at a gate but could not be resumed: %s", reason))
+	case ciMonitor:
+		// The status is load-bearing, not cosmetic: skipWorktreeCleanup spares
+		// a worktree only for RunCIMonitorInterrupted, and this run's worktree
+		// can hold an unpushed CI auto-fix commit. Recording the reason the
+		// ordinary way would map it to RunFailed and let the orphan sweep
+		// delete that work. The wording says monitoring rather than parked
+		// because nobody was waiting on an operator.
+		m.recordRejectionReason(run, types.RunCIMonitorInterrupted,
+			fmt.Sprintf("run was monitoring CI but could not be resumed: %s", reason))
 	}
-	errMsg := fmt.Sprintf("run was parked at a gate but could not be resumed: %s", reason)
-	failed, err := m.db.FailActiveRunWithReason(run.ID, errMsg)
+}
+
+// recordRejectionReason ends a preserved run that recovery declined, under the
+// terminal status its shape deserves.
+func (m *RunManager) recordRejectionReason(run *db.Run, status types.RunStatus, errMsg string) {
+	ended, err := m.db.EndActiveRunWithStatus(run.ID, status, errMsg)
 	if err != nil {
-		slog.Error("failed to record why a parked run could not be resumed", "run_id", run.ID, "error", err)
+		slog.Error("failed to record why a preserved run could not be resumed", "run_id", run.ID, "error", err)
 		return
 	}
-	if !failed {
-		slog.Warn("parked run was no longer active when its rejection reason was recorded", "run_id", run.ID)
+	if !ended {
+		slog.Warn("preserved run was no longer active when its rejection reason was recorded", "run_id", run.ID)
 	}
 }
 
@@ -421,8 +529,21 @@ func (m *RunManager) parkPreserved(runID string, err error) bool {
 // that establish an adverse fact wrap it in unresumable, so a read added here
 // later waits for a later start instead of costing the run its worktree.
 func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*recoveredRunPlan, error) {
-	if run == nil || run.Status != types.RunRunning || run.AwaitingAgentSince == nil || run.Branch == "" {
-		return nil, unresumable(fmt.Errorf("run is not a parked running run"))
+	if run == nil || run.Status != types.RunRunning || run.Branch == "" {
+		return nil, unresumable(fmt.Errorf("run is not a resumable running run"))
+	}
+	// One step-row read is the whole short-circuit, and it stays ahead of the
+	// repo row and every git call: a run at neither resume point was never
+	// promised preservation, so letting it reach those reads would let one of
+	// them defer it indefinitely instead of leaving it to the crash sweep.
+	// A read that does not complete is not adverse and defers, as everywhere
+	// else on this path.
+	stepRows, err := m.db.GetStepsByRun(run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get steps to classify recovered run: %w", err)
+	}
+	if !lifecycle.ParkedAtGate(run, stepRows) && !lifecycle.ResumableCIMonitor(run, stepRows) {
+		return nil, unresumable(fmt.Errorf("run is neither parked at a gate nor monitoring CI"))
 	}
 	repo, err := m.db.GetRepo(run.RepoID)
 	if err != nil {
@@ -438,8 +559,10 @@ func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*rec
 	// owner: the two must decide resumability by one rule, not two.
 	// That owner already separates the two: a read that did not complete comes
 	// back as pipeline.ErrRecoveryEvidenceUnavailable, so everything else it
-	// reports is an established adverse fact.
-	if err := lifecycle.ResumePreconditionsMet(ctx, m.db, m.paths, run, execSteps); err != nil {
+	// reports is an established adverse fact. It reads the step rows because a
+	// CI monitor must also hold a clean worktree to be resumed, which is what
+	// keeps an interrupted repair's leftovers out of the next repair's commit.
+	if err := lifecycle.ResumePreconditionsMet(ctx, m.db, m.paths, run, stepRows, execSteps); err != nil {
 		if errors.Is(err, pipeline.ErrRecoveryEvidenceUnavailable) {
 			return nil, err
 		}
@@ -561,6 +684,30 @@ func newPipelineAgent(ctx context.Context, cfg *config.Config, evidenceRoot stri
 	if steps.IsDemoMode() {
 		return agent.NewNoop(), nil
 	}
+	primary, err := newConfiguredAgent(ctx, cfg, evidenceRoot, lookPath, environment)
+	if err != nil {
+		return nil, err
+	}
+	roles := make(map[string]agent.Agent, len(cfg.ReviewAgents))
+	for _, role := range []string{"reviewer", "fixer"} {
+		entry, ok := cfg.ReviewAgents[role]
+		if !ok {
+			continue
+		}
+		next, err := newConfiguredAgent(ctx, cfg.ForReviewAgent(entry), evidenceRoot, lookPath, environment)
+		if err != nil {
+			_ = primary.Close()
+			for _, existing := range roles {
+				_ = existing.Close()
+			}
+			return nil, fmt.Errorf("create review_agents.%s: %w", role, err)
+		}
+		roles[role] = next
+	}
+	return agent.WithReviewAgents(primary, roles["reviewer"], roles["fixer"]), nil
+}
+
+func newConfiguredAgent(ctx context.Context, cfg *config.Config, evidenceRoot string, lookPath func(string) (string, error), environment runenv.Overlay) (agent.Agent, error) {
 	if err := cfg.ResolveAgent(ctx, lookPath); err != nil {
 		return nil, err
 	}
@@ -651,7 +798,7 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 	done := make(chan struct{})
 	m.mu.Lock()
 	m.executors[plan.run.ID] = executor
-	m.cancels[plan.run.ID] = cancel
+	m.cancels[plan.run.ID] = cancelCause(cancel)
 	m.dones[plan.run.ID] = done
 	m.mu.Unlock()
 
@@ -716,6 +863,7 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 		}
 		addRunPerformanceSummary(m.db, plan.run.ID, fields)
 		telemetry.Track("run", fields)
+		m.autoIngestCIFalseNegatives(runCtx, plan.cfg, plan.run.ID)
 	}()
 }
 
@@ -877,8 +1025,8 @@ func (m *RunManager) cleanupRunCoverage(runID string) {
 	}
 }
 
-// removeRunWorktree tears one run's worktree down: it sweeps whatever is still
-// standing in the directory and only then removes it.
+// removeRunWorktree sweeps processes before deciding whether to remove the
+// directory, so refusal retention cannot keep escaped workers alive.
 //
 // Every removal of a run worktree this package performs goes through here, and
 // none calls git.WorktreeRemove directly, because the ordering is easy to forget
@@ -887,6 +1035,25 @@ func (m *RunManager) cleanupRunCoverage(runID string) {
 // different routes. reason distinguishes the routes in the log.
 func (m *RunManager) removeRunWorktree(repoID, runID, gateDir, wtDir, reason string) {
 	m.sweepRunWorktreeProcesses(repoID, runID, wtDir)
+	run, err := m.db.GetRun(runID)
+	if err != nil {
+		slog.Warn("preserving run worktree: cannot read run", "run_id", runID, "error", err)
+		return
+	}
+	if refusal := protectedPathCleanupReason(m.db, run); refusal != "" {
+		slog.Warn("preserving run worktree", "run_id", runID, "path", wtDir, "reason", refusal)
+		return
+	}
+	// A run the daemon ended as an interrupted CI monitor has an open PR and a
+	// worktree that can hold a repair commit it never published, so the stop
+	// that ended it does not also delete it. Startup's skipWorktreeCleanup
+	// owns the eventual decision, once its head can be compared against the
+	// head the run recorded.
+	if run != nil && run.Status == types.RunCIMonitorInterrupted {
+		slog.Warn("preserving run worktree", "run_id", runID, "path", wtDir,
+			"reason", "ci monitor interrupted; the worktree may hold unpushed repair commits")
+		return
+	}
 	if err := git.WorktreeRemove(context.Background(), gateDir, wtDir); err != nil {
 		slog.Warn("failed to remove run worktree", "reason", reason, "run_id", runID, "path", wtDir, "error", err)
 	}
@@ -1074,7 +1241,8 @@ func assertGateTrustedConfigReadable(ctx context.Context, wtDir, defaultBranch, 
 }
 
 // HandlePushReceived processes a push notification from the post-receive hook.
-// It creates a run, sets up a worktree, and launches pipeline execution in the background.
+// A proof-mode push creates an unclaimed row: the first matching observer
+// receives the sole `created` disposition by atomically claiming it.
 func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushReceivedParams) (string, error) {
 	// Ref deletion (git push remote :branch) sends new SHA as all-zeros.
 	// Nothing to validate - skip pipeline.
@@ -1086,7 +1254,6 @@ func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushRec
 	if err != nil {
 		return "", err
 	}
-
 	repo, err := m.db.GetRepo(repoID)
 	if err != nil {
 		return "", fmt.Errorf("get repo: %w", err)
@@ -1096,15 +1263,233 @@ func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushRec
 	}
 
 	branch := branchFromRef(params.Ref)
-	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent)
+	if params.LaunchNonce != "" {
+		receipt, err := m.startFreshLaunch(ctx, repo, branch, params.New, params.Old, params.Gate, params.SkipSteps, params.Intent, params.LaunchNonce, params.ValidationGeneration, params.PRBaseBranch, "push")
+		if err != nil {
+			return "", err
+		}
+		return receipt.RunID, nil
+	}
+	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent, params.PRBaseBranch)
+}
+
+// HandleStartFreshRun creates or replays a proof-mode launch only after
+// checking the creation context under the repository/branch lock.
+func (m *RunManager) HandleStartFreshRun(ctx context.Context, params *ipc.StartFreshRunParams) (ipc.LaunchReceipt, error) {
+	repo, err := m.db.GetRepo(params.RepoID)
+	if err != nil {
+		return ipc.LaunchReceipt{}, fmt.Errorf("get repo: %w", err)
+	}
+	if repo == nil {
+		return ipc.LaunchReceipt{}, fmt.Errorf("unknown repo %s", params.RepoID)
+	}
+	return m.startFreshLaunch(ctx, repo, params.Branch, params.HeadSHA, "", m.paths.RepoDir(repo.ID), params.SkipSteps, params.Intent, params.LaunchNonce, params.ValidationGeneration, params.PRBaseBranch, "fresh")
+}
+
+// startFreshLaunch owns proof identity under the branch lock. A nonce may
+// replay only its immutable submitted-head, generation, and persisted-intent
+// digest. It must never fall back to ordinary same-head reattachment.
+func (m *RunManager) startFreshLaunch(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, gateDir string, skipSteps []types.StepName, intent, launchNonce, validationGeneration, prBaseBranch, trigger string) (ipc.LaunchReceipt, error) {
+	if err := validateLaunchNonce(launchNonce); err != nil {
+		return ipc.LaunchReceipt{}, err
+	}
+	if err := validateValidationGeneration(validationGeneration); err != nil {
+		return ipc.LaunchReceipt{}, err
+	}
+	storedPRBaseBranch, err := normalizeRunPRBaseBranch(prBaseBranch)
+	if err != nil {
+		return ipc.LaunchReceipt{}, err
+	}
+
+	if strings.TrimSpace(intent) == "" {
+		return ipc.LaunchReceipt{}, fmt.Errorf("intent is required with launch_nonce")
+	}
+	// Proof launches bind exactly the bytes persisted. Ordinary AXI intent
+	// retains its historical normalization.
+	persistedIntent := intent
+	requestDigest := digestIntent(persistedIntent)
+	var receipt ipc.LaunchReceipt
+	_, err = m.withBranchLock(repo.ID, branch, func() (string, error) {
+		existing, err := m.db.GetRunByLaunchNonce(repo.ID, branch, launchNonce)
+		if err != nil {
+			return "", err
+		}
+		if existing != nil {
+			if !launchPRBaseBranchMatches(existing, storedPRBaseBranch) {
+				return "", conflictingLaunchPRBaseBranch(launchNonce)
+			}
+
+			replayed, err := receiptForRun(existing, false)
+			if err != nil {
+				return "", err
+			}
+			// Submitted head is immutable proof provenance. Pipeline fixes and
+			// later gate pushes do not invalidate a same-nonce replay.
+			if replayed.ValidationGeneration != validationGeneration || replayed.SubmittedHeadSHA != headSHA || replayed.IntentDigest != requestDigest {
+				return "", fmt.Errorf("conflicting launch_nonce %q is already bound to a different validation generation, submitted head, or intent", launchNonce)
+			}
+			// Duplicate hook delivery is not observation: preserve an
+			// unclaimed push row for the first matching receipt observer.
+			if trigger == "push" {
+				receipt = replayed
+				return existing.ID, nil
+			}
+			claimedRun, claimed, err := m.db.ClaimLaunchReceipt(repo.ID, branch, launchNonce, headSHA, validationGeneration, requestDigest, storedPRBaseBranch)
+			if err != nil {
+				return "", err
+			}
+			if claimedRun == nil {
+				return "", fmt.Errorf("claimed launch receipt %q disappeared", launchNonce)
+			}
+			if !launchPRBaseBranchMatches(claimedRun, storedPRBaseBranch) {
+				return "", conflictingLaunchPRBaseBranch(launchNonce)
+			}
+
+			receipt, err = receiptForRun(claimedRun, claimed)
+			if err != nil {
+				return "", err
+			}
+			return existing.ID, nil
+		}
+
+		gateHead, err := git.Run(ctx, gateDir, "rev-parse", "refs/heads/"+branch+"^{commit}")
+		if err != nil {
+			return "", fmt.Errorf("resolve gate head: %w", err)
+		}
+		if gateHead != headSHA {
+			return "", fmt.Errorf("launch context drift: gate branch %q is at %s, not requested %s", branch, gateHead, headSHA)
+		}
+		inheritedPRURL := ""
+		if baseSHA == "" {
+			runs, err := m.db.GetRunsByRepoHead(repo.ID, branch, headSHA)
+			if err != nil {
+				return "", err
+			}
+			baseSHA = headSHA
+			if len(runs) > 0 {
+				baseSHA = runs[0].BaseSHA
+				inheritedPRURL = inheritablePRURL(runs[0])
+			}
+		}
+		runID, err := m.startRunWithIntentSourceLocked(ctx, repo, branch, headSHA, baseSHA, trigger, skipSteps, persistedIntent, db.RunIntentSourceAgent, launchNonce, validationGeneration, requestDigest, storedPRBaseBranch, inheritedPRURL)
+		if err != nil {
+			return "", err
+		}
+		run, err := m.db.GetRun(runID)
+		if err != nil {
+			return "", fmt.Errorf("read created run: %w", err)
+		}
+		if trigger == "push" {
+			receipt, err = receiptForRun(run, true)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			claimedRun, claimed, err := m.db.ClaimLaunchReceipt(repo.ID, branch, launchNonce, headSHA, validationGeneration, requestDigest, storedPRBaseBranch)
+			if err != nil {
+				return "", err
+			}
+			if claimedRun == nil {
+				return "", fmt.Errorf("claim newly created launch receipt")
+			}
+			if !launchPRBaseBranchMatches(claimedRun, storedPRBaseBranch) {
+				return "", conflictingLaunchPRBaseBranch(launchNonce)
+			}
+
+			receipt, err = receiptForRun(claimedRun, claimed)
+			if err != nil {
+				return "", err
+			}
+		}
+		return runID, nil
+	})
+	if err != nil {
+		return ipc.LaunchReceipt{}, err
+	}
+	return receipt, nil
+}
+
+func normalizeRunPRBaseBranch(prBaseBranch string) (string, error) {
+	normalized, err := steps.ValidateRunPRBaseBranchName(prBaseBranch)
+	if err != nil {
+		return "", fmt.Errorf("pr base branch: %w", err)
+	}
+	return normalized, nil
+}
+
+func launchPRBaseBranchMatches(run *db.Run, requested string) bool {
+	if requested == "" {
+		return true
+	}
+	return run != nil && run.PRBaseBranch != nil && strings.TrimSpace(*run.PRBaseBranch) == requested
+}
+
+func conflictingLaunchPRBaseBranch(launchNonce string) error {
+	return fmt.Errorf("conflicting launch_nonce %q is already bound to a different pr base branch", launchNonce)
+}
+
+func validateLaunchNonce(nonce string) error {
+	return validateLaunchValue("launch_nonce", nonce)
+}
+
+func validateValidationGeneration(generation string) error {
+	return validateLaunchValue("validation_generation", generation)
+}
+
+func validateLaunchValue(field, value string) error {
+	if len(value) == 0 || len(value) > 128 {
+		return fmt.Errorf("%s must be 1 to 128 ASCII URL-safe characters", field)
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || strings.ContainsRune("._~-", char) {
+			continue
+		}
+		return fmt.Errorf("%s contains unsupported character %q", field, char)
+	}
+	return nil
+}
+
+func digestIntent(intent string) string {
+	sum := sha256.Sum256([]byte(intent))
+	return fmt.Sprintf("%x", sum)
+}
+
+func receiptForRun(run *db.Run, created bool) (ipc.LaunchReceipt, error) {
+	if run == nil {
+		return ipc.LaunchReceipt{}, fmt.Errorf("run is required")
+	}
+	if run.SubmittedHeadSHA == nil || *run.SubmittedHeadSHA == "" {
+		return ipc.LaunchReceipt{}, fmt.Errorf("run %s has no submitted head binding", run.ID)
+	}
+	if run.LaunchNonce == nil || run.LaunchValidationGeneration == nil || run.LaunchIntentDigest == nil {
+		return ipc.LaunchReceipt{}, fmt.Errorf("run %s has no launch binding", run.ID)
+	}
+	disposition := "reused"
+	if created {
+		disposition = "created"
+	}
+	return ipc.LaunchReceipt{
+		RunID:                run.ID,
+		Disposition:          disposition,
+		LaunchNonce:          *run.LaunchNonce,
+		ValidationGeneration: *run.LaunchValidationGeneration,
+		Branch:               run.Branch,
+		HeadSHA:              *run.SubmittedHeadSHA,
+		SubmittedHeadSHA:     *run.SubmittedHeadSHA,
+		IntentDigest:         *run.LaunchIntentDigest,
+	}, nil
 }
 
 // HandleRerun creates a new run for the latest recoverable head on a branch:
 // normally the gate branch, or the latest terminal run's verified unpublished
 // head while custody remains outstanding. An explicit intent overrides the
 // selected run. Otherwise an authoritative intent is inherited byte-for-byte;
-// runs without one infer intent afresh.
-func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch, previousRunID string, skipSteps []types.StepName, intent string) (string, error) {
+// runs without one infer intent afresh. The selected run's PR URL is inherited
+// when that PR is not already merged or closed, so a later --base-branch
+// retarget can prove it is moving the same still-open review object.
+// A supplied clean caller head must match the selected head before any run
+// starts or is superseded. It never changes head selection.
+func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch, previousRunID string, skipSteps []types.StepName, intent, prBaseBranch, callerHeadSHA string) (string, error) {
 	repo, err := m.db.GetRepo(repoID)
 	if err != nil {
 		return "", fmt.Errorf("get repo: %w", err)
@@ -1145,6 +1530,9 @@ func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch, previousRu
 	if err != nil {
 		return "", err
 	}
+	if callerHeadSHA != "" && callerHeadSHA != headSHA {
+		return "", fmt.Errorf("refusing rerun: selected head %s differs from clean local head %s; inspect `no-mistakes axi status` and reconcile custody before using `no-mistakes axi run` to submit the local head", headSHA, callerHeadSHA)
+	}
 	selectedRun := latestForBranch
 	if previousRunID != "" {
 		selectedRun, err = m.db.GetRun(previousRunID)
@@ -1174,7 +1562,25 @@ func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch, previousRu
 		}
 	}
 
-	return m.startRunWithIntentSource(ctx, repo, branch, headSHA, baseSHA, "rerun", skipSteps, intent, intentSource)
+	storedPRBaseBranch := strings.TrimSpace(prBaseBranch)
+	if storedPRBaseBranch == "" && selectedRun.PRBaseBranch != nil {
+		storedPRBaseBranch = strings.TrimSpace(*selectedRun.PRBaseBranch)
+	}
+	return m.startRunWithIntentSource(ctx, repo, branch, headSHA, baseSHA, "rerun", skipSteps, intent, intentSource, storedPRBaseBranch, inheritablePRURL(selectedRun))
+}
+
+func inheritablePRURL(run *db.Run) string {
+	if run.PRURL == nil {
+		return ""
+	}
+	state := ""
+	if run.PRState != nil {
+		state = strings.ToLower(strings.TrimSpace(*run.PRState))
+	}
+	if state == "merged" || state == "closed" {
+		return ""
+	}
+	return strings.TrimSpace(*run.PRURL)
 }
 
 func resolveRerunHead(ctx context.Context, gateDir, branch string, latest *db.Run) (string, error) {
@@ -1235,14 +1641,31 @@ func fetchRunDefaultBranch(ctx context.Context, workDir string, repo *db.Repo) e
 // startRun creates a run, sets up a worktree, and launches pipeline execution.
 // A non-empty intent is stamped onto the run as agent-supplied, so the intent
 // step uses it instead of inferring from transcripts.
-func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent string) (string, error) {
-	return m.startRunWithIntentSource(ctx, repo, branch, headSHA, baseSHA, trigger, skipSteps, intent, db.RunIntentSourceAgent)
+func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent, prBaseBranch string) (string, error) {
+	return m.startRunWithIntentSource(ctx, repo, branch, headSHA, baseSHA, trigger, skipSteps, intent, db.RunIntentSourceAgent, prBaseBranch, "")
 }
 
 // startRunWithIntentSource is the common run-creation path. source is empty
 // when no intent is supplied, RunIntentSourceAgent for a new explicit
 // override, and RunIntentSourceRerun for inherited explicit intent.
-func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent, source string) (string, error) {
+func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent, source, prBaseBranch, inheritedPRURL string) (string, error) {
+	return m.withBranchLock(repo.ID, branch, func() (string, error) {
+		return m.startRunWithIntentSourceLocked(ctx, repo, branch, headSHA, baseSHA, trigger, skipSteps, intent, source, "", "", "", prBaseBranch, inheritedPRURL)
+	})
+}
+
+func (m *RunManager) withBranchLock(repoID, branch string, action func() (string, error)) (string, error) {
+	lockKey := repoID + "/" + branch
+	lockVal, _ := m.branchLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	branchMu := lockVal.(*sync.Mutex)
+	branchMu.Lock()
+	defer branchMu.Unlock()
+	return action()
+}
+
+// startRunWithIntentSourceLocked performs run creation while the caller owns
+// the repository/branch lock. Proof fields are empty for ordinary launches.
+func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent, source, launchNonce, validationGeneration, intentDigest, prBaseBranch, inheritedPRURL string) (string, error) {
 	branchRole := telemetryBranchRole(branch, repo.DefaultBranch)
 	trackStartFailure := func(stage string) {
 		telemetry.Track("run", telemetry.Fields{
@@ -1255,16 +1678,8 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 
 	if m.shuttingDown.Load() {
 		trackStartFailure("daemon_shutdown")
-		return "", fmt.Errorf("daemon is shutting down")
+		return "", m.refuseNewRunError()
 	}
-
-	// Serialize per repo+branch to prevent two concurrent pushes from both
-	// passing cancelActiveRuns and creating duplicate pipelines.
-	lockKey := repo.ID + "/" + branch
-	lockVal, _ := m.branchLocks.LoadOrStore(lockKey, &sync.Mutex{})
-	branchMu := lockVal.(*sync.Mutex)
-	branchMu.Lock()
-	defer branchMu.Unlock()
 
 	// Best-effort only: a clone's remotes may change after init. Refresh the
 	// registered URLs before constructing any run-owned Git operation, but keep
@@ -1285,7 +1700,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	}
 
 	storedIntent := intent
-	if source != db.RunIntentSourceRerun {
+	if source != db.RunIntentSourceRerun && launchNonce == "" {
 		storedIntent = strings.TrimSpace(storedIntent)
 	}
 	var runIntent *db.RunIntent
@@ -1296,11 +1711,26 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		runIntent = &db.RunIntent{Summary: storedIntent, Source: source, Score: 1}
 	}
 
-	run, err := m.db.InsertRunWithIntent(repo.ID, branch, headSHA, baseSHA, runIntent)
+	storedPRBaseBranch, err := normalizeRunPRBaseBranch(prBaseBranch)
+	if err != nil {
+		trackStartFailure("invalid_pr_base_branch")
+		return "", err
+	}
+
+	run, err := m.db.InsertRunWithIntentAndLaunchNonce(repo.ID, branch, headSHA, baseSHA, runIntent, launchNonce, validationGeneration, intentDigest, storedPRBaseBranch)
 	if err != nil {
 		trackStartFailure("create_run")
 		return "", fmt.Errorf("create run: %w", err)
 	}
+	if inherited := strings.TrimSpace(inheritedPRURL); inherited != "" {
+		if err := m.db.UpdateRunPRURL(run.ID, inherited); err != nil {
+			m.db.UpdateRunError(run.ID, fmt.Sprintf("inherit PR URL: %s", err))
+			trackStartFailure("inherit_pr_url")
+			return "", fmt.Errorf("inherit PR URL: %w", err)
+		}
+		run.PRURL = &inherited
+	}
+
 	globalCfg, err := config.LoadGlobal(m.paths.ConfigFile())
 	if err != nil {
 		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
@@ -1355,6 +1785,13 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		m.db.UpdateRunError(run.ID, fmt.Sprintf("configure worktree git identity: %s", err))
 		trackStartFailure("configure_worktree_identity")
 		return "", fmt.Errorf("configure worktree git identity: %w", err)
+	}
+	if storedPRBaseBranch != "" {
+		if err := steps.VerifyRemoteBranchExists(ctx, wtDir, storedPRBaseBranch); err != nil {
+			m.db.UpdateRunError(run.ID, err.Error())
+			trackStartFailure("pr_base_branch_missing")
+			return "", err
+		}
 	}
 	// Fetch the trusted default branch and resolve it to an exact commit SHA
 	// before any read. Reading the trusted config at this pinned SHA (rather
@@ -1471,51 +1908,14 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		return "", fmt.Errorf("resolve forge profile: %w", err)
 	}
 
-	// Create agent. In demo mode, skip resolution and use a no-op agent.
-	var ag agent.Agent
-	if steps.IsDemoMode() {
-		ag = agent.NewNoop()
-	} else {
-		if err := cfg.ResolveAgent(ctx, exec.LookPath); err != nil {
-			m.db.UpdateRunError(run.ID, err.Error())
-			trackStartFailure("resolve_agent")
-			return "", err
-		}
-		agents := cfg.Agents
-		if len(agents) == 0 {
-			agents = []types.AgentName{cfg.Agent}
-		}
-		created := make([]agent.Agent, 0, len(agents))
-		for _, name := range agents {
-			next, agErr := agent.NewWithOptions(name, cfg.AgentPathFor(name), cfg.AgentArgsFor(name), agent.Options{
-				ACPRegistryOverrides:   cfg.ACPRegistryOverrides,
-				DisableProjectSettings: cfg.DisableProjectSettings,
-				Profile:                cfg.AgentProfileFor(name),
-				Environment:            forgeEnvironment(forgeCtx),
-			})
-			if agErr != nil {
-				m.db.UpdateRunError(run.ID, fmt.Sprintf("create agent %s: %s", name, agErr))
-				trackStartFailure("create_agent")
-				return "", fmt.Errorf("create agent %s: %w", name, agErr)
-			}
-			// Steer every pipeline agent to keep writes inside the worktree and
-			// avoid mutating system state (e.g. brew/Homebrew touching
-			// /Applications), which triggers macOS App Management prompts.
-			created = append(created, agent.WithSteering(next, m.paths.EvidenceRoot(cfg.Test.Evidence.LocalRoot)))
-		}
-		ag = agent.NewFallback(created)
-		// Fail closed ONLY under the trusted opt-out: when the repo asked to
-		// disable project settings, refuse any resolved harness that lacks a
-		// verified suppression knob rather than launch it with the target repo's
-		// project instructions loaded. When the repo did not opt out, every
-		// adapter runs exactly as before (backward-compat).
-		if cfg.DisableProjectSettings {
-			if err := agent.EnsureGateNeutralized(ag); err != nil {
-				m.db.UpdateRunError(run.ID, err.Error())
-				trackStartFailure("gate_not_neutralized")
-				return "", err
-			}
-		}
+	// Create agent. In demo mode, newPipelineAgent returns a no-op agent, and it
+	// wires review-role routing plus the trusted-opt-out gate-neutralization
+	// fail-closed check.
+	ag, err := newPipelineAgent(ctx, cfg, m.paths.EvidenceRoot(cfg.Test.Evidence.LocalRoot), exec.LookPath, forgeEnvironment(forgeCtx))
+	if err != nil {
+		m.db.UpdateRunError(run.ID, err.Error())
+		trackStartFailure("create_agent")
+		return "", err
 	}
 
 	execSteps := m.steps()
@@ -1551,11 +1951,12 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 
 	// Track executor.
 	done := make(chan struct{})
-	m.mu.Lock()
-	m.executors[run.ID] = executor
-	m.cancels[run.ID] = cancel
-	m.dones[run.ID] = done
-	m.mu.Unlock()
+	if !m.registerActiveRun(run.ID, executor, cancel, done) {
+		refusal := m.refuseNewRunError()
+		m.refuseStartedRun(run.ID, ag, cancel, refusal)
+		trackStartFailure("daemon_shutdown")
+		return "", refusal
+	}
 
 	// Background goroutine now owns worktree cleanup.
 	bgOwnsWorktree = true
@@ -1643,6 +2044,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		// pipeline's own outcome is already decided and reported above, so
 		// nothing below can change it.
 		m.autoCaptureEvalCase(runCtx, cfg, run.ID)
+		m.autoIngestCIFalseNegatives(runCtx, cfg, run.ID)
 	}()
 
 	return run.ID, nil
@@ -1706,6 +2108,48 @@ func (m *RunManager) autoCaptureEvalCase(ctx context.Context, cfg *config.Config
 			slog.Warn("eval retention skipped: diversified pins unavailable", "run_id", runID, "reason", result.PinWarning)
 		}
 		slog.Info("collected eval case", "run_id", runID, "cases", result.Captured, "pruned", result.Pruned)
+	}
+}
+
+// autoIngestCIFalseNegatives writes false-negative gold for a finished run's
+// fixed CI findings onto its green review case. Any real code defect CI
+// surfaces (a failing ci-check or a review-bot comment), confirmed and fixed in
+// the run, is by definition a Review false negative: Review passed green and
+// missed it.
+//
+// Like autoCaptureEvalCase it is subordinate to the run: it swallows its own
+// panic, bounds its own time, shares the eval mutex so it never races capture,
+// and reports failure only to the log. It reads the CI findings the pipeline
+// already persisted per round, so it never fabricates a case.
+func (m *RunManager) autoIngestCIFalseNegatives(ctx context.Context, cfg *config.Config, runID string) {
+	if cfg == nil || !cfg.Eval.AutoCapture || !cfg.Eval.CaptureProvenance {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic while ingesting CI false negatives", "run_id", runID, "panic", r)
+		}
+	}()
+	m.evalCaptureMu.Lock()
+	defer m.evalCaptureMu.Unlock()
+
+	if ctx.Err() != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, evalAutoCaptureTimeout)
+	defer cancel()
+
+	result, skipped, err := eval.AutoIngestCIFalseNegatives(ctx, m.paths, m.db, runID)
+	switch {
+	case err != nil:
+		slog.Warn("failed to ingest CI false negatives", "run_id", runID, "error", err)
+	case skipped:
+		slog.Debug("run has no CI false negative to ingest", "run_id", runID)
+	default:
+		slog.Info("ingested CI false negatives", "run_id", runID, "case", result.CaseID, "added", result.Added, "total", result.Total)
 	}
 }
 
@@ -1800,24 +2244,468 @@ func (m *RunManager) HandleRespondWithOverrides(runID string, step types.StepNam
 	return exec.RespondWithOverrides(step, action, findingIDs, instructions, addedFindings)
 }
 
+// DrainReport is what a drain did, for the operator and for the caller's exit code.
+//
+// Finished counts only runs that completed their own work: a CI monitor the
+// drain cut short is reported under Interrupted and deliberately left out of
+// Finished, even when its goroutine exits promptly once cancelled, so the
+// operator's "N run(s) finished" line never counts work the drain ended.
+type DrainReport struct {
+	Waited      []string                  // run IDs the drain was still waiting on at the end
+	Finished    []string                  // of Waited, the ones that completed their own work in time
+	Interrupted []ipc.DrainInterruptedRun // runs the drain did not let finish naturally
+}
+
+// drainReclassifyInterval is how often Drain re-reads the runs it is still
+// waiting on. Classification cannot be one-shot: a waited run can park at a
+// gate or reach the CI monitor after the drain begins, and either one would
+// otherwise hold the drain to its full deadline. A var so tests can shorten
+// it rather than sleeping out a real interval.
+var drainReclassifyInterval = 5 * time.Second
+
+// drainBeforeReportHook runs between Drain's wait loop and the report it
+// builds from what that loop observed. Nil outside tests. The gap between
+// those two is a real window a run can finish in, and it is the only place a
+// test can put one, so pinning what the report then says about that run needs
+// a seam here.
+var drainBeforeReportHook func()
+
+// drainWaitIterationHook runs at the top of every pass of Drain's wait loop,
+// and drainFinishDeliveredHook runs once the funnel has handed a completion to
+// the wait loop's channel. Both nil outside tests. What the report says about
+// a run that finished just as the daemon shut down turns on the order of those
+// two events, and neither is observable from outside Drain, so a test that
+// pins that order needs the loop held at a known point while the completions
+// it is racing are provably in the channel.
+var (
+	drainWaitIterationHook   func()
+	drainFinishDeliveredHook func()
+)
+
+// drainPreserveCheckTimeout bounds the worktree reads the drain's
+// classification makes. The daemon is on its way down, so a stuck filesystem
+// must not hold the drain open past its own deadline.
+const drainPreserveCheckTimeout = 10 * time.Second
+
+// atAPreservedResumePoint reports whether the coming stop will preserve this
+// run, which is the whole question Drain's wait and its report both ask. Both
+// resume points are read from their owners against one step-row read: the
+// awaiting-agent marker is a best-effort write and proves nothing on its own,
+// so lifecycle.ParkedAtGate corroborates it against a real gate row, and
+// lifecycle.PreservableCIMonitor answers the CI half including the worktree
+// conditions the stop itself refuses on.
+//
+// Any read that fails answers false, so Drain treats the run as ordinary
+// in-flight work and waits on it, bounded by the deadline. Exempting a run the
+// stop then ends is the outcome to avoid: it appears in none of Waited,
+// Finished, or Interrupted.
+func (m *RunManager) atAPreservedResumePoint(run *db.Run) bool {
+	if run == nil {
+		return false
+	}
+	steps, err := m.db.GetStepsByRun(run.ID)
+	if err != nil {
+		slog.Warn("drain: failed to read run steps for classification; treating as a normal in-flight run", "run_id", run.ID, "error", err)
+		return false
+	}
+	if lifecycle.ParkedAtGate(run, steps) {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), drainPreserveCheckTimeout)
+	defer cancel()
+	return lifecycle.PreservableCIMonitor(ctx, m.paths, run, steps)
+}
+
+// registerActiveRun publishes a run's executor, cancel, and done channel, and
+// reports whether the run may proceed. The shuttingDown re-check belongs in
+// the same critical section as the writes: minutes can pass between startRun's
+// own check and this point (per-repo lock, fetch, worktree, trusted config),
+// and Drain and Shutdown both set the latch before taking m.mu to snapshot the
+// active runs. Registering without re-reading it under the lock would let a
+// run land after that snapshot, where the drain neither waits on it nor
+// reports it and the stop then kills it unannounced.
+func (m *RunManager) registerActiveRun(runID string, executor *pipeline.Executor, cancel context.CancelCauseFunc, done chan struct{}) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shuttingDown.Load() {
+		return false
+	}
+	m.executors[runID] = executor
+	m.cancels[runID] = cancelCause(cancel)
+	m.dones[runID] = done
+	return true
+}
+
+// refuseStartedRun releases everything startRun built for a run the
+// refuse-new-runs latch turned away at registration. Normally the pipeline
+// goroutine's deferred teardown owns this, and that goroutine never launches
+// here: the agent's subprocesses would stay alive, and a subscriber (an
+// attached TUI) would wait on a run that can no longer emit anything.
+//
+// The row lands cancelled rather than failed. Nothing of the pipeline ran, so
+// reporting a failure would put a red run in front of a contributor for work
+// the daemon deliberately declined to start.
+func (m *RunManager) refuseStartedRun(runID string, ag agent.Agent, cancel context.CancelCauseFunc, refusal error) {
+	cancel(refusal)
+	if ag != nil {
+		ag.Close()
+	}
+	m.closeSubscribers(runID)
+	if err := m.db.UpdateRunErrorStatus(runID, refusal.Error(), types.RunCancelled); err != nil {
+		slog.Warn("failed to record a refused run as cancelled", "run_id", runID, "error", err)
+	}
+}
+
+// runPreservedByShutdown is atAPreservedResumePoint for the report pass, which
+// holds a run ID rather than a row. Either way the next daemon start picks the
+// run up, so the report must not claim the stop cut it off. A DB read that
+// fails answers false, so Drain treats the run as ordinary in-flight work,
+// which is the safe reading.
+func (m *RunManager) runPreservedByShutdown(runID string) bool {
+	run, err := m.db.GetRun(runID)
+	if err != nil {
+		slog.Warn("failed to read run while checking for a preserved resume point; treating it as in-flight", "run_id", runID, "error", err)
+		return false
+	}
+	return m.atAPreservedResumePoint(run)
+}
+
+// drainWaitEntry is one run Drain is waiting on: its done channel, branch (for
+// reporting), and whether it has since reached a preserved resume point and
+// been released from the wait.
+type drainWaitEntry struct {
+	runID  string
+	branch string
+	done   chan struct{}
+	exempt bool
+}
+
+// Drain refuses new runs immediately, then waits out the in-flight runs it
+// can. It never waits on a run the coming stop preserves: an operator has to
+// drive a gate park, not time, and a CI monitor would hold the drain for a PR
+// merge that can take arbitrarily long. Both are released from the wait and
+// left to Shutdown. It returns once every run it decided to wait on has
+// finished, the daemon starts shutting down (Shutdown's signal, or ctx), or
+// timeout elapses, whichever is first.
+//
+// Drain cancels nothing. Shutdown() is still the caller's responsibility
+// afterwards, and it signals every run with pipeline.ErrDaemonShutdown, a
+// cause a gate park and a live CI monitor both keep their row and worktree
+// through so the next start resumes them.
+func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainReport {
+	// Set first, unconditionally, before any classification: there is no
+	// un-drain path, and startRun's shuttingDown check must see this
+	// immediately for every push that arrives after Drain begins.
+	m.shuttingDown.Store(true)
+
+	m.mu.Lock()
+	dones := make(map[string]chan struct{}, len(m.dones))
+	for id := range m.cancels {
+		done, ok := m.dones[id]
+		if !ok {
+			// Both maps are written under this same lock at every
+			// registration and deregistration site, so this is an invariant
+			// assertion rather than a state that occurs. Skipping is the safe
+			// reading: Shutdown() still cancels the run either way.
+			continue
+		}
+		dones[id] = done
+	}
+	m.mu.Unlock()
+
+	report := DrainReport{}
+	entries := make(map[string]*drainWaitEntry, len(dones))
+	order := make([]string, 0, len(dones))
+
+	for id, done := range dones {
+		run, err := m.db.GetRun(id)
+		if err != nil {
+			// A DB hiccup must not cut real work short: wait it out, bounded
+			// by the deadline like any other in-flight run.
+			slog.Warn("drain: failed to read run; waiting on it rather than cutting it short", "run_id", id, "error", err)
+			entries[id] = &drainWaitEntry{runID: id, done: done}
+			order = append(order, id)
+			continue
+		}
+		if run == nil {
+			// Deregistered concurrently with this snapshot; nothing to wait
+			// on or report.
+			continue
+		}
+		entry := &drainWaitEntry{runID: id, branch: run.Branch, done: done}
+		if m.atAPreservedResumePoint(run) {
+			// At a preserved resume point: exempt from the wait from the start,
+			// and left for Shutdown, whose ErrDaemonShutdown cause preserves it
+			// for the next start if it is still there when the drain ends. It is
+			// still entered here so the reclassify tick can re-admit it: an
+			// operator can answer a gate mid-drain and a monitor can end, and a
+			// run back at real work must not escape the report entirely.
+			entry.exempt = true
+		}
+		entries[id] = entry
+		order = append(order, id)
+	}
+	sort.Strings(order)
+	for _, id := range order {
+		report.Waited = append(report.Waited, id)
+	}
+
+	// Fan every done channel into one funnel so the deadline/ctx race can be
+	// expressed as a single select, without reflect.Select over a dynamic set.
+	finishedCh := make(chan string, len(entries))
+	delivered := drainFinishDeliveredHook
+	for _, e := range entries {
+		go func(e *drainWaitEntry) {
+			<-e.done
+			finishedCh <- e.runID
+			if delivered != nil {
+				delivered()
+			}
+		}(e)
+	}
+
+	deadlineTimer := time.NewTimer(timeout)
+	defer deadlineTimer.Stop()
+	reclassify := time.NewTicker(drainReclassifyInterval)
+	defer reclassify.Stop()
+
+	finished := make(map[string]bool, len(entries))
+	// released is separate from finished: an entry exempted mid-drain leaves
+	// the wait immediately, and its done channel may still close afterwards.
+	// Counting either event twice would end the wait early.
+	released := make(map[string]bool, len(entries))
+	remaining := len(entries)
+	// unfinishedReason labels the runs still in flight when the wait loop ends.
+	// Only the deadline arm claims the deadline. Every other way out of the
+	// loop, including the wait simply running out of runs to wait on while an
+	// exempt one is still in flight, is the daemon's own stop ending the run,
+	// and telling the operator otherwise points them at --drain-timeout for a
+	// problem raising it cannot fix.
+	unfinishedReason := ipc.DrainInterruptedShutdown
+	// endedByShutdown is the authority for "the daemon stopped underneath this
+	// wait", which unfinishedReason cannot answer on its own because its
+	// initial value is already the shutdown reason.
+	endedByShutdown := false
+	release := func(id string) {
+		if released[id] {
+			return
+		}
+		released[id] = true
+		remaining--
+	}
+	readmit := func(id string) {
+		if !released[id] {
+			return
+		}
+		released[id] = false
+		remaining++
+	}
+	// creditQueuedFinishes banks every completion the funnel has already
+	// delivered. The wait loop reads one message per iteration, so a shutdown
+	// arriving behind a burst of completions would otherwise walk away from
+	// runs that did finish and report them as stopped mid-flight.
+	creditQueuedFinishes := func() {
+		for {
+			select {
+			case id := <-finishedCh:
+				release(id)
+				finished[id] = true
+			default:
+				return
+			}
+		}
+	}
+	// reclassifyEntries re-reads every unfinished run: one can park at a gate
+	// or enter its CI monitor after the drain begins, and one released at
+	// either resume point can go back to real work.
+	reclassifyEntries := func() {
+		for _, id := range order {
+			e := entries[id]
+			if finished[id] {
+				continue
+			}
+			run, err := m.db.GetRun(id)
+			if err != nil || run == nil {
+				continue
+			}
+			if m.atAPreservedResumePoint(run) {
+				if !e.exempt {
+					e.exempt = true
+					release(id)
+				}
+				continue
+			}
+			if e.exempt {
+				// The operator answered the gate, or the monitor ended, and
+				// the run is working again. Exemption is not a latch: leaving
+				// it set would let a run the stop later kills appear in none
+				// of Waited, Finished, or Interrupted.
+				e.exempt = false
+				readmit(id)
+			}
+		}
+	}
+	for _, id := range order {
+		if entries[id].exempt {
+			release(id)
+		}
+	}
+waitLoop:
+	for {
+		if drainWaitIterationHook != nil {
+			drainWaitIterationHook()
+		}
+		if remaining == 0 {
+			// Running out of runs to wait on is not the same as the work
+			// being over: a run released as parked may have had its gate
+			// answered since the last tick, and it is back to real git and
+			// agent work that the stop after this drain would kill. Ask
+			// reality once more before declaring the wait finished.
+			reclassifyEntries()
+			if remaining == 0 {
+				break waitLoop
+			}
+		}
+		// Checked before the blocking select, not only inside it: once the
+		// daemon starts shutting down, the runs it cancels close their done
+		// channels, and a uniform select could take those as work that
+		// finished on its own. The shutdown signal is the authoritative
+		// answer whenever both are ready.
+		select {
+		case <-m.shutdownCh:
+			creditQueuedFinishes()
+			unfinishedReason = ipc.DrainInterruptedShutdown
+			endedByShutdown = true
+			break waitLoop
+		default:
+		}
+		select {
+		case <-m.shutdownCh:
+			// Shutdown() closes this before it cancels anything, so a drain
+			// racing a signal or a concurrent stop reports the runs it was
+			// waiting on as stopped mid-flight rather than as finished.
+			creditQueuedFinishes()
+			unfinishedReason = ipc.DrainInterruptedShutdown
+			endedByShutdown = true
+			break waitLoop
+		case id := <-finishedCh:
+			release(id)
+			finished[id] = true
+		case <-reclassify.C:
+			reclassifyEntries()
+		case <-deadlineTimer.C:
+			unfinishedReason = ipc.DrainInterruptedDeadline
+			break waitLoop
+		case <-ctx.Done():
+			// The daemon is shutting down underneath the drain (a signal, or a
+			// concurrent stop). The runs left over were not cut by the
+			// deadline, and telling the operator they were would point them at
+			// --drain-timeout for a problem raising it cannot fix.
+			creditQueuedFinishes()
+			unfinishedReason = ipc.DrainInterruptedShutdown
+			endedByShutdown = true
+			break waitLoop
+		}
+	}
+
+	if drainBeforeReportHook != nil {
+		drainBeforeReportHook()
+	}
+
+	waited := report.Waited[:0]
+	for _, id := range order {
+		e := entries[id]
+		if !finished[id] && !endedByShutdown {
+			// A run whose done channel closed without the wait loop crediting
+			// it really did finish. select picks uniformly among ready cases,
+			// and the funnel goroutine may not have delivered yet either, so
+			// the channel itself is the authority here rather than what the
+			// wait loop happened to observe. An exempt entry is the other
+			// route to an uncredited close: its finishedCh message is never
+			// consumed, because the wait it was released from can end without
+			// ever reading it.
+			//
+			// Skipped only when the daemon's own shutdown ended the wait,
+			// where a done channel closing right afterwards is shutdown
+			// killing the run, and crediting that as finished is exactly the
+			// claim the shutdown reason exists to avoid.
+			select {
+			case <-e.done:
+				finished[id] = true
+			default:
+			}
+		}
+		if !finished[id] && m.runPreservedByShutdown(id) {
+			// Preserved: Shutdown's ErrDaemonShutdown cause keeps the row and
+			// the worktree and the next start resumes it, so it is not a run
+			// the stop cut off. Asked of every unfinished run rather than only
+			// the ones a reclassify tick already exempted, because a run that
+			// parks or enters its monitor between the last tick and the end of
+			// the wait is preserved all the same, and reporting it as forcibly
+			// stopped contradicts what happens to it.
+			continue
+		}
+		// An entry exempted mid-drain but no longer at a resume point is
+		// reported like any other waited run. The wait may have ended before a
+		// reclassify tick could re-admit it, and a run the stop is about to
+		// kill must never be absent from the report entirely.
+		waited = append(waited, id)
+		if finished[id] {
+			report.Finished = append(report.Finished, id)
+			continue
+		}
+		// Drain does not cancel a waited run itself once the wait ends;
+		// Shutdown() still will.
+		report.Interrupted = append(report.Interrupted, ipc.DrainInterruptedRun{
+			RunID:  id,
+			Branch: e.branch,
+			Reason: unfinishedReason,
+		})
+	}
+	report.Waited = waited
+
+	return report
+}
+
 // Shutdown signals all active runs to stop. Called during daemon shutdown to
 // prevent orphaned goroutines from continuing agent calls and git operations.
 // The cause is pipeline.ErrDaemonShutdown, which a run parked at an approval
 // gate treats as "leave me resumable" rather than "fail": it keeps its run
 // row, its gate step and its worktree, and the next daemon start resumes it.
 // A run cancelled mid-step still fails with "daemon shutting down".
+//
+// Every run is cancelled, parked ones included, so their goroutines return and
+// the wait below is a plain m.wg.Wait(). Preservation is decided by the cause
+// the executor receives, not by withholding cancellation, which is what keeps
+// a drain's report true: an operator answering a gate in the window where the
+// IPC server is still up cannot leave a run working unsupervised past exit.
 func (m *RunManager) Shutdown() {
 	m.shuttingDown.Store(true)
+	m.signalShutdown()
 
 	m.mu.Lock()
-	cancels := make(map[string]context.CancelCauseFunc, len(m.cancels))
+	cancels := make(map[string]runCancel, len(m.cancels))
 	for id, cancel := range m.cancels {
 		cancels[id] = cancel
 	}
 	m.mu.Unlock()
 
-	for id, cancel := range cancels {
-		cancel(pipeline.ErrDaemonShutdown)
+	// Sorted rather than map order so a shutdown handles the same runs in the
+	// same sequence every time in the logs.
+	ids := make([]string, 0, len(cancels))
+	for id := range cancels {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		// A deferred run treats a shutdown cause as preservation and writes
+		// nothing, so nothing here can fail today; the error is logged rather
+		// than dropped so a future cancel that can fail is not silent.
+		if err := cancels[id](pipeline.ErrDaemonShutdown); err != nil {
+			slog.Error("failed to signal a run to stop for shutdown", "run_id", id, "error", err)
+			continue
+		}
 		slog.Info("signalled run to stop for shutdown", "run_id", id)
 	}
 
@@ -1833,6 +2721,44 @@ func (m *RunManager) Shutdown() {
 	}
 }
 
+// MarkDrainedAlive records that a drain_only request finished and deliberately
+// left this process running with its refuse-new-runs latch set.
+func (m *RunManager) MarkDrainedAlive() {
+	m.drainedAlive.Store(true)
+}
+
+// RefusingNewRuns reports whether the daemon has stopped accepting runs. Any
+// stop sets this, including an ordinary one that is about to exit on its own,
+// so it describes the daemon's answer to a push and nothing more.
+func (m *RunManager) RefusingNewRuns() bool {
+	return m.shuttingDown.Load()
+}
+
+// DrainedAndAlive reports the one refusing state an operator has to act on: a
+// drain_only whose service-manager exit never landed. Unlike RefusingNewRuns
+// this is never true of a daemon that is simply on its way out.
+func (m *RunManager) DrainedAndAlive() bool {
+	return m.drainedAlive.Load()
+}
+
+// refuseNewRunError explains why a push was turned away. A drained-and-alive
+// daemon is the one case an operator has to act on, so it names the recovery
+// command instead of the generic shutdown wording.
+func (m *RunManager) refuseNewRunError() error {
+	if m.drainedAlive.Load() {
+		return fmt.Errorf("daemon was drained and is no longer accepting runs; its service manager did not stop it, so run `no-mistakes daemon restart` to recover")
+	}
+	return fmt.Errorf("daemon is shutting down")
+}
+
+// signalShutdown announces that the daemon is going away, before any run is
+// cancelled. Idempotent: Shutdown itself is called from a sync.Once in the
+// daemon, but a test (or a future second caller) closing a closed channel
+// would panic.
+func (m *RunManager) signalShutdown() {
+	m.shutdownOnce.Do(func() { close(m.shutdownCh) })
+}
+
 // HandleCancel stops an active run and propagates cancellation to the executor.
 func (m *RunManager) HandleCancel(runID string) error {
 	m.mu.Lock()
@@ -1843,8 +2769,9 @@ func (m *RunManager) HandleCancel(runID string) error {
 		return fmt.Errorf("no active run %s", runID)
 	}
 
-	cancel(fmt.Errorf(types.RunCancelReasonAbortedByUser))
-	return nil
+	// A deferred run ends by writing its row here, so a failed write must
+	// reach the operator rather than read as a successful abort.
+	return cancel(fmt.Errorf(types.RunCancelReasonAbortedByUser))
 }
 
 // cancelActiveRuns cancels any in-progress runs for the given repo+branch
@@ -1875,7 +2802,7 @@ func (m *RunManager) cancelActiveRuns(repoID, branch string) error {
 	// The live path decides branch contention by the same owner startup uses:
 	// a parked or deferred run holds unpushed pipeline commits it was promised
 	// would survive, so the newer push loses instead of destroying it.
-	if preserved := preservedBranchRuns(active, m.gateStepRowsOf); len(preserved) > 0 {
+	if preserved := preservedBranchRuns(active, m.gateStepRowsOf, preservedGatesOnly); len(preserved) > 0 {
 		return fmt.Errorf("run %s is parked at a gate on branch %q and would be destroyed by a new run; resolve or abort it first", preserved[0].ID, branch)
 	}
 
@@ -1889,7 +2816,11 @@ func (m *RunManager) cancelActiveRuns(repoID, branch string) error {
 			continue
 		}
 
-		cancel(fmt.Errorf(types.RunCancelReasonSuperseded))
+		// A run that could not be ended still owns the branch, so the newer
+		// push is refused rather than started alongside it.
+		if err := cancel(fmt.Errorf(types.RunCancelReasonSuperseded)); err != nil {
+			return fmt.Errorf("could not supersede run %s on branch %q: %w", run.ID, branch, err)
+		}
 		slog.Info("cancelled active run", "run_id", run.ID, "repo_id", repoID, "branch", branch)
 		if done != nil {
 			toWait = append(toWait, done)

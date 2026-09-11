@@ -40,3 +40,11 @@ demo_raw.gif
 # repair commit stages with `git add -A`, so without this entry those caches are
 # committed and pushed onto the pull request branch.
 .ci-local-home/
+
+# Worktree-local gh release used to pin the user-attachments upload contract.
+.scratch-gh/
+
+# Review subagents run in their own git worktrees rooted here. Git records a
+# nested worktree as a gitlink, so `git add -A` stages a submodule entry that
+# points at a commit no clone can resolve.
+.claude/worktrees/

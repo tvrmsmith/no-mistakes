@@ -12,6 +12,15 @@ import (
 )
 
 func logLifecycleInvocation(command string, force bool) {
+	logDrainLifecycleInvocation(command, force, false)
+}
+
+// logDrainLifecycleInvocation records a daemon lifecycle command, including
+// whether it carried --drain. The drain flag has to be on the line: a drain
+// cuts CI monitors short, forcibly stops anything past its deadline, and
+// passes the active-runs guard that a bare stop would have refused, so
+// forensics cannot read it as an ordinary stop.
+func logDrainLifecycleInvocation(command string, force, drain bool) {
 	p, err := paths.New()
 	if err != nil {
 		return
@@ -19,10 +28,11 @@ func logLifecycleInvocation(command string, force bool) {
 	_ = p.EnsureDirs()
 
 	line := fmt.Sprintf(
-		"%s lifecycle command=%s force=%t pid=%d ppid=%d parent_cmdline=%q\n",
+		"%s lifecycle command=%s force=%t drain=%t pid=%d ppid=%d parent_cmdline=%q\n",
 		time.Now().Format(time.RFC3339),
 		command,
 		force,
+		drain,
 		os.Getpid(),
 		os.Getppid(),
 		parentCommandLine(os.Getppid()),

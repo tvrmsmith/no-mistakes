@@ -72,6 +72,11 @@ func changeUnitFile(t *testing.T, dir, path string) (headSHA string) {
 	return gitCmd(t, dir, "rev-parse", "HEAD")
 }
 
+// neutralEvidenceFindingsJSON is the smallest valid evidence payload: one live
+// scenario that passed, a go verdict, and nothing a caller's assertions have
+// to account for beyond the single "live check" tested entry.
+const neutralEvidenceFindingsJSON = `{"findings":[],"summary":"","tested":["live check"],"testing_summary":"drove the change against the running product","artifacts":[],"scenarios":[{"name":"the change behaves as intended","result":"pass","live":true,"evidence":"live check","reason":""}],"verdict":"go"}`
+
 // markerCommand writes a marker file. The Windows shard runs this package
 // through cmd.exe, which has no touch and reports 9009 rather than the exit
 // code a test asserts, so the command has to be one both shells accept.
@@ -90,6 +95,13 @@ func markerCommand(marker string) string {
 // artifacts it needs alongside its own marker/behavior.
 func unitTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA string, units []config.TestUnit) *pipeline.StepContext {
 	t.Helper()
+	if ag == nil {
+		// The evidence turn is unconditional, so a test that cares only about
+		// which unit commands ran still needs an agent to answer it. This one
+		// answers discovery and then returns a minimal valid live-validation
+		// payload, which is the neutral background those tests want.
+		ag = &mockAgent{name: "test", runFn: answerDiscoveryThen(neutralEvidenceFindingsJSON)}
+	}
 	sctx := newTestContext(t, ag, workDir, baseSHA, headSHA, config.Commands{})
 	sctx.Config.Test.Units = units
 	sctx.Shared = &pipeline.RunShared{}
@@ -384,9 +396,11 @@ func TestTestStep_GreenOutcomeNamesTheUnitsItCovered(t *testing.T) {
 		t.Fatalf("attempt parked instead of passing: %s", outcome.Findings)
 	}
 	tested := decodeFindings(t, outcome.Findings).Tested
+	// The evidence turn appends its own entries after the units', so the unit
+	// record under test is the prefix.
 	want := []string{"api: " + apiCmd, "api-contract: " + apiCmd}
-	if len(tested) != len(want) {
-		t.Fatalf("Tested = %v, want %v", tested, want)
+	if len(tested) < len(want) {
+		t.Fatalf("Tested = %v, want it to open with %v", tested, want)
 	}
 	for i := range want {
 		if tested[i] != want[i] {
@@ -432,7 +446,7 @@ func TestTestStep_ConfiguredLayoutOwningNoChangedFileFallsBackToTheEvidenceAgent
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"testing_summary":"exercised the change by hand"}`)}, nil
+			return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 		},
 	}
 	// Both units sit outside the changed file's directory, so the selection is
@@ -458,8 +472,9 @@ func TestTestStep_ConfiguredLayoutOwningNoChangedFileFallsBackToTheEvidenceAgent
 	if len(ag.calls) != 1 {
 		t.Fatalf("agent calls = %d, want 1 evidence pass", len(ag.calls))
 	}
-	// No unit command produced a baseline, so the pass runs the tests itself.
-	if !strings.Contains(ag.calls[0].Prompt, "run the smallest relevant tests yourself") {
+	// No unit command produced a baseline, so the pass drives the product
+	// itself rather than judging results that already ran.
+	if !strings.Contains(ag.calls[0].Prompt, "Examine the repository and drive the scenarios against the product yourself.") {
 		t.Errorf("evidence prompt missing the unbaselined opening, got:\n%s", ag.calls[0].Prompt)
 	}
 	if strings.Contains(ag.calls[0].Prompt, "already ran to completion and passed") {
@@ -485,7 +500,7 @@ func TestTestStep_EvidencePassAfterUnitCommandsJudgesThemInsteadOfRerunning(t *t
 				return &agent.Result{Output: json.RawMessage(out)}, nil
 			}
 			evidencePrompt = opts.Prompt
-			return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
+			return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 		},
 	}
 	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
@@ -521,7 +536,7 @@ func TestTestStep_EvidenceFindingsDriveApproval(t *testing.T) {
 				out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor("exit 0", "services/api/main.go")) + `}],"selected":["api"]}`
 				return &agent.Result{Output: json.RawMessage(out)}, nil
 			}
-			return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"error","action":"auto-fix","description":"the new handler has no test"}]}`)}, nil
+			return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"error","action":"auto-fix","description":"the new handler has no test"}],"summary":"","tested":["live check"],"testing_summary":"drove the change against the running product","artifacts":[],"scenarios":[{"name":"the change behaves as intended","result":"pass","live":true,"evidence":"live check","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
 	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
@@ -565,7 +580,9 @@ func TestTestStep_FixModeRunsOnlyTheChangedUnitsCommand(t *testing.T) {
 			if _, err := f.WriteString("// repaired\n"); err != nil {
 				return nil, err
 			}
-			return &agent.Result{Output: json.RawMessage(`{"summary":"fix the api test"}`)}, nil
+			// The same mock answers the repair turn and the evidence turn that
+			// follows it, so the payload carries both contracts.
+			return &agent.Result{Output: json.RawMessage(`{"summary":"fix the api test","findings":[],"tested":["live check"],"testing_summary":"drove the repair against the running product","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"live check","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
 	units := []config.TestUnit{
@@ -581,8 +598,11 @@ func TestTestStep_FixModeRunsOnlyTheChangedUnitsCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.FixSummary != "fix the api test" {
-		t.Errorf("FixSummary = %q, want the repair agent's summary", outcome.FixSummary)
+	// runValidationStep commits at the step's exit and reports that commit, so
+	// the summary is the applied-changes verdict rather than the agent's own
+	// sentence, which becomes the commit subject instead.
+	if outcome.FixSummary != changesAppliedSummary {
+		t.Errorf("FixSummary = %q, want %q", outcome.FixSummary, changesAppliedSummary)
 	}
 	if !fileExists(apiMarker) {
 		t.Error("api marker not created, expected the changed unit to run in fix mode")
@@ -645,6 +665,9 @@ func TestTestStep_UnderSelectionExpandsRunsTheMissingUnitAndLogsBoth(t *testing.
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if !isDiscoveryCall(opts) {
+				return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
+			}
 			out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor(markerCommand(apiMarker), "services/api/main.go")) + `},{"name":"web","path":"services/web","command":` + jsonString(t, coverageFor(markerCommand(webMarker), "services/web/main.go")) + `}],"selected":["api"]}`
 			return &agent.Result{Output: json.RawMessage(out)}, nil
 		},
@@ -703,7 +726,7 @@ func TestTestStep_ExpandedSelectionIsReusedByTheNextAttemptInTheSameRun(t *testi
 			name: "test",
 			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				if !isDiscoveryCall(opts) {
-					return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
+					return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 				}
 				out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor(markerCommand(apiMarker), "services/api/main.go")) + `},{"name":"web","path":"services/web","command":` + jsonString(t, coverageFor(markerCommand(webMarker), "services/web/main.go")) + `}],"selected":["api"]}`
 				return &agent.Result{Output: json.RawMessage(out)}, nil
@@ -901,7 +924,7 @@ func TestTestStep_RecoveredRunReusesTheDiscoveredLayout(t *testing.T) {
 					out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, coverageFor(markerCommand(apiMarker), "services/api/main.go")) + `}],"selected":["api"]}`
 					return &agent.Result{Output: json.RawMessage(out)}, nil
 				}
-				return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
+				return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 			},
 		}
 	}
@@ -997,7 +1020,7 @@ func TestTestStep_RunsEachUnitExactlyOncePerAttempt(t *testing.T) {
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			if !isDiscoveryCall(opts) {
-				return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
+				return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 			}
 			out := `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, appendCommand) + `},{"name":"web","path":"services/web","command":"exit 0"}],"selected":["api","api"]}`
 			return &agent.Result{Output: json.RawMessage(out)}, nil
@@ -1097,7 +1120,13 @@ func TestTestStep_FailingUnitCommandParksAutoFixable(t *testing.T) {
 func TestTestStep_ConfiguredCommandStillBehavesAsOneRepositoryUnit(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
-	sctx := newTestContext(t, nil, dir, baseSHA, headSHA, config.Commands{Test: "exit 1"})
+	// The evidence turn is unconditional, so even a failing baseline needs an
+	// agent to answer it. A configured command skips discovery, so this one
+	// only has to serve the evidence pass.
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
+	}}
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 1"})
 	sctx.Shared = &pipeline.RunShared{}
 	// The failing exit code returns before the vacuous-green guard ever reads
 	// a coverage artifact, but testUnitCoverageDir creates the unit's

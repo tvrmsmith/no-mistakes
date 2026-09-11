@@ -53,24 +53,38 @@ func StepPlanDrifted(run *db.Run, want []types.StepName) bool {
 	return false
 }
 
+// resumeCorroboration is recovery's own precondition check, as a guard surface
+// asks it: could the next start pick this run up as it stands? A nil value is a
+// caller with no state to corroborate against.
+type resumeCorroboration func(*db.Run, []*db.StepResult) bool
+
 // exemptFromGuard is the single predicate every guard surface splits on: the
-// run is genuinely parked at a gate, the plan that would resume it still
+// run is at one of the two resume points a stop preserves (genuinely parked at
+// a gate, or sitting in a live CI monitor), the plan that would resume it still
 // matches the one it was started under, and recovery's own preconditions
-// corroborate that the next start could actually pick it up. resumable is nil
-// only where a caller has no state to corroborate against.
-func exemptFromGuard(run *db.Run, steps []*db.StepResult, requiredStepPlan []types.StepName, resumable func(*db.Run) bool) bool {
-	if !ParkedAtGate(run, steps) || StepPlanDrifted(run, requiredStepPlan) {
+// corroborate that the next start could actually pick it up. A stop must never
+// promise a resume the next start refuses, and ResumePreconditionsMet is where
+// both sides read the same rule, including the clean-worktree condition a CI
+// monitor carries and a gate park does not.
+//
+// Including the CI monitor deliberately stops stop/restart/update refusing
+// while one is live: the monitor now survives the stop instead of being cut.
+func exemptFromGuard(run *db.Run, steps []*db.StepResult, requiredStepPlan []types.StepName, corroborate resumeCorroboration) bool {
+	if !ParkedAtGate(run, steps) && !ResumableCIMonitor(run, steps) {
 		return false
 	}
-	return resumable == nil || resumable(run)
+	if StepPlanDrifted(run, requiredStepPlan) {
+		return false
+	}
+	return corroborate == nil || corroborate(run, steps)
 }
 
 // splitActiveRuns divides the active runs into the ones a stop/restart/update
 // would actually disrupt and the exempt complement that survives it and
 // resumes when the daemon starts again. Order is preserved from the input.
-func splitActiveRuns(runs []*db.Run, stepsByRun map[string][]*db.StepResult, requiredStepPlan []types.StepName, resumable func(*db.Run) bool) (blocking, parked []*db.Run) {
+func splitActiveRuns(runs []*db.Run, stepsByRun map[string][]*db.StepResult, requiredStepPlan []types.StepName, corroborate resumeCorroboration) (blocking, parked []*db.Run) {
 	for _, run := range runs {
-		if run != nil && exemptFromGuard(run, stepsByRun[run.ID], requiredStepPlan, resumable) {
+		if run != nil && exemptFromGuard(run, stepsByRun[run.ID], requiredStepPlan, corroborate) {
 			parked = append(parked, run)
 			continue
 		}
@@ -115,7 +129,7 @@ func (d GuardDecision) ParkedNotice() string {
 	if d.binarySwap {
 		qualifier = binarySwapQualifier
 	}
-	return parkedRunNotice(d.Parked, qualifier)
+	return preservedRunNotice(d.Parked, qualifier)
 }
 
 // corroborationTimeout bounds the per-run git read the guard makes while
@@ -145,15 +159,15 @@ func Decide(p *paths.Paths, resumeSteps []pipeline.Step, resuming ResumingBinary
 	if err != nil {
 		return GuardDecision{}, err
 	}
-	var resumable func(*db.Run) bool
+	var corroborate resumeCorroboration
 	if resumeSteps != nil {
-		resumable = func(run *db.Run) bool {
+		corroborate = func(run *db.Run, steps []*db.StepResult) bool {
 			ctx, cancel := context.WithTimeout(context.Background(), corroborationTimeout)
 			defer cancel()
-			return ResumePreconditionsMet(ctx, database, p, run, resumeSteps) == nil
+			return ResumePreconditionsMet(ctx, database, p, run, steps, resumeSteps) == nil
 		}
 	}
-	blocking, parked := splitActiveRuns(runs, stepsByRun, stepPlanOf(resumeSteps), resumable)
+	blocking, parked := splitActiveRuns(runs, stepsByRun, stepPlanOf(resumeSteps), corroborate)
 	return GuardDecision{
 		Blocking:   blocking,
 		Parked:     parked,
@@ -219,16 +233,20 @@ func activeRunsWithSteps(database *db.DB) ([]*db.Run, map[string][]*db.StepResul
 	return runs, stepsByRun, nil
 }
 
-// parkedRunNotice renders the promise with an optional qualifier clause, so a
-// caller whose resuming binary may differ states the guarantee it actually
+// preservedRunNotice renders the promise with an optional qualifier clause, so
+// a caller whose resuming binary may differ states the guarantee it actually
 // has rather than a certainty.
-func parkedRunNotice(parked []*db.Run, qualifier string) string {
-	if len(parked) == 0 {
+//
+// The wording says preserved rather than parked because the exempt set holds
+// two shapes now, and a live CI monitor is not parked: nobody is waiting on an
+// operator, the run is polling a PR.
+func preservedRunNotice(preserved []*db.Run, qualifier string) string {
+	if len(preserved) == 0 {
 		return ""
 	}
-	runWord, _ := RunCountWords(len(parked))
-	return fmt.Sprintf("%d parked pipeline %s will be preserved and resumed when the daemon starts again%s\n", len(parked), runWord, qualifier) +
-		RunListWith("parked pipeline runs:", parked)
+	runWord, _ := RunCountWords(len(preserved))
+	return fmt.Sprintf("%d pipeline %s will be preserved and resumed when the daemon starts again%s\n", len(preserved), runWord, qualifier) +
+		RunListWith("preserved pipeline runs:", preserved)
 }
 
 // RunCountWords agrees a run count's noun and verb. The parked exemption makes

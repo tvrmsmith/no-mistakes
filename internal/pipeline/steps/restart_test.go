@@ -1017,6 +1017,7 @@ func TestRunValidationStep_NoProgressCommitParksInsteadOfWalkingOn(t *testing.T)
 func TestValidationStep_ExecuteRoutesThroughTheSharedExitHelper(t *testing.T) {
 	t.Parallel()
 	cleanReview, err := json.Marshal(Findings{
+		Items:         []Finding{},
 		Summary:       "no issues",
 		RiskLevel:     "low",
 		RiskRationale: "small change",
@@ -1031,7 +1032,7 @@ func TestValidationStep_ExecuteRoutesThroughTheSharedExitHelper(t *testing.T) {
 		output json.RawMessage
 	}{
 		{name: "review", step: &ReviewStep{}, output: cleanReview},
-		{name: "test", step: &TestStep{}, output: json.RawMessage(`{"findings":[],"risk_level":"low","risk_rationale":"none","risk_scope":"source-or-external","summary":"ok"}`)},
+		{name: "test", step: &TestStep{}, output: json.RawMessage(neutralEvidenceFindingsJSON)},
 		{name: "document", step: &DocumentStep{}, output: json.RawMessage(`{"findings":[],"summary":"update README"}`)},
 		{name: "lint", step: &LintStep{}, output: json.RawMessage(`{"findings":[],"summary":"lint clean"}`)},
 	}
@@ -1042,13 +1043,18 @@ func TestValidationStep_ExecuteRoutesThroughTheSharedExitHelper(t *testing.T) {
 			gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 			output := tc.output
-			ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Updated\n"), 0o644); err != nil {
 					return nil, err
 				}
+				// The Test step opens with a discovery pass; only the pass
+				// after it reads this case's payload.
+				if isDiscoveryCall(opts) {
+					return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
+				}
 				return &agent.Result{Output: output}, nil
 			}}
-			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 			sctx.Shared = &pipeline.RunShared{}
 			before := commitCount(t, dir)
 
@@ -1109,7 +1115,7 @@ func TestStep_RestartCarryoverReachesTheEvidencePass(t *testing.T) {
 			return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
 		}
 		evidencePrompt = opts.Prompt
-		return &agent.Result{Output: json.RawMessage(`{"findings":[],"risk_level":"low","risk_rationale":"none","risk_scope":"source-or-external","summary":"ok"}`)}, nil
+		return &agent.Result{Output: json.RawMessage(`{"findings":[],"risk_level":"low","risk_rationale":"none","risk_scope":"source-or-external","summary":"ok","tested":["live check"],"testing_summary":"drove the change against the running product","artifacts":[],"scenarios":[{"name":"the change behaves as intended","result":"pass","live":true,"evidence":"live check","reason":""}],"verdict":"go"}`)}, nil
 	}}
 	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Shared = &pipeline.RunShared{}

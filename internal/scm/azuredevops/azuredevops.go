@@ -51,6 +51,7 @@ type Host struct {
 	org          string // organization URL, e.g. https://dev.azure.com/myorg
 	project      string // project name (may contain spaces)
 	repo         string // repository name
+	draft        bool   // open created PRs as drafts (az repos pr create --draft true)
 }
 
 // New builds a Host. cliAvailable reports whether the az binary is resolvable
@@ -67,6 +68,14 @@ func New(cmd CmdFactory, cliAvailable func() bool, org, project, repo string) *H
 		project:      strings.TrimSpace(project),
 		repo:         strings.TrimSpace(repo),
 	}
+}
+
+// NewWithDraft builds a Host that opens created PRs as drafts when draft is
+// true (az repos pr create --draft true). See New for the other parameters.
+func NewWithDraft(cmd CmdFactory, cliAvailable func() bool, org, project, repo string, draft bool) *Host {
+	h := New(cmd, cliAvailable, org, project, repo)
+	h.draft = draft
+	return h
 }
 
 func (h *Host) Provider() scm.Provider { return scm.ProviderAzureDevOps }
@@ -270,6 +279,9 @@ func (h *Host) CreatePR(ctx context.Context, branch, base string, content scm.PR
 			"--title", content.Title,
 			"--description", descArg,
 		}
+		if h.draft {
+			args = append(args, "--draft", "true")
+		}
 		args = append(args, h.scopeArgs()...)
 		return append(args, "--output", "json")
 	})
@@ -333,8 +345,13 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 		if bucket == "" {
 			continue
 		}
+		providerID := ""
+		if id := strings.TrimSpace(e.EvaluationID); id != "" {
+			providerID = "azure-policy-evaluation:" + id
+		}
 		checks = append(checks, scm.Check{
 			Name:        e.checkName(),
+			ProviderID:  providerID,
 			Bucket:      bucket,
 			CompletedAt: parseAzTime(e.CompletedDate),
 		})
