@@ -40,7 +40,7 @@ const custodyRecoveryGuidance = "Recover custody first with `no-mistakes axi syn
 const refusedRecoveryRerunGuidance = "Do not reach for `no-mistakes rerun` here: it makes the run active again and the exits named above are then refused. It also refuses a known clean caller HEAD mismatch against the selected preserved head, so if the heads differ, inspect `no-mistakes axi status` and follow its exact `branch_sync.next_action.command` for custody or synchronization, then submit intended local commits with a fresh `no-mistakes axi run` once custody permits."
 
 func newSyncCmd() *cobra.Command {
-	var check, yes, recover, keepLocal bool
+	var check, yes, recoverCustody, keepLocal bool
 	var bindArchiveRef string
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -68,19 +68,19 @@ func newSyncCmd() *cobra.Command {
 			if check && yes {
 				return &exitError{code: 2, err: fmt.Errorf("--check and --yes cannot be used together")}
 			}
-			if check && recover {
+			if check && recoverCustody {
 				return &exitError{code: 2, err: fmt.Errorf("--check and --recover cannot be used together")}
 			}
-			if keepLocal && !recover {
+			if keepLocal && !recoverCustody {
 				return &exitError{code: 2, err: fmt.Errorf("--keep-local requires --recover")}
 			}
-			if bindArchiveRef != "" && (check || yes || recover || keepLocal) {
+			if bindArchiveRef != "" && (check || yes || recoverCustody || keepLocal) {
 				return &exitError{code: 2, err: fmt.Errorf("--bind-archive-ref cannot be combined with synchronization or recovery flags")}
 			}
 			if bindArchiveRef != "" {
 				return runHumanBindRecoveryArchive(cmd, bindArchiveRef)
 			}
-			if recover {
+			if recoverCustody {
 				return runHumanRecover(cmd, keepLocal, yes)
 			}
 			return runHumanSync(cmd, check, yes)
@@ -88,14 +88,14 @@ func newSyncCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "freshly verify and show the synchronization plan without changing HEAD")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply an eligible guarded synchronization without prompting")
-	cmd.Flags().BoolVar(&recover, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
+	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
 	return cmd
 }
 
 func newAxiSyncCmd() *cobra.Command {
-	var check, recover, keepLocal bool
+	var check, recoverCustody, keepLocal bool
 	var bindArchiveRef string
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -115,20 +115,20 @@ func newAxiSyncCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if check && recover {
+			if check && recoverCustody {
 				return emitError(cmd, 2, "--check and --recover cannot be used together")
 			}
-			if keepLocal && !recover {
+			if keepLocal && !recoverCustody {
 				return emitError(cmd, 2, "--keep-local requires --recover")
 			}
-			if bindArchiveRef != "" && (check || recover || keepLocal) {
+			if bindArchiveRef != "" && (check || recoverCustody || keepLocal) {
 				return emitError(cmd, 2, "--bind-archive-ref cannot be combined with synchronization or recovery flags")
 			}
-			return runAxiSync(cmd, check, recover, keepLocal, bindArchiveRef)
+			return runAxiSync(cmd, check, recoverCustody, keepLocal, bindArchiveRef)
 		},
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "freshly verify and return the plan without changing HEAD")
-	cmd.Flags().BoolVar(&recover, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
+	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
 	return cmd
@@ -396,7 +396,7 @@ func humanSyncSummary(state branchsync.State) string {
 	}
 }
 
-func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveRef string) error {
+func runAxiSync(cmd *cobra.Command, check, recoverCustody, keepLocal bool, bindArchiveRef string) error {
 	started := time.Now()
 	mode := "apply"
 	switch {
@@ -404,9 +404,9 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveR
 		mode = "bind_archive"
 	case check:
 		mode = "check"
-	case recover && keepLocal:
+	case recoverCustody && keepLocal:
 		mode = "recover_keep_local"
-	case recover:
+	case recoverCustody:
 		mode = "recover"
 	}
 	var state branchsync.State
@@ -424,7 +424,7 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveR
 		state = service.BindRecoveryArchive(cmd.Context(), bindArchiveRef)
 	case check:
 		state = service.Refresh(cmd.Context())
-	case recover:
+	case recoverCustody:
 		state = service.Recover(cmd.Context(), keepLocal)
 	default:
 		state = service.Apply(cmd.Context())
@@ -448,7 +448,7 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveR
 	}
 	emitDoc(cmd, fields...)
 	successful := syncStateSuccessful(state, check)
-	if recover {
+	if recoverCustody {
 		successful = state.Recovered
 	}
 	if bindArchiveRef != "" {

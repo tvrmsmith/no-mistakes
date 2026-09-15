@@ -145,14 +145,14 @@ func TestAxiSyncRecoverBreaksTheRebaseOnlyCustodyDeadlock(t *testing.T) {
 		}
 	}
 
-	recover, err := executeCmd("axi", "sync", "--recover")
+	recoverOut, err := executeCmd("axi", "sync", "--recover")
 	if err != nil {
-		t.Fatalf("advertised recovery refused instead of returning custody: %v\n%s", err, recover)
+		t.Fatalf("advertised recovery refused instead of returning custody: %v\n%s", err, recoverOut)
 	}
-	t.Logf("axi sync --recover:\n%s", recover)
+	t.Logf("axi sync --recover:\n%s", recoverOut)
 	for _, want := range []string{"recovered: true", "state: custody_returned", "changed: true", "no-mistakes axi run --intent"} {
-		if !strings.Contains(recover, want) {
-			t.Errorf("recovery output missing %q:\n%s", want, recover)
+		if !strings.Contains(recoverOut, want) {
+			t.Errorf("recovery output missing %q:\n%s", want, recoverOut)
 		}
 	}
 	if got := cliGit(t, f.local, "rev-parse", "HEAD"); got != f.preserved {

@@ -184,8 +184,8 @@ type captureRefreshRepoStep struct {
 
 func (s *captureRefreshRepoStep) Name() types.StepName { return types.StepReview }
 func (s *captureRefreshRepoStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
-	copy := *sctx.Repo
-	s.seen <- &copy
+	repoCopy := *sctx.Repo
+	s.seen <- &repoCopy
 	return &pipeline.StepOutcome{}, nil
 }
 

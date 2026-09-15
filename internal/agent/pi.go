@@ -523,14 +523,14 @@ func joinByIndex(parts map[int]string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	max := -1
+	highest := -1
 	for k := range parts {
-		if k > max {
-			max = k
+		if k > highest {
+			highest = k
 		}
 	}
 	var b strings.Builder
-	for i := 0; i <= max; i++ {
+	for i := 0; i <= highest; i++ {
 		b.WriteString(parts[i])
 	}
 	return b.String()

@@ -328,11 +328,11 @@ func finalizeTextResult(agentName, text string, schema json.RawMessage, usage To
 // inclusion in parse-failure errors. Without it, errors like "invalid
 // character 'N'" are undiagnosable without separately capturing agent stdout.
 func outputSnippet(text string) string {
-	const max = 200
+	const maxRunes = 200
 	trimmed := strings.TrimSpace(text)
 	runes := []rune(trimmed)
-	if len(runes) > max {
-		return string(runes[:max]) + "…"
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "…"
 	}
 	return trimmed
 }

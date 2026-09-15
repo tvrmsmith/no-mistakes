@@ -757,13 +757,13 @@ func TestAxiSurfacesReportUserOwnedReleaseAfterUnmovedPrePushAbort(t *testing.T)
 	}
 
 	for round := 0; round < 2; round++ {
-		recover, err := executeCmd("axi", "sync", "--recover")
+		recoverOut, err := executeCmd("axi", "sync", "--recover")
 		if err != nil {
-			t.Fatalf("released recover round %d: %v\n%s", round, err, recover)
+			t.Fatalf("released recover round %d: %v\n%s", round, err, recoverOut)
 		}
 		for _, want := range []string{"recovered: true", "state: user_owned", "changed: false"} {
-			if !strings.Contains(recover, want) {
-				t.Errorf("released recover round %d missing %q:\n%s", round, want, recover)
+			if !strings.Contains(recoverOut, want) {
+				t.Errorf("released recover round %d missing %q:\n%s", round, want, recoverOut)
 			}
 		}
 	}

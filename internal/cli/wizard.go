@@ -41,10 +41,10 @@ var runWizardAuto = func(ctx context.Context, p *paths.Paths, state *repoState, 
 }
 
 type wizardAgentSuggester struct {
-	cfg     *config.Config
-	workDir string
-	resolve func(context.Context, *config.Config) error
-	new     func(types.AgentName, string, []string, agent.Options) (agent.Agent, error)
+	cfg      *config.Config
+	workDir  string
+	resolve  func(context.Context, *config.Config) error
+	newAgent func(types.AgentName, string, []string, agent.Options) (agent.Agent, error)
 
 	once sync.Once
 	ag   agent.Agent
@@ -57,14 +57,14 @@ type wizardAgentSuggester struct {
 	cachedCommit string
 }
 
-func newWizardAgentSuggester(cfg *config.Config, workDir string, resolve func(context.Context, *config.Config) error, new func(types.AgentName, string, []string, agent.Options) (agent.Agent, error)) *wizardAgentSuggester {
+func newWizardAgentSuggester(cfg *config.Config, workDir string, resolve func(context.Context, *config.Config) error, newAgent func(types.AgentName, string, []string, agent.Options) (agent.Agent, error)) *wizardAgentSuggester {
 	if resolve == nil {
 		resolve = resolveWizardAgent
 	}
-	if new == nil {
-		new = newWizardAgent
+	if newAgent == nil {
+		newAgent = newWizardAgent
 	}
-	return &wizardAgentSuggester{cfg: cfg, workDir: workDir, resolve: resolve, new: new}
+	return &wizardAgentSuggester{cfg: cfg, workDir: workDir, resolve: resolve, newAgent: newAgent}
 }
 
 func (s *wizardAgentSuggester) ensure(ctx context.Context) error {
@@ -73,7 +73,7 @@ func (s *wizardAgentSuggester) ensure(ctx context.Context) error {
 			s.err = fmt.Errorf("resolve agent: %w", err)
 			return
 		}
-		ag, err := s.new(s.cfg.Agent, s.cfg.AgentPath(), s.cfg.AgentArgs(), agent.Options{
+		ag, err := s.newAgent(s.cfg.Agent, s.cfg.AgentPath(), s.cfg.AgentArgs(), agent.Options{
 			ACPRegistryOverrides: s.cfg.ACPRegistryOverrides,
 			Profile:              s.cfg.AgentProfile(),
 		})

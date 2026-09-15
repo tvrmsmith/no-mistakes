@@ -477,10 +477,3 @@ func symlink(t *testing.T, target, link string) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
