@@ -129,11 +129,6 @@ func (d *DB) aggregateRunStats(runID string, stepStats map[types.StepName]*StepS
 	return runReported, runFixed, nil
 }
 
-func stepFindingCounts(step *StepResult, rounds []*StepRound) (reported int, final int) {
-	stats := stepFindingStats(step, rounds)
-	return stats.ReportedFindings, stats.ReportedFindings - stats.FixedFindings
-}
-
 func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 	stats := StepStats{StepName: step.StepName}
 	if len(rounds) == 0 {

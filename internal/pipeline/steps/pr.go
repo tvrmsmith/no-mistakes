@@ -599,10 +599,6 @@ func generatedEssentialSections(riskLine, testingMD string) string {
 	return b.String()
 }
 
-func essentialPRBodyWithinLimit(body, generatedSections string) string {
-	return essentialPRBodyWithinBudget(body, generatedSections, maxPullRequestBodyBytes)
-}
-
 func essentialPRBodyWithinPipelineBudget(body, generatedSections, pipelineMD string, maxBytes int) string {
 	minPipeline := minimumPipelineRetainingLatestUpdate(pipelineMD)
 	if minPipeline == "" || len(minPipeline) > maxBytes {
@@ -1028,13 +1024,6 @@ func pipelineUpdatesOmissionMarker(omitted int) string {
 
 func pipelineLatestUpdateTruncationMarker() string {
 	return fmt.Sprintf("_... (latest pipeline update truncated to keep the PR body within GitHub's %d-char limit; full history is in the run log.)_", githubPullRequestBodyHardLimitChars)
-}
-
-func truncateEssentialPRBodyIfNeeded(body string) string {
-	if len(body) <= maxPullRequestBodyBytes {
-		return body
-	}
-	return truncateTextAtLineBoundary(body, maxPullRequestBodyBytes, essentialPRBodyTruncationMarker())
 }
 
 func essentialPRBodyTruncationMarker() string {

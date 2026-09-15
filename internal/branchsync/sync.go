@@ -1519,10 +1519,6 @@ func (s *Service) finishKeepLocalRecover(ctx context.Context, state State, runID
 	return fresh
 }
 
-func recoverAnchorRef(runID string) string {
-	return custody.RecoveryRef(runID)
-}
-
 // gateHoldsDetachedPreservedHead reports the one proof that stands in for a
 // missing terminal-head verification: the gate branch is still exactly the head
 // the operator submitted, and the gate holds the recorded pipeline head as a

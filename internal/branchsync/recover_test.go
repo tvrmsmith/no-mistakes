@@ -256,13 +256,6 @@ func (f *recoverFixture) custodyReturned() bool {
 	return run.CustodyReturnedAt != nil
 }
 
-func assertKeepLocalRecoveryOffer(t *testing.T, state State) {
-	t.Helper()
-	if state.NextAction == nil || state.NextAction.Code != "recover_custody" || state.NextAction.Command != "no-mistakes axi sync --recover --keep-local" {
-		t.Fatalf("want keep-local recover_custody, got %#v", state.NextAction)
-	}
-}
-
 func assertManualReconciliationOffer(t *testing.T, state State) {
 	t.Helper()
 	if state.Safety != "blocked_recover_manual_reconciliation" {

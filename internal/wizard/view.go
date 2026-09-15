@@ -175,16 +175,6 @@ func stepLabel(id stepID) string {
 	return "?"
 }
 
-func inputLabel(id stepID) string {
-	switch id {
-	case stepBranch:
-		return "branch name (blank to let the agent suggest):"
-	case stepCommit:
-		return "commit message (blank to let the agent suggest):"
-	}
-	return ""
-}
-
 func agentLabel(id stepID) string {
 	switch id {
 	case stepBranch:

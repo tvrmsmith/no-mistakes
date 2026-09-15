@@ -248,11 +248,6 @@ func parsePiMessages(raw json.RawMessage, timestamp string) []piParsedMessage {
 	return msgs
 }
 
-func parsePiMessage(raw json.RawMessage, timestamp string) (Message, bool) {
-	msg, ok := parsePiParsedMessage(raw, timestamp)
-	return msg.Message, ok
-}
-
 func parsePiParsedMessage(raw json.RawMessage, timestamp string) (piParsedMessage, bool) {
 	if len(raw) == 0 {
 		return piParsedMessage{}, false

@@ -1,7 +1,6 @@
 package e2edaemon
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -176,11 +175,6 @@ func samePath(a, b string) bool {
 		return filepath.Clean(ra) == filepath.Clean(rb)
 	}
 	return false
-}
-
-// signalProcess sends sig to pid. Used only after MatchesDaemonRoot.
-func signalProcess(pid int, sig os.Signal) error {
-	return signalProcessOS(pid, sig)
 }
 
 // waitProcessExit waits until pid is gone or timeout.

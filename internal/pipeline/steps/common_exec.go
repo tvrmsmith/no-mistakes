@@ -213,20 +213,6 @@ func stepGitHeadSHA(sctx *pipeline.StepContext) (string, error) {
 	return stepGitRun(sctx, "rev-parse", "HEAD")
 }
 
-func stepGitPush(sctx *pipeline.StepContext, remote, ref, expectedSHA string, forceWithLease bool) error {
-	args := []string{"push", remote}
-	if forceWithLease {
-		if expectedSHA != "" {
-			args = append(args, fmt.Sprintf("--force-with-lease=%s:%s", ref, expectedSHA))
-		} else {
-			args = append(args, "--force-with-lease")
-		}
-	}
-	args = append(args, "HEAD:"+ref)
-	_, err := stepGitRun(sctx, args...)
-	return err
-}
-
 // stepGitPushCommit pushes an explicit commit to a remote ref with the
 // StepContext's environment, mirroring git.PushCommit's argument assembly. The
 // explicit source SHA (rather than HEAD) is what lets a caller publish exactly
@@ -280,17 +266,6 @@ func stepExecutableAvailable(sctx *pipeline.StepContext, name string) bool {
 
 func hasExecutablePathSeparator(name string) bool {
 	return strings.ContainsRune(name, filepath.Separator) || (filepath.Separator != '/' && strings.ContainsRune(name, '/'))
-}
-
-// stepAuthConfigured checks whether the provider CLI is authenticated,
-// using sctx.Env to resolve the binary and pass environment variables.
-func stepAuthConfigured(sctx *pipeline.StepContext, provider scm.Provider) bool {
-	args := provider.AuthCheckCommand()
-	if len(args) == 0 {
-		return false
-	}
-	cmd := stepCmd(sctx, args[0], args[1:]...)
-	return cmd.Run() == nil
 }
 
 // runShellCommand executes a shell command and returns stdout+stderr, exit code, and error.

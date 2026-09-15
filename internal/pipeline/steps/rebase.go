@@ -154,11 +154,6 @@ func (s *RebaseStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 	return updateHeadSHA(ctx, sctx)
 }
 
-// rebaseTargets returns the ordered list of refs to rebase onto.
-func rebaseTargets(branch, defaultBranch string) []string {
-	return rebaseTargetsForBranch(branch, defaultBranch, "origin/"+branch)
-}
-
 func rebaseTargetsForBranch(branch, defaultBranch, branchTarget string) []string {
 	var targets []string
 	if branch != "" && branch != defaultBranch {

@@ -38,11 +38,6 @@ func canonicalPath(p string) string {
 	return filepath.Clean(abs)
 }
 
-// pathsEqual compares two paths after canonicalization.
-func pathsEqual(a, b string) bool {
-	return canonicalPath(a) == canonicalPath(b)
-}
-
 type repoMatcher struct {
 	origin string
 	ids    map[string]repoIdentity

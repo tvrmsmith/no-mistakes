@@ -396,14 +396,6 @@ func trimRenderedLines(s string, maxLines int) string {
 	return strings.Join(lines[:maxLines], "\n")
 }
 
-func renderFindingsWithSelectionHeight(raw string, width int, cursor int, selected map[string]bool, maxLines int) (string, string) {
-	f, err := parseFindings(raw)
-	if err != nil || f == nil {
-		return "", ""
-	}
-	return renderParsedFindingsHeight(f, width, cursor, selected, maxLines)
-}
-
 func renderParsedFindingsHeight(f *findings, width int, cursor int, selected map[string]bool, maxLines int) (string, string) {
 	if f == nil {
 		return "", ""

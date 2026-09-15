@@ -289,24 +289,6 @@ func effectiveReplayBase(ctx context.Context, gateDir, recordedBase, head, trust
 	return "", fmt.Errorf("derive replay base: reviewed head and trusted default branch have no readable merge base")
 }
 
-func repoConfigAt(ctx context.Context, gateDir, sha string) (*config.RepoConfig, error) {
-	if _, err := git.ResolveRef(ctx, gateDir, sha); err != nil {
-		return nil, err
-	}
-	entry, err := git.Run(ctx, gateDir, "ls-tree", sha, "--", ".no-mistakes.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("inspect repository config: %w", err)
-	}
-	if strings.TrimSpace(entry) == "" {
-		return &config.RepoConfig{}, nil
-	}
-	content, err := git.ShowFile(ctx, gateDir, sha, ".no-mistakes.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("read repository config: %w", err)
-	}
-	return config.LoadRepoFromBytes([]byte(content))
-}
-
 func agentNeutralGlobalConfig(data []byte) ([]byte, error) {
 	if _, err := config.LoadGlobalFromBytes(data); err != nil {
 		return nil, fmt.Errorf("read pinned global config for capture: %w", err)

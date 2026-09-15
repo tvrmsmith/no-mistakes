@@ -15,7 +15,6 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
 
@@ -174,26 +173,6 @@ func setupTestRepo(t *testing.T) string {
 	return repoDir
 }
 
-func writeMockClaude(t *testing.T, dir string) string {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		path := filepath.Join(dir, "claude.bat")
-		script := "@echo off\r\necho {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"structured_output\":{\"findings\":[],\"summary\":\"clean\"}}\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	path := filepath.Join(dir, "claude")
-	script := `#!/bin/sh
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"structured_output":{"findings":[],"summary":"clean"}}'
-`
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 func run(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
@@ -204,20 +183,6 @@ func run(t *testing.T, dir string, name string, args ...string) {
 	if err != nil {
 		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
 	}
-}
-
-func waitForDaemonRunning(t *testing.T, p *paths.Paths) {
-	t.Helper()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if alive, _ := daemon.IsRunning(p); alive {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	t.Fatal("daemon did not become responsive")
 }
 
 // chdir changes to the given directory and restores the original on cleanup.
@@ -252,75 +217,6 @@ func executeCmdWithContext(ctx context.Context, args ...string) (string, error) 
 	cmd.SetContext(ctx)
 	err := cmd.Execute()
 	return buf.String(), err
-}
-
-func linkTestBinary(t *testing.T, binDir, name string) string {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		dst := filepath.Join(binDir, name+".cmd")
-		content := "@echo off\r\n" +
-			"if /I \"%~n0\"==\"git\" (\r\n" +
-			"  if \"%1\"==\"--version\" (\r\n" +
-			"    echo git version 9.9.9\r\n" +
-			"    exit /b 0\r\n" +
-			"  )\r\n" +
-			"  exit /b 1\r\n" +
-			")\r\n" +
-			"if /I \"%~n0\"==\"gh\" exit /b 0\r\n" +
-			"if /I \"%~n0\"==\"claude\" exit /b 0\r\n" +
-			"exit /b 1\r\n"
-		if err := os.WriteFile(dst, []byte(content), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		return dst
-	}
-
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	dst := filepath.Join(binDir, name)
-	if err := os.Link(exe, dst); err == nil {
-		return dst
-	}
-	data, err := os.ReadFile(exe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, data, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return dst
-}
-
-func cleanupWorktree(t *testing.T, repoDir, wtDir string) {
-	t.Helper()
-
-	t.Cleanup(func() {
-		_ = os.Chdir(repoDir)
-		p := paths.WithRoot(os.Getenv("NM_HOME"))
-		_ = daemon.Stop(p)
-		if runtime.GOOS == "windows" {
-			time.Sleep(500 * time.Millisecond)
-		}
-		if resolved, err := filepath.EvalSymlinks(wtDir); err == nil {
-			wtDir = resolved
-		}
-
-		ctx := context.Background()
-		var err error
-		for attempt := 0; attempt < 5; attempt++ {
-			err = git.WorktreeRemove(ctx, repoDir, wtDir)
-			if err == nil || isMissingWorktreeError(err) {
-				return
-			}
-			if runtime.GOOS != "windows" {
-				break
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-		t.Fatalf("remove worktree %q: %v", wtDir, err)
-	})
 }
 
 func isMissingWorktreeError(err error) bool {

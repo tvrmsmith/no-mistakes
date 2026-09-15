@@ -469,44 +469,6 @@ func fakeCIGHMergeable(t *testing.T, state, checksJSON, mergeable string) []stri
 	})
 }
 
-func fakeCIGHMergeableError(t *testing.T, state, checksJSON, mergeableErr string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "gh")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":          "ci-gh",
-		"FAKE_CLI_STATE":         state,
-		"FAKE_CLI_CHECKS":        checksJSON,
-		"FAKE_CLI_MERGEABLE_ERR": mergeableErr,
-		"FAKE_CLI_PR_HEAD_SHA":   "deadbeef",
-	})
-}
-
-func fakeCIGHStateError(t *testing.T, stateErr, checksJSON string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "gh")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":        "ci-gh",
-		"FAKE_CLI_STATE_ERR":   stateErr,
-		"FAKE_CLI_CHECKS":      checksJSON,
-		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
-	})
-}
-
-func fakeCIGHChecksError(t *testing.T, state, mergeable, checksErr string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "gh")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":        "ci-gh",
-		"FAKE_CLI_STATE":       state,
-		"FAKE_CLI_MERGEABLE":   mergeable,
-		"FAKE_CLI_CHECKS_ERR":  checksErr,
-		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
-	})
-}
-
 func fakeCIGHSequenceMergeable(t *testing.T, state string, checks []string, mergeable string) []string {
 	t.Helper()
 	binDir := fakeCLIBinDir(t)
@@ -556,39 +518,6 @@ func fakeCIGHSequence(t *testing.T, state string, checks []string) []string {
 	})
 }
 
-// fakeCIGHLoggedSequence is fakeCIGHSequence with a recorded argv log, so tests
-// can assert which gh commands the CI monitor issued (for example whether it
-// asked for a check rerun). mergeable overrides the reported mergeable state
-// ("" reports MERGEABLE); rerunErr, when set, makes `gh run rerun` fail.
-func fakeCIGHLoggedSequence(t *testing.T, state string, checks []string, mergeable, rerunErr string) (env []string, logFile string) {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "gh")
-
-	tempDir := t.TempDir()
-	checksPath := filepath.Join(tempDir, "checks.txt")
-	indexPath := filepath.Join(tempDir, "checks-index.txt")
-	logFile = filepath.Join(tempDir, "gh.log")
-
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
-		t.Fatalf("write checks sequence: %v", err)
-	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
-		t.Fatalf("write checks index: %v", err)
-	}
-
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":              "ci-gh-seq",
-		"FAKE_CLI_STATE":             state,
-		"FAKE_CLI_CHECKS_PATH":       checksPath,
-		"FAKE_CLI_CHECKS_INDEX_PATH": indexPath,
-		"FAKE_CLI_MERGEABLE":         mergeable,
-		"FAKE_CLI_LOG":               logFile,
-		"FAKE_CLI_RERUN_ERR":         rerunErr,
-		"FAKE_CLI_PR_HEAD_SHA":       "deadbeef",
-	}), logFile
-}
-
 func fakeCIGHNoChecks(t *testing.T) []string {
 	t.Helper()
 	binDir := fakeCLIBinDir(t)
@@ -596,71 +525,6 @@ func fakeCIGHNoChecks(t *testing.T) []string {
 	return fakeCLIEnv(binDir, map[string]string{
 		"FAKE_CLI_MODE":        "ci-gh-nochecks",
 		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
-	})
-}
-
-// fakeCIGlab creates a fake glab binary that serves the CI monitoring endpoints.
-// state is the MR state ("opened", "merged", "closed"); checksJSON is a JSON
-// array of jobs for `glab ci status` / `glab ci get`.
-func fakeCIGlab(t *testing.T, state, checksJSON string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "glab")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":   "ci-glab",
-		"FAKE_CLI_STATE":  state,
-		"FAKE_CLI_CHECKS": checksJSON,
-	})
-}
-
-func fakeCIGlabConflict(t *testing.T, state, checksJSON string, conflict bool) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "glab")
-	conflicts := "false"
-	if conflict {
-		conflicts = "true"
-	}
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":         "ci-glab",
-		"FAKE_CLI_STATE":        state,
-		"FAKE_CLI_CHECKS":       checksJSON,
-		"FAKE_CLI_MR_CONFLICTS": conflicts,
-	})
-}
-
-func fakeCIGlabWithTrace(t *testing.T, state, checksJSON, trace string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "glab")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":   "ci-glab",
-		"FAKE_CLI_STATE":  state,
-		"FAKE_CLI_CHECKS": checksJSON,
-		"FAKE_CLI_TRACE":  trace,
-	})
-}
-
-func fakeCIGlabSequence(t *testing.T, state string, checks []string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "glab")
-
-	checksPath := filepath.Join(t.TempDir(), "checks.txt")
-	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
-
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
-		t.Fatalf("write checks sequence: %v", err)
-	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
-		t.Fatalf("write checks index: %v", err)
-	}
-
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":              "ci-glab-seq",
-		"FAKE_CLI_STATE":             state,
-		"FAKE_CLI_CHECKS_PATH":       checksPath,
-		"FAKE_CLI_CHECKS_INDEX_PATH": indexPath,
 	})
 }
 

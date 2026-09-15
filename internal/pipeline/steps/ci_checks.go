@@ -28,16 +28,6 @@ func pollInterval(elapsed time.Duration) time.Duration {
 	}
 }
 
-// hasFailingChecks returns true if any CI check is in the fail bucket.
-func hasFailingChecks(checks []scm.Check) bool {
-	for _, c := range checks {
-		if c.Failing() {
-			return true
-		}
-	}
-	return false
-}
-
 // hasPendingChecks returns true if any CI check is still running or queued.
 func hasPendingChecks(checks []scm.Check) bool {
 	for _, c := range checks {
