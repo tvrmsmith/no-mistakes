@@ -280,13 +280,18 @@ func (d *DB) ActiveRunWorktrees() ([]RunWorktree, error) {
 // hasColumn reports whether a table currently has a column. It reads the live
 // schema rather than assuming this binary's migrations have been applied, which
 // is what lets a read-only caller work against an older database.
+//
+// QueryRow, not Query: the absent-column answer is then sql.ErrNoRows and a
+// failed read is a different error, where a *sql.Rows makes both of them one
+// Next that returned false. Only ErrNoRows says the column is missing. A read
+// that failed is reported as absent too, which is safe rather than silent: the
+// callers use the answer to pick columns for a query they are about to run
+// against the same database, and that query reports the real fault with the
+// context this check does not have.
 func (d *DB) hasColumn(table, column string) bool {
-	rows, err := d.sql.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	return rows.Next()
+	var present int
+	err := d.sql.QueryRow(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&present)
+	return err == nil
 }
 
 // RunWorktreesOutside returns every run whose recorded worktree directory is
@@ -657,24 +662,9 @@ func (d *DB) ReconcileTerminalPRRuns() (int, error) {
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.Query(`SELECT id FROM runs WHERE status IN (?, ?) AND pr_state IN ('merged', 'closed')`, types.RunPending, types.RunRunning)
+	ids, err := terminalPRRunIDs(tx)
 	if err != nil {
-		return 0, fmt.Errorf("reconcile terminal PR runs: list runs: %w", err)
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return 0, fmt.Errorf("reconcile terminal PR runs: scan run: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, fmt.Errorf("reconcile terminal PR runs: close rows: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("reconcile terminal PR runs: list runs: %w", err)
+		return 0, fmt.Errorf("reconcile terminal PR runs: %w", err)
 	}
 
 	for _, id := range ids {
@@ -686,6 +676,34 @@ func (d *DB) ReconcileTerminalPRRuns() (int, error) {
 		return 0, fmt.Errorf("reconcile terminal PR runs: commit: %w", err)
 	}
 	return len(ids), nil
+}
+
+// terminalPRRunIDs lists the still-active runs whose PR has already merged or
+// closed. It reads inside tx and is a function of its own so the rows handle is
+// closed by the time it returns: its caller writes through the same
+// transaction, and a read left open across those writes is what deadlocks
+// SQLite.
+func terminalPRRunIDs(tx *sql.Tx) (ids []string, err error) {
+	rows, err := tx.Query(`SELECT id FROM runs WHERE status IN (?, ?) AND pr_state IN ('merged', 'closed')`, types.RunPending, types.RunRunning)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close rows: %w", closeErr)
+		}
+	}()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	return ids, nil
 }
 
 func monotonicPRState(current, observed string) string {

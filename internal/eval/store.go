@@ -506,28 +506,14 @@ func (s *Store) Prune(ctx context.Context, maxCases int) (int, error) {
 	if excess <= 0 {
 		return 0, nil
 	}
-	rows, err := s.db.Query(`SELECT c.id, c.path, c.repo_fingerprint FROM cases c
+	victims, err := scanCaseObjects(
+		s.db.QueryContext(ctx, `SELECT c.id, c.path, c.repo_fingerprint FROM cases c
 WHERE NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.case_id = c.id)
   AND NOT EXISTS (SELECT 1 FROM replay_case_reservations r WHERE r.case_id = c.id AND r.reserved_until > ?)
-ORDER BY c.captured_at, c.id LIMIT ?`, time.Now().Unix(), excess)
+ORDER BY c.captured_at, c.id LIMIT ?`, time.Now().Unix(), excess))
 	if err != nil {
 		return 0, fmt.Errorf("select prunable eval cases: %w", err)
 	}
-	type victim struct{ id, dir, fingerprint string }
-	var victims []victim
-	for rows.Next() {
-		var v victim
-		if err := rows.Scan(&v.id, &v.dir, &v.fingerprint); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("scan prunable eval case: %w", err)
-		}
-		victims = append(victims, v)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, fmt.Errorf("select prunable eval cases: %w", err)
-	}
-	rows.Close()
 
 	pruned := 0
 	for _, v := range victims {
@@ -553,26 +539,41 @@ ORDER BY c.captured_at, c.id LIMIT ?`, time.Now().Unix(), excess)
 	return pruned, nil
 }
 
-func (s *Store) cleanupPendingCaseDeletions(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, path, repo_fingerprint FROM pending_case_deletions ORDER BY id`)
-	if err != nil {
-		return fmt.Errorf("list pending eval case deletions: %w", err)
+// caseObject is one (id, directory, pool fingerprint) triple, the shape both
+// prune passes read before they start deleting.
+type caseObject struct{ id, dir, fingerprint string }
+
+// scanCaseObjects drains a query of case triples and closes it. It takes the
+// query's own results so the rows handle never outlives this call: both callers
+// write to the same database as soon as it returns, and an open read across
+// those writes is what locks SQLite out.
+func scanCaseObjects(rows *sql.Rows, queryErr error) (items []caseObject, err error) {
+	if queryErr != nil {
+		return nil, queryErr
 	}
-	type pending struct{ id, dir, fingerprint string }
-	var items []pending
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close rows: %w", closeErr)
+		}
+	}()
 	for rows.Next() {
-		var item pending
+		var item caseObject
 		if err := rows.Scan(&item.id, &item.dir, &item.fingerprint); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan pending eval case deletion: %w", err)
+			return nil, fmt.Errorf("scan: %w", err)
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *Store) cleanupPendingCaseDeletions(ctx context.Context) error {
+	items, err := scanCaseObjects(s.db.QueryContext(ctx, `SELECT id, path, repo_fingerprint FROM pending_case_deletions ORDER BY id`))
+	if err != nil {
 		return fmt.Errorf("list pending eval case deletions: %w", err)
 	}
-	rows.Close()
 	for _, item := range items {
 		if err := dropCaseObjects(ctx, s.poolDir(item.fingerprint), item.id); err != nil {
 			return err

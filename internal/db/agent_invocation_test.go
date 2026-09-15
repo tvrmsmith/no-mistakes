@@ -140,6 +140,14 @@ func TestAgentInvocations_PrivacySafeShape(t *testing.T) {
 		}
 		columns = append(columns, name)
 	}
+	// A read that stopped early lists fewer columns, and this guard would then
+	// pass by never seeing the one it exists to catch.
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read table info: %v", err)
+	}
+	if len(columns) == 0 {
+		t.Fatal("agent_invocations reported no columns")
+	}
 	for _, col := range columns {
 		lower := strings.ToLower(col)
 		if strings.HasSuffix(lower, "_tokens") {

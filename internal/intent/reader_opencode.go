@@ -99,36 +99,10 @@ func (r *opencodeReader) Load(ctx context.Context, s *Session) error {
 	}
 	defer db.Close()
 
-	// Map message id → role using the role field embedded in message.data.
-	msgRows, err := db.QueryContext(ctx,
-		`SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id`, s.SessionID)
+	msgs, ordered, err := opencodeMessages(ctx, db, s.SessionID)
 	if err != nil {
-		return fmt.Errorf("opencode messages: %w", err)
+		return err
 	}
-	type msgInfo struct {
-		role      Role
-		timestamp time.Time
-	}
-	msgs := map[string]msgInfo{}
-	var ordered []string
-	for msgRows.Next() {
-		var id, data string
-		var tc int64
-		if err := msgRows.Scan(&id, &tc, &data); err != nil {
-			continue
-		}
-		var meta struct {
-			Role string `json:"role"`
-		}
-		_ = json.Unmarshal([]byte(data), &meta)
-		role := RoleAssistant
-		if strings.EqualFold(meta.Role, "user") {
-			role = RoleUser
-		}
-		msgs[id] = msgInfo{role: role, timestamp: time.UnixMilli(tc).UTC()}
-		ordered = append(ordered, id)
-	}
-	msgRows.Close()
 
 	// Walk parts in chronological order; bucket by message id.
 	partRows, err := db.QueryContext(ctx,
@@ -179,6 +153,9 @@ func (r *opencodeReader) Load(ctx context.Context, s *Session) error {
 			}
 		}
 	}
+	if err := partRows.Err(); err != nil {
+		return fmt.Errorf("opencode parts: %w", err)
+	}
 
 	// Reassemble preserving message order.
 	for _, id := range ordered {
@@ -202,6 +179,51 @@ func (r *opencodeReader) Load(ctx context.Context, s *Session) error {
 		s.LastMsgKey = ordered[len(ordered)-1]
 	}
 	return nil
+}
+
+type opencodeMessage struct {
+	role      Role
+	timestamp time.Time
+}
+
+// opencodeMessages reads a session's messages keyed by id, plus the ids in
+// creation order. The role comes from the role field embedded in message.data.
+//
+// It owns its own rows handle so the close is a defer rather than a call the
+// error paths above it would each have to repeat, and it reports rows.Err:
+// iteration that stopped on a read error otherwise reassembles into a session
+// that is silently short of messages, which is the intent the caller infers.
+func opencodeMessages(ctx context.Context, db *sql.DB, sessionID string) (map[string]opencodeMessage, []string, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id`, sessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opencode messages: %w", err)
+	}
+	defer rows.Close()
+
+	msgs := map[string]opencodeMessage{}
+	var ordered []string
+	for rows.Next() {
+		var id, data string
+		var tc int64
+		if err := rows.Scan(&id, &tc, &data); err != nil {
+			continue
+		}
+		var meta struct {
+			Role string `json:"role"`
+		}
+		_ = json.Unmarshal([]byte(data), &meta)
+		role := RoleAssistant
+		if strings.EqualFold(meta.Role, "user") {
+			role = RoleUser
+		}
+		msgs[id] = opencodeMessage{role: role, timestamp: time.UnixMilli(tc).UTC()}
+		ordered = append(ordered, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("opencode messages: %w", err)
+	}
+	return msgs, ordered, nil
 }
 
 // resolveOpenCodeDB picks the path to opencode.db, honoring XDG_DATA_HOME
