@@ -120,9 +120,11 @@ func (f *ciRepairFixture) run(t *testing.T) (*pipeline.StepOutcome, error) {
 }
 
 func (f *ciRepairFixture) localHead(t *testing.T) string {
+	t.Helper()
 	return gitCmd(t, f.dir, "rev-parse", "HEAD")
 }
 func (f *ciRepairFixture) remoteHead(t *testing.T) string {
+	t.Helper()
 	return gitCmd(t, f.upstream, "rev-parse", "refs/heads/feature")
 }
 func (f *ciRepairFixture) log() string { return strings.Join(*f.logs, "\n") }
@@ -388,6 +390,7 @@ func TestCIStep_ConflictRepairAlwaysRevalidates(t *testing.T) {
 		{
 			name: "genuine_rebase_replaying_the_reviewed_commit",
 			rewrite: func(t *testing.T, f *ciRepairFixture, advancedBase string) string {
+				t.Helper()
 				// Resolve the conflict the way a repair agent would: keep the
 				// feature's intent on top of the base's rewrite. That changes
 				// the commit's patch-id, which is exactly why continuity
@@ -406,6 +409,7 @@ func TestCIStep_ConflictRepairAlwaysRevalidates(t *testing.T) {
 		{
 			name: "reset_to_base_dropping_the_reviewed_commit",
 			rewrite: func(t *testing.T, f *ciRepairFixture, advancedBase string) string {
+				t.Helper()
 				// The repair agent gives up on the conflict and resets to the
 				// base, silently discarding the reviewed commit.
 				gitCmd(t, f.dir, "rebase", "--abort")

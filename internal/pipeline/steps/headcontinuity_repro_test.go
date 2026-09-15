@@ -227,6 +227,7 @@ func TestPostReviewStepsRefuseHeadClobberAtEntry(t *testing.T) {
 		{
 			name: "backward_reset",
 			move: func(t *testing.T, dir, baseSHA string) string {
+				t.Helper()
 				gitCmd(t, dir, "reset", "--hard", baseSHA)
 				return baseSHA
 			},
@@ -234,6 +235,7 @@ func TestPostReviewStepsRefuseHeadClobberAtEntry(t *testing.T) {
 		{
 			name: "sibling_reset",
 			move: func(t *testing.T, dir, baseSHA string) string {
+				t.Helper()
 				gitCmd(t, dir, "reset", "--hard", baseSHA)
 				if err := os.WriteFile(filepath.Join(dir, "sibling.txt"), []byte("out-of-band sibling\n"), 0o644); err != nil {
 					t.Fatal(err)

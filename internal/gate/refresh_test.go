@@ -89,6 +89,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			name:   "multiple origin URLs",
 			origin: "git@example.com:owner/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com/owner/project.git")
 				gitTestCmd(t, dir, "config", "--add", "remote.origin.url", "ssh://git@example.com/owner/project.git")
 			},
@@ -98,6 +99,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			name:   "blank secondary origin URL",
 			origin: "git@example.com:owner/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com/owner/project.git")
 				gitTestCmd(t, dir, "config", "--add", "remote.origin.url", "")
 			},
@@ -107,6 +109,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			name:   "malformed origin",
 			origin: "git@example.com:owner/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com")
 			},
 			wantReason: RefreshInvalidRemote,
@@ -115,6 +118,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			name:   "credential-bearing origin",
 			origin: "git@example.com:owner/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://user:secret@example.com/owner/project.git")
 			},
 			wantReason: RefreshInvalidRemote,
@@ -124,6 +128,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			origin: "https://example.com/parent/project.git",
 			fork:   "git@example.com:fork/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com/parent/project.git")
 			},
 			wantReason: RefreshRemoteUnreadable,
@@ -133,6 +138,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			origin: "https://example.com/parent/project.git",
 			fork:   "git@example.com:fork/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com/parent/project.git")
 				gitTestCmd(t, dir, "remote", "add", "fork-a", "https://example.com/fork/project.git")
 				gitTestCmd(t, dir, "remote", "add", "fork-b", "ssh://git@example.com/fork/project.git")

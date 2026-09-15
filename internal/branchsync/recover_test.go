@@ -2318,6 +2318,7 @@ func TestRecoverRebasedPreservedHeadEscalatesWhenFixRoundsRewroteOperatorLines(t
 	t.Parallel()
 
 	f := newRebasedRecoverFixtureWithPipelineWork(t, types.RunCancelled, func(t *testing.T, pipelineDir string) {
+		t.Helper()
 		mustWrite(t, filepath.Join(pipelineDir, "feature.txt"), "feature one\nfeature two guarded\n")
 		mustRun(t, pipelineDir, "commit", "-am", "no-mistakes(review): guard the second line")
 	})

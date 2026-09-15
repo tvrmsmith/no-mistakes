@@ -677,12 +677,14 @@ func TestCIStep_UncertainProviderStateClearsPersistedReadiness(t *testing.T) {
 		{
 			name: "pr_state_error",
 			env: func(t *testing.T) []string {
+				t.Helper()
 				return stepstest.FakeCIGHStateError(t, "provider unavailable", `[{"name":"build","state":"SUCCESS","bucket":"pass"}]`)
 			},
 		},
 		{
 			name: "mergeability_unknown",
 			env: func(t *testing.T) []string {
+				t.Helper()
 				return stepstest.FakeCIGHMergeable(t, "OPEN", `[{"name":"build","state":"SUCCESS","bucket":"pass"}]`, "UNKNOWN")
 			},
 		},

@@ -101,12 +101,14 @@ func TestAssertReviewApprovedPushHead(t *testing.T) {
 		{
 			name: "equal",
 			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
 				return headSHA
 			},
 		},
 		{
 			name: "legitimate descendant",
 			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
 				if err := os.WriteFile(filepath.Join(dir, "docs.md"), []byte("docs\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
@@ -118,6 +120,7 @@ func TestAssertReviewApprovedPushHead(t *testing.T) {
 		{
 			name: "backward replacement",
 			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
 				gitCmd(t, dir, "reset", "--hard", baseSHA)
 				return baseSHA
 			},
@@ -126,6 +129,7 @@ func TestAssertReviewApprovedPushHead(t *testing.T) {
 		{
 			name: "divergent replacement",
 			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
 				gitCmd(t, dir, "reset", "--hard", baseSHA)
 				if err := os.WriteFile(filepath.Join(dir, "other.txt"), []byte("other\n"), 0o644); err != nil {
 					t.Fatal(err)
@@ -137,15 +141,21 @@ func TestAssertReviewApprovedPushHead(t *testing.T) {
 			wantError: "not an equal or descendant",
 		},
 		{
-			name:      "malformed approval",
-			approval:  "HEAD",
-			proposed:  func(t *testing.T, dir, baseSHA, headSHA string) string { return headSHA },
+			name:     "malformed approval",
+			approval: "HEAD",
+			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
+				return headSHA
+			},
 			wantError: "malformed",
 		},
 		{
-			name:      "unreachable approval",
-			approval:  strings.Repeat("a", 40),
-			proposed:  func(t *testing.T, dir, baseSHA, headSHA string) string { return headSHA },
+			name:     "unreachable approval",
+			approval: strings.Repeat("a", 40),
+			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
+				return headSHA
+			},
 			wantError: "unreachable",
 		},
 	}

@@ -258,6 +258,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "claude_skills_link_target_exists",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".agents", "skills"))
 				mkdirAll(t, filepath.Join(root, ".claude"))
 				symlink(t, filepath.Join("..", ".agents", "skills"), filepath.Join(root, ".claude", "skills"))
@@ -266,6 +267,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "claude_skills_link_target_missing",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".claude"))
 				symlink(t, filepath.Join("..", ".agents", "skills"), filepath.Join(root, ".claude", "skills"))
 			},
@@ -273,6 +275,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "claude_dir_link",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".agents"))
 				symlink(t, ".agents", filepath.Join(root, ".claude"))
 			},
@@ -280,6 +283,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "agents_skills_link_reverse",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".claude", "skills"))
 				mkdirAll(t, filepath.Join(root, ".agents"))
 				symlink(t, filepath.Join("..", ".claude", "skills"), filepath.Join(root, ".agents", "skills"))
@@ -288,6 +292,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "agents_dir_link_reverse",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".claude"))
 				symlink(t, ".claude", filepath.Join(root, ".agents"))
 			},

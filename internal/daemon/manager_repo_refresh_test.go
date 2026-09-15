@@ -78,18 +78,21 @@ func TestRunStartURLRefreshFailuresWarnSafelyAndContinueWithOldRegistration(t *t
 		{
 			name: "malformed origin",
 			setup: func(t *testing.T, _ *paths.Paths, _ *db.DB, repo *db.Repo) {
+				t.Helper()
 				gitCmd(t, repo.WorkingPath, "remote", "add", "origin", "https://example.com")
 			},
 		},
 		{
 			name: "credential-bearing origin",
 			setup: func(t *testing.T, _ *paths.Paths, _ *db.DB, repo *db.Repo) {
+				t.Helper()
 				gitCmd(t, repo.WorkingPath, "remote", "add", "origin", "https://user:top-secret@example.com/owner/project.git")
 			},
 		},
 		{
 			name: "ambiguous fork remotes",
 			setup: func(t *testing.T, _ *paths.Paths, database *db.DB, repo *db.Repo) {
+				t.Helper()
 				if _, err := database.ReplaceRepoURLs(repo.ID, repo.UpstreamURL, "git@example.com:fork/project.git"); err != nil {
 					t.Fatal(err)
 				}
@@ -102,6 +105,7 @@ func TestRunStartURLRefreshFailuresWarnSafelyAndContinueWithOldRegistration(t *t
 		{
 			name: "database write failure",
 			setup: func(t *testing.T, p *paths.Paths, _ *db.DB, repo *db.Repo) {
+				t.Helper()
 				gitCmd(t, repo.WorkingPath, "remote", "add", "origin", "https://example.com/owner/project.git")
 				raw, err := sql.Open("sqlite", p.DB())
 				if err != nil {
