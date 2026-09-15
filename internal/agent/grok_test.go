@@ -93,7 +93,7 @@ func TestGrokEnvHelper(t *testing.T) {
 	if os.Getenv("NM_GROK_ENV_HELPER") != "run" {
 		return
 	}
-	if err := os.WriteFile(os.Getenv("NM_GROK_ENV_OBSERVATION"), []byte(os.Getenv("NM_GROK_INVOCATION_VALUE")), 0o644); err != nil {
+	if err := os.WriteFile(os.Getenv("NM_GROK_ENV_OBSERVATION"), []byte(os.Getenv("NM_GROK_INVOCATION_VALUE")), 0o600); err != nil {
 		os.Exit(2)
 	}
 	_, _ = os.Stdout.WriteString(`{"type":"result","subtype":"success","is_error":false,"result":"done"}` + "\n")

@@ -147,7 +147,7 @@ func writeFakeCodex(t *testing.T, dir, posixScript, windowsScript string) string
 	}
 
 	bin := filepath.Join(dir, name)
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
 	return bin

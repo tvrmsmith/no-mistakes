@@ -124,7 +124,7 @@ func TestApplyEditsRejectsSymlinkPathsOutsideWorkingDirectory(t *testing.T) {
 func TestRunClaudeFailsWhenScenarioEditReplacementMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "note.txt")
-	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("before\n"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 

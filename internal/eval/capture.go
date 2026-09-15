@@ -322,7 +322,7 @@ func writeCase(ctx context.Context, store *Store, gateDir string, c Case, global
 	}
 	defer scratch.RemoveAll(tmp)
 	for _, dir := range []string{filepath.Join(tmp, "config"), filepath.Join(tmp, "original"), filepath.Join(tmp, "evals")} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
 	}
@@ -342,10 +342,10 @@ func writeCase(ctx context.Context, store *Store, gateDir string, c Case, global
 			_ = dropCaseObjects(ctx, store.poolDir(c.RepoFingerprint), c.ID)
 		}
 	}()
-	if err := os.WriteFile(filepath.Join(tmp, "config", "global.yaml"), globalConfig, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "config", "global.yaml"), globalConfig, 0o600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(tmp, "config", "repo-config.yaml"), repoConfig, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "config", "repo-config.yaml"), repoConfig, 0o600); err != nil {
 		return err
 	}
 	for _, item := range []struct {

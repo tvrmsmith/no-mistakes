@@ -90,7 +90,7 @@ func TestPiReader_LoadsPiEventStreamRecords(t *testing.T) {
 	repoCWD := t.TempDir()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".pi", "agent", "sessions", "repo")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "2026-04-18T02-15-37-407Z_session-events.jsonl")
@@ -101,7 +101,7 @@ func TestPiReader_LoadsPiEventStreamRecords(t *testing.T) {
 		`{"type":"turn_end","id":"u3","timestamp":"2026-04-18T02:15:40.000Z","message":{"role":"assistant","content":[{"type":"text","text":"updated it"},{"type":"toolCall","name":"edit","arguments":{"file_path":"internal/pi.go"}}]}}`,
 		`{"type":"agent_end","id":"u4","timestamp":"2026-04-18T02:15:41.000Z","messages":[{"role":"user","content":"also update docs/pi.md"},{"role":"assistant","content":[{"type":"text","text":"updated docs"}]}]}`,
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -145,7 +145,7 @@ func TestPiReader_IgnoresStreamingMessageUpdates(t *testing.T) {
 	repoCWD := t.TempDir()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".pi", "agent", "sessions", "repo")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "2026-04-18T02-15-37-407Z_session-updates.jsonl")
@@ -155,7 +155,7 @@ func TestPiReader_IgnoresStreamingMessageUpdates(t *testing.T) {
 		`{"type":"message_update","id":"u2","timestamp":"2026-04-18T02:15:39.000Z","message":{"role":"assistant","content":[{"type":"text","text":"updated internal"}]}}`,
 		`{"type":"turn_end","id":"u3","timestamp":"2026-04-18T02:15:40.000Z","message":{"role":"assistant","content":[{"type":"text","text":"updated internal/pi.go"}]}}`,
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,7 +187,7 @@ func TestPiReader_DeduplicatesCompletedEventsByResponseID(t *testing.T) {
 	repoCWD := t.TempDir()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".pi", "agent", "sessions", "repo")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "2026-04-18T02-15-37-407Z_session-completed-dedupe.jsonl")
@@ -198,7 +198,7 @@ func TestPiReader_DeduplicatesCompletedEventsByResponseID(t *testing.T) {
 		`{"type":"message_end","id":"u3","timestamp":"2026-04-18T02:15:41.000Z","message":{"role":"assistant","responseId":"r2","content":[{"type":"text","text":"done"}]}}`,
 		`{"type":"turn_end","id":"u4","timestamp":"2026-04-18T02:15:42.000Z","message":{"role":"assistant","responseId":"r2","content":[{"type":"text","text":"done"}]}}`,
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -233,7 +233,7 @@ func TestPiReader_DeduplicatesCompletedEventsByMessageID(t *testing.T) {
 	repoCWD := t.TempDir()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".pi", "agent", "sessions", "repo")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "2026-04-18T02-15-37-407Z_session-completed-message-id-dedupe.jsonl")
@@ -244,7 +244,7 @@ func TestPiReader_DeduplicatesCompletedEventsByMessageID(t *testing.T) {
 		`{"type":"message_end","id":"u3","timestamp":"2026-04-18T02:15:41.000Z","message":{"role":"assistant","id":"m2","content":[{"type":"text","text":"done"}]}}`,
 		`{"type":"turn_end","id":"u4","timestamp":"2026-04-18T02:15:42.000Z","message":{"role":"assistant","id":"m2","content":[{"type":"text","text":"done"}]}}`,
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,7 +279,7 @@ func TestPiReader_DeduplicatesAgentEndMessages(t *testing.T) {
 	repoCWD := t.TempDir()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".pi", "agent", "sessions", "repo")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "2026-04-18T02-15-37-407Z_session-dedupe.jsonl")
@@ -289,7 +289,7 @@ func TestPiReader_DeduplicatesAgentEndMessages(t *testing.T) {
 		`{"type":"turn_end","id":"u2","timestamp":"2026-04-18T02:15:40.000Z","message":{"role":"assistant","content":[{"type":"text","text":"updated it"}]}}`,
 		`{"type":"agent_end","id":"u3","timestamp":"2026-04-18T02:15:41.000Z","messages":[{"role":"user","content":"fix internal/pi.go"},{"role":"assistant","content":[{"type":"text","text":"updated it"}]}]}`,
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -321,7 +321,7 @@ func TestPiReader_PreservesRepeatedLiveMessages(t *testing.T) {
 	repoCWD := t.TempDir()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".pi", "agent", "sessions", "repo")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "2026-04-18T02-15-37-407Z_session-repeat.jsonl")
@@ -332,7 +332,7 @@ func TestPiReader_PreservesRepeatedLiveMessages(t *testing.T) {
 		`{"type":"turn_end","id":"u3","timestamp":"2026-04-18T02:15:41.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}`,
 		`{"type":"turn_end","id":"u4","timestamp":"2026-04-18T02:15:42.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}`,
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -375,7 +375,7 @@ func TestPiReader_LoadsOversizedAgentEndRecord(t *testing.T) {
 	repoCWD := t.TempDir()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".pi", "agent", "sessions", "repo")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "2026-04-18T02-15-37-407Z_session-large.jsonl")
@@ -384,7 +384,7 @@ func TestPiReader_LoadsOversizedAgentEndRecord(t *testing.T) {
 		`{"type":"message_end","id":"u1","timestamp":"2026-04-18T02:15:39.000Z","message":{"role":"user","content":"fix internal/pi.go"}}`,
 		`{"type":"agent_end","id":"u2","timestamp":"2026-04-18T02:15:41.000Z","messages":[{"role":"toolResult","content":"` + strings.Repeat("x", oversizedPayloadSize) + `"}]}`,
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -427,7 +427,7 @@ func writePiFixture(t *testing.T, repoCWD string) string {
 	t.Helper()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".pi", "agent", "sessions", "repo")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "2026-04-18T02-15-37-407Z_session-1.jsonl")
@@ -441,7 +441,7 @@ func writePiFixture(t *testing.T, repoCWD string) string {
 		`{"type":"message","id":"m5","timestamp":"2026-04-18T02:15:42.000Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{"command":"gofmt -w internal/baz.go"}}]}}`,
 		`{"type":"message","id":"m6","timestamp":"2026-04-18T02:15:43.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"only thinking should be skipped"}]}}`,
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return home

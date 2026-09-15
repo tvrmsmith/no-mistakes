@@ -250,7 +250,7 @@ func writeFakeCopilot(t *testing.T, dir string, jsonlLines []string, exitCode in
 		lines = append(lines, "exit "+itoa(exitCode))
 		script = strings.Join(lines, "\n") + "\n"
 	}
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake copilot: %v", err)
 	}
 	return bin
@@ -268,7 +268,7 @@ cat > stdin.txt
 printf '%s\n' '{"type":"assistant.message","data":{"content":"done","outputTokens":1}}'
 printf '%s\n' '{"type":"result","exitCode":0}'
 `
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	prompt := strings.Repeat("copilot-prompt-", 512)

@@ -211,7 +211,7 @@ func mkdirAllNoSymlink(root, target string) error {
 			if !os.IsNotExist(err) {
 				return fmt.Errorf("stat %s: %w", current, err)
 			}
-			if err := os.Mkdir(current, 0755); err != nil {
+			if err := os.Mkdir(current, 0750); err != nil {
 				return fmt.Errorf("create %s: %w", current, err)
 			}
 			continue

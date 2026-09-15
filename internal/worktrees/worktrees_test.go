@@ -76,7 +76,7 @@ func TestLayout_MatchesUnnormalizedAndSymlinkedCheckout(t *testing.T) {
 	p := paths.WithRoot(t.TempDir())
 	dir := t.TempDir()
 	checkout := filepath.Join(dir, "src", "repo1")
-	if err := os.MkdirAll(checkout, 0o755); err != nil {
+	if err := os.MkdirAll(checkout, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(dir, "link")
@@ -255,7 +255,7 @@ func TestContains(t *testing.T) {
 func TestContainsFollowsTheFilesystemAcrossCaseVariantSpellings(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "nm-home")
-	if err := os.MkdirAll(filepath.Join(home, "logs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, "logs"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	variantHome := filepath.Join(base, strings.ToUpper("nm-home"))
@@ -285,7 +285,7 @@ func TestContainsFollowsTheFilesystemAcrossCaseVariantSpellings(t *testing.T) {
 func TestCheckPlacementRefusesCaseVariantAppStateRoot(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "nm-home")
-	if err := os.MkdirAll(filepath.Join(home, "logs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, "logs"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	variantRoot := filepath.Join(base, strings.ToUpper("nm-home"), "logs")

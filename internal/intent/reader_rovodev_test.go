@@ -12,7 +12,7 @@ func buildRovoDevSession(t *testing.T, repoCWD string) string {
 	t.Helper()
 	home := t.TempDir()
 	sessionDir := filepath.Join(home, ".rovodev", "sessions", "abc-123")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	meta, err := json.Marshal(map[string]string{
@@ -23,7 +23,7 @@ func buildRovoDevSession(t *testing.T, repoCWD string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "metadata.json"), meta, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sessionDir, "metadata.json"), meta, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	convo, err := json.Marshal(map[string]any{
@@ -36,7 +36,7 @@ func buildRovoDevSession(t *testing.T, repoCWD string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "session_context.json"), convo, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sessionDir, "session_context.json"), convo, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return home

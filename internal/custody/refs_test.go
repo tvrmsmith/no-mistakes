@@ -41,7 +41,7 @@ func TestPreserveRecoveryHeadRejectsConflictingAnchorWithoutOverwriting(t *testi
 func TestPreserveRecoveryHeadRejectsNonCommitAnchorWithoutOverwriting(t *testing.T) {
 	repo, head := recoveryTestRepo(t)
 	blobPath := filepath.Join(repo, "blob.txt")
-	if err := os.WriteFile(blobPath, []byte("evidence\n"), 0o644); err != nil {
+	if err := os.WriteFile(blobPath, []byte("evidence\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	blob := gitOutput(t, repo, "hash-object", "-w", blobPath)

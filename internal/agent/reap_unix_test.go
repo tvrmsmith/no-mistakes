@@ -89,7 +89,7 @@ func TestNativeAgentEscapedPipeHelper(t *testing.T) {
 		if err := child.Start(); err != nil {
 			os.Exit(2)
 		}
-		_ = os.WriteFile(os.Getenv("NM_AGENT_NATIVE_PIPE_PID"), []byte(strconv.Itoa(child.Process.Pid)), 0o644)
+		_ = os.WriteFile(os.Getenv("NM_AGENT_NATIVE_PIPE_PID"), []byte(strconv.Itoa(child.Process.Pid)), 0o600)
 		if !waitForNativeAgentPipeHelperReady(os.Getenv("NM_AGENT_NATIVE_PIPE_READY"), 5*time.Second) {
 			os.Exit(3)
 		}
@@ -97,7 +97,7 @@ func TestNativeAgentEscapedPipeHelper(t *testing.T) {
 		os.Exit(0)
 	case "escaped":
 		_, _ = syscall.Setsid()
-		_ = os.WriteFile(os.Getenv("NM_AGENT_NATIVE_PIPE_READY"), []byte("ready"), 0o644)
+		_ = os.WriteFile(os.Getenv("NM_AGENT_NATIVE_PIPE_READY"), []byte("ready"), 0o600)
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
 	}

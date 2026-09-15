@@ -19,12 +19,12 @@ func buildCodexFixture(t *testing.T, cwd string) (homeDir, rolloutPath string) {
 	t.Helper()
 	homeDir = t.TempDir()
 	codexDir := filepath.Join(homeDir, ".codex")
-	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+	if err := os.MkdirAll(codexDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
 	rolloutPath = filepath.Join(codexDir, "sessions", "2026", "04", "rollout-thread-1.jsonl")
-	if err := os.MkdirAll(filepath.Dir(rolloutPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(rolloutPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	rollout := strings.Join([]string{
@@ -39,7 +39,7 @@ func buildCodexFixture(t *testing.T, cwd string) (homeDir, rolloutPath string) {
 		// Non-content envelope - should be skipped.
 		`{"type":"turn_context","payload":{}}`,
 	}, "\n")
-	if err := os.WriteFile(rolloutPath, []byte(rollout), 0o644); err != nil {
+	if err := os.WriteFile(rolloutPath, []byte(rollout), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,7 +178,7 @@ func TestCodexReader_MissingRollout(t *testing.T) {
 func TestResolveCodexStateDB_PicksHighestVersion(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"state_4.sqlite", "state_5.sqlite", "state_6.sqlite", "unrelated.sqlite"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -197,7 +197,7 @@ func TestResolveCodexStateDB_PicksHighestVersion(t *testing.T) {
 func TestResolveCodexStateDB_NumericSortPastNine(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"state_9.sqlite", "state_10.sqlite", "state_11.sqlite", "state_5.sqlite"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -214,7 +214,7 @@ func TestResolveCodexStateDB_NumericSortPastNine(t *testing.T) {
 func TestResolveCodexStateDB_IgnoresNonNumericSuffix(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"state_5.sqlite", "state_backup.sqlite"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

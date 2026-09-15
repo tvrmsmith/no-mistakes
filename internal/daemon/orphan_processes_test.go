@@ -79,10 +79,10 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 				t.Fatal(err)
 			}
 			evidenceDir := filepath.Join(p.EvidenceRoot(""), run.ID)
-			if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+			if err := os.MkdirAll(evidenceDir, 0o750); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(evidenceDir, "output.txt"), []byte("test output"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(evidenceDir, "output.txt"), []byte("test output"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			expired := time.Now().Add(-config.DefaultEvidenceRetention - time.Hour)
@@ -431,11 +431,11 @@ func TestRunSetupFailureSweepsTheWorktreeItRemoves(t *testing.T) {
 	// it, and leaves a process standing there whose parent exits immediately.
 	pidFile := filepath.Join(t.TempDir(), "orphan.pid")
 	gateHooks := filepath.Join(p.RepoDir("setup-failure-repo"), "hooks")
-	if err := os.MkdirAll(gateHooks, 0o755); err != nil {
+	if err := os.MkdirAll(gateHooks, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	hook := "#!/bin/sh\nsleep 300 >/dev/null 2>&1 &\necho $! > " + pidFile + "\n"
-	if err := os.WriteFile(filepath.Join(gateHooks, "post-checkout"), []byte(hook), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(gateHooks, "post-checkout"), []byte(hook), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -472,7 +472,7 @@ func TestRunSetupFailureSweepsTheWorktreeItRemoves(t *testing.T) {
 // parsed, which fails run setup after the worktree has been created.
 func commitInvalidRepoConfig(t *testing.T, workDir string) string {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", ".no-mistakes.yaml")
@@ -503,7 +503,7 @@ func readOrphanPID(t *testing.T, pidFile string) int {
 // child has by the time anyone notices it.
 func startOrphanInWorktree(t *testing.T, dir string) int {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("create worktree dir: %v", err)
 	}
 	cmd := exec.Command("/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!")

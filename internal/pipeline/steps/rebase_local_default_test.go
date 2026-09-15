@@ -60,7 +60,7 @@ func TestRebaseStep_DetectsUnpushedLocalDefaultBranchCommits(t *testing.T) {
 
 	// Upstream-only files must not inflate the proposed PR evidence.
 	gitCmd(t, working, "checkout", "-b", "upstream-advance", d0)
-	if err := os.WriteFile(filepath.Join(working, "aaa_upstream_only.txt"), []byte("upstream"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(working, "aaa_upstream_only.txt"), []byte("upstream"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, working, "add", "-A")
@@ -184,7 +184,7 @@ func TestRebaseStep_LocalDefaultTipIsIntendedDelivery(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	for _, name := range []string{"package.json", "package-lock.json"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("base"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("base"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -194,7 +194,7 @@ func TestRebaseStep_LocalDefaultTipIsIntendedDelivery(t *testing.T) {
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 	for _, name := range []string{"package.json", "package-lock.json"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("upgrade"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("upgrade"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

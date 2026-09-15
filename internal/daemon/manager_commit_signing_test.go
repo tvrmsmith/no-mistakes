@@ -18,7 +18,7 @@ type commitInWorktreeStep struct{}
 
 func (s *commitInWorktreeStep) Name() types.StepName { return types.StepReview }
 func (s *commitInWorktreeStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
-	if err := os.WriteFile(filepath.Join(sctx.WorkDir, "fix.txt"), []byte("agent fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sctx.WorkDir, "fix.txt"), []byte("agent fix\n"), 0o600); err != nil {
 		return nil, err
 	}
 	if err := git.CommitAll(context.Background(), sctx.WorkDir, "no-mistakes: apply agent fixes"); err != nil {
@@ -44,7 +44,7 @@ func TestRunStart_SignCommitsFalseLetsUnattendedCommitsSucceed(t *testing.T) {
 			t.Setenv("NM_DEMO", "1")
 			p, database := newRefreshRunFixture(t)
 			repo, head := setupTestGitRepo(t, p, database, "signing")
-			if err := os.WriteFile(p.ConfigFile(), []byte(tt.configYAML), 0o644); err != nil {
+			if err := os.WriteFile(p.ConfigFile(), []byte(tt.configYAML), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			// Force signing with a signer binary that does not exist, the

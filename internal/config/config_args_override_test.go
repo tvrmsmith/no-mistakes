@@ -35,7 +35,7 @@ agent_args_override:
     - --model
     - operator-selected
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -67,7 +67,7 @@ func TestLoadGlobal_AgentArgsOverride_UnknownAgentRejected(t *testing.T) {
     - --model
     - foo
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -161,7 +161,7 @@ func TestLoadGlobal_AgentArgsOverride_ReservedArgsRejected(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
 			data := "agent_args_override:\n  " + tt.agent + ":\n    - " + tt.arg + "\n"
-			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -186,7 +186,7 @@ func TestLoadGlobal_AgentArgsOverride_EmptyArgRejected(t *testing.T) {
   claude:
     - ""
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

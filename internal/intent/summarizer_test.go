@@ -194,7 +194,7 @@ func TestAgentDisambiguator_CleansWorktreeSideEffects(t *testing.T) {
 	gitTestCmd(t, dir, "config", "core.autocrlf", "false")
 	gitTestCmd(t, dir, "config", "user.name", "test")
 	gitTestCmd(t, dir, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("before\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("before\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitTestCmd(t, dir, "add", "tracked.txt")
@@ -202,10 +202,10 @@ func TestAgentDisambiguator_CleansWorktreeSideEffects(t *testing.T) {
 
 	fa := &fakeAgent{}
 	fa.run = func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(opts.CWD, "tracked.txt"), []byte("after\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "tracked.txt"), []byte("after\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(opts.CWD, "untracked.txt"), []byte("new\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "untracked.txt"), []byte("new\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		out := []byte(`{"agent_name":"claude","session_id":"s1","confidence":0.95,"reason":"closest"}`)
@@ -241,7 +241,7 @@ func TestAgentDisambiguator_CleansCommittedSideEffects(t *testing.T) {
 	gitTestCmd(t, dir, "config", "core.autocrlf", "false")
 	gitTestCmd(t, dir, "config", "user.name", "test")
 	gitTestCmd(t, dir, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("before\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("before\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitTestCmd(t, dir, "add", "tracked.txt")
@@ -250,7 +250,7 @@ func TestAgentDisambiguator_CleansCommittedSideEffects(t *testing.T) {
 
 	fa := &fakeAgent{}
 	fa.run = func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(opts.CWD, "tracked.txt"), []byte("after\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "tracked.txt"), []byte("after\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		gitTestCmd(t, opts.CWD, "add", "tracked.txt")
@@ -284,7 +284,7 @@ func TestAgentDisambiguator_CleansWithCanceledAgentContext(t *testing.T) {
 	gitTestCmd(t, dir, "config", "core.autocrlf", "false")
 	gitTestCmd(t, dir, "config", "user.name", "test")
 	gitTestCmd(t, dir, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("before\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("before\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitTestCmd(t, dir, "add", "tracked.txt")
@@ -293,7 +293,7 @@ func TestAgentDisambiguator_CleansWithCanceledAgentContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	fa := &fakeAgent{}
 	fa.run = func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(opts.CWD, "tracked.txt"), []byte("after\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "tracked.txt"), []byte("after\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		cancel()

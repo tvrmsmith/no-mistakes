@@ -2507,7 +2507,7 @@ func TestCIStep_ResolvedRerunDoesNotParkALaterGreenHead(t *testing.T) {
 	step := (&steps.CIStep{}).SetWaitForNextPoll(func(ctx context.Context, interval time.Duration) error {
 		polls++
 		if polls == 1 {
-			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			stepstest.GitCmd(t, dir, "add", "-A")

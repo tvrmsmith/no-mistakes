@@ -41,7 +41,7 @@ func logInvocation(agent, prompt string, args []string) {
 	}
 	logMu.Lock()
 	defer logMu.Unlock()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

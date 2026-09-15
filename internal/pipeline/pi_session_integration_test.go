@@ -23,7 +23,7 @@ func writeFakePiExecutable(t *testing.T, dir, posixScript, windowsScript string)
 		script = windowsScript
 	}
 	bin := filepath.Join(dir, name)
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake pi: %v", err)
 	}
 	return bin
@@ -152,7 +152,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"
 	// the identity, re-run the same turn in a fresh session marked as fallback,
 	// and persist the replacement.
 	expire := filepath.Join(dir, "pi-expire")
-	if err := os.WriteFile(expire, []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(expire, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write expire marker: %v", err)
 	}
 	second, err := rs.Run(t.Context(), pa, SessionRoleFixer, opts, nil)

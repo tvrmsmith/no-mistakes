@@ -56,7 +56,7 @@ func newRepoWithRemote(t *testing.T) (remote, work string) {
 	runGit(t, root, "init", "--initial-branch=main", work)
 	runGit(t, work, "config", "user.name", "Evidence Test")
 	runGit(t, work, "config", "user.email", "evidence@example.com")
-	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("code\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("code\n"), 0o600); err != nil {
 		t.Fatalf("write README: %v", err)
 	}
 	runGit(t, work, "add", "-A")
@@ -70,10 +70,10 @@ func writeEvidence(t *testing.T, dir string, files map[string]string) string {
 	t.Helper()
 	for rel, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
 			t.Fatalf("write %s: %v", rel, err)
 		}
 	}
@@ -251,7 +251,7 @@ func TestPublish_RefusesExistingBranchThatIsNotAnEvidenceBranch(t *testing.T) {
 func TestPublish_RefusesExistingBranchWithWrongMarkerContent(t *testing.T) {
 	remote, work := newRepoWithRemote(t)
 	source := writeEvidence(t, t.TempDir(), map[string]string{"proof.txt": "ok\n"})
-	if err := os.WriteFile(filepath.Join(work, MarkerPath), []byte("not a no-mistakes evidence branch\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, MarkerPath), []byte("not a no-mistakes evidence branch\n"), 0o600); err != nil {
 		t.Fatalf("write false marker: %v", err)
 	}
 	runGit(t, work, "add", MarkerPath)
@@ -288,7 +288,7 @@ func TestPublish_FailsClosedWhenTheRemoteRefusesThePush(t *testing.T) {
 	remote, work := newRepoWithRemote(t)
 	source := writeEvidence(t, t.TempDir(), map[string]string{"proof.txt": "ok\n"})
 	hook := filepath.Join(remote, "hooks", "pre-receive")
-	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho 'denied: no write access' >&2\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho 'denied: no write access' >&2\nexit 1\n"), 0o700); err != nil {
 		t.Fatalf("write hook: %v", err)
 	}
 
@@ -311,7 +311,7 @@ func TestPublish_FailsClosedWhenTheRemoteIsUnreadable(t *testing.T) {
 func TestPublish_WorksFromADetachedShallowClone(t *testing.T) {
 	remote, work := newRepoWithRemote(t)
 	// A second commit so a depth-1 clone is genuinely shallow.
-	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("more code\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("more code\n"), 0o600); err != nil {
 		t.Fatalf("write README: %v", err)
 	}
 	runGit(t, work, "commit", "-am", "second")

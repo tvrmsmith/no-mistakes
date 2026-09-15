@@ -70,7 +70,7 @@ func TestEjectSweepsRecordedWorktreesBeforeRemovingThem(t *testing.T) {
 // anyone notices it.
 func startOrphanIn(t *testing.T, dir string) int {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("create dir: %v", err)
 	}
 	cmd := exec.Command("/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!")

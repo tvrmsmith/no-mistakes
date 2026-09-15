@@ -207,7 +207,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 
 	// Create log directory for this run
 	logDir := e.paths.RunLogDir(run.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		return e.failRun(run, repo, fmt.Errorf("create log dir: %w", err))
 	}
 
@@ -385,7 +385,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		return err
 	}
 	logDir := e.paths.RunLogDir(run.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		return e.failRun(run, repo, fmt.Errorf("create log dir: %w", err))
 	}
 	e.initializeRunScopes(run.ID)
@@ -1103,7 +1103,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	var durationOverrideMS int64 // sum of step-reported overrides (demo mode)
 
 	// Open log file for persistent step logging
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return false, "", fmt.Errorf("create step log file %s: %w", stepName, err)
 	}

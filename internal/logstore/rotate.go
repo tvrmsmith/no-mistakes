@@ -53,10 +53,10 @@ func Open(path string, policy Policy) (*RotatingWriter, error) {
 	if err := validatePolicy(policy); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open log: %w", err)
 	}
@@ -286,7 +286,7 @@ func copySectionAtomic(src *os.File, offset, length int64, target string) error 
 }
 
 func trimFileTail(path string, maxBytes int64) (err error) {
-	file, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
 	if os.IsNotExist(err) {
 		return nil
 	}

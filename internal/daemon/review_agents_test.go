@@ -25,7 +25,7 @@ func TestPipelineReviewRolesUseIndependentPiProfiles(t *testing.T) {
 		bin += ".cmd"
 		script = "@echo off\r\necho %* > pi-argv.txt\r\nmore > nul\r\necho " + response + "\r\n"
 	}
-	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	global, err := config.LoadGlobalFromBytes([]byte(`agent: pi
@@ -106,7 +106,7 @@ func writeCapturingPiAgent(t *testing.T, dir, capturePath string) string {
 		bin += ".cmd"
 		script = "@echo off\r\necho %* >> \"" + capturePath + "\"\r\nmore > nul\r\necho " + response + "\r\n"
 	}
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return bin
@@ -132,7 +132,7 @@ func TestPushReceivedRoutesReviewRolesToIndependentProfiles(t *testing.T) {
 		"review_agents:\n" +
 		"  reviewer: {agent: pi, model: anthropic-vertex/claude-opus-4-8, effort: max}\n" +
 		"  fixer: {agent: pi, model: google-vertex/gemini-3.8-flash, effort: max}\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

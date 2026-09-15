@@ -32,7 +32,7 @@ func TestCommitAgentFixes_RefusesToCommitOnOutOfBandResetHead(t *testing.T) {
 	guard := filepath.Join(dir, "guard.sh")
 
 	// 1) Review-fix applies the CORRECT change; the pipeline commits it (04b5f5d).
-	if err := os.WriteFile(guard, []byte("FORCE_INCLUDE marker-inversion\n"), 0o644); err != nil {
+	if err := os.WriteFile(guard, []byte("FORCE_INCLUDE marker-inversion\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := commitAgentFixes(sctx, types.StepReview, "guard linked secondmate homes correctly", "address review findings"); err != nil {
@@ -46,7 +46,7 @@ func TestCommitAgentFixes_RefusesToCommitOnOutOfBandResetHead(t *testing.T) {
 	// 2) Out-of-band clobber: a concurrent sibling worktree resets HEAD to a
 	//    DIVERGENT commit built from base that does not contain the fix (a876550).
 	gitCmd(t, dir, "checkout", "--detach", baseSHA)
-	if err := os.WriteFile(guard, []byte("REMOVE_ONLY\n"), 0o644); err != nil {
+	if err := os.WriteFile(guard, []byte("REMOVE_ONLY\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -64,7 +64,7 @@ func TestCommitAgentFixes_RefusesToCommitOnOutOfBandResetHead(t *testing.T) {
 	}
 
 	// 3) Document step edits docs and tries to commit. It MUST refuse loudly.
-	if err := os.WriteFile(filepath.Join(dir, "docs.md"), []byte("corrected docs\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "docs.md"), []byte("corrected docs\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	err := commitAgentFixes(sctx, types.StepDocument, "correct secondmate guard documentation", "update docs")
@@ -97,7 +97,7 @@ func TestCommitAgentFixes_RefusesOnBackwardReset(t *testing.T) {
 	sctx := newTestContext(t, &mockAgent{name: "codex"}, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Fixing = true
 
-	if err := os.WriteFile(filepath.Join(dir, "guard.sh"), []byte("FORCE_INCLUDE\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "guard.sh"), []byte("FORCE_INCLUDE\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := commitAgentFixes(sctx, types.StepReview, "apply fix", "fallback"); err != nil {
@@ -108,7 +108,7 @@ func TestCommitAgentFixes_RefusesOnBackwardReset(t *testing.T) {
 	// Out-of-band backward reset to base (an ancestor of the reviewed head).
 	gitCmd(t, dir, "reset", "--hard", baseSHA)
 
-	if err := os.WriteFile(filepath.Join(dir, "docs.md"), []byte("docs\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "docs.md"), []byte("docs\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	err := commitAgentFixes(sctx, types.StepDocument, "docs", "fallback")
@@ -144,7 +144,7 @@ func TestCommitAgentFixes_RefusesResetDuringCommit(t *testing.T) {
 	t.Setenv("FAKE_CLI_REPLACEMENT_HEAD", baseSHA)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("reviewed fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("reviewed fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := commitAgentFixes(sctx, types.StepDocument, "update docs", "fallback"); err == nil {
@@ -173,7 +173,7 @@ func TestCommitAgentFixes_AllowsForwardAgentCommit(t *testing.T) {
 	sctx.Fixing = true
 
 	// Agent makes its own forward commit (descendant of the recorded head).
-	if err := os.WriteFile(filepath.Join(dir, "agent.txt"), []byte("agent commit\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "agent.txt"), []byte("agent commit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -181,7 +181,7 @@ func TestCommitAgentFixes_AllowsForwardAgentCommit(t *testing.T) {
 	forward := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	// Pipeline then commits its own working-tree edits on top - must succeed.
-	if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := commitAgentFixes(sctx, types.StepReview, "apply fix", "fallback"); err != nil {
@@ -229,7 +229,7 @@ func TestPostReviewStepsRefuseHeadClobberAtEntry(t *testing.T) {
 			move: func(t *testing.T, dir, baseSHA string) string {
 				t.Helper()
 				gitCmd(t, dir, "reset", "--hard", baseSHA)
-				if err := os.WriteFile(filepath.Join(dir, "sibling.txt"), []byte("out-of-band sibling\n"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "sibling.txt"), []byte("out-of-band sibling\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				gitCmd(t, dir, "add", "-A")
@@ -339,7 +339,7 @@ func TestPostReviewStepEntryAllowsEqualAndPipelineDescendantHeads(t *testing.T) 
 		t.Logf("%s allowed HEAD equal to recorded head %s", stepName, recordedHead)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "pipeline-descendant.txt"), []byte("pipeline work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "pipeline-descendant.txt"), []byte("pipeline work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -365,7 +365,7 @@ func TestAssertPipelineHeadContinuity_AnchorIsRecordedReviewedHead(t *testing.T)
 	// Record a reviewed head, then clobber the worktree out from under it.
 	sctx.Run.HeadSHA = headSHA
 	gitCmd(t, dir, "checkout", "--detach", baseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "x.txt"), []byte("divergent\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "x.txt"), []byte("divergent\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")

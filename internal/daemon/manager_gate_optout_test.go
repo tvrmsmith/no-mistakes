@@ -17,18 +17,18 @@ func gateOptOutWorktree(t *testing.T, repoYAML string) (string, string) {
 	t.Helper()
 	ctx := t.Context()
 	src := filepath.Join(t.TempDir(), "src")
-	if err := os.MkdirAll(src, 0o755); err != nil {
+	if err := os.MkdirAll(src, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, src, "init", "--initial-branch=main")
 	gitCmd(t, src, "config", "user.email", "test@test.com")
 	gitCmd(t, src, "config", "user.name", "Test")
 	gitCmd(t, src, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("# t\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("# t\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if repoYAML != "" {
-		if err := os.WriteFile(filepath.Join(src, ".no-mistakes.yaml"), []byte(repoYAML), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(src, ".no-mistakes.yaml"), []byte(repoYAML), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

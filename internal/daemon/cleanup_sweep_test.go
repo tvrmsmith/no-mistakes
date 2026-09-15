@@ -32,7 +32,7 @@ func TestCleanupOrphanWorktreesSweepsEveryRemovableDirectoryInOneSnapshot(t *tes
 	defer closers.Quiet(d)
 
 	workingPath := filepath.Join(t.TempDir(), "checkout")
-	if err := os.MkdirAll(workingPath, 0o755); err != nil {
+	if err := os.MkdirAll(workingPath, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := d.InsertRepoWithID("repo1", workingPath, "https://example.com/owner/repo1", "main")
@@ -97,7 +97,7 @@ func placeCleanupRun(t *testing.T, d *db.DB, repoID, root string, status types.R
 	if err := d.UpdateRunStatus(run.ID, status); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	return dir

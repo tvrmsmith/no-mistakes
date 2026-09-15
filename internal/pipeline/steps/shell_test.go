@@ -15,7 +15,7 @@ func TestRunShellCommandWithEnv_UsesShAndIgnoresUserShell(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "user-shell-used")
 	shellPath := filepath.Join(t.TempDir(), "bash")
 	script := "#!/bin/sh\nprintf used > \"$USER_SHELL_MARKER\"\nexit 99\n"
-	if err := os.WriteFile(shellPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(shellPath, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SHELL", shellPath)

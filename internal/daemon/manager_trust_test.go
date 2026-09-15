@@ -40,7 +40,7 @@ func TestLoadRecoveredConfig_BoundsFetchAndFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	workDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("commands:\n  lint: echo pushed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("commands:\n  lint: echo pushed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,18 +88,18 @@ func TestLoadTrustedRepoConfig_FailClosedOnFetchFailure(t *testing.T) {
 	// kind of command a maintainer has since removed but a stale ref would
 	// still serve.
 	src := filepath.Join(t.TempDir(), "src")
-	if err := os.MkdirAll(src, 0o755); err != nil {
+	if err := os.MkdirAll(src, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, src, "init", "--initial-branch=main")
 	gitCmd(t, src, "config", "user.email", "test@test.com")
 	gitCmd(t, src, "config", "user.name", "Test")
 	gitCmd(t, src, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("# test\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("# test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(src, ".no-mistakes.yaml"),
-		[]byte("commands:\n  lint: \"echo stale-command\"\n"), 0o644); err != nil {
+		[]byte("commands:\n  lint: \"echo stale-command\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, src, "add", ".")
@@ -162,18 +162,18 @@ func TestLoadTrustedRepoConfig_PinnedSHAReadsFreshDefaultBranch(t *testing.T) {
 	ctx := t.Context()
 
 	src := filepath.Join(t.TempDir(), "src")
-	if err := os.MkdirAll(src, 0o755); err != nil {
+	if err := os.MkdirAll(src, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, src, "init", "--initial-branch=main")
 	gitCmd(t, src, "config", "user.email", "test@test.com")
 	gitCmd(t, src, "config", "user.name", "Test")
 	gitCmd(t, src, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("# test\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("# test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(src, ".no-mistakes.yaml"),
-		[]byte("commands:\n  lint: \"echo stale-A\"\n"), 0o644); err != nil {
+		[]byte("commands:\n  lint: \"echo stale-A\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, src, "add", ".")
@@ -190,7 +190,7 @@ func TestLoadTrustedRepoConfig_PinnedSHAReadsFreshDefaultBranch(t *testing.T) {
 
 	// Advance the default branch to a fresh command and push.
 	if err := os.WriteFile(filepath.Join(src, ".no-mistakes.yaml"),
-		[]byte("commands:\n  lint: \"echo fresh-B\"\n"), 0o644); err != nil {
+		[]byte("commands:\n  lint: \"echo fresh-B\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, src, "add", ".")

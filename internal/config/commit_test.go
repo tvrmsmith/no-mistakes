@@ -184,7 +184,7 @@ func TestLoadGlobal_CommitFixMessage(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	const source = "chore(no-mistakes-{{.Step}}): {{.Summary}}"
 	data := []byte("commit:\n  fix_message: '" + source + "'\n")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -219,7 +219,7 @@ func TestLoadGlobal_RejectsInvalidCommitFixMessage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -237,7 +237,7 @@ func TestLoadRepo_CommitFixMessage(t *testing.T) {
 	path := filepath.Join(dir, ".no-mistakes.yaml")
 	const source = "{{.Summary}}"
 	data := []byte("commit:\n  fix_message: '" + source + "'\n")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 

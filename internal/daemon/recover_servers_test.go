@@ -14,7 +14,7 @@ import (
 
 func writePIDRecord(t *testing.T, dir, name string, info agent.ServerPIDInfo) string {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, name)
@@ -22,7 +22,7 @@ func writePIDRecord(t *testing.T, dir, name string, info agent.ServerPIDInfo) st
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -48,7 +48,7 @@ func TestReapOrphanedServers_RemovesMalformedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := filepath.Join(p.ServerPIDsDir(), "garbage.json")
-	if err := os.WriteFile(bad, []byte("{not json"), 0o644); err != nil {
+	if err := os.WriteFile(bad, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	reapOrphanedServers(p)
@@ -243,7 +243,7 @@ func TestOtherDaemonAlive_FalseForOwnPID(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if otherDaemonAlive(p) {
@@ -256,7 +256,7 @@ func TestOtherDaemonAlive_FalseForDeadPID(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("999999"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("999999"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if otherDaemonAlive(p) {
@@ -269,7 +269,7 @@ func TestOtherDaemonAlive_TrueWhenLivenessCheckErrors(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -292,7 +292,7 @@ func TestOtherDaemonAlive_TrueWhenPIDFileUnreadable(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(p.PIDFile(), 0o755); err != nil {
+	if err := os.Mkdir(p.PIDFile(), 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -306,7 +306,7 @@ func TestOtherDaemonAlive_TrueWhenPIDFileCorrupt(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("not-a-pid"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("not-a-pid"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -320,7 +320,7 @@ func TestOtherDaemonAlive_FalseWhenPIDReusedByNewerProcess(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	recordedStart := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
@@ -328,7 +328,7 @@ func TestOtherDaemonAlive_FalseWhenPIDReusedByNewerProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), pidData, 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), pidData, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -361,7 +361,7 @@ func TestOtherDaemonAlive_FalseWhenLegacyPIDFileMatchesReusedPID(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mtime := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
@@ -398,7 +398,7 @@ func TestOtherDaemonAlive_FalseWhenLegacyPIDFileTouchedNearLivePID(t *testing.T)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mtime := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
@@ -440,7 +440,7 @@ func TestOtherDaemonAlive_TrueWhenLegacyPIDFileMatchesResponsiveDaemon(t *testin
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mtime := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
@@ -499,7 +499,7 @@ func TestOtherDaemonAlive_TrueWhenDaemonStartTimeMatchesRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), pidData, 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), pidData, 0o600); err != nil {
 		t.Fatal(err)
 	}
 

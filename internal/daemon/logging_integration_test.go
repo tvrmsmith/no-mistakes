@@ -30,12 +30,12 @@ func TestDetachedDaemonUsesBoundedDedicatedLogSinks(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.DaemonBootstrapLog(), []byte("previous crash diagnostic\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.DaemonBootstrapLog(), []byte("previous crash diagnostic\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	shellShim := filepath.Join(t.TempDir(), "test-shell")
-	if err := os.WriteFile(shellShim, []byte("#!/bin/sh\nexec env -0\n"), 0o755); err != nil {
+	if err := os.WriteFile(shellShim, []byte("#!/bin/sh\nexec env -0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SHELL", shellShim)

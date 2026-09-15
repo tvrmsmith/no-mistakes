@@ -308,7 +308,7 @@ func TestExecutor_AppliesGateReconcileTimingsFromGlobalConfig(t *testing.T) {
 	// Operator raises the per-attempt budget for slow gh auth probes; the
 	// interval stays long so only the timeout bound is under test here.
 	body := "gate_reconcile_interval: \"1h\"\ngate_reconcile_timeout: \"25ms\"\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	global, err := config.LoadGlobal(cfgPath)
@@ -358,7 +358,7 @@ func TestExecutor_AppliesGateReconcileIntervalFromGlobalConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	body := "gate_reconcile_interval: \"10ms\"\ngate_reconcile_timeout: \"50ms\"\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	global, err := config.LoadGlobal(cfgPath)

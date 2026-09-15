@@ -189,7 +189,7 @@ func TestLintStep_NoConfiguredLint_RejectsInvalidSummaryWithoutStaging(t *testin
 			ag := &mockAgent{
 				name: "test",
 				runFn: func(_ context.Context, _ agent.RunOpts) (*agent.Result, error) {
-					if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o600); err != nil {
 						return nil, err
 					}
 					return &agent.Result{Output: output}, nil
@@ -285,7 +285,7 @@ func TestLintStep_FixAgentSuccessfulReturnAfterTimeoutFailsWithoutCommit(t *test
 	ag := &mockAgent{
 		name: "late-lint-fix-agent",
 		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o600); err != nil {
 				return nil, err
 			}
 			<-ctx.Done()

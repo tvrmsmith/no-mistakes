@@ -118,7 +118,7 @@ func TestCLILogWriterAppendsToFileWhenLogsDirExists(t *testing.T) {
 	t.Setenv("NM_HOME", nmHome)
 
 	logsDir := filepath.Join(nmHome, "logs")
-	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+	if err := os.MkdirAll(logsDir, 0o750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
@@ -202,15 +202,15 @@ func TestWriteDaemonRunErrorPreservesBootstrapSinkOwnership(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	logDir := filepath.Join(root, "logs")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	bootstrapPath := filepath.Join(logDir, "daemon-bootstrap.log")
 	const existing = "active output\n"
-	if err := os.WriteFile(bootstrapPath, []byte(existing), 0o644); err != nil {
+	if err := os.WriteFile(bootstrapPath, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bootstrap, err := os.OpenFile(bootstrapPath, os.O_WRONLY|os.O_APPEND, 0o644)
+	bootstrap, err := os.OpenFile(bootstrapPath, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}

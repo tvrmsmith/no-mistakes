@@ -154,11 +154,11 @@ func TestFindCodexRollout(t *testing.T) {
 	// Place a rollout in yesterday's partition to exercise the multi-day window.
 	day := now.AddDate(0, 0, -1)
 	partition := filepath.Join(dir, day.Format("2006"), day.Format("01"), day.Format("02"))
-	if err := os.MkdirAll(partition, 0o755); err != nil {
+	if err := os.MkdirAll(partition, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	want := filepath.Join(partition, "rollout-2026-07-11T23-00-00-thread-xyz.jsonl")
-	if err := os.WriteFile(want, []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(want, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got := findCodexRollout(dir, "thread-xyz", now)

@@ -43,7 +43,7 @@ func TestCIGateReconciliationClearsActiveRunAfterPRBecomesTerminal(t *testing.T)
 			done := make(chan error, 1)
 			go func() { done <- exec.Execute(t.Context(), run, repo, dir) }()
 			waitForCIGate(t, database, run.ID)
-			if err := os.WriteFile(statePath, []byte(terminalState+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(statePath, []byte(terminalState+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -83,7 +83,7 @@ func TestCIGateReconciliationPreservesOpenErrorAndUnknownStates(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- exec.Execute(t.Context(), run, repo, dir) }()
 			waitForCIGate(t, database, run.ID)
-			if err := os.WriteFile(statePath, []byte(state+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(statePath, []byte(state+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			time.Sleep(60 * time.Millisecond)
@@ -135,7 +135,7 @@ func setupCIGateReconcileTest(t *testing.T) (*db.DB, *paths.Paths, *db.Run, *db.
 	binDir := fakeCLIBinDir(t)
 	linkTestBinary(t, binDir, "gh")
 	statePath := filepath.Join(t.TempDir(), "pr-state")
-	if err := os.WriteFile(statePath, []byte("OPEN\n"), 0o644); err != nil {
+	if err := os.WriteFile(statePath, []byte("OPEN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeCLIEnv(binDir, map[string]string{

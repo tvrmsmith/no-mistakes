@@ -414,7 +414,7 @@ func TestCIStep_AutoFixStillPrefersExistingPRForgeBase(t *testing.T) {
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "checkout", "-b", "develop")
-	if err := os.WriteFile(filepath.Join(dir, "develop.txt"), []byte("develop\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "develop.txt"), []byte("develop\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -460,7 +460,7 @@ func TestRebaseStep_UsesPerRunPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -468,7 +468,7 @@ func TestRebaseStep_UsesPerRunPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "epic/feature")
-	if err := os.WriteFile(filepath.Join(dir, "epic.txt"), []byte("epic\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "epic.txt"), []byte("epic\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -477,7 +477,7 @@ func TestRebaseStep_UsesPerRunPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "epic/feature")
 
 	gitCmd(t, dir, "checkout", "-b", "task")
-	if err := os.WriteFile(filepath.Join(dir, "task.txt"), []byte("task\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "task.txt"), []byte("task\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")

@@ -400,7 +400,7 @@ func TestDropCaseObjectsReleasesOnlyItsOwnPins(t *testing.T) {
 func seedCase(t *testing.T, store *Store, id string, capturedAt int64) {
 	t.Helper()
 	dir := store.caseDir(id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeJSON(filepath.Join(dir, "labels.json"), Labels{Version: labelsVersion}); err != nil {
@@ -413,7 +413,7 @@ func seedCase(t *testing.T, store *Store, id string, capturedAt int64) {
 	if err := writeJSON(filepath.Join(dir, "manifest.json"), c.Manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "original"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "original"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeJSON(filepath.Join(dir, "original", "decision.json"), Decision{}); err != nil {
@@ -440,7 +440,7 @@ func padHistory(t *testing.T, ctx context.Context, workDir string, commits int) 
 			t.Fatal(err)
 		}
 		name := fmt.Sprintf("padding-%02d.bin", i)
-		if err := os.WriteFile(filepath.Join(workDir, name), []byte(hex.EncodeToString(blob)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte(hex.EncodeToString(blob)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		mustGit(t, ctx, workDir, "add", name)
@@ -475,7 +475,7 @@ func dirSize(t *testing.T, root string) int64 {
 // two cases from the same repository.
 func addSecondReviewRound(t *testing.T, ctx context.Context, sourceDB *db.DB, runID, workDir string, firstRound *db.StepRound) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, workDir, "add", "main.go")

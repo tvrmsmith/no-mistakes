@@ -121,7 +121,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	// that cannot answer turns a fast unit test into a minutes-long timeout.
 	mustGitRun(t, ctx, workDir, "config", "commit.gpgsign", "false")
 	mustGitRun(t, ctx, workDir, "config", "tag.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGitRun(t, ctx, workDir, "add", ".")
@@ -130,7 +130,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	mustGitRun(t, ctx, workDir, "push", "origin", "main")
 	baseSHA := mustGitRun(t, ctx, workDir, "rev-parse", "HEAD")
 	mustGitRun(t, ctx, workDir, "checkout", "-b", "feature/eval")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGitRun(t, ctx, workDir, "add", "main.go")

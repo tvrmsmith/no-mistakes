@@ -36,14 +36,14 @@ func newCLISyncFixture(t *testing.T) cliSyncFixture {
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")
 	cliGit(t, local, "commit", "-m", "base")
 	base := cliGit(t, local, "rev-parse", "HEAD")
 	cliGit(t, local, "checkout", "-b", "feature/sync")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "commit", "-am", "feature")
@@ -54,7 +54,7 @@ func newCLISyncFixture(t *testing.T) cliSyncFixture {
 	cliGit(t, pipeline, "config", "user.name", "Pipeline")
 	cliGit(t, pipeline, "config", "user.email", "pipeline@example.com")
 	cliGit(t, pipeline, "checkout", "feature/sync")
-	if err := os.WriteFile(filepath.Join(pipeline, "fix.txt"), []byte("fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(pipeline, "fix.txt"), []byte("fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, pipeline, "add", "fix.txt")
@@ -111,7 +111,7 @@ func rewriteCLIPipelineHead(t *testing.T, f *cliSyncFixture, commits []pipelineC
 	cliGit(t, pipeline, "checkout", "-B", "feature/sync", f.base)
 	for _, commit := range commits {
 		for name, contents := range commit.files {
-			if err := os.WriteFile(filepath.Join(pipeline, name), []byte(contents), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(pipeline, name), []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cliGit(t, pipeline, "add", name)
@@ -224,7 +224,7 @@ func TestAxiSyncEquivalentDivergedCheckAndApply(t *testing.T) {
 
 func TestAxiSyncBlockedDirtyUsesExitOneAndStructuredError(t *testing.T) {
 	f := newCLISyncFixture(t)
-	if err := os.WriteFile(filepath.Join(f.local, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.local, "dirty.txt"), []byte("dirty\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := executeCmd("axi", "sync")
@@ -359,14 +359,14 @@ func newCLIRecoverFixture(t *testing.T) cliRecoverFixture {
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")
 	cliGit(t, local, "commit", "-m", "base")
 	base := cliGit(t, local, "rev-parse", "HEAD")
 	cliGit(t, local, "checkout", "-b", "feature/recover")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "commit", "-am", "feature")
@@ -400,7 +400,7 @@ func newCLIRecoverFixture(t *testing.T) cliRecoverFixture {
 	cliGit(t, pipeline, "config", "user.name", "Pipeline")
 	cliGit(t, pipeline, "config", "user.email", "pipeline@example.com")
 	cliGit(t, pipeline, "checkout", "feature/recover")
-	if err := os.WriteFile(filepath.Join(pipeline, "fix.txt"), []byte("fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(pipeline, "fix.txt"), []byte("fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, pipeline, "add", "fix.txt")
@@ -443,14 +443,14 @@ func newCLIDivergentArchiveFixture(t *testing.T) cliRecoverFixture {
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")
 	cliGit(t, local, "commit", "-m", "base")
 	base := cliGit(t, local, "rev-parse", "HEAD")
 	cliGit(t, local, "checkout", "-b", "feature/recover")
-	if err := os.WriteFile(filepath.Join(local, "required.txt"), []byte("required reviewed work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "required.txt"), []byte("required reviewed work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "required.txt")
@@ -494,7 +494,7 @@ func newCLIDivergentArchiveFixture(t *testing.T) cliRecoverFixture {
 	cliGit(t, writer, "config", "user.name", "Pipeline")
 	cliGit(t, writer, "config", "user.email", "pipeline@example.com")
 	cliGit(t, writer, "checkout", "-b", "divergent-later", base)
-	if err := os.WriteFile(filepath.Join(writer, "later.txt"), []byte("divergent later validation work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(writer, "later.txt"), []byte("divergent later validation work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, writer, "add", "later.txt")
@@ -537,7 +537,7 @@ func cliRecoveryGitSnapshot(t *testing.T, f cliRecoverFixture) string {
 func newCLIMissingPreservedHeadFixture(t *testing.T, extraStranded int) cliRecoverFixture {
 	t.Helper()
 	f := newCLIRecoverFixture(t)
-	if err := os.WriteFile(filepath.Join(f.local, "rebuild.txt"), []byte("rebuilt\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.local, "rebuild.txt"), []byte("rebuilt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, f.local, "add", "rebuild.txt")
@@ -619,14 +619,14 @@ func newCLIUnmovedAbortFixture(t *testing.T) cliRecoverFixture {
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")
 	cliGit(t, local, "commit", "-m", "base")
 	base := cliGit(t, local, "rev-parse", "HEAD")
 	cliGit(t, local, "checkout", "-b", "feature/recover")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "commit", "-am", "feature")
@@ -830,14 +830,14 @@ func newCLIStaleUnpublishedFixtureWithOptions(t *testing.T, pushedDescendant boo
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")
 	cliGit(t, local, "commit", "-m", "base")
 	base := cliGit(t, local, "rev-parse", "HEAD")
 	cliGit(t, local, "checkout", "-b", "feature/sync")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "commit", "-am", "feature")
@@ -870,7 +870,7 @@ func newCLIStaleUnpublishedFixtureWithOptions(t *testing.T, pushedDescendant boo
 	cliGit(t, pipeline, "config", "user.name", "Pipeline")
 	cliGit(t, pipeline, "config", "user.email", "pipeline@example.com")
 	cliGit(t, pipeline, "checkout", "feature/sync")
-	if err := os.WriteFile(filepath.Join(pipeline, "older-fix.txt"), []byte("older\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(pipeline, "older-fix.txt"), []byte("older\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, pipeline, "add", "older-fix.txt")
@@ -910,7 +910,7 @@ func newCLIStaleUnpublishedFixtureWithOptions(t *testing.T, pushedDescendant boo
 	cliGit(t, newer, "config", "user.name", "Pipeline")
 	cliGit(t, newer, "config", "user.email", "pipeline@example.com")
 	cliGit(t, newer, "checkout", "feature/sync")
-	if err := os.WriteFile(filepath.Join(newer, "newer-fix.txt"), []byte("newer\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(newer, "newer-fix.txt"), []byte("newer\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, newer, "add", "newer-fix.txt")
@@ -1104,7 +1104,7 @@ func TestAxiSyncRecoverReturnsCustodyEndToEnd(t *testing.T) {
 
 func TestAxiSyncRecoverDivergedRefusesThenKeepLocalSucceeds(t *testing.T) {
 	f := newCLIRecoverFixture(t)
-	if err := os.WriteFile(filepath.Join(f.local, "rescope.txt"), []byte("rescope\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.local, "rescope.txt"), []byte("rescope\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, f.local, "add", "rescope.txt")
@@ -1337,7 +1337,7 @@ func TestSyncServicesRejectInvalidGlobalRemoteTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte("branch_sync_remote_timeout: \"0s\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("branch_sync_remote_timeout: \"0s\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

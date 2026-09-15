@@ -133,7 +133,7 @@ func runRequireAction(t *testing.T, run actionRun) actionResult {
 	t.Helper()
 	python := pythonInterpreter(t)
 	outputFile := filepath.Join(t.TempDir(), "github_output")
-	if err := os.WriteFile(outputFile, nil, 0o644); err != nil {
+	if err := os.WriteFile(outputFile, nil, 0o600); err != nil {
 		t.Fatalf("seed GITHUB_OUTPUT: %v", err)
 	}
 
@@ -448,7 +448,7 @@ func TestRequireActionReadsTheEventPayloadWhenInputsAreOmitted(t *testing.T) {
 	eventPath := filepath.Join(t.TempDir(), "event.json")
 	payload := `{"pull_request":{"number":812,"body":` + mustJSONString(t, compliant) +
 		`,"head":{"sha":"` + requiredWorkflowTestHeadSHA + `","ref":"fm/example"},"user":{"login":"kunchenguid"}}}`
-	if err := os.WriteFile(eventPath, []byte(payload), 0o644); err != nil {
+	if err := os.WriteFile(eventPath, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write event payload: %v", err)
 	}
 	// The live lookup is the only source once no explicit pr-body/pr-head-sha
@@ -552,7 +552,7 @@ func writeEventPayload(t *testing.T, number int, body, headSHA string) string {
 		`{"pull_request":{"number":%d,"body":%s,"head":{"sha":%q,"ref":"fm/example"},"user":{"login":"kunchenguid"}}}`,
 		number, mustJSONString(t, body), headSHA,
 	)
-	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write event payload: %v", err)
 	}
 	return path

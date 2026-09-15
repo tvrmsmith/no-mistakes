@@ -294,9 +294,9 @@ func runWizardWithMode(ctx context.Context, p *paths.Paths, state *repoState, sk
 // cleanup. Failing to open the log file is not fatal — we fall back to
 // io.Discard to avoid corrupting the alt-screen.
 func captureAgentServerOutput(p *paths.Paths) func() {
-	_ = os.MkdirAll(p.LogsDir(), 0o755)
+	_ = os.MkdirAll(p.LogsDir(), 0o750)
 	logPath := filepath.Join(p.LogsDir(), "wizard-agent.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		agent.SetManagedServerOutput(discardWriter{})
 		return func() { agent.SetManagedServerOutput(nil) }

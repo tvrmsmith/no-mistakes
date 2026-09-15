@@ -477,7 +477,7 @@ func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 	})
 
 	profileDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    users:\n        test-user:\n    user: test-user\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    users:\n        test-user:\n    user: test-user\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	globalConfig, err := os.ReadFile(p.ConfigFile())
@@ -485,7 +485,7 @@ func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	globalConfig = append(globalConfig, []byte(fmt.Sprintf("forge_profiles:\n  github.com:\n    gh_config_dir: %s\n", profileDir))...)
-	if err := os.WriteFile(p.ConfigFile(), globalConfig, 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), globalConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -556,7 +556,7 @@ func TestPushReceivedKeepsConcurrentForgeProfilesIsolated(t *testing.T) {
 	personalDir := t.TempDir()
 	workDir := t.TempDir()
 	for dir, host := range map[string]string{personalDir: "personal.example.test", workDir: "work.example.test"} {
-		if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(host+":\n    user: test-user\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(host+":\n    user: test-user\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -568,7 +568,7 @@ func TestPushReceivedKeepsConcurrentForgeProfilesIsolated(t *testing.T) {
 		"forge_profiles:\n  personal.example.test:\n    gh_config_dir: %s\n  work.example.test:\n    gh_config_dir: %s\n",
 		personalDir, workDir,
 	))...)
-	if err := os.WriteFile(p.ConfigFile(), globalConfig, 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), globalConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -879,7 +879,7 @@ func TestRerunInheritsPRBaseBranchFromSelectedRun(t *testing.T) {
 	repo, headSHA := setupTestGitRepo(t, p, d, "pr-base-rerun-repo")
 	workDir := repo.WorkingPath
 	gitCmd(t, workDir, "checkout", "-b", "epic/feature")
-	if err := os.WriteFile(filepath.Join(workDir, "epic.txt"), []byte("epic\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "epic.txt"), []byte("epic\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", "epic.txt")
@@ -1024,7 +1024,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 	gitCmd(t, "", "init", work)
 	gitCmd(t, work, "config", "user.email", "test@test.com")
 	gitCmd(t, work, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("submitted\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("submitted\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, work, "add", "file.txt")
@@ -1032,7 +1032,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 	submitted := gitOutput(t, work, "rev-parse", "HEAD")
 	gitCmd(t, "", "init", "--bare", gate)
 	gitCmd(t, work, "push", gate, "HEAD:refs/heads/feature/recover")
-	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("preserved\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("preserved\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, work, "commit", "-am", "pipeline fix")
@@ -1079,7 +1079,7 @@ func TestResolveRerunHeadUsesAdvancedGateWhenSubmittedHeadWasTerminal(t *testing
 	gitCmd(t, "", "init", work)
 	gitCmd(t, work, "config", "user.email", "test@test.com")
 	gitCmd(t, work, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("submitted\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("submitted\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, work, "add", "file.txt")
@@ -1087,7 +1087,7 @@ func TestResolveRerunHeadUsesAdvancedGateWhenSubmittedHeadWasTerminal(t *testing
 	submitted := gitOutput(t, work, "rev-parse", "HEAD")
 	gitCmd(t, "", "init", "--bare", gate)
 	gitCmd(t, work, "push", gate, "HEAD:refs/heads/feature/recover")
-	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("advanced\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("advanced\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, work, "commit", "-am", "advanced gate")
@@ -1119,7 +1119,7 @@ func TestPushReceivedReturnsBeforeIntentSummarization(t *testing.T) {
 	})
 
 	slowClaude := writeSlowMockClaude(t, t.TempDir())
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+slowClaude+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+slowClaude+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1173,11 +1173,11 @@ func writeManagerClaudeFixture(t *testing.T, home, repoCWD string, lines []strin
 	t.Helper()
 	encoded := testClaudeProjectDirName(repoCWD)
 	dir := filepath.Join(home, ".claude", "projects", encoded)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "session-uuid-1.jsonl")
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1248,7 +1248,7 @@ func TestPushReceivedDemoModeBypassesAgentResolution(t *testing.T) {
 		return []pipeline.Step{step}
 	})
 
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: /path/that/does/not/exist\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: /path/that/does/not/exist\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

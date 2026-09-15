@@ -37,7 +37,7 @@ func TestProvisionGateDoesNotStampUnsupportedHookIsolation(t *testing.T) {
 		t.Fatalf("init worktree: %v: %s", err, out)
 	}
 	reposDir := filepath.Join(root, "repos")
-	if err := os.MkdirAll(reposDir, 0o755); err != nil {
+	if err := os.MkdirAll(reposDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	bareDir := filepath.Join(reposDir, "repo.git")
@@ -81,7 +81,7 @@ func copyDirTree(t *testing.T, src, dst string) {
 		}
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return os.MkdirAll(target, 0o750)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -820,7 +820,7 @@ func TestInitRefreshPreservesCustomPostReceiveHook(t *testing.T) {
 	}
 	hookPath := filepath.Join(p.RepoDir(repo.ID), "hooks", "post-receive")
 	customHook := []byte("#!/bin/sh\necho custom hook\n")
-	if err := os.WriteFile(hookPath, customHook, 0o755); err != nil {
+	if err := os.WriteFile(hookPath, customHook, 0o700); err != nil {
 		t.Fatalf("write custom hook: %v", err)
 	}
 
@@ -993,7 +993,7 @@ func TestEjectCleansUpWorktrees(t *testing.T) {
 
 	// Create a fake worktree directory to verify cleanup.
 	wtDir := p.WorktreeDir(repo.ID, "fake-run-id")
-	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+	if err := os.MkdirAll(wtDir, 0o750); err != nil {
 		t.Fatalf("create worktree dir: %v", err)
 	}
 
@@ -1044,16 +1044,16 @@ func TestEjectCleansUpWorktreesInConfiguredRoot(t *testing.T) {
 	foreignRunDir := filepath.Join(root, "01JZ8XQ7V6K9M3B0T5N2R4C8YD")
 	operatorDir := filepath.Join(root, "scratch-checkout")
 	for _, dir := range []string{ownRunDir, foreignRunDir, operatorDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatalf("create dir: %v", err)
 		}
 	}
 	operatorFile := filepath.Join(root, "mise.local.toml")
-	if err := os.WriteFile(operatorFile, []byte("[tools]\n"), 0o644); err != nil {
+	if err := os.WriteFile(operatorFile, []byte("[tools]\n"), 0o600); err != nil {
 		t.Fatalf("write operator file: %v", err)
 	}
 	configYAML := "worktree_roots:\n  " + yamlPath(repo.WorkingPath) + ": " + yamlPath(root) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -1131,14 +1131,14 @@ func TestInit_PostReceiveSurvivesHooksPathPoisoning(t *testing.T) {
 	marker := filepath.Join(markerDir, "fired")
 	hookPath := filepath.Join(bareDir, "hooks", "post-receive")
 	hook := "#!/bin/sh\ntouch '" + marker + "'\nexit 0\n"
-	if err := os.WriteFile(hookPath, []byte(hook), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(hook), 0o700); err != nil {
 		t.Fatalf("write marker hook: %v", err)
 	}
 	// This unit test has no isolated daemon. Stub only pre-receive admission;
 	// the behavior under test is hookspath isolation for post-receive. Full
 	// fail-closed admission is covered by the isolated-daemon e2e regression.
 	preHookPath := filepath.Join(bareDir, "hooks", "pre-receive")
-	if err := os.WriteFile(preHookPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(preHookPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatalf("write admission stub: %v", err)
 	}
 

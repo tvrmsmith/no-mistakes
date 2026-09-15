@@ -41,18 +41,18 @@ func stepDiffFixture(t *testing.T, contents string) (*RunManager, string) {
 	}
 
 	worktree := p.WorktreeDir(repo.ID, run.ID)
-	if err := os.MkdirAll(worktree, 0o755); err != nil {
+	if err := os.MkdirAll(worktree, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, worktree, "init")
 	runGit(t, worktree, "config", "user.email", "test@example.com")
 	runGit(t, worktree, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, worktree, "add", "tracked.txt")
 	runGit(t, worktree, "commit", "-m", "base")
-	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,7 +120,7 @@ func TestStepDiff_UnknownRunFailsClosed(t *testing.T) {
 // the run.
 func TestStepDiff_ServesTheDiffWhileTheGlobalConfigIsUnreadable(t *testing.T) {
 	m, runID := stepDiffFixture(t, "agent fix\n")
-	if err := os.WriteFile(m.paths.ConfigFile(), []byte("worktree_roots: [not, a, mapping\n"), 0o644); err != nil {
+	if err := os.WriteFile(m.paths.ConfigFile(), []byte("worktree_roots: [not, a, mapping\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

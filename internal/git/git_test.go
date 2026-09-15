@@ -60,7 +60,7 @@ func run(t *testing.T, dir string, name string, args ...string) string {
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -205,7 +205,7 @@ func TestFindGitRoot(t *testing.T) {
 
 	// from subdirectory
 	sub := filepath.Join(dir, "a", "b", "c")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
+	if err := os.MkdirAll(sub, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	root, err = FindGitRoot(sub)

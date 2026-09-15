@@ -320,7 +320,7 @@ func TestRejectedCIMonitorKeepsItsWorktree(t *testing.T) {
 	// Move the worktree head off the run's head, the adverse fact recovery
 	// refuses on while the directory itself is still there to lose.
 	workDir := p.WorktreeDir(repo.ID, runID)
-	if err := os.WriteFile(filepath.Join(workDir, "autofix.txt"), []byte("unpushed ci repair\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "autofix.txt"), []byte("unpushed ci repair\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", ".")
@@ -575,7 +575,7 @@ func TestCIMonitorWithUncommittedWorkIsNotResumed(t *testing.T) {
 	}
 
 	workDir := p.WorktreeDir(repo.ID, runID)
-	if err := os.WriteFile(filepath.Join(workDir, "half-written.go"), []byte("package broken\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "half-written.go"), []byte("package broken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

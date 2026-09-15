@@ -167,7 +167,7 @@ func TestACPAgentRunReportsJSONRPCErrorMessage(t *testing.T) {
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"not authenticated"}}'
 exit 1
 `
-	if err := os.WriteFile(script, []byte(contents), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
@@ -265,7 +265,7 @@ cat > "$STDIN_LOG"
 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":123,"size":1000}}}'
 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{\"done\":true}"}}}}'
 `
-	if err := os.WriteFile(script, []byte(contents), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 

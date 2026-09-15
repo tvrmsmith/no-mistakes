@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 	switch os.Getenv("NM_DAEMON_HELPER_PROCESS") {
 	case "1":
 		if capturePath := os.Getenv("NM_CAPTURE_NM_HOME_FILE"); capturePath != "" {
-			_ = os.WriteFile(capturePath, []byte(os.Getenv("NM_HOME")), 0o644)
+			_ = os.WriteFile(capturePath, []byte(os.Getenv("NM_HOME")), 0o600)
 		}
 		// Stay alive long enough for tests with a synthetic health transition
 		// to distinguish launch from readiness. The production exit regression
@@ -274,7 +274,7 @@ func startTestDaemonInstance(t *testing.T, sf StepFactory) *testDaemonInstance {
 	// Keep daemon tests hermetic now that the default config auto-detects agents.
 	mockClaude := writeMockClaude(t, t.TempDir())
 	configYAML := "agent: claude\nagent_path_override:\n  claude: " + mockClaude + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -340,7 +340,7 @@ func setupTestGitRepoWithConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, 
 
 	// Create a work repo with an initial commit.
 	workDir := filepath.Join(t.TempDir(), "work")
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
+	if err := os.MkdirAll(workDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "init")
@@ -351,12 +351,12 @@ func setupTestGitRepoWithConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, 
 	// that cannot answer turns a fast unit test into a minutes-long timeout.
 	gitCmd(t, workDir, "config", "commit.gpgsign", "false")
 	gitCmd(t, workDir, "config", "tag.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(workDir, "test.txt"), []byte("hello"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "test.txt"), []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Disable auto-fix so approval-based tests pause immediately.
 	repoConfig := "auto_fix:\n  lint: 0\n  test: 0\n  review: 0\n" + extraConfig
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte(repoConfig), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte(repoConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", ".")
@@ -443,7 +443,7 @@ func writeMockClaude(t *testing.T, dir string) string {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(dir, "claude.bat")
 		script := "@echo off\r\necho {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"structured_output\":{\"findings\":[],\"summary\":\"clean\"}}\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return path
@@ -452,7 +452,7 @@ func writeMockClaude(t *testing.T, dir string) string {
 	script := `#!/bin/sh
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"structured_output":{"findings":[],"summary":"clean"}}'
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -464,7 +464,7 @@ func writeMockGHState(t *testing.T, dir, state string) (string, string) {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(dir, "gh.bat")
 		script := "@echo off\r\nset TOKENSTATE=\r\nif defined GH_TOKEN set TOKENSTATE=set\r\necho env:%GH_CONFIG_DIR% token:%TOKENSTATE%>>\"" + logPath + "\"\r\necho %*>>\"" + logPath + "\"\r\necho %* | findstr /C:\"auth status\" >nul && exit /b 0\r\necho %* | findstr /C:\"pr view 42\" >nul && (echo " + state + "& exit /b 0)\r\nexit /b 1\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return dir, logPath
@@ -479,7 +479,7 @@ case "$*" in
 esac
 exit 1
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return dir, logPath
@@ -500,7 +500,7 @@ func writeMockGHNoPR(t *testing.T, dir string) string {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(dir, "gh.bat")
 		script := "@echo off\r\necho %* | findstr /C:\"auth status\" >nul && exit /b 0\r\necho %* | findstr /C:\"pr list\" >nul && (echo []& exit /b 0)\r\nexit /b 1\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return dir
@@ -513,7 +513,7 @@ case "$*" in
 esac
 exit 1
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -528,7 +528,7 @@ func writeSlowMockClaude(t *testing.T, dir string) string {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(dir, "claude.bat")
 		script := "@echo off\r\ntimeout /t 3 /nobreak >nul\r\necho {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"structured_output\":{\"summary\":\"slow intent\"}}\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return path
@@ -538,7 +538,7 @@ func writeSlowMockClaude(t *testing.T, dir string) string {
 sleep 3
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"structured_output":{"summary":"slow intent"}}'
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -642,7 +642,7 @@ func breakTrustedRepoConfig(t *testing.T, gateDir string) {
 	gitCmd(t, clone, "config", "user.email", "test@test.com")
 	gitCmd(t, clone, "config", "user.name", "Test")
 	gitCmd(t, clone, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(clone, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(clone, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, clone, "add", ".no-mistakes.yaml")

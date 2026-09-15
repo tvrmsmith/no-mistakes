@@ -93,7 +93,7 @@ func TestRotationKeepsCurrentInodeForHeldDescriptors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closers.Quiet(w)
-	held, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	held, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,10 +116,10 @@ func TestRotationKeepsCurrentInodeForHeldDescriptors(t *testing.T) {
 
 func TestOpenCompactsLegacyUnboundedLogAndPrunesRetention(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon.log")
-	if err := os.WriteFile(path, []byte("00001111222233334444"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("00001111222233334444"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path+".9", []byte("stale"), 0o644); err != nil {
+	if err := os.WriteFile(path+".9", []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	policy := Policy{MaxBytes: 4, Backups: 2}
@@ -138,10 +138,10 @@ func TestOpenCompactsLegacyUnboundedLogAndPrunesRetention(t *testing.T) {
 
 func TestRotateAtStartupPreservesCrashOutputAndHeldDescriptor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bootstrap.log")
-	if err := os.WriteFile(path, []byte("previous crash\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("previous crash\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	held, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	held, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}

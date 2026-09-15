@@ -292,7 +292,7 @@ func TestReviewFix_PostAgentCommitUsesStepParentContext(t *testing.T) {
 				t.Fatal("fixer context has no deadline")
 			}
 			invocationDeadline = deadline
-			if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			fakeNow = deadline.Add(-time.Second)
@@ -558,7 +558,7 @@ func TestReviewStep_SourceContentFindingFollowsNormalFixFlow(t *testing.T) {
 				return &agent.Result{Output: output}, nil
 			case 2:
 				assertTestQualityRulePrompt(t, opts.Prompt)
-				if err := os.WriteFile(filepath.Join(dir, "semantic_test.go"), []byte("package app\n"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "semantic_test.go"), []byte("package app\n"), 0o600); err != nil {
 					return nil, err
 				}
 				return &agent.Result{Output: json.RawMessage(`{"summary":"replace source test"}`)}, nil
@@ -746,10 +746,10 @@ func TestReviewStep_IntendedUsageFixturesApply(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, tc.file)
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(path, []byte(tc.baseline), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(tc.baseline), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "init", "-q")
@@ -762,7 +762,7 @@ func TestReviewStep_IntendedUsageFixturesApply(t *testing.T) {
 			}
 			fixturePath := filepath.Join(dir, "fixture.diff")
 			fixture = []byte(strings.ReplaceAll(string(fixture), "\r\n", "\n"))
-			if err := os.WriteFile(fixturePath, fixture, 0o644); err != nil {
+			if err := os.WriteFile(fixturePath, fixture, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "apply", "--check", fixturePath)
@@ -1069,7 +1069,7 @@ func TestUncertifiedRange_PersistsThenFeedsNextInitialReview(t *testing.T) {
 	fixAgent := &mockAgent{name: "test"}
 	fixCtx := newTestContextWithDBRecords(t, fixAgent, dir, baseSHA, headSHA, config.Commands{})
 	fixCtx.ReviewStartingHeadSHA = headSHA
-	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := commitAgentFixes(fixCtx, types.StepReview, "apply fix", "fallback"); err != nil {
@@ -1962,10 +1962,10 @@ func TestReviewStep_SimplificationFixturesApply(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, tc.file)
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(path, []byte(tc.baseline), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(tc.baseline), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "init", "-q")
@@ -1976,7 +1976,7 @@ func TestReviewStep_SimplificationFixturesApply(t *testing.T) {
 			}
 			fixturePath := filepath.Join(dir, "fixture.diff")
 			fixture = []byte(strings.ReplaceAll(string(fixture), "\r\n", "\n"))
-			if err := os.WriteFile(fixturePath, fixture, 0o644); err != nil {
+			if err := os.WriteFile(fixturePath, fixture, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "apply", "--check", fixturePath)

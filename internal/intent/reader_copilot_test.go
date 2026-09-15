@@ -15,11 +15,11 @@ func writeCopilotFixture(t *testing.T, sessionID string, lines []string) string 
 	t.Helper()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".copilot", "session-state", sessionID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "events.jsonl")
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return home

@@ -64,7 +64,7 @@ func TestInspectorCanonicalManagedGitIdentityMatrix(t *testing.T) {
 	}
 
 	lookalike := filepath.Join(filepath.Dir(f.p.Root()), filepath.Base(f.p.Root())+"-lookalike", "worktrees", "repo", "run")
-	if err := os.MkdirAll(filepath.Dir(lookalike), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(lookalike), 0o750); err != nil {
 		t.Fatalf("mkdir lookalike parent: %v", err)
 	}
 	run(t, "", "git", "clone", f.origin, lookalike)
@@ -192,7 +192,7 @@ func TestInspectorAttributesRunInConfiguredWorktreeRoot(t *testing.T) {
 		t.Fatalf("record placement: %v", err)
 	}
 	// An unreadable global config must not cost the refusal its run metadata.
-	if err := os.WriteFile(f.p.ConfigFile(), []byte("worktree_roots: [not, a, mapping\n"), 0o644); err != nil {
+	if err := os.WriteFile(f.p.ConfigFile(), []byte("worktree_roots: [not, a, mapping\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -327,13 +327,13 @@ func newTopologyFixture(t *testing.T) *topologyFixture {
 
 func initOrdinaryRepo(t *testing.T, dir, origin string) {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("mkdir repo: %v", err)
 	}
 	run(t, dir, "git", "init", "--initial-branch=main")
 	run(t, dir, "git", "config", "user.email", "test@example.com")
 	run(t, dir, "git", "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("test\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("test\n"), 0o600); err != nil {
 		t.Fatalf("write readme: %v", err)
 	}
 	run(t, dir, "git", "add", "README.md")

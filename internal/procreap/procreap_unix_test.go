@@ -99,7 +99,7 @@ func TestProcReapHelper(t *testing.T) {
 		if _, err := syscall.Setsid(); err != nil {
 			os.Exit(4)
 		}
-		_ = os.WriteFile(os.Getenv("NM_PROCREAP_READY"), []byte("ready"), 0o644)
+		_ = os.WriteFile(os.Getenv("NM_PROCREAP_READY"), []byte("ready"), 0o600)
 		time.Sleep(5 * time.Minute)
 		os.Exit(0)
 	}
@@ -170,7 +170,7 @@ func newFakeWorktree(t *testing.T) (root, worktree string) {
 	t.Helper()
 	root = filepath.Join(t.TempDir(), "worktrees")
 	worktree = filepath.Join(root, "repo1", "run1")
-	if err := os.MkdirAll(worktree, 0o755); err != nil {
+	if err := os.MkdirAll(worktree, 0o750); err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
 	return root, worktree

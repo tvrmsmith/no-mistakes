@@ -16,7 +16,7 @@ func buildOpenCodeDB(t *testing.T, sessionDir string) string {
 	t.Helper()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".local", "share", "opencode")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	dbPath := filepath.Join(dir, "opencode.db")
@@ -182,7 +182,7 @@ func TestOpenCodeReader_NoDB(t *testing.T) {
 
 func initGitRepoWithRemote(t *testing.T, dir, remote string) string {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{

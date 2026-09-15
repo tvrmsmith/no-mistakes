@@ -112,14 +112,14 @@ func TestTerminateShellCommandGroupTermHelper(t *testing.T) {
 	case "grandchild":
 		term := make(chan os.Signal, 1)
 		signal.Notify(term, syscall.SIGTERM)
-		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_PID"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_PID"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 			os.Exit(4)
 		}
-		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_READY"), []byte("ready"), 0o644); err != nil {
+		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_READY"), []byte("ready"), 0o600); err != nil {
 			os.Exit(5)
 		}
 		<-term
-		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_FILE"), []byte("terminated"), 0o644); err != nil {
+		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_FILE"), []byte("terminated"), 0o600); err != nil {
 			os.Exit(6)
 		}
 		os.Exit(0)
@@ -244,7 +244,7 @@ func TestShellOutputPipeHelper(t *testing.T) {
 		os.Exit(0)
 	case "escaped":
 		_, _ = syscall.Setsid()
-		_ = os.WriteFile(os.Getenv("NM_SHELLENV_PIPE_READY"), []byte("ready"), 0o644)
+		_ = os.WriteFile(os.Getenv("NM_SHELLENV_PIPE_READY"), []byte("ready"), 0o600)
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
 	}

@@ -131,7 +131,7 @@ func (s *Store) prepareReplay(ctx context.Context, opts ReplayOptions) ([]Case, 
 	}
 	session.Cohort = cohortID(session.CaseIDs, session.Repeats)
 	sessionsDir := filepath.Join(s.root, "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	if err := os.MkdirAll(sessionsDir, 0o750); err != nil {
 		return nil, Session{}, fmt.Errorf("create eval sessions directory: %w", err)
 	}
 	sessionPath := filepath.Join(sessionsDir, session.ID+".json")
@@ -536,7 +536,7 @@ func (s *Store) persistEvaluation(c Case, evaluation Evaluation) error {
 	}
 	candidateDir := candidatePathPart(evaluation.Candidate)
 	resultDir := filepath.Join(c.Dir, "evals", evaluation.SessionID, candidateDir)
-	if err := os.MkdirAll(resultDir, 0o755); err != nil {
+	if err := os.MkdirAll(resultDir, 0o750); err != nil {
 		return fmt.Errorf("create eval result directory: %w", err)
 	}
 	path := filepath.Join(resultDir, fmt.Sprintf("repeat-%03d.json", evaluation.Repeat))

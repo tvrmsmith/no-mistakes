@@ -30,7 +30,7 @@ func newEvidencePublishContext(t *testing.T, branch string) (sctx *pipeline.Step
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "config", "url."+remote+".insteadOf", evidenceTestUpstream)
-	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -56,10 +56,10 @@ func writeRunEvidence(t *testing.T, sctx *pipeline.StepContext, files map[string
 	t.Cleanup(func() { removeEvidenceDir(t, dir) })
 	for rel, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

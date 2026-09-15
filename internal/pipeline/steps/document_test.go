@@ -68,7 +68,7 @@ func TestDocumentStep_AgentManaged_NormalizesMultilineCommitSummary(t *testing.T
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Updated\n"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Updated\n"), 0o600); err != nil {
 				return nil, err
 			}
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"update README\nand references"}`)}, nil
@@ -409,7 +409,7 @@ func TestDocumentStep_SuccessfulReturnAfterTimeoutFailsWithoutCommit(t *testing.
 	ag := &mockAgent{
 		name: "late-document-agent",
 		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# late\n"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# late\n"), 0o600); err != nil {
 				return nil, err
 			}
 			<-ctx.Done()

@@ -490,10 +490,10 @@ func fakeCIGHSequenceMergeable(t *testing.T, state string, checks []string, merg
 	checksPath := filepath.Join(t.TempDir(), "checks.txt")
 	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
 
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o600); err != nil {
 		t.Fatalf("write checks sequence: %v", err)
 	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("write checks index: %v", err)
 	}
 
@@ -515,10 +515,10 @@ func fakeCIGHSequence(t *testing.T, state string, checks []string) []string {
 	checksPath := filepath.Join(t.TempDir(), "checks.txt")
 	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
 
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o600); err != nil {
 		t.Fatalf("write checks sequence: %v", err)
 	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("write checks index: %v", err)
 	}
 

@@ -83,7 +83,7 @@ func TestRunUpstreamFetchUsesRefreshedRegistration(t *testing.T) {
 	gitCmd(t, seed, "config", "user.name", "test")
 	gitCmd(t, seed, "config", "user.email", "test@test.com")
 	gitCmd(t, seed, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(seed, "base.txt"), []byte("stale\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(seed, "base.txt"), []byte("stale\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, seed, "add", "base.txt")
@@ -99,7 +99,7 @@ func TestRunUpstreamFetchUsesRefreshedRegistration(t *testing.T) {
 	gitCmd(t, updater, "config", "user.name", "test")
 	gitCmd(t, updater, "config", "user.email", "test@test.com")
 	gitCmd(t, updater, "checkout", "main")
-	if err := os.WriteFile(filepath.Join(updater, "base.txt"), []byte("refreshed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(updater, "base.txt"), []byte("refreshed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, updater, "add", "base.txt")

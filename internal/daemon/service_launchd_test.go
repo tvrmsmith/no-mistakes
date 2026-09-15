@@ -119,13 +119,13 @@ func TestInstallLaunchAgentKeepsLegacyPlistOnScopedWriteFailure(t *testing.T) {
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 
 	legacyPath := filepath.Join(home, "Library", "LaunchAgents", legacyLaunchdServiceLabel+".plist")
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(legacyPath, []byte("<plist/>"), 0o644); err != nil {
+	if err := os.WriteFile(legacyPath, []byte("<plist/>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(launchAgentPath(p), 0o755); err != nil {
+	if err := os.MkdirAll(launchAgentPath(p), 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,12 +245,12 @@ func TestInstallLaunchAgentDoesNotRemoveLegacyPlistForDifferentRoot(t *testing.T
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
 
 	legacyPath := filepath.Join(home, "Library", "LaunchAgents", legacyLaunchdServiceLabel+".plist")
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	otherRoot := filepath.Join(t.TempDir(), "other-nm-home")
 	legacyPlist := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", paths.WithRoot(otherRoot), home)
-	if err := os.WriteFile(legacyPath, []byte(legacyPlist), 0o644); err != nil {
+	if err := os.WriteFile(legacyPath, []byte(legacyPlist), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

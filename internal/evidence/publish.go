@@ -224,7 +224,7 @@ func assertEvidenceBranch(ctx context.Context, repoDir, tip, branch string) erro
 
 func addMarker(ctx context.Context, repoDir string, env []string, indexDir string) error {
 	markerFile := filepath.Join(indexDir, "marker")
-	if err := os.WriteFile(markerFile, []byte(MarkerContent), 0o644); err != nil {
+	if err := os.WriteFile(markerFile, []byte(MarkerContent), 0o600); err != nil {
 		return fmt.Errorf("write evidence marker: %w", err)
 	}
 	blob, err := git.RunWithEnv(ctx, repoDir, env, "hash-object", "-w", "--", markerFile)

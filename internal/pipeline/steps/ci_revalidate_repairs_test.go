@@ -314,7 +314,7 @@ func TestCIStep_PartialPublicationRecordsNothing(t *testing.T) {
 	f := newCIRepairFixture(t, false, nil)
 	writeCIFix(t, f.dir)
 	brokenGate := filepath.Join(t.TempDir(), "invalid-gate")
-	if err := os.MkdirAll(brokenGate, 0o755); err != nil {
+	if err := os.MkdirAll(brokenGate, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	f.sctx.GateDir = brokenGate
@@ -397,7 +397,7 @@ func TestCIStep_ConflictRepairAlwaysRevalidates(t *testing.T) {
 				// feature's intent on top of the base's rewrite. That changes
 				// the commit's patch-id, which is exactly why continuity
 				// cannot be proven for a conflict repair.
-				if err := os.WriteFile(filepath.Join(f.dir, "feature.txt"), []byte("base rewrote this line\nthe user's feature, resolved\n"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(f.dir, "feature.txt"), []byte("base rewrote this line\nthe user's feature, resolved\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				gitCmd(t, f.dir, "add", "-A")
@@ -430,7 +430,7 @@ func TestCIStep_ConflictRepairAlwaysRevalidates(t *testing.T) {
 			// resolution rather than a clean replay.
 			f := newCIRepairFixture(t, false, nil)
 			gitCmd(t, f.dir, "checkout", "main")
-			if err := os.WriteFile(filepath.Join(f.dir, "feature.txt"), []byte("base rewrote this line\n"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(f.dir, "feature.txt"), []byte("base rewrote this line\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, f.dir, "add", "-A")

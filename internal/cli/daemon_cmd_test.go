@@ -32,7 +32,7 @@ func TestParseSkipPushOptionsRejectsUnknownStep(t *testing.T) {
 
 func TestNormalizeNotifyGatePathResolvesLegacyDotGate(t *testing.T) {
 	bare := filepath.Join(t.TempDir(), "repo123.git")
-	if err := os.MkdirAll(bare, 0o755); err != nil {
+	if err := os.MkdirAll(bare, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(bare)

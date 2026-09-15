@@ -169,10 +169,10 @@ func stepNames(plan []pipeline.Step) []types.StepName {
 func initWorktree(t *testing.T, dir string) string {
 	t.Helper()
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("create worktree dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("parked\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("parked\n"), 0o600); err != nil {
 		t.Fatalf("write worktree file: %v", err)
 	}
 	gitCmd(t, dir, "init", "-b", "main")
@@ -188,7 +188,7 @@ func initWorktree(t *testing.T, dir string) string {
 func CommitInWorktree(t *testing.T, dir, name, contents string) string {
 	t.Helper()
 
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
 		t.Fatalf("write worktree file: %v", err)
 	}
 	gitCmd(t, dir, "add", ".")

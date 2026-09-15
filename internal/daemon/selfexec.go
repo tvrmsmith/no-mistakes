@@ -360,7 +360,7 @@ func startDetachedDaemon(p *paths.Paths) error {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 
-	logFile, err := os.OpenFile(p.DaemonBootstrapLog(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(p.DaemonBootstrapLog(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open daemon bootstrap log: %w", err)
 	}

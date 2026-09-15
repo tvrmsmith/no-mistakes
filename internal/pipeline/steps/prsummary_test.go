@@ -850,7 +850,7 @@ func TestArtifactPathRelativeToRoot_AllowsSymlinkEquivalentPaths(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
 	root := filepath.Join(tempDir, "evidence")
-	if err := os.Mkdir(root, 0o755); err != nil {
+	if err := os.Mkdir(root, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	linkedRoot := filepath.Join(tempDir, "linked-evidence")
@@ -858,10 +858,10 @@ func TestArtifactPathRelativeToRoot_AllowsSymlinkEquivalentPaths(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	target := filepath.Join(linkedRoot, "run-123", "checkout.png")
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(target, []byte("png"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -881,11 +881,11 @@ func TestArtifactPathRelativeToRoot_AllowsSymlinkEquivalentPaths(t *testing.T) {
 // one directory and can hand the same value to BuildTestingSummaryForPR.
 func writeTempEvidenceFile(t *testing.T, evidenceRoot, name string, content []byte) string {
 	t.Helper()
-	if err := os.MkdirAll(evidenceRoot, 0o755); err != nil {
+	if err := os.MkdirAll(evidenceRoot, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(evidenceRoot, name)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
+	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -950,11 +950,11 @@ func TestBuildTestingSummaryForPR_PreservesPublicURLForEmbeddedTextEvidence(t *t
 func TestBuildTestingSummaryForPR_EmbedsRepoTextEvidenceContent(t *testing.T) {
 	t.Parallel()
 	repoRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repoRoot, "artifacts"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoRoot, "artifacts"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	fileBody := "POST /checkout 200\nreceipt=ok"
-	if err := os.WriteFile(filepath.Join(repoRoot, "artifacts", "server.log"), []byte(fileBody), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "artifacts", "server.log"), []byte(fileBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	findings := `{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"log","label":"Server log","path":"artifacts/server.log"}]}`
@@ -980,7 +980,7 @@ func TestBuildTestingSummaryForPR_DoesNotEmbedRepoRelativeSecrets(t *testing.T) 
 	t.Parallel()
 	repoRoot := t.TempDir()
 	secret := "DATABASE_URL=postgres://secret"
-	if err := os.WriteFile(filepath.Join(repoRoot, ".env"), []byte(secret), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, ".env"), []byte(secret), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	findings := `{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"log","label":"Environment dump","path":".env"}]}`

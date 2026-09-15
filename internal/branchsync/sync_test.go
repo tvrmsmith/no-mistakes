@@ -540,7 +540,7 @@ func TestApplyReportsHonestFinalStateWhenPostMergeHookMutatesWorktree(t *testing
 	hooks := filepath.Join(f.local, ".git", "hooks")
 	hook := filepath.Join(hooks, "post-merge")
 	mustWrite(t, hook, "#!/bin/sh\nprintf hook > hook-output.txt\nexit 1\n")
-	if err := os.Chmod(hook, 0o755); err != nil {
+	if err := os.Chmod(hook, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	state := f.service.Apply(f.ctx)
@@ -1064,10 +1064,10 @@ func mustRun(t *testing.T, dir string, args ...string) string {
 
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

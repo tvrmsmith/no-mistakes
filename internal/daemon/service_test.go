@@ -36,10 +36,10 @@ func TestStart_ReinstallsManagedServiceWhenPlistChanged(t *testing.T) {
 	serviceExecutablePath = func() (string, error) { return "/opt/no-mistakes/bin/no-mistakes", nil }
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(p)+".plist")
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(plistPath, []byte("<stale-plist-from-older-binary/>"), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte("<stale-plist-from-older-binary/>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,11 +107,11 @@ func TestStart_DoesNotReinstallWhenPlistUnchanged(t *testing.T) {
 	serviceExecutablePath = func() (string, error) { return "/opt/no-mistakes/bin/no-mistakes", nil }
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(p)+".plist")
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	current := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", p, home)
-	if err := os.WriteFile(plistPath, []byte(current), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(current), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -146,11 +146,11 @@ func TestStartDoesNotRestartLaunchAgentForExecutableOnlyChange(t *testing.T) {
 	serviceExecutablePath = func() (string, error) { return "/private/var/folders/go-build/no-mistakes", nil }
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(p)+".plist")
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	installed := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", p, home)
-	if err := os.WriteFile(plistPath, []byte(installed), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(installed), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,11 +192,11 @@ func TestStartPreservesInstalledExecutableWhenRefreshingLaunchAgent(t *testing.T
 	serviceExecutablePath = func() (string, error) { return "/private/var/folders/go-build/no-mistakes", nil }
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(p)+".plist")
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	stale := renderLaunchAgentWithoutEnvironment("/opt/no-mistakes/bin/no-mistakes", p)
-	if err := os.WriteFile(plistPath, []byte(stale), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,10 +247,10 @@ func TestStartRestartsSystemdUnitWhenDefinitionChanged(t *testing.T) {
 	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -295,10 +295,10 @@ func TestStartStopsDetachedDaemonBeforeRestartingStaleManagedService(t *testing.
 	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -359,10 +359,10 @@ func TestStartDoesNotStopRunningDaemonWhenStaleManagedInstallFails(t *testing.T)
 	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -405,11 +405,11 @@ func TestStartRestoresStaleSystemdUnitWhenRefreshInstallFails(t *testing.T) {
 	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	stale := "[Service]\nExecStart=/old/no-mistakes daemon run\n"
-	if err := os.WriteFile(unitPath, []byte(stale), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -464,7 +464,7 @@ func TestStartRestoresStaleSystemdUnitAtOriginalModeWhenRefreshInstallFails(t *t
 	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	stale := "[Service]\nEnvironment=\"HTTPS_PROXY=http://user:pass@127.0.0.1:7897\"\nExecStart=/old/no-mistakes daemon run\n"
@@ -514,11 +514,11 @@ func TestStartRestartsRestoredSystemdUnitWhenRefreshRestartFails(t *testing.T) {
 	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	stale := "[Service]\nExecStart=/old/no-mistakes daemon run\n"
-	if err := os.WriteFile(unitPath, []byte(stale), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1026,10 +1026,10 @@ func TestStopUsesManagedServiceWhenInstalled(t *testing.T) {
 	daemonHealthCheck = func(*paths.Paths) (bool, error) { return false, nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("WorkingDirectory="+p.Root()+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("WorkingDirectory="+p.Root()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1062,10 +1062,10 @@ func TestManagedServiceInstalledRequiresMatchingRoot(t *testing.T) {
 
 	otherRoot := filepath.Join(t.TempDir(), "other-root")
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(paths.WithRoot(otherRoot))+".plist")
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(plistPath, []byte(renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", paths.WithRoot(otherRoot), home)), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", paths.WithRoot(otherRoot), home)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1087,10 +1087,10 @@ func TestStopFallsBackToDetachedDaemonWhenManagedStopFails(t *testing.T) {
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("WorkingDirectory="+p.Root()+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("WorkingDirectory="+p.Root()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1151,10 +1151,10 @@ func TestManagedStopErrorsStillWaitForCapturedDaemonExit(t *testing.T) {
 			daemonHealthCheck = func(*paths.Paths) (bool, error) { return false, nil }
 
 			unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-			if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(unitPath, []byte("WorkingDirectory="+p.Root()+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(unitPath, []byte("WorkingDirectory="+p.Root()+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1268,18 +1268,18 @@ func TestStopWithUnstubbedPathsDoesNotInvokeRealServiceCommands(t *testing.T) {
 	switch runtime.GOOS {
 	case "darwin":
 		plistDir := filepath.Join(home, "Library", "LaunchAgents")
-		if err := os.MkdirAll(plistDir, 0o755); err != nil {
+		if err := os.MkdirAll(plistDir, 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(plistDir, launchdServiceLabel(p)+".plist"), []byte("<plist/>"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(plistDir, launchdServiceLabel(p)+".plist"), []byte("<plist/>"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	case "linux":
 		unitDir := filepath.Join(home, ".config", "systemd", "user")
-		if err := os.MkdirAll(unitDir, 0o755); err != nil {
+		if err := os.MkdirAll(unitDir, 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(unitDir, systemdServiceName(p)), []byte("[Unit]\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(unitDir, systemdServiceName(p)), []byte("[Unit]\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1354,7 +1354,7 @@ func TestServiceInstanceSuffixResolvesSymlinkedRoot(t *testing.T) {
 
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "real", "nm-home")
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	if err := os.MkdirAll(realRoot, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	linkRoot := filepath.Join(base, "alias")
@@ -1387,7 +1387,7 @@ func TestServiceInstanceSuffixDistinguishesRelativeRootsAcrossWorkingDirs(t *tes
 	firstWD := filepath.Join(base, "first")
 	secondWD := filepath.Join(base, "second")
 	for _, dir := range []string{firstWD, secondWD} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1454,24 +1454,24 @@ func TestStopDoesNotTouchManagedDaemonOwnedByDifferentNMHome(t *testing.T) {
 	switch runtime.GOOS {
 	case "darwin":
 		plistDir := filepath.Join(home, "Library", "LaunchAgents")
-		if err := os.MkdirAll(plistDir, 0o755); err != nil {
+		if err := os.MkdirAll(plistDir, 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(plistDir, legacyLaunchdServiceLabel+".plist"), []byte("<plist/>"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(plistDir, legacyLaunchdServiceLabel+".plist"), []byte("<plist/>"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(plistDir, launchdServiceLabel(otherP)+".plist"), []byte("<plist/>"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(plistDir, launchdServiceLabel(otherP)+".plist"), []byte("<plist/>"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	case "linux":
 		unitDir := filepath.Join(home, ".config", "systemd", "user")
-		if err := os.MkdirAll(unitDir, 0o755); err != nil {
+		if err := os.MkdirAll(unitDir, 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(unitDir, legacySystemdServiceName), []byte("[Unit]\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(unitDir, legacySystemdServiceName), []byte("[Unit]\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(unitDir, systemdServiceName(otherP)), []byte("[Unit]\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(unitDir, systemdServiceName(otherP)), []byte("[Unit]\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

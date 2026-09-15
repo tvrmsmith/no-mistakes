@@ -29,7 +29,7 @@ func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
 	content := "NO_MISTAKES_UMAMI_HOST=https://dotenv.example\nNO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
 
@@ -72,7 +72,7 @@ func TestDefaultPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
 	content := "NO_MISTAKES_UMAMI_HOST=https://dotenv.example\nNO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
 
@@ -189,19 +189,19 @@ func TestDefaultIgnoresDotEnvOutsideRepo(t *testing.T) {
 	t.Setenv(umamiWebsiteIDEnv, "")
 
 	parentDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(parentDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=outside-repo\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(parentDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=outside-repo\n"), 0o600); err != nil {
 		t.Fatalf("write parent .env: %v", err)
 	}
 
 	repoDir := filepath.Join(parentDir, "repo")
-	if err := os.Mkdir(repoDir, 0o755); err != nil {
+	if err := os.Mkdir(repoDir, 0o750); err != nil {
 		t.Fatalf("mkdir repo: %v", err)
 	}
 	subDir := filepath.Join(repoDir, "nested")
-	if err := os.Mkdir(subDir, 0o755); err != nil {
+	if err := os.Mkdir(subDir, 0o750); err != nil {
 		t.Fatalf("mkdir nested: %v", err)
 	}
-	if err := os.Mkdir(filepath.Join(repoDir, ".git"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(repoDir, ".git"), 0o750); err != nil {
 		t.Fatalf("mkdir .git: %v", err)
 	}
 

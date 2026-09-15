@@ -89,12 +89,12 @@ func TestInstallSystemdUserServiceDoesNotRemoveLegacyUnitForDifferentRoot(t *tes
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 
 	legacyPath := filepath.Join(home, ".config", "systemd", "user", legacySystemdServiceName)
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	otherRoot := filepath.Join(t.TempDir(), "other-nm-home")
 	legacyUnit := renderSystemdUnit("/usr/local/bin/no-mistakes", paths.WithRoot(otherRoot), home)
-	if err := os.WriteFile(legacyPath, []byte(legacyUnit), 0o644); err != nil {
+	if err := os.WriteFile(legacyPath, []byte(legacyUnit), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,10 +128,10 @@ func TestInstallSystemdUserServiceKeepsLegacyUnitOnEnableFailure(t *testing.T) {
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 
 	legacyPath := filepath.Join(home, ".config", "systemd", "user", legacySystemdServiceName)
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(legacyPath, []byte("[Unit]\n"), 0o644); err != nil {
+	if err := os.WriteFile(legacyPath, []byte("[Unit]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

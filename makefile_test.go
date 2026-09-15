@@ -20,7 +20,7 @@ func TestMakeBuildPrioritizesDotEnvUmamiWebsiteID(t *testing.T) {
 	}
 
 	workDir := writeTestMakeWorkspace(t)
-	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,7 +82,7 @@ func TestMakeBuildPrioritizesDotEnvUmamiHost(t *testing.T) {
 	}
 
 	workDir := writeTestMakeWorkspace(t)
-	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("NO_MISTAKES_UMAMI_HOST=https://dotenv.example\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("NO_MISTAKES_UMAMI_HOST=https://dotenv.example\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,7 +107,7 @@ func TestMakeBuildIgnoresUnrelatedDotEnvEntries(t *testing.T) {
 	}
 
 	workDir := writeTestMakeWorkspace(t)
-	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("VERSION=from-dotenv\nNO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("VERSION=from-dotenv\nNO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,7 +130,7 @@ func TestMakeBuildStripsInlineCommentsFromDotEnvUmamiWebsiteID(t *testing.T) {
 	}
 
 	workDir := writeTestMakeWorkspace(t)
-	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv # dev\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv # dev\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,7 +153,7 @@ func TestMakeBuildPreservesQuotedHashInDotEnvUmamiWebsiteID(t *testing.T) {
 	}
 
 	workDir := writeTestMakeWorkspace(t)
-	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=\"website # dev\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=\"website # dev\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -182,7 +182,7 @@ func writeTestMakeWorkspace(t *testing.T) string {
 		t.Fatal(err)
 	}
 	workDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workDir, "Makefile"), data, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "Makefile"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return workDir

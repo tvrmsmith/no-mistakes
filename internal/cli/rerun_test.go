@@ -29,7 +29,7 @@ func TestRerunCallerHeadDoesNotCombineDifferentGitStates(t *testing.T) {
 	cliGit(t, dir, "init", "-b", "main")
 	cliGit(t, dir, "config", "user.name", "Test")
 	cliGit(t, dir, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("original\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("original\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, dir, "add", "tracked.txt")
@@ -74,7 +74,7 @@ func main() {
 }
 `
 	file := filepath.Join(binDir, "main.go")
-	if err := os.WriteFile(file, []byte(source), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Build a native, non-race helper so the same test runs on Windows too.
@@ -110,7 +110,7 @@ func TestRerunCallerHeadGitStates(t *testing.T) {
 			}
 			want := ""
 			if state != "unborn" && state != "dirty_unborn" && state != "not_repo" {
-				if err := os.WriteFile("tracked.txt", []byte("original\n"), 0o644); err != nil {
+				if err := os.WriteFile("tracked.txt", []byte("original\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				cliGit(t, dir, "add", "tracked.txt")
@@ -123,7 +123,7 @@ func TestRerunCallerHeadGitStates(t *testing.T) {
 			case "detached":
 				cliGit(t, dir, "checkout", "--detach")
 			case "unstaged", "staged":
-				if err := os.WriteFile("tracked.txt", []byte("edited\n"), 0o644); err != nil {
+				if err := os.WriteFile("tracked.txt", []byte("edited\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				if state == "staged" {
@@ -132,7 +132,7 @@ func TestRerunCallerHeadGitStates(t *testing.T) {
 			case "renamed":
 				cliGit(t, dir, "mv", "tracked.txt", "# branch.oid misleading.txt")
 			case "untracked", "dirty_unborn":
-				if err := os.WriteFile("# branch.oid misleading.txt", []byte("untracked\n"), 0o644); err != nil {
+				if err := os.WriteFile("# branch.oid misleading.txt", []byte("untracked\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -176,7 +176,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 			}
 			wantHead := cliGit(t, dir, "rev-parse", "HEAD")
 			if dirty {
-				if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("local edits"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("local edits"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				wantHead = ""

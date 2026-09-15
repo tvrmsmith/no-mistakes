@@ -695,7 +695,7 @@ func TestExecutor_CleanShutdownDoesNotPreserveACIStepHoldingAnAgentPID(t *testin
 // git add -A commit those edits under a message describing a different repair.
 func TestExecutor_CleanShutdownDoesNotPreserveACIStepWithUncommittedRepairWork(t *testing.T) {
 	database, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
-		if wErr := os.WriteFile(filepath.Join(sctx.WorkDir, "half-written.go"), []byte("package broken\n"), 0o644); wErr != nil {
+		if wErr := os.WriteFile(filepath.Join(sctx.WorkDir, "half-written.go"), []byte("package broken\n"), 0o600); wErr != nil {
 			t.Error(wErr)
 		}
 	})

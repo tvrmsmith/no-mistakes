@@ -130,7 +130,7 @@ Previous test findings to address:
 	if evidenceDir == "" {
 		return nil, fmt.Errorf("test evidence dir is not configured for this run")
 	}
-	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+	if err := os.MkdirAll(evidenceDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create test evidence dir: %w", err)
 	}
 	switch {

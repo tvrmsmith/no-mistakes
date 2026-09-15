@@ -99,7 +99,7 @@ func logFakeCLIStdinBody(args []string, logFile string) {
 // nonzero rather than letting the test read a missing line as a call that
 // never happened.
 func appendLog(logFile, line string) {
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		fatalf("open fake CLI log %s: %v", logFile, err)
 	}
@@ -509,7 +509,7 @@ func fakeGHHandlePRContentCommands(args []string, joined string) {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
-			if err := os.WriteFile(path, body, 0o644); err != nil {
+			if err := os.WriteFile(path, body, 0o600); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
@@ -662,7 +662,7 @@ func fakeCIGHSequenceHandler(args []string) {
 		if index >= len(entries) {
 			index = len(entries) - 1
 		}
-		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o644); err != nil {
+		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -689,7 +689,7 @@ func fakeCIGHSequenceHandler(args []string) {
 		if index >= len(entries) {
 			index = len(entries) - 1
 		}
-		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o644); err != nil {
+		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -810,7 +810,7 @@ func fakeCIGlabSequenceHandler(args []string) {
 		if index >= len(entries) {
 			index = len(entries) - 1
 		}
-		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o644); err != nil {
+		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

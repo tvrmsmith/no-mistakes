@@ -80,10 +80,10 @@ func registerFakeRun(t *testing.T, m *RunManager, database *db.DB, repo *db.Repo
 func seedRunWorktree(t *testing.T, m *RunManager, database *db.DB, run *db.Run) {
 	t.Helper()
 	dir := m.paths.WorktreeDir(run.RepoID, run.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("run head\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("run head\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "init", "-b", "main")
@@ -1340,7 +1340,7 @@ func TestDrain_CIMonitorWithUncommittedWorkIsWaitedOnNotExempt(t *testing.T) {
 	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
 	markCIMonitorActive(t, database, run)
 	dirty := filepath.Join(m.paths.WorktreeDir(run.RepoID, run.ID), "half-written.go")
-	if err := os.WriteFile(dirty, []byte("package broken\n"), 0o644); err != nil {
+	if err := os.WriteFile(dirty, []byte("package broken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	close(done)

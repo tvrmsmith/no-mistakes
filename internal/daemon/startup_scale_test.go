@@ -81,7 +81,7 @@ func startColdDetachedFixture(t *testing.T, gateCount int, delayedGit bool) time
 		shim := "#!/bin/sh\n" +
 			"if [ \"$2\" = config ] && [ \"$3\" = receive.advertisePushOptions ]; then /bin/sleep 0.075; fi\n" +
 			"exec \"$NM_TEST_REAL_GIT\" \"$@\"\n"
-		if err := os.WriteFile(gitShim, []byte(shim), 0o755); err != nil {
+		if err := os.WriteFile(gitShim, []byte(shim), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("NM_TEST_REAL_GIT", realGit)
@@ -91,7 +91,7 @@ func startColdDetachedFixture(t *testing.T, gateCount int, delayedGit bool) time
 	// Run() resolves a login-shell environment before recovery. This isolated
 	// shell preserves the fixture PATH without reading the developer's profile.
 	shellShim := filepath.Join(t.TempDir(), "test-shell")
-	if err := os.WriteFile(shellShim, []byte("#!/bin/sh\nexec env -0\n"), 0o755); err != nil {
+	if err := os.WriteFile(shellShim, []byte("#!/bin/sh\nexec env -0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SHELL", shellShim)
@@ -136,11 +136,11 @@ func startColdDetachedFixture(t *testing.T, gateCount int, delayedGit bool) time
 		t.Fatalf("read isolated daemon log: %v", err)
 	}
 	if evidenceDir := os.Getenv("NM_TEST_STARTUP_EVIDENCE_DIR"); evidenceDir != "" {
-		if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+		if err := os.MkdirAll(evidenceDir, 0o750); err != nil {
 			t.Fatalf("create startup evidence directory: %v", err)
 		}
 		evidencePath := filepath.Join(evidenceDir, fmt.Sprintf("startup-%d-gates.log", gateCount))
-		if err := os.WriteFile(evidencePath, logData, 0o644); err != nil {
+		if err := os.WriteFile(evidencePath, logData, 0o600); err != nil {
 			t.Fatalf("write startup evidence: %v", err)
 		}
 		t.Logf("startup evidence: %s", evidencePath)

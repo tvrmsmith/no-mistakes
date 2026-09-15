@@ -38,7 +38,7 @@ func newAbortQuiescenceFixtureWithCancel(t *testing.T, getRun func(context.Conte
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")

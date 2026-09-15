@@ -38,7 +38,7 @@ type singletonLock struct {
 // instead of silently proceeding.
 func acquireSingletonLock(p *paths.Paths) (*singletonLock, error) {
 	path := p.LockFile()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open daemon lock %s: %w", path, err)
 	}

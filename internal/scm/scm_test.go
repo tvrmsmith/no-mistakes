@@ -256,7 +256,7 @@ func TestDetectProvider_UsesForgejoBaseEnvironment(t *testing.T) {
 func writeGlabConfig(t *testing.T, body string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GLAB_CONFIG_DIR", dir)
@@ -332,7 +332,7 @@ func TestDetectProvider_GlabConfigMalformedFailsClosed(t *testing.T) {
 func writeGhConfig(t *testing.T, body string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GH_CONFIG_DIR", dir)
@@ -388,10 +388,10 @@ func TestDetectProvider_GhConfigMalformedFailsClosed(t *testing.T) {
 func writeTeaConfig(t *testing.T, body string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "tea"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "tea"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "tea", "config.yml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tea", "config.yml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)

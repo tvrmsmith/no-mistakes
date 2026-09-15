@@ -30,7 +30,7 @@ func installLaunchAgent(p *paths.Paths, exe string) error {
 	if err != nil {
 		return fmt.Errorf("resolve user home: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create launch agents directory: %w", err)
 	}
 	// writeServiceFile resolves the proxy environment once and feeds it to the

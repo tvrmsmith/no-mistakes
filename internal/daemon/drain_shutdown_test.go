@@ -632,10 +632,10 @@ func TestStopWithOptions_ManagedServiceDrainsBeforeSignalling(t *testing.T) {
 	home := t.TempDir()
 	runtimeGOOS = "darwin"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	if err := os.MkdirAll(filepath.Dir(launchAgentPath(p)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(launchAgentPath(p)), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(launchAgentPath(p), []byte("<plist/>"), 0o644); err != nil {
+	if err := os.WriteFile(launchAgentPath(p), []byte("<plist/>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

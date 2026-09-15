@@ -100,7 +100,7 @@ func TestEjectSweepsTheDefaultTreeBeforeRemovingIt(t *testing.T) {
 		t.Fatalf("set run status: %v", err)
 	}
 	defaultDir := p.WorktreeDir(repo.ID, run.ID)
-	if err := os.MkdirAll(defaultDir, 0o755); err != nil {
+	if err := os.MkdirAll(defaultDir, 0o750); err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func placeRun(t *testing.T, d *db.DB, repoID, root string, status types.RunStatu
 		t.Fatalf("set run status: %v", err)
 	}
 	if onDisk {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatalf("create worktree: %v", err)
 		}
 	}

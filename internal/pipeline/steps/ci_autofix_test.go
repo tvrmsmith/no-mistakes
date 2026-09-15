@@ -1306,7 +1306,7 @@ func TestCIStep_FixAgentSuccessfulReturnAfterTimeoutFailsWithoutCommit(t *testin
 	ag := &mockAgent{
 		name: "late-ci-fix-agent",
 		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o600); err != nil {
 				return nil, err
 			}
 			<-ctx.Done()

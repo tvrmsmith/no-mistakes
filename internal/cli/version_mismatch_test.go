@@ -312,7 +312,7 @@ func TestDaemonStopCompletesAgainstASkewedDaemon(t *testing.T) {
 	go func() { _ = srv.ServeReady() }()
 	t.Cleanup(func() { srv.Close() })
 
-	if err := os.WriteFile(p.PIDFile(), []byte(strconv.Itoa(child.Process.Pid)), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -394,7 +394,7 @@ func TestGlobalConfigErrorStaysDeferredForASkewedDaemon(t *testing.T) {
 
 	configErrorFor := func(t *testing.T, p *paths.Paths) error {
 		t.Helper()
-		if err := os.WriteFile(p.ConfigFile(), []byte(brokenConfig), 0o644); err != nil {
+		if err := os.WriteFile(p.ConfigFile(), []byte(brokenConfig), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		_, err := config.LoadGlobal(p.ConfigFile())

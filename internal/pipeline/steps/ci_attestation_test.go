@@ -53,7 +53,7 @@ func runVerifyPy(t *testing.T, body, headSHA string) (conclusion, output string)
 	t.Helper()
 	python := pythonInterpreterForVerify(t)
 	outputFile := filepath.Join(t.TempDir(), "github_output")
-	if err := os.WriteFile(outputFile, nil, 0o644); err != nil {
+	if err := os.WriteFile(outputFile, nil, 0o600); err != nil {
 		t.Fatalf("seed GITHUB_OUTPUT: %v", err)
 	}
 	cmd := exec.Command(python, verifyPyRelPath)
@@ -374,7 +374,7 @@ func TestCIStep_PublishRepairRebindsAttestationAcrossRepairPushes(t *testing.T) 
 	f := newCIRepairFixture(t, false, writeCIFix)
 	original := compliantPipelineBody(t, f.headSHA)
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(original), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
@@ -417,7 +417,7 @@ func TestCIStep_PublishRepairRebindsAttestationAcrossRepairPushes(t *testing.T) 
 func TestCIStep_UnsettledRepairPushParksImmediately(t *testing.T) {
 	f := newCIRepairFixture(t, false, writeCIFix)
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, f.headSHA)), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, f.headSHA)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.sctx.Repo.UpstreamURL = "https://github.com/test/repo.git"
@@ -449,7 +449,7 @@ func TestCIStep_UnsettledRepairPushParksImmediately(t *testing.T) {
 func TestCIStep_PublishRepairFailsWhenAttestationCannotSettle(t *testing.T) {
 	f := newCIRepairFixture(t, false, writeCIFix)
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, f.headSHA)), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, f.headSHA)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.sctx.Repo.UpstreamURL = "https://github.com/test/repo.git"
@@ -512,7 +512,7 @@ func TestCIStep_PublishRepairDoesNotMintAttestation(t *testing.T) {
 	f := newCIRepairFixture(t, false, writeCIFix)
 	const foreign = "a regular pull request with no pipeline section"
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(foreign), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(foreign), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
@@ -563,7 +563,7 @@ func TestPushStep_AttestsHeadBeforePush(t *testing.T) {
 
 	priorAttestedBody := compliantPipelineBody(t, priorHead)
 
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -589,7 +589,7 @@ func TestPushStep_AttestsHeadBeforePush(t *testing.T) {
 	}
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
@@ -637,7 +637,7 @@ func TestPushStep_UnavailableSCMLeavesStaleAttestationFailingClosed(t *testing.T
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	priorAttestedBody := compliantPipelineBody(t, priorHead)
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -653,7 +653,7 @@ func TestPushStep_UnavailableSCMLeavesStaleAttestationFailingClosed(t *testing.T
 	recordReviewApproval(t, sctx, newHead)
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
@@ -704,7 +704,7 @@ func TestPushStep_AttestationWriteFailureAbortsBeforePush(t *testing.T) {
 
 	priorAttestedBody := compliantPipelineBody(t, priorHead)
 
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -720,7 +720,7 @@ func TestPushStep_AttestationWriteFailureAbortsBeforePush(t *testing.T) {
 	recordReviewApproval(t, sctx, newHead)
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeCIGH(t, "OPEN", `[]`)
@@ -769,13 +769,13 @@ func TestPushStep_PushFailureAfterAttestationLeavesBodyAhead(t *testing.T) {
 	gitCmd(t, other, "config", "user.name", "other")
 	gitCmd(t, other, "config", "user.email", "other@test.com")
 	gitCmd(t, other, "checkout", "feature")
-	if err := os.WriteFile(filepath.Join(other, "intervening.txt"), []byte("intervening\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "intervening.txt"), []byte("intervening\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, other, "add", "-A")
 	gitCmd(t, other, "commit", "-m", "intervening commit")
 
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -799,7 +799,7 @@ func TestPushStep_PushFailureAfterAttestationLeavesBodyAhead(t *testing.T) {
 	recordReviewApproval(t, sctx, newHead)
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -852,7 +852,7 @@ func TestPushStep_DoesNotMintAttestation(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -869,7 +869,7 @@ func TestPushStep_DoesNotMintAttestation(t *testing.T) {
 	recordReviewApproval(t, sctx, newHead)
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(foreign), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(foreign), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
@@ -915,7 +915,7 @@ func TestPushStep_SkipsGhOnBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -924,7 +924,7 @@ func TestPushStep_SkipsGhOnBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 
-	if err := os.WriteFile(filepath.Join(dir, "direct.txt"), []byte("direct change\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "direct.txt"), []byte("direct change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")

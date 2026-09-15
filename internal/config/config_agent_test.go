@@ -199,7 +199,7 @@ acpx_path: /opt/bin/acpx
 acp_registry_overrides:
   local-gemini: node /tmp/mock-acp.mjs
 `)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -420,7 +420,7 @@ func TestResolveAgent_AutoReturnsRovoDevProbeExitError(t *testing.T) {
 		script += ".cmd"
 		contents = []byte("@echo off\r\nexit /b 1\r\n")
 	}
-	if err := os.WriteFile(script, contents, 0o755); err != nil {
+	if err := os.WriteFile(script, contents, 0o700); err != nil {
 		t.Fatalf("write probe script: %v", err)
 	}
 

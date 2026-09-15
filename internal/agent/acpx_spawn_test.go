@@ -28,7 +28,7 @@ else
   printf '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","text":"cursor stub reply"}}}\n'
 fi
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -143,7 +143,7 @@ func TestAcpxAgent_Run_SurfacesStdinWriteFailure(t *testing.T) {
 printf '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","text":"early reply"}}}\n'
 printf 'acpx: unknown option --file\n' >&2
 `
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 

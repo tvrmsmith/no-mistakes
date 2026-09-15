@@ -279,7 +279,7 @@ func setupEvalCLIFixture(t *testing.T, ctx context.Context, root, findings strin
 	mustCLIGit(t, ctx, root, "clone", gateDir, workDir)
 	mustCLIGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustCLIGit(t, ctx, workDir, "config", "user.name", "Eval Test")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustCLIGit(t, ctx, workDir, "add", ".")
@@ -288,7 +288,7 @@ func setupEvalCLIFixture(t *testing.T, ctx context.Context, root, findings strin
 	mustCLIGit(t, ctx, workDir, "push", "origin", "main")
 	baseSHA := mustCLIGit(t, ctx, workDir, "rev-parse", "HEAD")
 	mustCLIGit(t, ctx, workDir, "checkout", "-b", "feature/eval")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustCLIGit(t, ctx, workDir, "add", "main.go")
@@ -333,7 +333,7 @@ func installFakeCLIReviewAgent(t *testing.T, root, findingsJSON string) {
 	} else {
 		script = "#!/bin/sh\n[ \"$NM_HOME\" = \"" + root + "\" ] && touch \"" + root + "/shared-home-used\"\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(fake)+string(os.PathListSeparator)+os.Getenv("PATH"))

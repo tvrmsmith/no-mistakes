@@ -776,7 +776,7 @@ func TestClaudeStdinHelper(t *testing.T) {
 	case "exit-early":
 		os.Exit(0)
 	case "block":
-		_ = os.WriteFile(os.Getenv("NM_CLAUDE_STDIN_READY"), []byte("ready"), 0o644)
+		_ = os.WriteFile(os.Getenv("NM_CLAUDE_STDIN_READY"), []byte("ready"), 0o600)
 		for {
 			time.Sleep(time.Second)
 		}
@@ -788,8 +788,8 @@ func TestClaudeStdinHelper(t *testing.T) {
 		if err := child.Start(); err != nil {
 			os.Exit(2)
 		}
-		_ = os.WriteFile(os.Getenv("NM_CLAUDE_STDIN_PID"), []byte(strconv.Itoa(child.Process.Pid)), 0o644)
-		_ = os.WriteFile(os.Getenv("NM_CLAUDE_STDIN_READY"), []byte("ready"), 0o644)
+		_ = os.WriteFile(os.Getenv("NM_CLAUDE_STDIN_PID"), []byte(strconv.Itoa(child.Process.Pid)), 0o600)
+		_ = os.WriteFile(os.Getenv("NM_CLAUDE_STDIN_READY"), []byte("ready"), 0o600)
 		emitClaudeHelperResult()
 		return
 	case "grandchild":
@@ -857,7 +857,7 @@ func TestClaudeStdinHelper(t *testing.T) {
 			EOF:    true,
 		}
 		data, _ := json.Marshal(observation)
-		if err := os.WriteFile(os.Getenv("NM_CLAUDE_STDIN_OBSERVATION"), data, 0o644); err != nil {
+		if err := os.WriteFile(os.Getenv("NM_CLAUDE_STDIN_OBSERVATION"), data, 0o600); err != nil {
 			os.Exit(4)
 		}
 		emitClaudeHelperResult()
@@ -872,7 +872,7 @@ func TestClaudeStdinHelper(t *testing.T) {
 // differently across the retry loop's separate processes.
 func recordClaudeHelperAttempt() int {
 	path := os.Getenv("NM_CLAUDE_STDIN_ATTEMPTS")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		os.Exit(6)
 	}

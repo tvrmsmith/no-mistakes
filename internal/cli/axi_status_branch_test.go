@@ -415,10 +415,10 @@ func TestAxiLogsExplicitRunTailHelpKeepsRunID(t *testing.T) {
 		t.Fatalf("start other-branch run: %v", err)
 	}
 	logDir := p.RunLogDir(other.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		t.Fatalf("mkdir log dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(logDir, "review.log"), []byte(strings.Repeat("line\n", logTailLines+1)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(logDir, "review.log"), []byte(strings.Repeat("line\n", logTailLines+1)), 0o600); err != nil {
 		t.Fatalf("write review log: %v", err)
 	}
 

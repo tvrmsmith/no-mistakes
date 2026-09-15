@@ -117,7 +117,7 @@ test:
     dir: artifacts/evidence
     branch: team/ci/evidence
 `
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -144,7 +144,7 @@ test:
   evidence:
     branch: "not a branch"
 `
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -165,7 +165,7 @@ test:
     store_in_repo: true
     branch: team/ci/evidence
 `
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -188,7 +188,7 @@ test:
   evidence:
     branch: "evidence..branch"
 `
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

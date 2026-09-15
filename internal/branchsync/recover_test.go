@@ -43,7 +43,7 @@ func (*unreachedCancellationStep) Execute(*pipelinepkg.StepContext) (*pipelinepk
 func (s *cancellationRaceStep) Name() types.StepName { return types.StepReview }
 
 func (s *cancellationRaceStep) Execute(sctx *pipelinepkg.StepContext) (*pipelinepkg.StepOutcome, error) {
-	if err := os.WriteFile(filepath.Join(sctx.WorkDir, "fix.txt"), []byte("pipeline fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sctx.WorkDir, "fix.txt"), []byte("pipeline fix\n"), 0o600); err != nil {
 		return nil, err
 	}
 	if _, err := gitpkg.Run(sctx.Ctx, sctx.WorkDir, "add", "fix.txt"); err != nil {
@@ -409,7 +409,7 @@ func TestRecoverReportsDirtyFinalStateWhenPostMergeHookMutatesWorktree(t *testin
 	hooks := filepath.Join(f.local, ".git", "hooks")
 	hook := filepath.Join(hooks, "post-merge")
 	mustWrite(t, hook, "#!/bin/sh\nprintf hook > hook-output.txt\nexit 1\n")
-	if err := os.Chmod(hook, 0o755); err != nil {
+	if err := os.Chmod(hook, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	state := f.service.Recover(f.ctx, false)
@@ -1368,7 +1368,7 @@ func TestRecoverKeepLocalPreservesHeadRestoredAfterPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.service.beforeGateReset = func() {
-		if err := os.WriteFile(objectPath, objectData, 0o444); err != nil {
+		if err := os.WriteFile(objectPath, objectData, 0o400); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -52,18 +52,18 @@ func TestMigrateGateConfigsRejectsInvalidDirectoriesAndSkipsCurrentGates(t *test
 		filepath.Join(p.ReposDir(), "malformed.git"),
 	}
 	for _, dir := range invalidDirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "marker"), []byte("do not mutate\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "marker"), []byte("do not mutate\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	malformedDir := filepath.Join(p.ReposDir(), "malformed.git")
-	if err := os.Mkdir(filepath.Join(malformedDir, "objects"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(malformedDir, "objects"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(malformedDir, "HEAD"), []byte("not-a-valid-head\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(malformedDir, "HEAD"), []byte("not-a-valid-head\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.InsertRepoWithID("malformed", filepath.Join(parent, "malformed-source"), "https://example.com/malformed.git", "main"); err != nil {

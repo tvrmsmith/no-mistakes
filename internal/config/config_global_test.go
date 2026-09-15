@@ -140,7 +140,7 @@ func TestEnsureDefaultGlobalConfig_CreatedConfigIsLoadable(t *testing.T) {
 func TestLoadGlobal_ForgejoAXIPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("forgejo_axi_path: /opt/tools/forgejo-axi\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("forgejo_axi_path: /opt/tools/forgejo-axi\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +160,7 @@ func TestLoadGlobal_ForgejoAXIPath(t *testing.T) {
 func TestLoadGlobal_StepQuietWarning(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("step_quiet_warning: 90s\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("step_quiet_warning: 90s\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +176,7 @@ func TestLoadGlobal_StepQuietWarning(t *testing.T) {
 func TestLoadGlobal_AgentTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("agent_timeout: 90s\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("agent_timeout: 90s\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,7 +192,7 @@ func TestLoadGlobal_AgentTimeout(t *testing.T) {
 func TestLoadGlobal_ReviewAgentTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("review_agent_timeout: 90s\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("review_agent_timeout: 90s\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,7 +208,7 @@ func TestLoadGlobal_ReviewAgentTimeout(t *testing.T) {
 func TestLoadGlobal_TestAgentTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("test_agent_timeout: 90s\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("test_agent_timeout: 90s\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -224,7 +224,7 @@ func TestLoadGlobal_TestAgentTimeout(t *testing.T) {
 func TestLoadGlobal_GateReconcileTimings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("gate_reconcile_interval: 45s\ngate_reconcile_timeout: 90s\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("gate_reconcile_interval: 45s\ngate_reconcile_timeout: 90s\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,7 +247,7 @@ func TestLoadGlobal_GateReconcileTimings_OperatorSlowAuthBudget(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := "gate_reconcile_interval: \"5m\"\ngate_reconcile_timeout: \"2m\"\n"
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,7 +279,7 @@ func TestLoadGlobal_InvalidGateReconcileTimings(t *testing.T) {
 		`gate_reconcile_interval: "0s"`,
 	} {
 		path := filepath.Join(dir, "config.yaml")
-		if err := os.WriteFile(path, []byte(body+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadGlobal(path); err == nil {
@@ -298,7 +298,7 @@ func TestLoadGlobal_InvalidAgentTimeout(t *testing.T) {
 		t.Run(data, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -320,7 +320,7 @@ func TestLoadGlobal_InvalidTestAgentTimeout(t *testing.T) {
 		t.Run(data, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -336,7 +336,7 @@ func TestEnsureDefaultGlobalConfig_DoesNotOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	custom := "agent: codex\nlog_level: debug\n"
-	if err := os.WriteFile(path, []byte(custom), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(custom), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -354,7 +354,7 @@ func TestEnsureDefaultGlobalConfig_DoesNotOverwrite(t *testing.T) {
 func TestEnsureDefaultGlobalConfig_SkipsOnStatPermissionError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("agent: codex\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("agent: codex\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(dir, 0o000); err != nil {
@@ -363,14 +363,14 @@ func TestEnsureDefaultGlobalConfig_SkipsOnStatPermissionError(t *testing.T) {
 	t.Cleanup(func() {
 		// Without this the temp dir cannot be read back, so t.TempDir's own
 		// cleanup fails on a directory this test locked.
-		if err := os.Chmod(dir, 0o755); err != nil {
+		if err := os.Chmod(dir, 0o700); err != nil {
 			t.Errorf("restore permissions on %s: %v", dir, err)
 		}
 	})
 
 	EnsureDefaultGlobalConfig(path)
 
-	if err := os.Chmod(dir, 0o755); err != nil {
+	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatalf("restore permissions on %s: %v", dir, err)
 	}
 	data, err := os.ReadFile(path)
@@ -419,7 +419,7 @@ daemon_connect_timeout: "4s"
 branch_sync_remote_timeout: "90s"
 log_level: "debug"
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -455,7 +455,7 @@ func TestLoadGlobal_AgentAcceptsList(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	data := `agent: [codex, claude]
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -482,7 +482,7 @@ func TestLoadGlobal_AgentStringPreservesSingleAgent(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	data := `agent: codex
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -504,7 +504,7 @@ func TestLoadGlobal_PartialOverride(t *testing.T) {
 	// Only override agent, rest should be defaults
 	data := `agent: opencode
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -529,7 +529,7 @@ func TestLoadGlobal_PartialOverride(t *testing.T) {
 func TestLoadGlobal_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("{{invalid"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("{{invalid"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -542,7 +542,7 @@ func TestLoadGlobal_InvalidYAML(t *testing.T) {
 func TestLoadGlobal_InvalidDuration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(`ci_timeout: "not-a-duration"`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`ci_timeout: "not-a-duration"`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -562,7 +562,7 @@ func TestLoadGlobal_InvalidDaemonConnectTimeout(t *testing.T) {
 		t.Run(data, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -584,7 +584,7 @@ func TestLoadGlobal_InvalidBranchSyncRemoteTimeout(t *testing.T) {
 		t.Run(data, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -612,7 +612,7 @@ func TestLoadGlobal_CITimeoutUnlimited(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
-			if err := os.WriteFile(path, []byte(tc.value), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(tc.value), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err := LoadGlobal(path)
@@ -629,7 +629,7 @@ func TestLoadGlobal_CITimeoutUnlimited(t *testing.T) {
 func TestLoadGlobal_LegacyBabysitTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(`babysit_timeout: "90m"`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`babysit_timeout: "90m"`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -645,7 +645,7 @@ func TestLoadGlobal_LegacyBabysitTimeout(t *testing.T) {
 func TestLoadGlobal_LegacyAutoFixBabysit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("auto_fix:\n  babysit: 0\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("auto_fix:\n  babysit: 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -787,7 +787,7 @@ func TestAutoFixMinSeverity_DefaultsToWarningAndAcceptsOverrides(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
-			if err := os.WriteFile(path, []byte(tt.yaml), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			global, err := LoadGlobal(path)
@@ -818,7 +818,7 @@ func TestLoadGlobal_SignCommits(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
-			if err := os.WriteFile(path, []byte(tt.yaml), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err := LoadGlobal(path)
@@ -844,7 +844,7 @@ func TestLoadGlobal_SignCommits(t *testing.T) {
 // must never be able to turn the maintainer's commit signing off.
 func TestSignCommits_IsGlobalOnlyAndNotSettableFromRepoConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".no-mistakes.yaml")
-	if err := os.WriteFile(path, []byte("sign_commits: false\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("sign_commits: false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	repoCfg, err := LoadRepo(filepath.Dir(path))
@@ -877,7 +877,7 @@ func TestLoadGlobal_AutoFixFromFile(t *testing.T) {
   review: 2
   ci: 1
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -905,7 +905,7 @@ func TestLoadGlobal_AutoFixPartial(t *testing.T) {
 	data := `auto_fix:
   lint: 1
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

@@ -30,7 +30,7 @@ func TestPreserveStaleRunHeadsAnchorsCrashWorkBeforeTerminalization(t *testing.T
 	gitCmd(t, "", "init", source)
 	gitCmd(t, source, "config", "user.email", "test@test.com")
 	gitCmd(t, source, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(source, "file.txt"), []byte("submitted\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "file.txt"), []byte("submitted\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, source, "add", "file.txt")
@@ -54,7 +54,7 @@ func TestPreserveStaleRunHeadsAnchorsCrashWorkBeforeTerminalization(t *testing.T
 	}
 	gitCmd(t, managed, "config", "user.email", "test@test.com")
 	gitCmd(t, managed, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(managed, "fix.txt"), []byte("pipeline fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(managed, "fix.txt"), []byte("pipeline fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, managed, "add", "fix.txt")
@@ -119,10 +119,10 @@ func TestRecoverOnStartup_DoesNotDeleteActiveRunWorktree(t *testing.T) {
 	}
 
 	activeWT := p.WorktreeDir(repo.ID, activeRun.ID)
-	if err := os.MkdirAll(activeWT, 0o755); err != nil {
+	if err := os.MkdirAll(activeWT, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(activeWT+"/marker", []byte("still running"), 0o644); err != nil {
+	if err := os.WriteFile(activeWT+"/marker", []byte("still running"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,7 +135,7 @@ func TestRecoverOnStartup_DoesNotDeleteActiveRunWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	terminalWT := p.WorktreeDir(repo.ID, terminalRun.ID)
-	if err := os.MkdirAll(terminalWT, 0o755); err != nil {
+	if err := os.MkdirAll(terminalWT, 0o750); err != nil {
 		t.Fatal(err)
 	}
 

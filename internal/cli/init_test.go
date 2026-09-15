@@ -68,7 +68,7 @@ func TestResolveWorktreeRootRejectsUnusablePlacements(t *testing.T) {
 		t.Error("expected error for a root inside the repository being initialized")
 	}
 	file := filepath.Join(t.TempDir(), "not-a-dir")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := resolveWorktreeRoot(p, nil, repoDir, file); err == nil {
@@ -89,7 +89,7 @@ func TestResolveWorktreeRootRefusesRootInsideAnotherConfiguredCheckout(t *testin
 	repoDir := setupTestRepo(t)
 	otherCheckout := filepath.Join(t.TempDir(), "other-checkout")
 	configYAML := "worktree_roots:\n  " + yamlPath(otherCheckout) + ": " + yamlPath(filepath.Join(t.TempDir(), "other-runs")) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -157,7 +157,7 @@ func TestResolveWorktreeRootRefusesRootClaimedByAnotherCheckout(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "shared-runs")
 	otherCheckout := filepath.Join(t.TempDir(), "other-checkout")
 	configYAML := "worktree_roots:\n  " + yamlPath(otherCheckout) + ": " + yamlPath(root) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -172,7 +172,7 @@ func TestResolveWorktreeRootRefusesRootClaimedByAnotherCheckout(t *testing.T) {
 	// The same checkout re-initializing with the root it already uses is not a
 	// conflict with itself.
 	selfConfig := "worktree_roots:\n  " + yamlPath(repoDir) + ": " + yamlPath(root) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(selfConfig), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(selfConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := resolveWorktreeRoot(p, nil, repoDir, root); err != nil {
@@ -197,7 +197,7 @@ func TestInitRefusesToRegisterACheckoutHoldingAConfiguredWorktreeRoot(t *testing
 	// of an unrelated checkout.
 	otherCheckout := filepath.Join(t.TempDir(), "other-checkout")
 	insideConfig := "worktree_roots:\n  " + yamlPath(otherCheckout) + ": " + yamlPath(filepath.Join(repoDir, "runs")) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(insideConfig), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(insideConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,7 +221,7 @@ func TestInitRefusesToRegisterACheckoutHoldingAConfiguredWorktreeRoot(t *testing
 
 	// The same checkout placing its own runs inside itself is refused too.
 	selfConfig := "worktree_roots:\n  " + yamlPath(repoDir) + ": " + yamlPath(filepath.Join(repoDir, "runs")) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(selfConfig), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(selfConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := assertCheckoutHoldsNoConfiguredWorktreeRoot(p, repoDir); err == nil {
@@ -231,7 +231,7 @@ func TestInitRefusesToRegisterACheckoutHoldingAConfiguredWorktreeRoot(t *testing
 	// A configuration whose roots are all outside this checkout registers
 	// normally: init refuses only what this registration itself breaks.
 	outsideConfig := "worktree_roots:\n  " + yamlPath(otherCheckout) + ": " + yamlPath(filepath.Join(t.TempDir(), "runs")) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(outsideConfig), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(outsideConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := assertCheckoutHoldsNoConfiguredWorktreeRoot(p, repoDir); err != nil {
@@ -258,7 +258,7 @@ func TestInitRefusesToRegisterWhileTheGlobalConfigDoesNotLoad(t *testing.T) {
 	unloadable := "worktree_roots:\n" +
 		"  " + yamlPath(otherCheckout) + ": " + yamlPath(filepath.Join(repoDir, "runs")) + "\n" +
 		"  " + yamlPath(unrelatedCheckout) + ": relative-runs\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(unloadable), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(unloadable), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfgErr := func() error {
@@ -282,7 +282,7 @@ func TestInitRefusesToRegisterWhileTheGlobalConfigDoesNotLoad(t *testing.T) {
 	repaired := "worktree_roots:\n" +
 		"  " + yamlPath(otherCheckout) + ": " + yamlPath(filepath.Join(repoDir, "runs")) + "\n" +
 		"  " + yamlPath(unrelatedCheckout) + ": " + yamlPath(filepath.Join(t.TempDir(), "unrelated-runs")) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(repaired), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(repaired), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := assertCheckoutHoldsNoConfiguredWorktreeRoot(p, repoDir); err == nil {
@@ -319,7 +319,7 @@ func TestPrintWorktreeRootGuidanceReportsExistingEntry(t *testing.T) {
 	checkout := filepath.Join(dir, "src", "repo1")
 	root := filepath.Join(dir, "work", "repo1-runs")
 	configYAML := "worktree_roots:\n  " + yamlPath(checkout) + ": " + yamlPath(root) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -352,7 +352,7 @@ func TestPrintWorktreeRootGuidanceMergesIntoAnExistingBlock(t *testing.T) {
 	existingCheckout := filepath.Join(dir, "src", "repo1")
 	existingRoot := filepath.Join(dir, "work", "repo1-runs")
 	block := "worktree_roots:\n  " + yamlPath(existingCheckout) + ": " + yamlPath(existingRoot) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(block), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(block), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -408,7 +408,7 @@ func TestPrintWorktreeRootGuidanceReplacesThisCheckoutsEntry(t *testing.T) {
 	oldEntry := "  " + checkout + ": " + oldRoot
 	newEntry := "  " + checkout + ": " + newRoot
 	block := "worktree_roots:\n" + oldEntry + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(block), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(block), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -462,7 +462,7 @@ func TestPrintWorktreeRootGuidanceNamesTheEntryAsTheConfigSpellsIt(t *testing.T)
 	oldRoot := filepath.Join(dir, "work", "repo1-runs")
 	newRoot := filepath.Join(dir, "work", "repo1-runs-v2")
 	block := "worktree_roots:\n  " + yamlPath(configuredKey) + ": " + yamlPath(oldRoot) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(block), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(block), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -497,7 +497,7 @@ func TestPrintWorktreeRootGuidanceMatchesTheBlocksIndentation(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte(block), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(block), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -591,7 +591,7 @@ func TestPrintWorktreeRootGuidanceReplacesAKeyWithNoBlockToAddTo(t *testing.T) {
 		if err := p.EnsureDirs(); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p.ConfigFile(), []byte(tc.document), 0o644); err != nil {
+		if err := os.WriteFile(p.ConfigFile(), []byte(tc.document), 0o600); err != nil {
 			t.Fatal(err)
 		}
 
@@ -642,7 +642,7 @@ func TestPrintWorktreeRootGuidanceRepointsAnInlineEntry(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte(document), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -706,7 +706,7 @@ var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 func writeConfig(t *testing.T, p *paths.Paths, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path

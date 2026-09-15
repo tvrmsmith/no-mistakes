@@ -42,7 +42,7 @@ func logDrainLifecycleInvocation(command string, force, drain bool) {
 		line = strings.Replace(line, "lifecycle ", "lifecycle FORCE ", 1)
 	}
 
-	f, err := os.OpenFile(p.CLILog(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(p.CLILog(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return
 	}

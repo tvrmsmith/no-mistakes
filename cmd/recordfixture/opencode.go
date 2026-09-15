@@ -89,7 +89,7 @@ func recordOpencode(ctx context.Context, out string, args []string) int {
 	}
 	for _, f := range flavours {
 		dir := filepath.Join(out, f.name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -122,7 +122,7 @@ func captureOpencodeFlavour(ctx context.Context, baseURL, dir, prompt, schema st
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "session.json"), sessionRaw, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), sessionRaw, 0o600); err != nil {
 		return err
 	}
 	var sess struct {
@@ -170,7 +170,7 @@ func captureOpencodeFlavour(ctx context.Context, baseURL, dir, prompt, schema st
 		<-sseDone
 		return fmt.Errorf("send message: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "message.json"), msgRaw, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "message.json"), msgRaw, 0o600); err != nil {
 		return err
 	}
 
@@ -185,7 +185,7 @@ func captureOpencodeFlavour(ctx context.Context, baseURL, dir, prompt, schema st
 		return fmt.Errorf("capture SSE: missing session.idle event")
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "sse.txt"), sseCapture.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "sse.txt"), sseCapture.Bytes(), 0o600); err != nil {
 		return err
 	}
 

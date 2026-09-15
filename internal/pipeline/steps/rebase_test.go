@@ -105,14 +105,14 @@ func TestRebaseStep_UsesConfiguredPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base")
 	gitCmd(t, dir, "push", "origin", "main")
 
-	if err := os.WriteFile(filepath.Join(dir, "main.txt"), []byte("main\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "main.txt"), []byte("main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -120,7 +120,7 @@ func TestRebaseStep_UsesConfiguredPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "develop", "HEAD~1")
-	if err := os.WriteFile(filepath.Join(dir, "develop.txt"), []byte("develop\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "develop.txt"), []byte("develop\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -129,7 +129,7 @@ func TestRebaseStep_UsesConfiguredPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "develop")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -269,7 +269,7 @@ func TestRebaseStep_ForkSyncsPushBranchBeforeDefaultBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", parent)
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -282,7 +282,7 @@ func TestRebaseStep_ForkSyncsPushBranchBeforeDefaultBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "feature")
 	gitCmd(t, dir, "push", fork, "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "fork.txt"), []byte("fork\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "fork.txt"), []byte("fork\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -291,7 +291,7 @@ func TestRebaseStep_ForkSyncsPushBranchBeforeDefaultBranch(t *testing.T) {
 	gitCmd(t, dir, "push", fork, "feature")
 
 	gitCmd(t, dir, "reset", "--hard", baseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "local.txt"), []byte("local\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "local.txt"), []byte("local\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -405,7 +405,7 @@ func TestRebaseStep_NonConflictFailureWithRebaseMetadataReturnsError(t *testing.
 
 	writeFile(t, filepath.Join(dir, "b.txt"), "dirty\n")
 	rebaseMergeDir := gitCmd(t, dir, "rev-parse", "--git-path", "rebase-merge")
-	if err := os.MkdirAll(rebaseMergeDir, 0o755); err != nil {
+	if err := os.MkdirAll(rebaseMergeDir, 0o750); err != nil {
 		t.Fatalf("mkdir rebase metadata: %v", err)
 	}
 

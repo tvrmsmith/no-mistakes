@@ -89,7 +89,7 @@ func installFakeGit(t *testing.T, body string) {
 	binDir := t.TempDir()
 	gitPath := filepath.Join(binDir, "git")
 	script := "#!/bin/sh\n" + body + "\n"
-	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(gitPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

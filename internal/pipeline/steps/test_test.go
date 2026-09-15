@@ -178,7 +178,7 @@ func TestTestStep_FixAgentTimeoutDoesNotCancelPostProcessing(t *testing.T) {
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o600); err != nil {
 				return nil, err
 			}
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix tests","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
@@ -210,7 +210,7 @@ func TestTestStep_FixAgentSuccessfulReturnAfterTimeoutFailsWithoutCommit(t *test
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o600); err != nil {
 				return nil, err
 			}
 			<-ctx.Done()

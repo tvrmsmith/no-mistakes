@@ -14,7 +14,7 @@ func writeGlobalConfig(t *testing.T, data string) *GlobalConfig {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadGlobal(path)
@@ -28,7 +28,7 @@ func loadGlobalConfigError(t *testing.T, data string) error {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := LoadGlobal(path)

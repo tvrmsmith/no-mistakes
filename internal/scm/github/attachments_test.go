@@ -63,7 +63,7 @@ func TestValidateUserAsset(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "dot.png")
-	if err := os.WriteFile(png, []byte("png-bytes"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("png-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	asset, err := ValidateUserAsset(png)
@@ -75,7 +75,7 @@ func TestValidateUserAsset(t *testing.T) {
 	}
 
 	txt := filepath.Join(dir, "notes.txt")
-	if err := os.WriteFile(txt, []byte("hello"), 0o644); err != nil {
+	if err := os.WriteFile(txt, []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ValidateUserAsset(txt); err == nil || !strings.Contains(err.Error(), "not a supported file type") {
@@ -83,7 +83,7 @@ func TestValidateUserAsset(t *testing.T) {
 	}
 
 	empty := filepath.Join(dir, "empty.png")
-	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ValidateUserAsset(empty); err == nil || !strings.Contains(err.Error(), "empty") {
@@ -91,7 +91,7 @@ func TestValidateUserAsset(t *testing.T) {
 	}
 
 	oversize := filepath.Join(dir, "oversize.png")
-	if err := os.WriteFile(oversize, make([]byte, maxUserAssetImageBytes+1), 0o644); err != nil {
+	if err := os.WriteFile(oversize, make([]byte, maxUserAssetImageBytes+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ValidateUserAsset(oversize); err == nil || !strings.Contains(err.Error(), "images must be at most") {
@@ -99,7 +99,7 @@ func TestValidateUserAsset(t *testing.T) {
 	}
 
 	mp4 := filepath.Join(dir, "clip.MP4")
-	if err := os.WriteFile(mp4, []byte("ftyp"), 0o644); err != nil {
+	if err := os.WriteFile(mp4, []byte("ftyp"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	video, err := ValidateUserAsset(mp4)
@@ -116,7 +116,7 @@ func TestUserAssetClientUploadFile(t *testing.T) {
 	dir := t.TempDir()
 	png := filepath.Join(dir, "checkout.png")
 	body := []byte("fake-png")
-	if err := os.WriteFile(png, body, 0o644); err != nil {
+	if err := os.WriteFile(png, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	asset, err := ValidateUserAsset(png)
@@ -176,7 +176,7 @@ func TestUserAssetClientUploadFileRejectsReplacedFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "checkout.png")
-	if err := os.WriteFile(png, []byte("safe-png"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("safe-png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	asset, err := ValidateUserAsset(png)
@@ -184,7 +184,7 @@ func TestUserAssetClientUploadFileRejectsReplacedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := filepath.Join(dir, "other.png")
-	if err := os.WriteFile(other, []byte("private!"), 0o644); err != nil {
+	if err := os.WriteFile(other, []byte("private!"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(png); err != nil {
@@ -220,7 +220,7 @@ func TestUserAssetClientUploadFileRejectsUnexpectedURL(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "dot.png")
-	if err := os.WriteFile(png, []byte("png"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	asset, err := ValidateUserAsset(png)
@@ -259,7 +259,7 @@ func TestHostUploadUserAssetSkipsInstallationToken(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "dot.png")
-	if err := os.WriteFile(png, []byte("png"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
@@ -275,7 +275,7 @@ func TestHostUploadUserAssetUploadsWithOAuthToken(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "dot.png")
-	if err := os.WriteFile(png, []byte("png"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

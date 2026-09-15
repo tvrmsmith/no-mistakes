@@ -483,7 +483,7 @@ func runRequiredWorkflowCheckJob(t *testing.T, workflow requiredWorkflow, event 
 		t.Fatalf("marshal event payload: %v", err)
 	}
 	eventPath := filepath.Join(t.TempDir(), "event.json")
-	if err := os.WriteFile(eventPath, raw, 0o644); err != nil {
+	if err := os.WriteFile(eventPath, raw, 0o600); err != nil {
 		t.Fatalf("write event payload: %v", err)
 	}
 
@@ -540,7 +540,7 @@ func runRequiredWorkflowCheckJob(t *testing.T, workflow requiredWorkflow, event 
 		t.Fatalf("resolve composite action path: %v", err)
 	}
 	outputPath := filepath.Join(t.TempDir(), "github_output")
-	if err := os.WriteFile(outputPath, nil, 0o644); err != nil {
+	if err := os.WriteFile(outputPath, nil, 0o600); err != nil {
 		t.Fatalf("seed GITHUB_OUTPUT: %v", err)
 	}
 

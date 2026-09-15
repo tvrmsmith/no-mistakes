@@ -51,7 +51,7 @@ func trustedDefaultBranchConfig() *config.RepoConfig {
 
 func writeWorkingPathConfig(t *testing.T, dir, body string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -92,7 +92,7 @@ func TestApplyWorkingPathTrustedConfig_UnstatableFileKeepsTrustedCopy(t *testing
 	}
 	base := t.TempDir()
 	notADir := filepath.Join(base, "notadir")
-	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

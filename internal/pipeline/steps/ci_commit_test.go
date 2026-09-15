@@ -96,7 +96,7 @@ func TestCIStep_CommitAndPushDoesNotPushForkWhenConfigured(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -107,13 +107,13 @@ func TestCIStep_CommitAndPushDoesNotPushForkWhenConfigured(t *testing.T) {
 	gitCmd(t, dir, "push", fork, "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
-	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -168,7 +168,7 @@ func TestCIStep_InvalidCommitTemplateDoesNotStageChanges(t *testing.T) {
 	sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Config.Commit = config.Commit{FixMessage: `{{printf "%s" .Summary}}`}
 
-	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := (&CIStep{}).commitRepair(sctx, "repair checks"); err == nil {
@@ -306,7 +306,7 @@ func TestCIStep_CommitAndPush_GitCommandsUseStandardCredentialEnv(t *testing.T) 
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -316,14 +316,14 @@ func TestCIStep_CommitAndPush_GitCommandsUseStandardCredentialEnv(t *testing.T) 
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
-	if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("ci fix"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("ci fix"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -332,7 +332,7 @@ func TestCIStep_CommitAndPush_GitCommandsUseStandardCredentialEnv(t *testing.T) 
 	t.Setenv("GIT_TERMINAL_PROMPT", "1")
 	t.Setenv("GIT_OPTIONAL_LOCKS", "1")
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[credential \"https://github.com\"]\n\thelper = !gh auth git-credential\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[credential \"https://github.com\"]\n\thelper = !gh auth git-credential\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)

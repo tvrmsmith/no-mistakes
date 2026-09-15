@@ -290,13 +290,13 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	// Exercise the manager's real trusted-config fetch: the pushed branch tries
 	// to remove protection even though the trusted branch opts into repo commands.
 	configFile := filepath.Join(repo.WorkingPath, ".no-mistakes.yaml")
-	if err := os.WriteFile(configFile, []byte("protected_paths: ['*.txt']\nallow_repo_commands: true\n"), 0o644); err != nil {
+	if err := os.WriteFile(configFile, []byte("protected_paths: ['*.txt']\nallow_repo_commands: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, repo.WorkingPath, "add", ".no-mistakes.yaml")
 	gitCmd(t, repo.WorkingPath, "commit", "-m", "protect text files on trusted main")
 	gitCmd(t, repo.WorkingPath, "push", "gate", "HEAD:refs/heads/main")
-	if err := os.WriteFile(configFile, []byte("protected_paths: []\n"), 0o644); err != nil {
+	if err := os.WriteFile(configFile, []byte("protected_paths: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, repo.WorkingPath, "add", ".no-mistakes.yaml")
@@ -402,13 +402,13 @@ func (s protectedPathCommitStep) Name() types.StepName { return s.step.Name() }
 func (s protectedPathCommitStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	sctx.Config.ProtectedPaths = []string{"*.txt"}
 	file := filepath.Join(sctx.WorkDir, "test.txt")
-	if err := os.WriteFile(file, []byte("staged edit\n"), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte("staged edit\n"), 0o600); err != nil {
 		return nil, err
 	}
 	if _, err := git.Run(sctx.Ctx, sctx.WorkDir, "add", "test.txt"); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(file, []byte("unstaged edit\n"), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte("unstaged edit\n"), 0o600); err != nil {
 		return nil, err
 	}
 	if s.Name() == types.StepTest {

@@ -507,7 +507,7 @@ func TestRecoverOnStartup_ResumesParkedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	mockClaude := writeMockClaude(t, t.TempDir())
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+mockClaude+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+mockClaude+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d, err := db.Open(p.DB())
@@ -645,12 +645,12 @@ func TestRecoverOnStartup_ReconcilesHistoricalCIGateFromCurrentPRState(t *testin
 			}
 			mockClaude := writeMockClaude(t, t.TempDir())
 			profileDir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    user: recovery-user\n"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    user: recovery-user\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			globalConfig := "agent: claude\nagent_path_override:\n  claude: " + mockClaude +
 				"\nforge_profiles:\n  github.com:\n    gh_config_dir: " + profileDir + "\n"
-			if err := os.WriteFile(p.ConfigFile(), []byte(globalConfig), 0o644); err != nil {
+			if err := os.WriteFile(p.ConfigFile(), []byte(globalConfig), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			d, err := db.Open(p.DB())
@@ -759,10 +759,10 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 
 	// Create orphaned worktree directories.
 	orphanDir := p.WorktreeDir("some-repo", "some-run")
-	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+	if err := os.MkdirAll(orphanDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(orphanDir, "test.txt"), []byte("orphan"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(orphanDir, "test.txt"), []byte("orphan"), 0o600); err != nil {
 		t.Fatalf("write orphan file: %v", err)
 	}
 
@@ -856,7 +856,7 @@ func TestSkipWorktreeCleanup_CIMonitorInterrupted(t *testing.T) {
 		runID, wtPath := newInterruptedWorktree(t, headSHA)
 		gitCmd(t, wtPath, "config", "user.email", "test@test.com")
 		gitCmd(t, wtPath, "config", "user.name", "Test")
-		if err := os.WriteFile(filepath.Join(wtPath, "fix.txt"), []byte("ci fix"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(wtPath, "fix.txt"), []byte("ci fix"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		gitCmd(t, wtPath, "add", "-A")
@@ -879,7 +879,7 @@ func TestSkipWorktreeCleanup_CIMonitorInterrupted(t *testing.T) {
 			t.Fatal(err)
 		}
 		wtPath := p.WorktreeDir(repo.ID, run.ID)
-		if err := os.MkdirAll(wtPath, 0o755); err != nil {
+		if err := os.MkdirAll(wtPath, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		skip, _ := skipWorktreeCleanup(ctx, d, run.ID, wtPath)
@@ -966,7 +966,7 @@ while read oldrev newrev refname; do
 done
 exit 0
 `
-	if err := os.WriteFile(hookPath, []byte(legacyHook), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(legacyHook), 0o700); err != nil {
 		t.Fatal(err)
 	}
 

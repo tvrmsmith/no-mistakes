@@ -73,7 +73,7 @@ func isManagedPreReceiveHook(content []byte) bool {
 // an existing user hook behind the managed wrapper.
 func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	hooksDir := filepath.Join(bareDir, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		return false, err
 	}
 	hookPath := filepath.Join(hooksDir, "pre-receive")
@@ -223,7 +223,7 @@ func isManagedPostReceiveHook(content []byte) bool {
 // the hooks directory of a bare repo at bareDir.
 func InstallPostReceiveHook(bareDir string) error {
 	hooksDir := filepath.Join(bareDir, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		return err
 	}
 	hookPath := filepath.Join(hooksDir, "post-receive")
@@ -234,7 +234,7 @@ func InstallPostReceiveHook(bareDir string) error {
 // Custom hooks are left untouched; missing hooks are installed for gate repos.
 func RefreshManagedPostReceiveHook(bareDir string) (bool, error) {
 	hooksDir := filepath.Join(bareDir, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		return false, err
 	}
 	hookPath := filepath.Join(hooksDir, "post-receive")

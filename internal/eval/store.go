@@ -38,7 +38,7 @@ func Open(root string) (*Store, error) {
 	}
 	root = filepath.Clean(root)
 	cases := filepath.Join(root, "cases")
-	if err := os.MkdirAll(cases, 0o755); err != nil {
+	if err := os.MkdirAll(cases, 0o750); err != nil {
 		return nil, fmt.Errorf("create eval cases directory: %w", err)
 	}
 	database, err := sql.Open("sqlite", filepath.Join(root, "registry.sqlite")+"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)")
@@ -651,7 +651,7 @@ func writeJSON(path string, value any) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}

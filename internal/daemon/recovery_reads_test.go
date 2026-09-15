@@ -274,7 +274,7 @@ func TestAmbiguousContendedBranchResumesNeitherRun(t *testing.T) {
 	}
 	twin := parkedTwinRun(t, d, parked)
 	twinWorktree := p.WorktreeDir(repo.ID, twin.ID)
-	if err := os.MkdirAll(twinWorktree, 0o755); err != nil {
+	if err := os.MkdirAll(twinWorktree, 0o750); err != nil {
 		t.Fatal(err)
 	}
 

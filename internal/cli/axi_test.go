@@ -734,19 +734,19 @@ func TestPreflightGuardDirtyTreeNamesUntrackedFiles(t *testing.T) {
 	run(t, dir, "git", "config", "user.name", "Test")
 	run(t, dir, "git", "commit", "--allow-empty", "-m", "initial")
 	run(t, dir, "git", "checkout", "-b", "feature/x")
-	if err := os.MkdirAll(filepath.Join(dir, "docs", "plans"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "plans"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "docs", "plans", "spec.md"), []byte("spec\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "docs", "plans", "spec.md"), []byte("spec\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("scratch/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("scratch/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "scratch"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "scratch"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "scratch", "notes.md"), []byte("scratch\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "scratch", "notes.md"), []byte("scratch\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
@@ -784,13 +784,13 @@ func TestPreflightGuardDirtyTreeTrackedOnlyHasNoUntrackedList(t *testing.T) {
 	run(t, dir, "git", "init")
 	run(t, dir, "git", "config", "user.email", "test@test.com")
 	run(t, dir, "git", "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	run(t, dir, "git", "add", ".")
 	run(t, dir, "git", "commit", "-m", "initial")
 	run(t, dir, "git", "checkout", "-b", "feature/x")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# changed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# changed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
@@ -981,12 +981,12 @@ func TestAxiLogsFullEscapesControlByteOutsideTailWithoutRewritingLog(t *testing.
 		t.Fatalf("mark run running: %v", err)
 	}
 	logDir := p.RunLogDir(dbRun.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		t.Fatalf("mkdir log dir: %v", err)
 	}
 	raw := []byte("bad\x1fvalue\n" + strings.Repeat("later passing line\n", logTailLines+5))
 	logPath := filepath.Join(logDir, "test.log")
-	if err := os.WriteFile(logPath, raw, 0o644); err != nil {
+	if err := os.WriteFile(logPath, raw, 0o600); err != nil {
 		t.Fatalf("write test log: %v", err)
 	}
 
@@ -1031,7 +1031,7 @@ func TestAxiStatusIgnoresInvalidGlobalConfig(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatalf("ensure dirs: %v", err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o600); err != nil {
 		t.Fatalf("write invalid config: %v", err)
 	}
 	database, err := db.Open(p.DB())
@@ -1094,7 +1094,7 @@ func TestAxiRunReportsInvalidGlobalConfig(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatalf("ensure dirs: %v", err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o600); err != nil {
 		t.Fatalf("write invalid config: %v", err)
 	}
 	database, err := db.Open(p.DB())

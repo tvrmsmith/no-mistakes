@@ -125,7 +125,7 @@ func installFakePiJSONL(t *testing.T, fakeDir, reply string) {
 	} else {
 		script = "#!/bin/sh\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }

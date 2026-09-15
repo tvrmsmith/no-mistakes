@@ -414,7 +414,7 @@ func TestRunWizardTracksPageview(t *testing.T) {
 	}
 
 	repoDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -478,7 +478,7 @@ func TestRunWizardReturnsTerminalWizardError(t *testing.T) {
 	}
 
 	repoDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -524,7 +524,7 @@ func TestRunWizard_ConfiguresServerPIDsDir(t *testing.T) {
 	t.Cleanup(func() { agent.SetServerPIDsDirForOwner(prevDir, prevOwner) })
 
 	repoDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 

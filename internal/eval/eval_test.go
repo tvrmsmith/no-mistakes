@@ -153,7 +153,7 @@ func TestCapturePinsConfigurationFromSourceReview(t *testing.T) {
 	mustGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustGit(t, ctx, workDir, "config", "user.name", "Eval Test")
 	mustGit(t, ctx, workDir, "checkout", "main")
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("ignore_patterns: ['advanced-only']\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("ignore_patterns: ['advanced-only']\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, workDir, "add", ".no-mistakes.yaml")
@@ -180,7 +180,7 @@ func TestCapturePreservesFixRoundStartingHead(t *testing.T) {
 	ctx := t.Context()
 	p, sourceDB, run, repo, firstRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
-	if err := os.WriteFile(filepath.Join(repo.WorkingPath, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo.WorkingPath, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, repo.WorkingPath, "add", "main.go")
@@ -228,7 +228,7 @@ func TestReplayRestoresCaseIntoAnIsolatedWorktree(t *testing.T) {
 	} else {
 		script = "#!/bin/sh\n[ \"$NM_HOME\" = \"" + p.Root() + "\" ] && touch \"" + p.Root() + "/shared-home-used\"\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(fake)+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -296,7 +296,7 @@ func TestReplayPinsCandidateModelAndEffortOnTheHarness(t *testing.T) {
 	} else {
 		script = "#!/bin/sh\nprintf '%s %s\\n%s %s\\n' \"$1\" \"$2\" \"$3\" \"$4\" > \"" + tuningArgsPath + "\"\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(fake)+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -465,7 +465,7 @@ func TestPersistEvaluationQueuesEveryUnexpectedCandidateFinding(t *testing.T) {
 	defer closers.Quiet(store)
 
 	caseDir := store.caseDir("candidate-findings")
-	if err := os.MkdirAll(caseDir, 0o755); err != nil {
+	if err := os.MkdirAll(caseDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	labels := Labels{Version: labelsVersion}
@@ -953,10 +953,10 @@ func setupCapturedRunWithHistoryAndFindings(t *testing.T, ctx context.Context, p
 	mustGit(t, ctx, root, "clone", gateDir, workDir)
 	mustGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustGit(t, ctx, workDir, "config", "user.name", "Eval Test")
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("review:\n  path_instructions:\n    - path: '*.go'\n      instructions: review error paths\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("review:\n  path_instructions:\n    - path: '*.go'\n      instructions: review error paths\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, workDir, "add", ".")
@@ -966,7 +966,7 @@ func setupCapturedRunWithHistoryAndFindings(t *testing.T, ctx context.Context, p
 	mustGit(t, ctx, workDir, "push", "origin", "main")
 	baseSHA := mustGit(t, ctx, workDir, "rev-parse", "HEAD")
 	mustGit(t, ctx, workDir, "checkout", "-b", "feature/eval")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, workDir, "add", "main.go")
@@ -1034,7 +1034,7 @@ func installFakeReviewAgent(t *testing.T, p *paths.Paths, findingsJSON string) {
 	} else {
 		script = "#!/bin/sh\n[ \"$NM_HOME\" = \"" + p.Root() + "\" ] && touch \"" + p.Root() + "/shared-home-used\"\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(fake)+string(os.PathListSeparator)+os.Getenv("PATH"))

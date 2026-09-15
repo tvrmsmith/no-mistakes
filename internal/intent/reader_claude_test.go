@@ -16,11 +16,11 @@ func writeClaudeFixture(t *testing.T, repoCWD string, lines []string) string {
 	home := t.TempDir()
 	encoded := claudeProjectDirName(repoCWD)
 	dir := filepath.Join(home, ".claude", "projects", encoded)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "session-uuid-1.jsonl")
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return home
