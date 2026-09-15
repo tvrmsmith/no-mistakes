@@ -792,11 +792,15 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 	}
 	runCtx, cancel := context.WithCancelCause(context.Background())
 	executor := pipeline.NewExecutor(m.db, m.paths, plan.cfg, plan.agent, plan.steps, m.broadcast)
-	executor.SetOnPRMerged(func(_ context.Context, runID string) {
+	executor.SetOnPRMerged(func(ctx context.Context, runID string) {
+		// Keeps what the merge's context carries but not its cancellation:
+		// the step returns as soon as the merge lands, and the relabel that
+		// follows it is held open by m.wg instead, so a drain waits for it.
+		relabelCtx := context.WithoutCancel(ctx)
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			m.relabelEvalRun(context.Background(), plan.cfg, runID)
+			m.relabelEvalRun(relabelCtx, plan.cfg, runID)
 		}()
 	})
 	executor.SetForgeContext(plan.forge)
@@ -1930,11 +1934,15 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	executor := pipeline.NewExecutor(m.db, m.paths, cfg, ag, execSteps, m.broadcast)
 	executor.SetForgeContext(forgeCtx)
 	executor.SetSkippedSteps(effectiveSkips)
-	executor.SetOnPRMerged(func(_ context.Context, runID string) {
+	executor.SetOnPRMerged(func(ctx context.Context, runID string) {
+		// Keeps what the merge's context carries but not its cancellation:
+		// the step returns as soon as the merge lands, and the relabel that
+		// follows it is held open by m.wg instead, so a drain waits for it.
+		relabelCtx := context.WithoutCancel(ctx)
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			m.relabelEvalRun(context.Background(), cfg, runID)
+			m.relabelEvalRun(relabelCtx, cfg, runID)
 		}()
 	})
 
