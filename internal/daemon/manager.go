@@ -552,7 +552,17 @@ func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*rec
 		return nil, unresumable(fmt.Errorf("run repository is missing"))
 	}
 	workDir := worktrees.RecordedDir(m.paths, run.WorktreePath(), repo.ID, run.ID)
-	execSteps := m.steps()
+	// The precondition check compares the recorded step rows against the plan
+	// this run executes, so it needs the run's own pinned gates rather than
+	// m.steps() alone: a gated run's rows would otherwise never match. Reading
+	// them here (instead of waiting for loadRecoveredConfig below) keeps that
+	// comparison ahead of the git reads, and a failed read defers like every
+	// other incomplete read on this path.
+	pinnedGates, err := m.pinnedRunGates(run.ID)
+	if err != nil {
+		return nil, err
+	}
+	execSteps := steps.WithCustomGates(m.steps(), pinnedGates)
 	// The destructive lifecycle guard promises an operator that a parked run
 	// survives a stop, so it corroborates its candidates against this same
 	// owner: the two must decide resumability by one rule, not two.
@@ -578,6 +588,10 @@ func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*rec
 
 	cfg, err := m.loadRecoveredConfig(ctx, run, repo, workDir)
 	if err != nil {
+		return nil, err
+	}
+	execSteps = steps.WithCustomGates(m.steps(), cfg.Gates)
+	if err := pipeline.ValidateRecoveredRun(m.db, run, execSteps); err != nil {
 		return nil, err
 	}
 	forgeCtx, err := forgecontext.Resolve(ctx, cfg.ForgeProfiles, repo.UpstreamURL, repo.ForkURL)
@@ -667,6 +681,17 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 	trustedRepoCfg, allowRepoCommands := resolveTrustedRepoConfig(ctx, workDir, globalCfg, repo, trustedSHA, run.ID)
 	effectiveRepoCfg := config.EffectiveRepoConfig(repoCfg, trustedRepoCfg, allowRepoCommands)
 	cfg := config.Merge(globalCfg, effectiveRepoCfg)
+	// Gates are read back from the run, never re-resolved. Everything else here
+	// is deliberately re-read from the live default branch, but a gate decides
+	// which steps the run HAS: the default branch may have gained or lost one
+	// since this run parked, and rebuilding the sequence from the current list
+	// would leave recovery matching the run's recorded steps against a sequence
+	// it never executed - failing a healthy parked run as a crash.
+	gates, err := m.pinnedRunGates(run.ID)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Gates = gates
 	if err := m.paths.ValidateEvidenceRoot(cfg.Test.Evidence.LocalRoot); err != nil {
 		return nil, err
 	}
@@ -677,6 +702,23 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 		}
 	}
 	return cfg, nil
+}
+
+// pinnedRunGates reads back the gate list a run resolved at creation. An absent
+// pin means the bare core pipeline - the only sequence a run created before
+// gates were pinned can have had - while an unusable one fails its caller
+// closed with a reason, because silently dropping it would resume the run
+// against a shorter pipeline than the one it recorded.
+func (m *RunManager) pinnedRunGates(runID string) ([]config.Gate, error) {
+	payload, err := m.db.GetRunGates(runID)
+	if err != nil {
+		return nil, fmt.Errorf("read pinned gates: %w", err)
+	}
+	gates, err := config.ParseGates(payload)
+	if err != nil {
+		return nil, fmt.Errorf("pinned gates are unusable: %w", err)
+	}
+	return gates, nil
 }
 
 func newPipelineAgent(ctx context.Context, cfg *config.Config, evidenceRoot string, lookPath func(string) (string, error), environment runenv.Overlay) (agent.Agent, error) {
@@ -1249,14 +1291,23 @@ func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushRec
 	}
 
 	branch := branchFromRef(params.Ref)
+	baseSHA := params.Old
+	// A push that re-creates a branch the pusher reconciled reports no previous
+	// head, which would record a zero base and make a deliberate history
+	// rewrite look like an ordinary push to the rebase step. Restore the head
+	// the branch actually carried, but only when the gate's own archive tag
+	// records it: the claim itself arrives over the push and is not evidence.
+	if git.IsZeroSHA(baseSHA) && gate.ArchivedHeadRecorded(ctx, m.paths.RepoDir(repo.ID), branch, params.ReconciledPreviousHead) {
+		baseSHA = strings.TrimSpace(params.ReconciledPreviousHead)
+	}
 	if params.LaunchNonce != "" {
-		receipt, err := m.startFreshLaunch(ctx, repo, branch, params.New, params.Old, params.Gate, params.SkipSteps, params.Intent, params.LaunchNonce, params.ValidationGeneration, params.PRBaseBranch, "push")
+		receipt, err := m.startFreshLaunch(ctx, repo, branch, params.New, baseSHA, params.Gate, params.SkipSteps, params.Intent, params.LaunchNonce, params.ValidationGeneration, params.PRBaseBranch, "push")
 		if err != nil {
 			return "", err
 		}
 		return receipt.RunID, nil
 	}
-	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent, params.PRBaseBranch)
+	return m.startRun(ctx, repo, branch, params.New, baseSHA, "push", params.SkipSteps, params.Intent, params.PRBaseBranch)
 }
 
 // HandleStartFreshRun creates or replays a proof-mode launch only after
@@ -1666,7 +1717,6 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 		trackStartFailure("daemon_shutdown")
 		return "", m.refuseNewRunError()
 	}
-
 	// Best-effort only: a clone's remotes may change after init. Refresh the
 	// registered URLs before constructing any run-owned Git operation, but keep
 	// the exact prior repo value and continue when discovery, validation, or the
@@ -1904,10 +1954,30 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 		return "", err
 	}
 
-	execSteps := m.steps()
+	// Configuration decides this run's gates exactly once, here, and the
+	// resolved list is recorded before the executor can write a single step
+	// row. Every later consumer - above all crash recovery - reads that record
+	// back through pinnedRunGates, so a gate merged onto (or removed from) the
+	// default branch from here on is inert for this run instead of retargeting
+	// its resume at a step sequence it never executed.
+	pinnedGates, err := config.MarshalGates(cfg.Gates)
+	if err != nil {
+		m.db.UpdateRunError(run.ID, fmt.Sprintf("record gates: %s", err))
+		trackStartFailure("record_gates")
+		return "", fmt.Errorf("record gates: %w", err)
+	}
+	if err := m.db.SetRunGates(run.ID, pinnedGates); err != nil {
+		m.db.UpdateRunError(run.ID, fmt.Sprintf("record gates: %s", err))
+		trackStartFailure("record_gates")
+		return "", fmt.Errorf("record gates: %w", err)
+	}
+
+	execSteps := steps.WithCustomGates(m.steps(), cfg.Gates)
 	// Persist the step plan so a lifecycle guard can tell whether the binary
-	// that would resume this run still runs the same layout. A write failure
-	// only leaves the plan unknown, which the guard treats as unresumable.
+	// that would resume this run still runs the same layout. Custom gates are
+	// already folded in above, so the recorded plan names the sequence this run
+	// actually executes. A write failure only leaves the plan unknown, which the
+	// guard treats as unresumable.
 	planNames := steps.StepNames(execSteps)
 	run.StepPlan = planNames
 	if err := m.db.SetRunStepPlan(run.ID, planNames); err != nil {
@@ -2199,7 +2269,7 @@ func telemetryFailedStepName(database *db.DB, runID string) string {
 	}
 	for _, step := range steps {
 		if step.Status == types.StepStatusFailed {
-			return string(step.StepName)
+			return telemetry.StepName(step.StepName)
 		}
 	}
 	return ""

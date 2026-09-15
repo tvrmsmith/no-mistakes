@@ -93,7 +93,7 @@ func ParkRunAtGate(t *testing.T, p *paths.Paths, database *db.DB, repoID, runID 
 			if _, err := database.InsertStepRound(row.ID, 1, "initial", &findings, nil, 10); err != nil {
 				t.Fatalf("insert gate round: %v", err)
 			}
-			if err := database.ParkStepForApproval(run.ID, row.ID, types.StepStatusAwaitingApproval, 10, &findings); err != nil {
+			if err := database.ParkStepForApproval(run.ID, row.ID, types.StepStatusAwaitingApproval, 0, 10, &findings); err != nil {
 				t.Fatalf("park gate step: %v", err)
 			}
 		}
