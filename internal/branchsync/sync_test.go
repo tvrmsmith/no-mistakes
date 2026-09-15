@@ -329,6 +329,7 @@ func TestEquivalentButDivergedClassification(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := newSplitLocalSyncFixture(t)
 			rebuildPipelineHead(t, f, tc.commits)
 
@@ -491,6 +492,7 @@ func TestEquivalentDivergenceRefusesUnrepresentedEdgeDeletion(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncFixture(t)
 			mustWrite(t, filepath.Join(f.local, "edge.txt"), tc.base)
 			mustRun(t, f.local, "add", "edge.txt")
@@ -575,6 +577,7 @@ func TestDirtyClassesRefuseBeforeNetworkAndLeaveHeadIndexWorktree(t *testing.T) 
 	}
 	for name, prepare := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncFixture(t)
 			prepare(f)
 			beforeIndex, err := os.ReadFile(filepath.Join(f.local, ".git", "index"))
@@ -611,6 +614,7 @@ func TestOperationInProgressClassesRefuse(t *testing.T) {
 		{"rebase-merge/head-name", "blocked_rebase_in_progress"},
 	} {
 		t.Run(tc.marker, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncFixture(t)
 			gitPath := mustRun(t, f.local, "rev-parse", "--git-path", tc.marker)
 			if !filepath.IsAbs(gitPath) {
@@ -629,6 +633,7 @@ func TestLocalAheadAndDivergedRefuse(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ahead", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		if state := f.service.Apply(f.ctx); !state.Changed {
 			t.Fatal("setup sync failed")
@@ -642,6 +647,7 @@ func TestLocalAheadAndDivergedRefuse(t *testing.T) {
 		}
 	})
 	t.Run("diverged", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		mustWrite(t, filepath.Join(f.local, "followup.txt"), "diverged\n")
 		mustRun(t, f.local, "add", "followup.txt")
@@ -657,6 +663,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 	t.Parallel()
 
 	t.Run("advanced", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		writer := cloneRemoteBranch(t, f.remote)
 		mustWrite(t, filepath.Join(writer, "advanced.txt"), "advanced\n")
@@ -668,6 +675,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("rewritten", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		writer := cloneRemoteBranch(t, f.remote)
 		mustRun(t, writer, "checkout", "--orphan", "rewrite")
@@ -681,6 +689,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("missing open", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		if err := f.db.UpdateRunPRState(f.run.ID, "open"); err != nil {
 			t.Fatal(err)
@@ -691,6 +700,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("missing merged noop", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		if err := f.db.UpdateRunPRState(f.run.ID, "merged"); err != nil {
 			t.Fatal(err)
@@ -705,6 +715,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("offline", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		if err := os.Rename(f.remote, f.remote+".offline"); err != nil {
 			t.Fatal(err)
@@ -722,6 +733,7 @@ func TestTargetChangeLegacyDetachedAndGenerationRaceRefuse(t *testing.T) {
 	t.Parallel()
 
 	t.Run("target changed", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		other := filepath.Join(t.TempDir(), "other.git")
 		mustRun(t, filepath.Dir(other), "init", "--bare", other)
@@ -735,6 +747,7 @@ func TestTargetChangeLegacyDetachedAndGenerationRaceRefuse(t *testing.T) {
 		}
 	})
 	t.Run("active run without push provenance", func(t *testing.T) {
+		t.Parallel()
 		// A newer active run with no push binding owns the branch: the refusal
 		// names pipeline custody (not a legacy-unbound misclassification) and
 		// points at the active run.
@@ -755,6 +768,7 @@ func TestTargetChangeLegacyDetachedAndGenerationRaceRefuse(t *testing.T) {
 		}
 	})
 	t.Run("detached", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		mustRun(t, f.local, "checkout", "--detach", f.old)
 		if state := f.service.Apply(f.ctx); state.State != StateAmbiguousContext {
@@ -762,6 +776,7 @@ func TestTargetChangeLegacyDetachedAndGenerationRaceRefuse(t *testing.T) {
 		}
 	})
 	t.Run("generation race", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		f.service.beforeApply = func() {
 			if err := f.db.UpdateRunPushBinding(f.run.ID, db.PushBinding{HeadSHA: f.pushed, TargetKind: "upstream", TargetFingerprint: TargetFingerprint(f.remote), Ref: "refs/heads/feature/sync"}); err != nil {

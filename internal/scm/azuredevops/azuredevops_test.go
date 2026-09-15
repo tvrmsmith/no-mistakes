@@ -184,6 +184,7 @@ func TestFindPRRejectsInvalidResponse(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			h := newTestHost(map[string]azdoTestResponse{
 				"az repos pr list --source-branch feature --status active --target-branch main --organization " + testOrg + " --project " + testProject + " --repository " + testRepo + " --output json": {
 					stdout: tc.output,
@@ -395,6 +396,7 @@ func TestGetPRState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
+			t.Parallel()
 			h := newTestHost(map[string]azdoTestResponse{
 				"az repos pr show --id 42 --organization " + testOrg + " --output json": {
 					stdout: fmt.Sprintf(`{"pullRequestId":42,"status":%q}`, tc.raw) + "\n",
@@ -427,6 +429,7 @@ func TestGetMergeableState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
+			t.Parallel()
 			h := newTestHost(map[string]azdoTestResponse{
 				"az repos pr show --id 42 --organization " + testOrg + " --output json": {
 					stdout: fmt.Sprintf(`{"pullRequestId":42,"mergeStatus":%q}`, tc.raw) + "\n",

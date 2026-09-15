@@ -316,6 +316,7 @@ func TestRestampPRAttestation_RetriesAndRequiresSettlement(t *testing.T) {
 	repairHead := strings.Repeat("12", 20)
 
 	t.Run("transient_failure_settles", func(t *testing.T) {
+		t.Parallel()
 		host := &attestationTestHost{
 			title:       "fix: ci",
 			body:        compliantPipelineBody(t, testPipelineHeadSHA),
@@ -333,6 +334,7 @@ func TestRestampPRAttestation_RetriesAndRequiresSettlement(t *testing.T) {
 	})
 
 	t.Run("persistent_failure_is_returned", func(t *testing.T) {
+		t.Parallel()
 		host := &attestationTestHost{
 			title:       "fix: ci",
 			body:        compliantPipelineBody(t, testPipelineHeadSHA),

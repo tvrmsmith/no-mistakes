@@ -104,6 +104,7 @@ func TestResolveRemoteSupportsPortsAndPathPrefixes(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			base, repo, err := ResolveRemote(tt.remote, tt.configured, tt.resolved)
 			if err != nil {
 				t.Fatalf("ResolveRemote() error = %v", err)
@@ -369,6 +370,7 @@ func TestChecksFailClosedAcrossStates(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: checksJSON(tt.overall, tt.requiredState, tt.passes, tt.statuses, tt.required)}}})
 			got, err := host.GetChecks(context.Background(), testPR())
 			if err != nil {

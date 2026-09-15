@@ -39,6 +39,7 @@ func TestRepoSlug(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := RepoSlug(tc.in); got != tc.want {
 				t.Fatalf("RepoSlug(%q) = %q, want %q", tc.in, got, tc.want)
 			}
@@ -80,6 +81,7 @@ func TestHostPrefixedSlug(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := HostPrefixedSlug(tc.in); got != tc.want {
 				t.Fatalf("HostPrefixedSlug(%q) = %q, want %q", tc.in, got, tc.want)
 			}
@@ -1229,6 +1231,7 @@ func TestRerunCheckTargetsJobFromCheckLink(t *testing.T) {
 		"trailing slash":     "https://github.com/test/repo/actions/runs/900/job/901/",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			var recorded [][]string
 			host := New(recordingCmdFactory("", &recorded), nil, "", "test/repo")
 
@@ -1261,6 +1264,7 @@ func TestRerunCheckTargetsWholeCancelledRun(t *testing.T) {
 		"with a query":   "https://github.com/test/repo/actions/runs/900?check_suite_focus=true",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			var recorded [][]string
 			host := New(recordingCmdFactory("", &recorded), nil, "", "test/repo")
 
@@ -1308,6 +1312,7 @@ func TestRerunCheckFailsClosedWithoutAnActionsJob(t *testing.T) {
 		"unknown run subpath":      "https://github.com/test/repo/actions/runs/900/attempts/2",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			host := New(failIfInvokedCmdFactory(t), nil, "", "test/repo")
 			err := host.RerunCheck(context.Background(), &scm.PR{Number: "123"}, scm.Check{Name: "build", Bucket: scm.CheckBucketFail, State: "TIMED_OUT", Link: link})
 			if err == nil {
@@ -1631,6 +1636,7 @@ func TestFindPRForkRejectsMissingHeadIdentity(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			host := NewWithFork(githubTestCmdFactory(map[string]githubTestResponse{
 				"gh pr list --head " + branch + " --base main --repo parent/repo --state open --json number,url,baseRefName,headRefName,headRepositoryOwner": {
 					stdout: tc.output + "\n",

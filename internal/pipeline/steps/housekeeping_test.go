@@ -160,16 +160,6 @@ func TestDocumentStep_ConfiguredLintCommandKeepsLintCategorizedFindingInDocument
 // pays no second agent invocation.
 func TestLintStep_ConsumesCombinedResultWithoutAgentPass(t *testing.T) {
 	t.Parallel()
-	dir, baseSHA, headSHA := setupGitRepo(t)
-
-	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			t.Error("lint step must not invoke the agent when a combined result exists")
-			return &agent.Result{}, nil
-		},
-	}
-	sctx := newHousekeepingContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	cases := []struct {
 		name          string
@@ -194,6 +184,18 @@ func TestLintStep_ConsumesCombinedResultWithoutAgentPass(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Each case owns its context: the combined result is a
+			// consume-once stash, so cases sharing one would race for it.
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			ag := &mockAgent{
+				name: "test",
+				runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+					t.Error("lint step must not invoke the agent when a combined result exists")
+					return &agent.Result{}, nil
+				},
+			}
+			sctx := newHousekeepingContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
 			sctx.Shared.SetHousekeepingLint(pipeline.HousekeepingLintResult{FindingsJSON: tc.findings, Summary: "housekeeping"})
 			outcome, err := (&LintStep{}).Execute(sctx)
 			if err != nil {

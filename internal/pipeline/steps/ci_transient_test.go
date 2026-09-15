@@ -166,6 +166,7 @@ func TestClassifyCheckFailure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := classifyCheckFailure(tc.check); got != tc.want {
 				t.Fatalf("classifyCheckFailure(%+v) = %q, want %q", tc.check, got, tc.want)
 			}
@@ -383,6 +384,7 @@ func TestTransientRerunCandidates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			budget := checkRerunBudget{spent: tc.spent}
 			got := transientRerunCandidates(tc.checks, &budget, tc.limit)
 			if len(got) != len(tc.want) {
@@ -562,6 +564,7 @@ func TestCancelledChecksAfterRerun(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			budget := checkRerunBudget{spent: tc.spent}
 			unresolved, awaiting := budget.cancelledAfterRerun(tc.checks)
 			assertNames(t, "unresolved", unresolved, tc.wantUnresolved)
@@ -630,6 +633,7 @@ func TestMergeCheckNames(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assertNames(t, "merged", mergeCheckNames(tc.base, tc.extra), tc.want)
 		})
 	}

@@ -251,6 +251,7 @@ func TestLoadRepo_CommitFixMessage(t *testing.T) {
 }
 
 func TestLoadRepo_RejectsInvalidCommitFixMessage(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"unknown variable": "commit:\n  fix_message: '{{.Unknown}}'\n",
 		"escape control":   "commit:\n  fix_message: \"chore:\\u001b {{.Summary}}\"\n",

@@ -287,6 +287,7 @@ func TestPRStep_StaleIdentityRefusesRetargetOfEitherPR(t *testing.T) {
 	t.Parallel()
 	for _, state := range []scm.PRState{scm.PRStateClosed, scm.PRStateMerged} {
 		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
 			owned := "https://github.com/test/repo/pull/42"
 			sctx := &pipeline.StepContext{
 				Run: &db.Run{PRURL: &owned, PRBaseBranch: strptr("epic/feature")},
@@ -338,6 +339,7 @@ func TestRetargetExistingPRIfNeeded_ProviderWithoutRetargetFailsClosed(t *testin
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			owned := tc.pr.URL
 			sctx.Run.PRURL = &owned
 			err := retargetExistingPRIfNeeded(sctx, host, tc.pr, "epic/feature")

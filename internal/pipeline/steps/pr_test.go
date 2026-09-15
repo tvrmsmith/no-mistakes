@@ -940,6 +940,7 @@ func TestUnwrapNestedPRBody(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := unwrapNestedPRBody(tt.body)
 			if got != tt.want {
 				t.Errorf("unwrapNestedPRBody(%q) = %q, want %q", tt.body, got, tt.want)

@@ -175,6 +175,7 @@ func TestLintStep_NoConfiguredLint_RejectsInvalidSummaryWithoutStaging(t *testin
 		{name: "blank", summary: " \t\n "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			gitCmd(t, dir, "checkout", "--detach", headSHA)
 

@@ -325,6 +325,7 @@ func TestRunShellCommand(t *testing.T) {
 	dir := t.TempDir()
 
 	t.Run("success", func(t *testing.T) {
+		t.Parallel()
 		out, code, err := runShellCommand(context.Background(), dir, "echo hello")
 		if err != nil {
 			t.Fatal(err)
@@ -338,6 +339,7 @@ func TestRunShellCommand(t *testing.T) {
 	})
 
 	t.Run("nonzero exit", func(t *testing.T) {
+		t.Parallel()
 		_, code, err := runShellCommand(context.Background(), dir, "exit 42")
 		if err != nil {
 			t.Fatal(err)
@@ -1231,6 +1233,7 @@ func TestMatchIgnorePattern(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%s_%s", tt.path, tt.pattern), func(t *testing.T) {
+			t.Parallel()
 			got := matchIgnorePattern(tt.path, tt.pattern)
 			if got != tt.want {
 				t.Errorf("matchIgnorePattern(%q, %q) = %v, want %v", tt.path, tt.pattern, got, tt.want)

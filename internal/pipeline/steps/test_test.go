@@ -130,6 +130,7 @@ func TestTestStep_EmptyEvidenceFails(t *testing.T) {
 		{name: "whitespace entries", output: json.RawMessage(`{"findings":[],"summary":"","tested":[" \t"],"testing_summary":"tests passed","artifacts":[]}`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			ag := &mockAgent{
 				name: "test",

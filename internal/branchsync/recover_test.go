@@ -276,6 +276,7 @@ func TestTerminalPrePushRunSurfacesGuardedCustodyRecovery(t *testing.T) {
 
 	for _, status := range []types.RunStatus{types.RunCancelled, types.RunFailed, types.RunCompleted} {
 		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
 			f := newRecoverFixture(t, status)
 			state := f.service.InspectCached(f.ctx)
 			if state.State != StatePipelineOwned || state.Safety != "blocked_pipeline_owned_recoverable" {
@@ -654,9 +655,10 @@ func TestBoundArchiveMovedAtRecoveryBoundaryRefusesWithoutRecoveryMutation(t *te
 	}
 }
 
+// The cases run in sequence, not in parallel: each one breaks the single
+// archive fixture a different way, asserts the refusal left Git untouched, and
+// restores it for the next.
 func TestBoundArchiveProofMatrixFailsClosedWithoutGitMutation(t *testing.T) {
-	t.Parallel()
-
 	f, archiveRef := newDivergentArchiveRecoverFixture(t)
 	records, err := f.db.GetRecoveryArchivesByRun(f.run.ID)
 	if err != nil || len(records) != 1 {
@@ -822,6 +824,7 @@ func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 	t.Parallel()
 
 	t.Run("gate branch moved", func(t *testing.T) {
+		t.Parallel()
 		f := newRecoverFixture(t, types.RunCancelled)
 		writer := filepath.Join(t.TempDir(), "writer")
 		mustRun(t, filepath.Dir(writer), "-c", "core.autocrlf=false", "clone", f.gate, writer)
@@ -844,6 +847,7 @@ func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("gate branch deleted with recovery ref", func(t *testing.T) {
+		t.Parallel()
 		f := newRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.gate, "update-ref", f.anchorRef(), f.preserved)
 		mustRun(t, f.gate, "update-ref", "-d", "refs/heads/feature/recover")
@@ -856,6 +860,7 @@ func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("gate missing", func(t *testing.T) {
+		t.Parallel()
 		f := newRecoverFixture(t, types.RunCancelled)
 		if err := os.RemoveAll(f.gate); err != nil {
 			t.Fatal(err)
@@ -1656,6 +1661,7 @@ func TestCancellationReleaseRequiresVerifiedManagedHead(t *testing.T) {
 		{name: "missing worktree keeps custody", wantState: StatePipelineOwned, wantSafety: "blocked_pipeline_owned_recoverable"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			f := newUnmovedRecoverFixture(t, types.RunCancelled)
 			if err := f.db.UpdateRunStatus(f.run.ID, types.RunPending); err != nil {
 				t.Fatal(err)
@@ -1768,6 +1774,7 @@ func TestTerminalUnmovedPrePushRunReportsUserOwnedRelease(t *testing.T) {
 
 	for _, status := range []types.RunStatus{types.RunCancelled, types.RunFailed} {
 		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
 			f := newUnmovedRecoverFixture(t, status)
 			state := f.service.InspectCached(f.ctx)
 			if state.State != StateUserOwned || state.Safety != "user_owned" {
@@ -1913,6 +1920,7 @@ func TestReleasedBranchAfterUserResetOrDivergenceStaysUserOwned(t *testing.T) {
 	t.Parallel()
 
 	t.Run("reset behind clean", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "reset", "--hard", f.base)
 		state := f.service.InspectCached(f.ctx)
@@ -1922,12 +1930,14 @@ func TestReleasedBranchAfterUserResetOrDivergenceStaysUserOwned(t *testing.T) {
 		assertReleasedNoOpRecover(t, f, false, f.base)
 	})
 	t.Run("reset behind dirty", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "reset", "--hard", f.base)
 		mustWrite(t, filepath.Join(f.local, "file.txt"), "dirty\n")
 		assertReleasedNoOpRecover(t, f, false, f.base)
 	})
 	t.Run("diverged with keep-local", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "reset", "--hard", f.base)
 		mustWrite(t, filepath.Join(f.local, "rescope.txt"), "rescope\n")
@@ -1950,6 +1960,7 @@ func TestUnmovedRunSelectionPrefersNewerAuthoritativeRuns(t *testing.T) {
 	t.Parallel()
 
 	t.Run("newer active run wins", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		time.Sleep(1100 * time.Millisecond)
 		fresh, err := f.db.InsertRun(f.repo.ID, "feature/recover", f.submitted, f.base)
@@ -1972,6 +1983,7 @@ func TestUnmovedRunSelectionPrefersNewerAuthoritativeRuns(t *testing.T) {
 		}
 	})
 	t.Run("newer pushed binding wins", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		time.Sleep(1100 * time.Millisecond)
 		mustRun(t, f.local, "push", f.remote, "refs/heads/feature/recover:refs/heads/feature/recover")
@@ -2001,6 +2013,7 @@ func TestUnmovedRunWrongContextsStayRefusedWithoutStamp(t *testing.T) {
 	t.Parallel()
 
 	t.Run("different branch", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "checkout", "-b", "feature/other")
 		state := f.service.InspectCached(f.ctx)
@@ -2016,6 +2029,7 @@ func TestUnmovedRunWrongContextsStayRefusedWithoutStamp(t *testing.T) {
 		}
 	})
 	t.Run("detached head", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "checkout", "--detach", f.submitted)
 		state := f.service.InspectCached(f.ctx)

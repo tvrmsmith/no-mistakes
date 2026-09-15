@@ -276,6 +276,7 @@ func TestCIStep_AgentCommittedRepairFollowsThePolicy(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := newCIRepairFixture(t, tc.revalidate, nil)
 			// The agent commits the repair itself and leaves a clean tree.
 			os.WriteFile(filepath.Join(f.dir, "resolved.txt"), []byte("resolved"), 0o644)
@@ -421,6 +422,7 @@ func TestCIStep_ConflictRepairAlwaysRevalidates(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Publish policy: this is the path that could publish without review.
 			// The base and the feature edit the SAME line of the same file, so
 			// a rebase genuinely conflicts and the repair really is conflict
@@ -503,6 +505,7 @@ func TestCIStep_ManualRepairFollowsTheSamePolicy(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := newCIRepairFixture(t, tc.revalidate, writeCIFix)
 			// Automatic auto-fix off; the user answered the gate with "fix",
 			// selecting the failing check's finding.
