@@ -268,7 +268,7 @@ func parsePiParsedMessage(raw json.RawMessage, timestamp string) (piParsedMessag
 		return piParsedMessage{}, false
 	}
 
-	role := RoleAssistant
+	var role Role
 	switch {
 	case strings.EqualFold(msg.Role, "user"):
 		role = RoleUser

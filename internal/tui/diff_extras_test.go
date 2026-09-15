@@ -75,27 +75,38 @@ func TestRenderDiff_NoExtraBlankBeforeFirstFile(t *testing.T) {
 	plain := stripANSI(got)
 	lines := strings.Split(plain, "\n")
 
-	// Find the "diff --git" line.
+	headerIdx := -1
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		trimmed = strings.TrimLeft(trimmed, "│")
-		trimmed = strings.TrimRight(trimmed, "│")
-		trimmed = strings.TrimSpace(trimmed)
-		if strings.HasPrefix(trimmed, "diff --git") {
-			// Line before should NOT be blank (it should be stats or box border).
-			if i > 0 {
-				prev := strings.TrimSpace(lines[i-1])
-				prev = strings.TrimLeft(prev, "│")
-				prev = strings.TrimRight(prev, "│")
-				prev = strings.TrimSpace(prev)
-				// The line before the first diff header is the stats line or empty stats separator.
-				// It should NOT be an extra blank line inserted by file separation logic.
-				// We can't easily distinguish, but we verify the diff renders correctly.
-			}
-			return
+		if strings.HasPrefix(trimBoxBorders(line), "diff --git") {
+			headerIdx = i
+			break
 		}
 	}
-	t.Fatal("diff --git line not found")
+	if headerIdx < 0 {
+		t.Fatal("diff --git line not found")
+	}
+	if headerIdx < 2 {
+		t.Fatalf("first file header is at line %d, too early to carry a stats line and its separator", headerIdx)
+	}
+	// One blank line separates the stats line from the body. The blank line the
+	// renderer inserts between files must not be added on top of it, so the
+	// stats line sits exactly two lines above the first file header; a second
+	// separator would push it to three.
+	if prev := trimBoxBorders(lines[headerIdx-1]); prev != "" {
+		t.Errorf("line above the first file header = %q, want the stats separator", lines[headerIdx-1])
+	}
+	if stats := trimBoxBorders(lines[headerIdx-2]); !strings.Contains(stats, "file") {
+		t.Errorf("two lines above the first file header = %q, want the stats line", lines[headerIdx-2])
+	}
+}
+
+// trimBoxBorders reduces a rendered line to its content, dropping the box
+// drawing characters the diff view frames each line with.
+func trimBoxBorders(line string) string {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimLeft(trimmed, "│")
+	trimmed = strings.TrimRight(trimmed, "│")
+	return strings.TrimSpace(trimmed)
 }
 
 func TestRenderDiff_BlankLineBetweenFiles_ThreeFiles(t *testing.T) {

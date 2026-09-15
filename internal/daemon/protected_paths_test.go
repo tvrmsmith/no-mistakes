@@ -286,7 +286,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	p, database := startTestDaemonWithSteps(t, func() []pipeline.Step {
 		return []pipeline.Step{&protectedPathPushRetryStep{}}
 	})
-	repo, headSHA := setupTestGitRepo(t, p, database, "protected-publication")
+	repo, _ := setupTestGitRepo(t, p, database, "protected-publication")
 	// Exercise the manager's real trusted-config fetch: the pushed branch tries
 	// to remove protection even though the trusted branch opts into repo commands.
 	configFile := filepath.Join(repo.WorkingPath, ".no-mistakes.yaml")
@@ -302,7 +302,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	gitCmd(t, repo.WorkingPath, "add", ".no-mistakes.yaml")
 	gitCmd(t, repo.WorkingPath, "commit", "-m", "try to remove protection on feature")
 	gitCmd(t, repo.WorkingPath, "push", "gate", "HEAD:refs/heads/feature")
-	headSHA = gitOutput(t, repo.WorkingPath, "rev-parse", "HEAD")
+	headSHA := gitOutput(t, repo.WorkingPath, "rev-parse", "HEAD")
 	t.Logf("trusted main config:\n%s\npushed feature config:\n%s", gitOutput(t, p.RepoDir(repo.ID), "show", "refs/heads/main:.no-mistakes.yaml"), gitOutput(t, p.RepoDir(repo.ID), "show", "refs/heads/feature:.no-mistakes.yaml"))
 	publicationDir := filepath.Join(t.TempDir(), "published.git")
 	gitCmd(t, "", "init", "--bare", publicationDir)
