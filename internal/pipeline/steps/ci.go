@@ -624,23 +624,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 			var unresolvedCancelled, awaitingRerun []string
 			if !rerunIssued {
 				unresolvedCancelled, awaitingRerun = s.transientReruns.cancelledAfterRerun(checks)
-				// A cancelled check this run never re-ran is just as unresolved,
-				// and just as final: the provider published a conclusion for it,
-				// and with no rerun outstanding nothing this run is waiting on
-				// will ever replace it. It has to reach the same gate, or a
-				// repository on the default rerun budget of 0 polls a rollup
-				// that has already stopped moving until its idle timeout.
-				// Checks that can still finish on their own are excluded, so a
-				// cancellation observed alongside a running check keeps waiting.
-				// Beyond that there is no settling window, for the same reason
-				// a genuine failure gets none: a status rollup is per commit,
-				// so a cancellation in it belongs to the commit under test and
-				// cannot be a leftover from a head this run already replaced.
-				//
-				// Only the cancel bucket qualifies. A check whose state this
-				// version does not recognize is not known to be terminal, so it
-				// stays on the wait-then-timeout path rather than being
-				// escalated as a conclusion the provider never reported.
+				// Only asked once nothing can still finish on its own, so a
+				// cancellation observed alongside a running check keeps
+				// waiting. cancelledWithoutRerun owns the rest of the rule.
 				if !checksPending {
 					unresolvedCancelled = mergeCheckNames(unresolvedCancelled, s.transientReruns.cancelledWithoutRerun(checks))
 				}

@@ -479,6 +479,15 @@ func (m *RunManager) recordRejectionReason(run *db.Run, status types.RunStatus, 
 	}
 }
 
+// setRunSkippedSteps records the EFFECTIVE skip set, the same union the
+// executor runs with, so a run preserved across a clean daemon stop resumes
+// with the scope it started under. Both sources reach delivery steps: --skip
+// accepts push, pr and ci, and the trusted repo config's skip_steps is the
+// standing form of the same selection. Persisting only the run argument leaves
+// a resumed run free to push a branch and open a PR the repository itself
+// excluded, because config skips are applied lazily inside the execution loop
+// and post-gate step rows are still pending at park. The write is
+// authoritative: a run that cannot record its scope does not start.
 func (m *RunManager) setRunSkippedSteps(runID string, skipSteps []types.StepName) error {
 	if m.persistSkippedSteps != nil {
 		return m.persistSkippedSteps(runID, skipSteps)
@@ -1833,22 +1842,11 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 		trackStartFailure("load_repo_config")
 		return "", fmt.Errorf("load repo config: %w", err)
 	}
-	// SECURITY: load the code-executing selection fields (commands.* and
-	// agent) from the trusted default-branch copy of .no-mistakes.yaml rather
-	// than the pushed SHA. The worktree is checked out at headSHA (the
-	// contributor's branch), so reading repoCfg above would honor a
-	// contributor's commands/agent and let any pushed SHA run arbitrary shell
-	// (sh -c) or pick the launched agent (incl. acp: targets) on the daemon
-	// host with the maintainer's env (GH_TOKEN, SSH agent, ...).
-	// EffectiveRepoConfig replaces commands + agent with the trusted
-	// default-branch values unless the maintainer has explicitly opted in.
-	//
-	// allow_repo_commands is itself read ONLY from the trusted copy: a
-	// contributor cannot self-enable it from the pushed branch. A readable
-	// trusted tree with no config leaves the opt-in false and forces
-	// commands/agent empty. An unreadable trusted tree aborts below.
-	// SECURITY: a trusted-config fetch failure must abort, not silently disable
-	// the disable_project_settings opt-out (see assertGateTrustedConfigReadable).
+	// SECURITY: the worktree is checked out at the contributor's branch, so
+	// the code-executing selection fields come from the trusted default-branch
+	// copy instead of repoCfg. config.EffectiveRepoConfig owns that rule and
+	// assertGateTrustedConfigReadable owns why an unreadable trusted tree has
+	// to abort rather than fall back.
 	if err := assertGateTrustedConfigReadable(ctx, wtDir, repo.DefaultBranch, trustedSHA); err != nil {
 		m.recordRunError(run.ID, err.Error())
 		trackStartFailure("trusted_config_unreadable")
@@ -1872,17 +1870,9 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	cfg.TrustedConfigSHA = trustedSHA
 
-	// Persist the EFFECTIVE skip set, the same union the executor runs with,
-	// so a run preserved across a clean daemon stop resumes with the scope it
-	// started under. Both sources reach delivery steps: --skip accepts push,
-	// pr and ci, and the trusted repo config's skip_steps is the standing form
-	// of the same selection. Persisting only the run argument leaves a resumed
-	// run free to push a branch and open a PR the repository itself excluded,
-	// because config skips are applied lazily inside the execution loop and
-	// post-gate step rows are still pending at park. Resolving it here rather
-	// than at the executor keeps one owner for what the run is scoped to. The
-	// write is authoritative: the run does not start at all rather than start
-	// with a scope that cannot survive a stop.
+	// The union is resolved here, where the config is final, so one owner
+	// answers what the run is scoped to. setRunSkippedSteps owns why it is
+	// persisted and why the write is authoritative.
 	effectiveSkips := cfg.SkippedSteps(skipSteps)
 	if len(effectiveSkips) > 0 {
 		run.SkippedSteps = effectiveSkips
@@ -2370,6 +2360,22 @@ func (m *RunManager) runPreservedByShutdown(runID string) bool {
 	return m.atAPreservedResumePoint(run)
 }
 
+// runFinishedUncredited reports whether a run's done channel has closed even
+// though the wait loop never credited it, which means the run really did
+// finish. select picks uniformly among ready cases, and the funnel goroutine
+// may not have delivered yet either, so the channel itself is the authority
+// rather than what the wait loop happened to observe. An exempt entry is the
+// other route to an uncredited close: its finishedCh message is never consumed,
+// because the wait it was released from can end without ever reading it.
+func runFinishedUncredited(done chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 // drainWaitEntry is one run Drain is waiting on: its done channel, branch (for
 // reporting), and whether it has since reached a preserved resume point and
 // been released from the wait.
@@ -2392,6 +2398,18 @@ type drainWaitEntry struct {
 // afterwards, and it signals every run with pipeline.ErrDaemonShutdown, a
 // cause a gate park and a live CI monitor both keep their row and worktree
 // through so the next start resumes them.
+//
+// Shutdown's signal, closed before it cancels anything, is what the wait loop
+// reacts to, so a stop racing a drain aborts the drain outright rather than
+// waiting out its deadline, and reports those runs as stopped mid-flight
+// rather than as finished. That is intentional. Since CancelCauseFunc keeps
+// only the first cause, a run the drain meant to classify as a cut CI monitor
+// can then land as a plain shutdown-cancelled failure, an accepted tradeoff of
+// a signal racing a drain. The RPC handler's ctx arrives too late to matter:
+// the server cancels it on Close(), by which point Shutdown has already
+// cancelled the runs the drain was waiting on. A caller that hangs up
+// mid-drain is not observed at all, because ipc/server.go detects a closed
+// peer only on the stream path, so that drain runs to its own deadline.
 func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainReport {
 	// Set first, unconditionally, before any classification: there is no
 	// un-drain path, and startRun's shuttingDown check must see this
@@ -2613,25 +2631,12 @@ waitLoop:
 	waited := report.Waited[:0]
 	for _, id := range order {
 		e := entries[id]
-		if !finished[id] && !endedByShutdown {
-			// A run whose done channel closed without the wait loop crediting
-			// it really did finish. select picks uniformly among ready cases,
-			// and the funnel goroutine may not have delivered yet either, so
-			// the channel itself is the authority here rather than what the
-			// wait loop happened to observe. An exempt entry is the other
-			// route to an uncredited close: its finishedCh message is never
-			// consumed, because the wait it was released from can end without
-			// ever reading it.
-			//
-			// Skipped only when the daemon's own shutdown ended the wait,
-			// where a done channel closing right afterwards is shutdown
-			// killing the run, and crediting that as finished is exactly the
-			// claim the shutdown reason exists to avoid.
-			select {
-			case <-e.done:
-				finished[id] = true
-			default:
-			}
+		// Not asked when the daemon's own shutdown ended the wait: there a done
+		// channel closing right afterwards is shutdown killing the run, and
+		// crediting that as finished is the claim the shutdown reason exists to
+		// avoid.
+		if !finished[id] && !endedByShutdown && runFinishedUncredited(e.done) {
+			finished[id] = true
 		}
 		if !finished[id] && m.runPreservedByShutdown(id) {
 			// Preserved: Shutdown's ErrDaemonShutdown cause keeps the row and

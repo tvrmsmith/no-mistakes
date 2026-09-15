@@ -1146,31 +1146,11 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if p.DrainTimeoutMS <= 0 {
 			timeout = defaultDrainTimeout
 		}
-		// Drain runs synchronously on this handler goroutine so its report
-		// reaches the caller in this same RPC response, with no second RPC or
-		// DB read needed to learn what got interrupted. That's safe here:
-		// ipc/server.go gives every connection its own goroutine and doesn't
-		// close s.done until Close() is called, so blocking this one doesn't
-		// stall the listener or any other connection (see the concurrent
-		// MethodHealth test alongside this handler's tests).
-		//
-		// ctx is this connection's own context, which the server cancels the
-		// moment Close() runs. That is late: doShutdown runs mgr.Shutdown()
-		// first, so by then the runs the drain was waiting on have already
-		// been cancelled. mgr.Shutdown's own signal, closed before it cancels
-		// anything, is what Drain's wait loop reacts to, so a signal aborts an
-		// in-flight drain outright rather than waiting out its deadline and
-		// reports those runs as stopped mid-flight rather than as finished;
-		// that's intentional, not a bug to fix here. A caller that hangs up
-		// mid-drain is NOT observed: ipc/server.go detects a closed peer only
-		// on the stream path, and this connection's scanner loop is blocked
-		// inside this handler, so such a drain runs to its own deadline.
-		// What the drain hadn't finished by then is left for
-		// mgr.Shutdown() below to cancel, same as always, and since
-		// CancelCauseFunc keeps only the first cause, a run the drain meant to
-		// classify as a cut CI monitor can land as a plain shutdown-cancelled
-		// failure instead - an accepted, best-effort tradeoff of a signal
-		// racing a drain.
+		// Synchronous on this handler goroutine so the report reaches the
+		// caller in this same RPC response. ipc/server.go gives every
+		// connection its own goroutine, so blocking this one stalls neither
+		// the listener nor another connection. Drain's own doc comment owns
+		// what ctx and a concurrent Shutdown signal mean for it.
 		report := mgr.Drain(ctx, timeout)
 		// DrainOnly leaves the process alive with mgr's refuse-new-runs latch
 		// still set. Under launchd KeepAlive / systemd Restart=always, exiting

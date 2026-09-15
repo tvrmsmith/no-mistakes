@@ -502,6 +502,14 @@ func TestRequireActionLiveLookupHeadBindStillApplies(t *testing.T) {
 // stubPullsAPI serves exactly one GET /repos/{repo}/pulls/{number} response,
 // standing in for the real GitHub API in the live-lookup tests below. It
 // fails the test if called for any other path or method, or more than once.
+//
+// A caller that forwards no explicit pr-body/pr-head-sha (the ordinary
+// pull_request-triggered workflow, see its own comment on PR_BODY/PR_HEAD_SHA)
+// requires the live lookup to reach any verdict at all: a lookup failure fails
+// the whole gate closed rather than falling back to the event payload. A test
+// covering such a caller therefore needs this stub to reach the verdict logic
+// at all, which is what a real runner with `permissions: pull-requests: read`
+// does.
 func stubPullsAPI(t *testing.T, repo, number string, status int, body string, headSHA string) *httptest.Server {
 	t.Helper()
 	wantPath := "/repos/" + repo + "/pulls/" + number

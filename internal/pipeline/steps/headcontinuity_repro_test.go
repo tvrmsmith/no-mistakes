@@ -14,17 +14,9 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-// These tests are the regression for incident run 01KXC3SD5NZYMERGDS68Z1C8ER:
-// the review step committed a CORRECT fix (reviewed head R = incident 04b5f5d),
-// a concurrent process (a sibling worktree sharing the bare repo) then reset the
-// worktree HEAD to a divergent commit D that lacked the fix (incident a876550),
-// and the pipeline's next commit (document) built on D and shipped it. R was not
-// even an ancestor of what shipped.
-//
-// commitAgentFixes must refuse to commit whenever the worktree HEAD is no longer
-// a descendant of the head the pipeline itself recorded, so the reviewed change
-// cannot be silently lost - while still allowing a legitimate forward agent
-// commit (e.g. git rebase --continue).
+// These tests are the regression for incident run 01KXC3SD5NZYMERGDS68Z1C8ER,
+// whose shape and the rule it produced are owned by the doc comment on
+// assertPipelineHeadContinuity (common_fix.go).
 
 // TestCommitAgentFixes_RefusesToCommitOnOutOfBandResetHead reproduces the
 // incident shape: a concurrent / divergent-sibling reset. It also proves the

@@ -286,17 +286,9 @@ func (a *opencodeAgent) runOnceWithFormat(ctx context.Context, opts RunOpts, nat
 		return nil, thinkingConflict(evidence, nil)
 	}
 
-	// A turn that failed reports its cause on info.error rather than on the
-	// HTTP status, so the request itself looks successful. Surface that error
-	// instead of falling through to the streamed text: opencode leaves no
-	// usable text behind a failed turn, so the fallback reports the
-	// undiagnosable "opencode returned no text output" and hides causes such
-	// as a provider rejecting the forced tool_choice that json_schema output
-	// requires, or an expired provider credential. Any prose streamed before
-	// the failure is reasoning, not an answer. This supersedes the narrower
-	// StructuredOutputError-only branch: opencodeMessageFailure renders that
-	// case with the same wording and decodes the nested error payload the
-	// flat fields never carried.
+	// A failed turn reports its cause on info.error with an HTTP 200, so the
+	// request itself looks successful. newOpencodeMessageFailure owns what
+	// that error becomes.
 	if mr.resp != nil && mr.resp.Info != nil && mr.resp.Info.Error != nil {
 		return nil, newOpencodeMessageFailure(mr.resp.Info.Error, evidence == opencodeToolsRan)
 	}

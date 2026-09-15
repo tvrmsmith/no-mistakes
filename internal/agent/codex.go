@@ -187,32 +187,39 @@ func (a *codexAgent) buildArgs(schemaPath, resumeID string) []string {
 	if resumeID == "" {
 		args = append(args, "--color", "never")
 	}
-	// Project-settings opt-out (trusted-only; see config.DisableProjectSettings):
-	// suppress codex's project-level settings/instructions so the target repo's
-	// AGENTS.md cannot install a fleet-captain identity on the gate agent. The
-	// full project surface codex loads from the checkout is the project doc
-	// (AGENTS.md) plus project execpolicy `.rules`; codex config itself is
-	// user-level ($CODEX_HOME), not project. Both knobs are global overrides
-	// accepted by `codex exec` AND `codex exec resume`, appended last so they
-	// never disturb codex's `[resume] <id> -` positionals:
-	//   - `-c project_doc_max_bytes=0` makes codex read zero bytes of AGENTS.md
-	//     (the identity-bearing surface). Skipped only when the operator pinned
-	//     their own project_doc_max_bytes (their choice wins; NeutralizesGate-
-	//     Instructions then fails closed if that value re-enables the doc).
-	//   - `--ignore-rules` drops project (and user) execpolicy `.rules` for full
-	//     project-settings coverage. It is functionally redundant under the gate's
-	//     --dangerously-bypass-approvals-and-sandbox (which bypasses execpolicy
-	//     anyway) but completes the contract and is robust to future sandbox
-	//     changes. Skipped only if the operator already passed it.
-	// When the repo did not opt out, none of this is added and codex loads
-	// AGENTS.md exactly as before (backward-compat for ordinary repos).
-	if a.disableProjectSettings {
-		if !codexUserSetProjectDocMaxBytes(a.extraArgs) {
-			args = append(args, "-c", "project_doc_max_bytes=0")
-		}
-		if !codexArgsContain(a.extraArgs, "--ignore-rules") {
-			args = append(args, "--ignore-rules")
-		}
+	return a.appendProjectSettingsOptOut(args)
+}
+
+// appendProjectSettingsOptOut appends the flags that suppress codex's
+// project-level settings and instructions, so the target repo's AGENTS.md
+// cannot install a fleet-captain identity on the gate agent. The opt-out is
+// trusted-only; see config.DisableProjectSettings. A repo that did not opt out
+// gets none of this and codex loads AGENTS.md exactly as before.
+//
+// The full project surface codex loads from the checkout is the project doc
+// (AGENTS.md) plus project execpolicy `.rules`; codex config itself is
+// user-level ($CODEX_HOME), not project. Both knobs are global overrides
+// accepted by `codex exec` AND `codex exec resume`, appended last so they never
+// disturb codex's `[resume] <id> -` positionals:
+//
+//   - `-c project_doc_max_bytes=0` makes codex read zero bytes of AGENTS.md
+//     (the identity-bearing surface). Skipped only when the operator pinned
+//     their own project_doc_max_bytes (their choice wins; NeutralizesGate-
+//     Instructions then fails closed if that value re-enables the doc).
+//   - `--ignore-rules` drops project (and user) execpolicy `.rules` for full
+//     project-settings coverage. It is functionally redundant under the gate's
+//     --dangerously-bypass-approvals-and-sandbox (which bypasses execpolicy
+//     anyway) but completes the contract and is robust to future sandbox
+//     changes. Skipped only if the operator already passed it.
+func (a *codexAgent) appendProjectSettingsOptOut(args []string) []string {
+	if !a.disableProjectSettings {
+		return args
+	}
+	if !codexUserSetProjectDocMaxBytes(a.extraArgs) {
+		args = append(args, "-c", "project_doc_max_bytes=0")
+	}
+	if !codexArgsContain(a.extraArgs, "--ignore-rules") {
+		args = append(args, "--ignore-rules")
 	}
 	return args
 }
