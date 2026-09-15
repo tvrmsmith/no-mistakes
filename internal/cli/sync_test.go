@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1514,17 +1515,5 @@ func cliGit(t *testing.T, dir string, args ...string) string {
 }
 
 func asExitError(err error, target **exitError) bool {
-	for err != nil {
-		if typed, ok := err.(*exitError); ok {
-			*target = typed
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		u, ok := err.(unwrapper)
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
+	return errors.As(err, target)
 }

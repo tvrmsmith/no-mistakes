@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -28,8 +29,8 @@ func TestEmitIntentRequiredError_CarriesBranchSyncNextAction(t *testing.T) {
 
 	err := emitIntentRequiredError(cmd, state)
 
-	exit, ok := err.(*exitError)
-	if !ok {
+	var exit *exitError
+	if !errors.As(err, &exit) {
 		t.Fatalf("error type = %T, want *exitError", err)
 	}
 	if exit.code != 2 {

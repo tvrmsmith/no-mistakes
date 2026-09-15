@@ -699,7 +699,7 @@ func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, headSHA string) (
 func (s *CIStep) publishRepair(sctx *pipeline.StepContext, headSHA string) (ciRepairResult, error) {
 	if err := publishRunHead(sctx, headSHA, headSHA, nil); err != nil {
 		if errors.Is(err, errAttestationWriteFailed) {
-			return ciRepairResult{}, fmt.Errorf("%w at %s: %v", errCIAttestationUnsettled, shortObjectID(headSHA), err)
+			return ciRepairResult{}, fmt.Errorf("%w at %s: %w", errCIAttestationUnsettled, shortObjectID(headSHA), err)
 		}
 		return ciRepairResult{}, err
 	}
@@ -758,17 +758,17 @@ func attestHeadBeforePush(sctx *pipeline.StepContext, headSHA string, steps []*d
 	}
 	discovered, err := host.FindPR(sctx.Ctx, branch, "")
 	if err != nil {
-		return fmt.Errorf("%w: find pull request: %v", errAttestationWriteFailed, err)
+		return fmt.Errorf("%w: find pull request: %w", errAttestationWriteFailed, err)
 	}
 	pr, err := bindExistingPR(sctx, host, discovered)
 	if err != nil {
-		return fmt.Errorf("%w: resolve pull request: %v", errAttestationWriteFailed, err)
+		return fmt.Errorf("%w: resolve pull request: %w", errAttestationWriteFailed, err)
 	}
 	if pr == nil {
 		return nil
 	}
 	if err := restampPRAttestationWithSteps(sctx.Ctx, host, pr, headSHA, steps, sctx.Log); err != nil {
-		return fmt.Errorf("%w: %v", errAttestationWriteFailed, err)
+		return fmt.Errorf("%w: %w", errAttestationWriteFailed, err)
 	}
 	return nil
 }

@@ -35,7 +35,7 @@ func thinkingConflict(evidence opencodeToolEvidence, cause error) error {
 		err = fmt.Errorf("%w (%w)", err, evidence.marker())
 	}
 	if cause != nil {
-		return fmt.Errorf("%w: %v", err, cause)
+		return fmt.Errorf("%w: %w", err, cause)
 	}
 	return err
 }

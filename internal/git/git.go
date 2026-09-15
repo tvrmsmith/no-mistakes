@@ -95,7 +95,7 @@ func runInDirWithEnvRaw(ctx context.Context, dir string, extraEnv []string, args
 	out, err := shellenv.OutputShellCommand(cmd)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			err = fmt.Errorf("%w (%v)", ctxErr, err)
+			err = fmt.Errorf("%w (%w)", ctxErr, err)
 		}
 		return nil, fmt.Errorf("git %s: %w: %s", safeurl.RedactText(strings.Join(args, " ")), err, safeurl.RedactText(strings.TrimSpace(stderr.String())))
 	}
@@ -418,7 +418,8 @@ func IsDetachedHEAD(ctx context.Context, dir string) (bool, error) {
 	cmd.Dir = dir
 	winproc.Harden(cmd)
 	if err := cmd.Run(); err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			// Exit 1 means HEAD is not a symbolic ref — detached.
 			if ee.ExitCode() == 1 {
 				return true, nil

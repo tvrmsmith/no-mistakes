@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -62,8 +63,8 @@ func TestMethodNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown method")
 	}
-	rpcErr, ok := err.(*ipc.RPCError)
-	if !ok {
+	var rpcErr *ipc.RPCError
+	if !errors.As(err, &rpcErr) {
 		t.Fatalf("expected RPCError, got %T: %v", err, err)
 	}
 	if rpcErr.Code != ipc.ErrMethodNotFound {
@@ -90,8 +91,8 @@ func TestHandlerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	rpcErr, ok := err.(*ipc.RPCError)
-	if !ok {
+	var rpcErr *ipc.RPCError
+	if !errors.As(err, &rpcErr) {
 		t.Fatalf("expected RPCError, got %T: %v", err, err)
 	}
 	if rpcErr.Code != ipc.ErrInternal {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -70,7 +71,8 @@ func runVerifyPy(t *testing.T, body, headSHA string) (conclusion, output string)
 	case err == nil:
 		return "success", buf.String()
 	default:
-		if _, ok := err.(*exec.ExitError); !ok {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
 			t.Fatalf("execute verify.py: %v\n%s", err, buf.String())
 		}
 		return "failure", buf.String()

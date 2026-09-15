@@ -82,7 +82,7 @@ func TestDriveRun_HealthyWaitStaysWithinRequestBudget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
 	defer cancel()
 	_, _, err := driveRun(ctx, io.Discard, client, socketPath, "run-1", false)
-	if err == nil || err != context.DeadlineExceeded {
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("driveRun error = %v, want context deadline", err)
 	}
 	if got := getRunCalls.Load(); got != 1 {

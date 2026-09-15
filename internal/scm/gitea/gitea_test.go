@@ -2,6 +2,7 @@ package gitea
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -100,7 +101,7 @@ func TestGetMergeableStateReturnsErrUnsupported(t *testing.T) {
 	t.Parallel()
 
 	host := New(nil, nil, "", "", "")
-	if _, err := host.GetMergeableState(context.Background(), &scm.PR{Number: "1"}); err != scm.ErrUnsupported {
+	if _, err := host.GetMergeableState(context.Background(), &scm.PR{Number: "1"}); !errors.Is(err, scm.ErrUnsupported) {
 		t.Fatalf("GetMergeableState() error = %v, want scm.ErrUnsupported", err)
 	}
 }

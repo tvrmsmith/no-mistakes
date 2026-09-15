@@ -283,7 +283,8 @@ func runAxiRunWithLaunchProof(cmd *cobra.Command, autoYes bool, skipSteps []type
 			runID, err = triggerRun(ctx, env, branch, headSHA, skipSteps, intent, baseBranch)
 		}
 		if err != nil {
-			if ownershipErr, ok := err.(*branchOwnershipError); ok {
+			var ownershipErr *branchOwnershipError
+			if errors.As(err, &ownershipErr) {
 				return emitBranchOwnershipError(cmd, ownershipErr)
 			}
 			return emitError(cmd, 1, err.Error())
@@ -556,7 +557,7 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 		return run.ID, nil
 	}
 	if !shouldRerunAfterNoActiveRun(pushErr) {
-		return "", fmt.Errorf("push %q to gate: %v", branch, pushErr)
+		return "", fmt.Errorf("push %q to gate: %w", branch, pushErr)
 	}
 
 	// No run appeared: the push was likely up-to-date. Refresh the caller's
@@ -568,7 +569,7 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 		return "", err
 	}
 	if err := env.client.Call(ipc.MethodRerun, params, &rr); err != nil {
-		return "", fmt.Errorf("no run started for %q: %v", branch, err)
+		return "", fmt.Errorf("no run started for %q: %w", branch, err)
 	}
 	return rr.RunID, nil
 }

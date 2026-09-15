@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -99,7 +100,7 @@ func (d *DB) recoveryArchiveByOwnerAndRef(ownerRunID, archiveRef string) (*Recov
 		SELECT id, owner_run_id, repo_id, run_id, branch, required_head_sha, preserved_head_sha, archive_ref, created_at
 		FROM recovery_archives
 		WHERE owner_run_id = ? AND archive_ref = ?`, ownerRunID, archiveRef), record)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
 	if err != nil {

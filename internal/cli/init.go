@@ -74,7 +74,7 @@ func newInitCmd() *cobra.Command {
 						}
 					} else if created {
 						if _, ejectErr := gate.Eject(cmd.Context(), d, p, "."); ejectErr != nil {
-							return fmt.Errorf("%w, rollback init: %v", ensureDaemonError(err), ejectErr)
+							return fmt.Errorf("%w, rollback init: %w", ensureDaemonError(err), ejectErr)
 						}
 					}
 					return ensureDaemonError(err)

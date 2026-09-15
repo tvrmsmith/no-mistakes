@@ -2,6 +2,7 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,7 +109,8 @@ func TestResolveForcePushDecision_RefusesUnincorporatedRemoteCommit(t *testing.T
 	if err == nil {
 		t.Fatal("expected refusal when the remote carries an unincorporated commit")
 	}
-	if _, ok := err.(*forcePushWouldDiscardError); !ok {
+	var discardErr *forcePushWouldDiscardError
+	if !errors.As(err, &discardErr) {
 		t.Fatalf("expected forcePushWouldDiscardError, got %T: %v", err, err)
 	}
 }
@@ -210,7 +212,8 @@ func TestResolveForcePushDecision_RefusesOutOfBandEvenWithBase(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected refusal: an out-of-band commit is not reachable from baseSHA")
 	}
-	if _, ok := err.(*forcePushWouldDiscardError); !ok {
+	var discardErr *forcePushWouldDiscardError
+	if !errors.As(err, &discardErr) {
 		t.Fatalf("expected forcePushWouldDiscardError, got %T: %v", err, err)
 	}
 }

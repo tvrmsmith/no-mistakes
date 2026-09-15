@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -182,7 +183,8 @@ func runRequireAction(t *testing.T, run actionRun) actionResult {
 	case err == nil:
 		result.conclusion = "success"
 	default:
-		if _, ok := err.(*exec.ExitError); !ok {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
 			t.Fatalf("execute composite action: %v\n%s", err, buf.String())
 		}
 		result.conclusion = "failure"

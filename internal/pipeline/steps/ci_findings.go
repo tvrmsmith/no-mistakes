@@ -2,6 +2,7 @@ package steps
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -320,7 +321,7 @@ func reviewBotComments(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, ch
 		return nil
 	}
 	comments, err := rch.GetReviewComments(sctx.Ctx, pr)
-	if err != nil && err != scm.ErrUnsupported {
+	if err != nil && !errors.Is(err, scm.ErrUnsupported) {
 		sctx.Log(fmt.Sprintf("warning: could not read review bot comments: %v", err))
 		return nil
 	}

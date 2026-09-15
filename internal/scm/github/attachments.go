@@ -130,7 +130,8 @@ func ValidateUserAsset(path string) (UserAsset, error) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		if pathErr, ok := err.(*fs.PathError); ok {
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
 			return UserAsset{}, fmt.Errorf("%s: %w", path, pathErr.Err)
 		}
 		return UserAsset{}, err

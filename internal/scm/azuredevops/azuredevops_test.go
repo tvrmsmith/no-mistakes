@@ -2,6 +2,7 @@ package azuredevops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -545,7 +546,7 @@ func TestFetchFailedCheckLogsUnsupported(t *testing.T) {
 	if logs != "" {
 		t.Fatalf("FetchFailedCheckLogs() logs = %q, want empty", logs)
 	}
-	if err != scm.ErrUnsupported {
+	if !errors.Is(err, scm.ErrUnsupported) {
 		t.Fatalf("FetchFailedCheckLogs() error = %v, want ErrUnsupported", err)
 	}
 }

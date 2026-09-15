@@ -241,14 +241,14 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	stoppedForRefresh := false
 	restoreOnFailure := func(cause error) (bool, error) {
 		if err := writeFileAtomic(installPath, existing, restoreMode); err != nil {
-			return false, fmt.Errorf("%w; restore managed service definition: %v", cause, err)
+			return false, fmt.Errorf("%w; restore managed service definition: %w", cause, err)
 		}
 		if err := reloadManagedServiceDefinition(p); err != nil {
-			return false, fmt.Errorf("%w; reload restored managed service definition: %v", cause, err)
+			return false, fmt.Errorf("%w; reload restored managed service definition: %w", cause, err)
 		}
 		if stoppedForRefresh {
 			if _, err := restartManagedService(p); err != nil {
-				return false, fmt.Errorf("%w; restart restored managed service: %v", cause, err)
+				return false, fmt.Errorf("%w; restart restored managed service: %w", cause, err)
 			}
 		}
 		return false, cause
@@ -283,11 +283,11 @@ func stopCurrentDaemonBeforeManagedRestart(p *paths.Paths) error {
 		if waitErr := waitForDaemonStop(p, instance); waitErr != nil {
 			switch {
 			case err != nil && detachedErr != nil:
-				return fmt.Errorf("stop managed daemon before restart: %w; detached shutdown: %v; wait for exit: %v", err, detachedErr, waitErr)
+				return fmt.Errorf("stop managed daemon before restart: %w; detached shutdown: %w; wait for exit: %w", err, detachedErr, waitErr)
 			case err != nil:
-				return fmt.Errorf("stop managed daemon before restart: %w; wait for exit: %v", err, waitErr)
+				return fmt.Errorf("stop managed daemon before restart: %w; wait for exit: %w", err, waitErr)
 			case detachedErr != nil:
-				return fmt.Errorf("detached shutdown before managed restart: %w; wait for exit: %v", detachedErr, waitErr)
+				return fmt.Errorf("detached shutdown before managed restart: %w; wait for exit: %w", detachedErr, waitErr)
 			default:
 				return fmt.Errorf("wait for managed daemon exit before restart: %w", waitErr)
 			}
@@ -380,7 +380,7 @@ func startDetachedDaemon(p *paths.Paths) error {
 	startedAt, err := daemonProcessStartTime(pid)
 	if err != nil {
 		if cleanupErr := cleanupStartedDaemonProcess(cmd.Process); cleanupErr != nil {
-			return fmt.Errorf("inspect daemon process %d: %w; cleanup daemon child: %v", pid, err, cleanupErr)
+			return fmt.Errorf("inspect daemon process %d: %w; cleanup daemon child: %w", pid, err, cleanupErr)
 		}
 		return fmt.Errorf("inspect daemon process %d: %w", pid, err)
 	}
@@ -499,7 +499,7 @@ func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-ch
 
 	timeoutErr := fmt.Errorf("daemon launched but did not become ready within %v", timeout)
 	if lastHealthErr != nil {
-		timeoutErr = fmt.Errorf("%w: last health check: %v", timeoutErr, lastHealthErr)
+		timeoutErr = fmt.Errorf("%w: last health check: %w", timeoutErr, lastHealthErr)
 	}
 
 	return reapLaunchedDaemonChild(timeoutErr, proc, exitCh, pid, startedAt, timeout)
@@ -555,7 +555,7 @@ func reapLaunchedDaemonChild(baseErr error, proc *os.Process, exitCh <-chan erro
 			case <-exitCh:
 				return baseErr
 			default:
-				return fmt.Errorf("%w: cleanup daemon child %d: %v", baseErr, pid, err)
+				return fmt.Errorf("%w: cleanup daemon child %d: %w", baseErr, pid, err)
 			}
 		}
 		select {
@@ -570,7 +570,7 @@ func reapLaunchedDaemonChild(baseErr error, proc *os.Process, exitCh <-chan erro
 	// detached process but do not have an os.Process handle.
 	if pid > 0 {
 		if err := killTimedOutDaemonPID(pid, startedAt); err != nil {
-			return fmt.Errorf("%w: cleanup daemon child %d: %v", baseErr, pid, err)
+			return fmt.Errorf("%w: cleanup daemon child %d: %w", baseErr, pid, err)
 		}
 		if !startedAt.IsZero() {
 			waitForProcessExit(pid, cleanupWait)
@@ -907,7 +907,7 @@ func stopDetachedDaemonWithOptions(p *paths.Paths, opts StopOptions) (StopOutcom
 		// That is deliberately NOT NoDaemon: the operator asked for a drain,
 		// there was something to drain, and it did not happen.
 		if killErr := stopDetachedDaemonByPID(p); killErr != nil {
-			return StopOutcome{}, fmt.Errorf("dial daemon: %w; pid fallback: %v", err, killErr)
+			return StopOutcome{}, fmt.Errorf("dial daemon: %w; pid fallback: %w", err, killErr)
 		}
 		return StopOutcome{}, nil
 	}

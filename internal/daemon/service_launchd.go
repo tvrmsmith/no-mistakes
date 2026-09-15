@@ -76,7 +76,7 @@ func startLaunchAgent(p *paths.Paths) error {
 	_, kickstartErr := serviceCommandRunner("launchctl", "kickstart", "-k", serviceTarget)
 	if kickstartErr != nil {
 		if bootstrapErr != nil {
-			return fmt.Errorf("launchctl bootstrap: %v; kickstart: %w", bootstrapErr, kickstartErr)
+			return fmt.Errorf("launchctl bootstrap: %w; kickstart: %w", bootstrapErr, kickstartErr)
 		}
 		return fmt.Errorf("launchctl kickstart: %w", kickstartErr)
 	}

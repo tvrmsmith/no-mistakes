@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -583,7 +584,8 @@ func runRequiredWorkflowCheckJob(t *testing.T, workflow requiredWorkflow, event 
 	if err == nil {
 		return "success", buf.String()
 	}
-	if _, ok := err.(*exec.ExitError); !ok {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
 		t.Fatalf("execute composite action: %v\n%s", err, buf.String())
 	}
 	return "failure", buf.String()

@@ -2,6 +2,7 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -199,7 +200,8 @@ func stepGitRunRaw(sctx *pipeline.StepContext, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		stderr := ""
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			stderr = strings.TrimSpace(string(ee.Stderr))
 		}
 		return "", fmt.Errorf("git %s: %w: %s", safeurl.RedactText(strings.Join(args, " ")), err, safeurl.RedactText(stderr))
@@ -322,7 +324,8 @@ func runShellCommandWithProcessEnv(ctx context.Context, dir string, env []string
 	}
 	out, err := shellenv.CombinedOutputShellCommand(cmd)
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			return string(out), ee.ExitCode(), nil
 		}
 		return "", -1, fmt.Errorf("run command %q: %w", cmdStr, err)

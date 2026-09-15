@@ -361,7 +361,7 @@ func (d *DB) runWorktreesOutside(prefix, statusClause string) ([]RunWorktree, er
 func (d *DB) GetRun(id string) (*Run, error) {
 	r := &Run{}
 	err := scanRun(d.sql.QueryRow(`SELECT `+runColumns+` FROM runs WHERE id = ?`, id), r)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -485,7 +485,7 @@ func (d *DB) GetActiveRun(repoID, branch string) (*Run, error) {
 			`SELECT `+runColumns+` FROM runs WHERE repo_id = ? AND branch = ? AND status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1`, repoID, branch,
 		), r)
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -630,7 +630,7 @@ func (d *DB) UpdateRunPRState(id, state string) error {
 
 	var current sql.NullString
 	if err := tx.QueryRow(`SELECT pr_state FROM runs WHERE id = ?`, id).Scan(&current); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return fmt.Errorf("update run PR state: read current state: %w", err)

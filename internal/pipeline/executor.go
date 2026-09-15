@@ -1023,7 +1023,7 @@ func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir stri
 	if !e.runReachedItsPR(run.ID) {
 		return refusal
 	}
-	return fmt.Errorf("%w: %s", ErrCIMonitorInterrupted, refusal)
+	return fmt.Errorf("%w: %w", ErrCIMonitorInterrupted, refusal)
 }
 
 // runReachedItsPR reports whether the run has a PR URL recorded. A read that
@@ -1932,7 +1932,7 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 	// plain failure.
 	if !errors.Is(err, ErrCIMonitorInterrupted) {
 		for _, ctx := range ctxs {
-			if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
+			if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
 				errMsg = cause.Error()
 				break
 			}

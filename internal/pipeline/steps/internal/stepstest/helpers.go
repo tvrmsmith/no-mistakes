@@ -321,7 +321,7 @@ func Init() (func() error, error) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
-			return nil, fmt.Errorf("go build fakecli: %w: %s; cleanup: %v", err, out, cleanupErr)
+			return nil, fmt.Errorf("go build fakecli: %w: %s; cleanup: %w", err, out, cleanupErr)
 		}
 		return nil, fmt.Errorf("go build fakecli: %w: %s", err, out)
 	}
