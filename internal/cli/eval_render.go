@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 
@@ -215,14 +214,14 @@ func evalScoreLines(s eval.EvaluationSummary) []string {
 
 // evalRunProgress streams one line per persisted replay so a long candidate
 // comparison shows its work as it happens.
-func evalRunProgress(w io.Writer, evaluation eval.Evaluation, completed, total int) {
+func evalRunProgress(w *printer, evaluation eval.Evaluation, completed, total int) {
 	progress := fmt.Sprintf("%*d/%d", len(strconv.Itoa(total)), completed, total)
 	if evaluation.Status != "completed" {
-		fmt.Fprintf(w, "  %s %s  %s repeat %d  failed: %s\n",
+		w.Printf("  %s %s  %s repeat %d  failed: %s\n",
 			sRed.Render("✗"), progress, evaluation.CaseID, evaluation.Repeat, evaluation.Error)
 		return
 	}
-	fmt.Fprintf(w, "  %s %s  %s repeat %d  TP %d · FN %d · FP %d · pending %d  %s\n",
+	w.Printf("  %s %s  %s repeat %d  TP %d · FN %d · FP %d · pending %d  %s\n",
 		sGreen.Render("✓"), progress, evaluation.CaseID, evaluation.Repeat,
 		evaluation.TruePositive, evaluation.FalseNegative, evaluation.FalsePositive, evaluation.Pending,
 		formatMS(evaluation.DurationMS))

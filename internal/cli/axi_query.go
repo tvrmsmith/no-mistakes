@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,8 +112,7 @@ func runAxiStatus(cmd *cobra.Command, runID string) error {
 			fields = append(fields, toon.Field{Key: "ci_override_reason", Value: rv.CIOverrideReason})
 		}
 	}
-	emitDoc(cmd, fields...)
-	return nil
+	return emitDoc(cmd, fields...)
 }
 
 // emitNoRunForCaller answers `axi status` when the caller has no run of its
@@ -143,8 +141,7 @@ func emitNoRunForCaller(cmd *cobra.Command, env *axiEnv, branch string, runs []*
 		help = append(help, startRunHelp())
 	}
 	fields = append(fields, toon.Field{Key: "help", Value: help})
-	emitDoc(cmd, fields...)
-	return nil
+	return emitDoc(cmd, fields...)
 }
 
 func annotateRunView(env *axiEnv, rv *runView) {
@@ -261,8 +258,7 @@ func runAxiLogs(cmd *cobra.Command, step, runID string, full bool) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			fields = append(fields, toon.Field{Key: "log", Value: fmt.Sprintf("no log recorded for step %q in this run", step)})
-			emitDoc(cmd, fields...)
-			return nil
+			return emitDoc(cmd, fields...)
 		}
 		return emitError(cmd, 1, fmt.Sprintf("read log: %v", err))
 	}
@@ -280,15 +276,13 @@ func runAxiLogs(cmd *cobra.Command, step, runID string, full bool) error {
 			toon.Field{Key: "log", Value: logRows(shown)},
 			toon.Field{Key: "help", Value: []string{fmt.Sprintf("Run `%s` to see the entire log", axiLogsFullCommand(step, selectedRunID))}},
 		)
-		emitDoc(cmd, fields...)
-		return nil
+		return emitDoc(cmd, fields...)
 	}
 	fields = append(fields,
 		toon.Field{Key: "lines", Value: fmt.Sprintf("%d total", len(lines))},
 		toon.Field{Key: "log", Value: logRows(shown)},
 	)
-	emitDoc(cmd, fields...)
-	return nil
+	return emitDoc(cmd, fields...)
 }
 
 // logRows wraps log lines as single-column rows so the encoder renders them as
@@ -380,7 +374,7 @@ func parseAddFinding(raw string) (types.Finding, error) {
 // progressPrinter emits step and run status transitions to stderr so a human
 // or agent watching the command sees liveness without parsing stdout.
 type progressPrinter struct {
-	w         io.Writer
+	w         *printer
 	seen      map[string]string
 	runStatus string
 }
@@ -391,7 +385,7 @@ func (p *progressPrinter) update(run *ipc.RunInfo) {
 	}
 	if string(run.Status) != p.runStatus {
 		p.runStatus = string(run.Status)
-		fmt.Fprintf(p.w, "run: %s\n", p.runStatus)
+		p.w.Printf("run: %s\n", p.runStatus)
 	}
 	for _, s := range run.Steps {
 		name := string(s.StepName)
@@ -401,7 +395,7 @@ func (p *progressPrinter) update(run *ipc.RunInfo) {
 		}
 		if p.seen[name] != status {
 			p.seen[name] = status
-			fmt.Fprintf(p.w, "  %s: %s\n", name, status)
+			p.w.Printf("  %s: %s\n", name, status)
 		}
 	}
 }

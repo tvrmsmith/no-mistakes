@@ -27,7 +27,7 @@ func TestOpencodeAgent_FullFlow(t *testing.T) {
 		calledPaths[r.Method+" "+r.URL.Path] = true
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"test-session-456"}`)
+			writeStub(t, w, `{"id":"test-session-456"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			if r.Header.Get("Accept") != "text/event-stream" {
@@ -36,13 +36,13 @@ func TestOpencodeAgent_FullFlow(t *testing.T) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			// Send text delta events then usage and idle
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"test-session-456\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"{\\\"success\\\":true,\\\"summary\\\":\\\"all good\\\"}\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"test-session-456\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\",\"tokens\":{\"input\":100,\"output\":50}}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"test-session-456\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"{\\\"success\\\":true,\\\"summary\\\":\\\"all good\\\"}\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"test-session-456\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\",\"tokens\":{\"input\":100,\"output\":50}}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/test-session-456/message" && r.Method == http.MethodPost:
 			// Return message response with structured output
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant","structured":{"success":true,"summary":"all good"},"tokens":{"input":100,"output":50}},"parts":[{"type":"text","text":"{\"success\":true,\"summary\":\"all good\"}"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant","structured":{"success":true,"summary":"all good"},"tokens":{"input":100,"output":50}},"parts":[{"type":"text","text":"{\"success\":true,\"summary\":\"all good\"}"}]}`)
 
 		case r.URL.Path == "/session/test-session-456" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -114,18 +114,18 @@ func TestOpencodeAgent_BackfillsAssistantTextWhenStreamCannotClassifyOrphans(t *
 		calledPaths[r.Method+" "+r.URL.Path] = true
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"test-session-789"}`)
+			writeStub(t, w, `{"id":"test-session-789"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.delta\",\"properties\":{\"sessionID\":\"test-session-789\",\"field\":\"text\",\"partID\":\"p1\",\"delta\":\"hello \"}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.delta\",\"properties\":{\"sessionID\":\"test-session-789\",\"field\":\"text\",\"partID\":\"p2\",\"delta\":\"world\"}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"test-session-789\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\",\"tokens\":{\"input\":100,\"output\":50}}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.delta\",\"properties\":{\"sessionID\":\"test-session-789\",\"field\":\"text\",\"partID\":\"p1\",\"delta\":\"hello \"}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.delta\",\"properties\":{\"sessionID\":\"test-session-789\",\"field\":\"text\",\"partID\":\"p2\",\"delta\":\"world\"}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"test-session-789\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\",\"tokens\":{\"input\":100,\"output\":50}}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/test-session-789/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant","structured":{"summary":"hello world"},"tokens":{"input":100,"output":50}},"parts":[{"type":"text","text":"hello world"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant","structured":{"summary":"hello world"},"tokens":{"input":100,"output":50}},"parts":[{"type":"text","text":"hello world"}]}`)
 
 		case r.URL.Path == "/session/test-session-789" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -173,14 +173,14 @@ func TestOpencodeAgent_BackfillsAllAssistantResponseParts(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"s1"}`)
+			writeStub(t, w, `{"id":"s1"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}`)
 
 		case r.URL.Path == "/session/s1" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -217,16 +217,16 @@ func TestOpencodeAgent_BackfillsMissingResponseSuffixAfterStreaming(t *testing.T
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"s1"}`)
+			writeStub(t, w, `{"id":"s1"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"hello\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"hello\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}`)
 
 		case r.URL.Path == "/session/s1" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -266,17 +266,17 @@ func TestOpencodeAgent_BackfillsMissingResponseSuffixAfterToolStep(t *testing.T)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"s1"}`)
+			writeStub(t, w, `{"id":"s1"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"hello\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"step1\",\"messageID\":\"msg1\",\"type\":\"step-finish\",\"tokens\":{\"input\":10,\"output\":5}}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"hello\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"step1\",\"messageID\":\"msg1\",\"type\":\"step-finish\",\"tokens\":{\"input\":10,\"output\":5}}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}`)
 
 		case r.URL.Path == "/session/s1" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -316,17 +316,17 @@ func TestOpencodeAgent_DoesNotSeparateBackfillWhenToolStepPrecedesFirstText(t *t
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"s1"}`)
+			writeStub(t, w, `{"id":"s1"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"step1\",\"messageID\":\"msg1\",\"type\":\"step-finish\",\"tokens\":{\"input\":10,\"output\":5}}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"hello\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"step1\",\"messageID\":\"msg1\",\"type\":\"step-finish\",\"tokens\":{\"input\":10,\"output\":5}}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"hello\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}`)
 
 		case r.URL.Path == "/session/s1" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -367,15 +367,15 @@ func TestOpencodeAgent_NoSchema(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"s1"}`)
+			writeStub(t, w, `{"id":"s1"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.delta\",\"properties\":{\"sessionID\":\"s1\",\"field\":\"text\",\"partID\":\"p1\",\"delta\":\"done\"}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.delta\",\"properties\":{\"sessionID\":\"s1\",\"field\":\"text\",\"partID\":\"p1\",\"delta\":\"done\"}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"done"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"done"}]}`)
 
 		case r.URL.Path == "/session/s1" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -415,17 +415,17 @@ func TestOpencodeAgent_FinalAnswerPreferred(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"s1"}`)
+			writeStub(t, w, `{"id":"s1"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
 			// First text part (regular), then final_answer part
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"type\":\"text\",\"text\":\"thinking...\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p2\",\"type\":\"text\",\"text\":\"{\\\"answer\\\":42}\",\"metadata\":{\"openai\":{\"phase\":\"final_answer\"}}}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"type\":\"text\",\"text\":\"thinking...\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p2\",\"type\":\"text\",\"text\":\"{\\\"answer\\\":42}\",\"metadata\":{\"openai\":{\"phase\":\"final_answer\"}}}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"thinking..."},{"type":"text","text":"{\"answer\":42}","metadata":{"openai":{"phase":"final_answer"}}}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant"},"parts":[{"type":"text","text":"thinking..."},{"type":"text","text":"{\"answer\":42}","metadata":{"openai":{"phase":"final_answer"}}}]}`)
 
 		case r.URL.Path == "/session/s1" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -466,7 +466,7 @@ func TestOpencodeAgent_StructuredOutputError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"s1"}`)
+			writeStub(t, w, `{"id":"s1"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -474,15 +474,15 @@ func TestOpencodeAgent_StructuredOutputError(t *testing.T) {
 			// Stream reasoning prose (no JSON) - this is exactly the
 			// shape real opencode emits when the model never calls the
 			// StructuredOutput tool.
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"Now I need to find the failing test. The only failing test is foo.\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"Now I need to find the failing test. The only failing test is foo.\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
 			// opencode signals structured-output failure via
 			// info.error.name = "StructuredOutputError". The body
 			// intentionally omits info.structured.
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant","error":{"name":"StructuredOutputError","message":"Model did not produce structured output","retries":2}},"parts":[{"type":"text","text":"Now I need to find the failing test. The only failing test is foo."}]}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant","error":{"name":"StructuredOutputError","message":"Model did not produce structured output","retries":2}},"parts":[{"type":"text","text":"Now I need to find the failing test. The only failing test is foo."}]}`)
 
 		case r.URL.Path == "/session/s1" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -536,14 +536,14 @@ func TestOpencodeAgent_ThinkingToolChoiceConflictFallsBackToValidatedText(t *tes
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
 			id := sessions.Add(1)
-			fmt.Fprintf(w, `{"id":"s%d"}`, id)
+			writeStub(t, w, fmt.Sprintf(`{"id":"s%d"}`, id))
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			if eventStreams.Add(1) == 1 {
-				fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"thinking before conflict\"}}}}\n\n")
-				fmt.Fprint(w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
+				writeStub(t, w, "data: {\"payload\":{\"type\":\"message.part.updated\",\"properties\":{\"sessionID\":\"s1\",\"part\":{\"id\":\"p1\",\"messageID\":\"msg1\",\"type\":\"text\",\"text\":\"thinking before conflict\"}}}}\n\n")
+				writeStub(t, w, "data: {\"payload\":{\"type\":\"message.updated\",\"properties\":{\"sessionID\":\"s1\",\"info\":{\"id\":\"msg1\",\"role\":\"assistant\"}}}}\n\n")
 			}
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
 			var body map[string]any
@@ -562,7 +562,7 @@ func TestOpencodeAgent_ThinkingToolChoiceConflictFallsBackToValidatedText(t *tes
 					body["variant"] == "high" &&
 					format["retryCount"] == float64(2),
 			)
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant","error":{"name":"APIError","data":{"message":"Provider returned error","responseBody":"Thinking may not be enabled when tool_choice forces tool use."}}}}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant","error":{"name":"APIError","data":{"message":"Provider returned error","responseBody":"Thinking may not be enabled when tool_choice forces tool use."}}}}`)
 
 		case r.URL.Path == "/session/s2/message" && r.Method == http.MethodPost:
 			var body map[string]any
@@ -571,7 +571,7 @@ func TestOpencodeAgent_ThinkingToolChoiceConflictFallsBackToValidatedText(t *tes
 			}
 			_, hasFormat := body["format"]
 			fallbackFormatSeen.Store(hasFormat)
-			fmt.Fprint(w, `{"info":{"id":"msg2","role":"assistant"},"parts":[{"type":"text","text":"{\"summary\":\"all good\"}"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg2","role":"assistant"},"parts":[{"type":"text","text":"{\"summary\":\"all good\"}"}]}`)
 
 		case (r.URL.Path == "/session/s1" || r.URL.Path == "/session/s2") && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
@@ -640,13 +640,13 @@ func TestOpencodeAgent_ThinkingToolChoiceFallbackRejectsSchemaViolation(t *testi
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
 			id := sessions.Add(1)
-			fmt.Fprintf(w, `{"id":"s%d"}`, id)
+			writeStub(t, w, fmt.Sprintf(`{"id":"s%d"}`, id))
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant","error":{"name":"APIError","data":{"responseBody":"Thinking may not be enabled when tool_choice forces tool use."}}}}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant","error":{"name":"APIError","data":{"responseBody":"Thinking may not be enabled when tool_choice forces tool use."}}}}`)
 		case r.URL.Path == "/session/s2/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg2","role":"assistant"},"parts":[{"type":"text","text":"{\"summary\":42}"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg2","role":"assistant"},"parts":[{"type":"text","text":"{\"summary\":42}"}]}`)
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -687,17 +687,17 @@ func TestOpencodeAgent_ThinkingToolChoiceConflictFromSSEFallsBackOnce(t *testing
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
 			id := sessions.Add(1)
-			fmt.Fprintf(w, `{"id":"s%d"}`, id)
+			writeStub(t, w, fmt.Sprintf(`{"id":"s%d"}`, id))
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			if eventStreams.Add(1) == 1 {
-				fmt.Fprint(w, `data: {"payload":{"type":"session.error","properties":{"sessionID":"s1","error":{"name":"APIError","data":{"message":"tool_choice 'required' is incompatible with thinking enabled"}}}}}`+"\n\n")
+				writeStub(t, w, `data: {"payload":{"type":"session.error","properties":{"sessionID":"s1","error":{"name":"APIError","data":{"message":"tool_choice 'required' is incompatible with thinking enabled"}}}}}`+"\n\n")
 				return
 			}
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant"}}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant"}}`)
 		case r.URL.Path == "/session/s2/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg2","role":"assistant"},"parts":[{"type":"text","text":"{\"summary\":\"sse fallback passed\"}"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg2","role":"assistant"},"parts":[{"type":"text","text":"{\"summary\":\"sse fallback passed\"}"}]}`)
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -731,11 +731,11 @@ func TestOpencodeAgent_UnrelatedThinkingLimitationDoesNotFallback(t *testing.T) 
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
 			id := sessions.Add(1)
-			fmt.Fprintf(w, `{"id":"s%d"}`, id)
+			writeStub(t, w, fmt.Sprintf(`{"id":"s%d"}`, id))
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant","error":{"name":"APIError","data":{"message":"tool_choice is required. Thinking is not supported when streaming."}}}}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant","error":{"name":"APIError","data":{"message":"tool_choice is required. Thinking is not supported when streaming."}}}}`)
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
 		default:

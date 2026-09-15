@@ -28,19 +28,19 @@ and removes the repo record from the database.`,
 					return fmt.Errorf("eject: %w", err)
 				}
 
-				w := cmd.OutOrStdout()
-				fmt.Fprintf(w, "  %s Gate removed\n", sGreen.Render("✓"))
-				fmt.Fprintln(w)
-				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  repo"), repo.WorkingPath)
+				w := newPrinter(cmd.OutOrStdout())
+				w.Printf("  %s Gate removed\n", sGreen.Render("✓"))
+				w.Println()
+				w.Printf("  %s  %s\n", sDim.Render("  repo"), repo.WorkingPath)
 				remoteURL := repo.UpstreamURL
 				if repo.ForkURL != "" {
 					remoteURL = safeurl.Redact(remoteURL)
 				}
-				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("remote"), remoteURL)
+				w.Printf("  %s  %s\n", sDim.Render("remote"), remoteURL)
 				if repo.ForkURL != "" {
-					fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  fork"), safeurl.Redact(repo.ForkURL))
+					w.Printf("  %s  %s\n", sDim.Render("  fork"), safeurl.Redact(repo.ForkURL))
 				}
-				return nil
+				return w.Err()
 			})
 		},
 	}

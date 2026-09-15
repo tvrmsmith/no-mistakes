@@ -27,7 +27,11 @@ func init() {
 		switch name {
 		case "git":
 			if len(os.Args) > 1 && os.Args[1] == "--version" {
-				fmt.Fprintln(os.Stdout, "git version 9.9.9")
+				// The version line is the whole answer the caller reads, so a
+				// failed write exits nonzero rather than claiming success.
+				if _, err := fmt.Fprintln(os.Stdout, "git version 9.9.9"); err != nil {
+					os.Exit(1)
+				}
 				os.Exit(0)
 			}
 			os.Exit(1)
@@ -39,7 +43,9 @@ func init() {
 	}
 	if os.Getenv("NM_HOOK_HELPER") == "1" {
 		if err := newRootCmd().Execute(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			// Last resort: the helper process exits nonzero straight after,
+			// and a failed write to stderr has nowhere left to report itself.
+			_, _ = fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -51,7 +57,9 @@ func init() {
 		}
 		_ = os.Setenv("NM_HOME", root)
 		if err := daemon.RunBootstrapLogSink(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			// Last resort: the helper process exits nonzero straight after,
+			// and a failed write to stderr has nowhere left to report itself.
+			_, _ = fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -65,7 +73,7 @@ func init() {
 		return
 	}
 	if err := daemon.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	os.Exit(0)
@@ -78,13 +86,13 @@ func TestMain(m *testing.M) {
 	}
 	root, err := os.MkdirTemp(base, "nm-cli-test-")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
 		os.Exit(1)
 	}
 	home, err := os.MkdirTemp(base, "nm-cli-home-")
 	if err != nil {
 		_ = os.RemoveAll(root)
-		fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
 		os.Exit(1)
 	}
 	_ = os.Setenv("NM_HOME", root)

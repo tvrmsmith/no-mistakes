@@ -61,8 +61,9 @@ func newRerunCmd() *cobra.Command {
 					return fmt.Errorf("rerun pipeline: %w", err)
 				}
 
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s Rerun started for %s %s\n", sGreen.Render("✓"), branch, sDim.Render(result.RunID))
-				return nil
+				out := newPrinter(cmd.OutOrStdout())
+				out.Printf("  %s Rerun started for %s %s\n", sGreen.Render("✓"), branch, sDim.Render(result.RunID))
+				return out.Err()
 			})
 		},
 	}

@@ -207,7 +207,7 @@ func TestCIStep_BitbucketAutoFixIncludesPipelineLogs(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -215,7 +215,7 @@ func TestCIStep_BitbucketAutoFixIncludesPipelineLogs(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -231,7 +231,7 @@ func TestCIStep_BitbucketAutoFixIncludesPipelineLogs(t *testing.T) {
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			capturedPrompt = opts.Prompt
-			os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(opts.CWD, "ci-fix.txt"), "fixed")
 			return &agent.Result{}, nil
 		},
 	}

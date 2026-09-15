@@ -26,7 +26,7 @@ func TestDocumentStep_AgentManaged_FixesAndCommitsWithoutApproval(t *testing.T) 
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
-			os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Updated\n"), 0o644)
+			writeFile(t, filepath.Join(dir, "README.md"), "# Updated\n")
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"update README"}`)}, nil
 		},
 	}
@@ -92,7 +92,7 @@ func TestDocumentStep_AgentManaged_AllowsDocCommentEdits(t *testing.T) {
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\n// documentedThing explains the exported behavior.\nfunc documentedThing() {}\n"), 0o644)
+			writeFile(t, filepath.Join(dir, "main.go"), "package main\n\n// documentedThing explains the exported behavior.\nfunc documentedThing() {}\n")
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"update doc comment"}`)}, nil
 		},
 	}
@@ -257,7 +257,7 @@ func TestDocumentStep_UserFix_PassesPreviousFindingsIntoPrompt(t *testing.T) {
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Fixed\n"), 0o644)
+			writeFile(t, filepath.Join(dir, "README.md"), "# Fixed\n")
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"address config docs"}`)}, nil
 		},
 	}
@@ -324,7 +324,7 @@ func TestDocumentStep_MalformedOutput_CommitsAndFailsClosed(t *testing.T) {
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Partial\n"), 0o644)
+			writeFile(t, filepath.Join(dir, "README.md"), "# Partial\n")
 			return &agent.Result{
 				Output: json.RawMessage(`{not valid json`),
 				Text:   "I updated the docs",

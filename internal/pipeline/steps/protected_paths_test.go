@@ -248,7 +248,7 @@ func TestCIStep_ProtectedPathRetryFinishesRetainedRepairWithGreenChecks(t *testi
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			calls := 0
-			f := newCIRepairFixture(t, revalidate, func(dir string) {
+			f := newCIRepairFixture(t, revalidate, func(t *testing.T, dir string) {
 				calls++
 				for file, content := range map[string]string{"package.lock": "refused\n", "fix.go": "retained repair\n"} {
 					if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
@@ -304,7 +304,7 @@ func TestCIStep_ProtectedPathRetryFinishesRetainedRepairWithGreenChecks(t *testi
 
 func TestCIStep_ProtectedPathRetryPublicationFailureKeepsRefusal(t *testing.T) {
 	t.Parallel()
-	f := newCIRepairFixture(t, false, func(dir string) {
+	f := newCIRepairFixture(t, false, func(t *testing.T, dir string) {
 		for file, content := range map[string]string{"package.lock": "refused\n", "fix.go": "retained repair\n"} {
 			if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
 				t.Fatal(err)

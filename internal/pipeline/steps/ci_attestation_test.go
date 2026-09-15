@@ -388,7 +388,7 @@ func TestCIStep_PublishRepairRebindsAttestationAcrossRepairPushes(t *testing.T) 
 	)
 	f.sctx.Env = env
 	f.sctx.Ctx = context.Background()
-	writeCIFix(f.dir)
+	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 	if err != nil {
@@ -460,7 +460,7 @@ func TestCIStep_PublishRepairFailsWhenAttestationCannotSettle(t *testing.T) {
 		"FAKE_CLI_PR_EDIT_ERR=provider unavailable",
 	)
 	f.sctx.Ctx = context.Background()
-	writeCIFix(f.dir)
+	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 	if err == nil || !strings.Contains(err.Error(), "failed after 3 attempts") {
@@ -494,7 +494,7 @@ func TestCIStep_PublishRepairSkipsAttestationForNonGitHubProvider(t *testing.T) 
 	gitlabPR := "https://gitlab.com/test/repo/-/merge_requests/42"
 	f.sctx.Repo.UpstreamURL = "https://gitlab.com/test/repo.git"
 	f.sctx.Run.PRURL = &gitlabPR
-	writeCIFix(f.dir)
+	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 	if err != nil {
@@ -526,7 +526,7 @@ func TestCIStep_PublishRepairDoesNotMintAttestation(t *testing.T) {
 	)
 	f.sctx.Env = env
 	f.sctx.Ctx = context.Background()
-	writeCIFix(f.dir)
+	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 	if err != nil {

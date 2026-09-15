@@ -67,13 +67,13 @@ func TestResolveBaseSHA_ZeroWithMergeBase(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base"), 0o644)
+	writeFile(t, filepath.Join(dir, "base.txt"), "base")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	mainSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feat.txt"), []byte("feat"), 0o644)
+	writeFile(t, filepath.Join(dir, "feat.txt"), "feat")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature commit")
 
@@ -92,7 +92,7 @@ func TestResolveBaseSHA_ZeroNoDefaultBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("data"), 0o644)
+	writeFile(t, filepath.Join(dir, "f.txt"), "data")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 
@@ -1182,7 +1182,7 @@ func TestCommitAgentFixes_UsesFallbackSummary(t *testing.T) {
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
-	os.WriteFile(filepath.Join(dir, "agent-change.txt"), []byte("change"), 0o644)
+	writeFile(t, filepath.Join(dir, "agent-change.txt"), "change")
 	err := commitAgentFixes(sctx, types.StepLint, "", "fallback lint fix")
 	if err != nil {
 		t.Fatal(err)

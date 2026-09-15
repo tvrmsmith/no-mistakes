@@ -66,7 +66,9 @@ func TestServerInvalidJSON(t *testing.T) {
 	defer conn.Close()
 
 	// Write invalid JSON.
-	fmt.Fprintln(conn, "this is not json")
+	if _, err := fmt.Fprintln(conn, "this is not json"); err != nil {
+		t.Fatalf("write invalid JSON: %v", err)
+	}
 
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {

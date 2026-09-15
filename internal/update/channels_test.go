@@ -3,7 +3,6 @@ package update
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -120,7 +119,7 @@ func TestFetchLatestRelease_ManifestPathDoesNotCallGitHubRESTAPI(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "" {
 			t.Fatalf("manifest fetch sent Authorization %q, want anonymous", got)
 		}
-		fmt.Fprint(w, `{
+		writeStub(t, w, `{
 			"schema_version":1,
 			"stable":{"tag_name":"v1.2.3","prerelease":false,"assets":[{"name":"checksums.txt","browser_download_url":"https://example.com/stable"}]},
 			"beta":{"tag_name":"v1.3.0-beta.2","prerelease":true,"assets":[{"name":"checksums.txt","browser_download_url":"https://example.com/beta"}]}
@@ -167,7 +166,7 @@ func TestFetchLatestRelease_ManifestSucceedsWhenRESTAPIReturns403(t *testing.T) 
 			http.Error(w, "API rate limit exceeded", http.StatusForbidden)
 			return
 		}
-		fmt.Fprint(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[]},"beta":{"tag_name":"v1.3.0-beta.1","assets":[]}}`)
+		writeStub(t, w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[]},"beta":{"tag_name":"v1.3.0-beta.1","assets":[]}}`)
 	}))
 	defer server.Close()
 
@@ -192,7 +191,7 @@ func TestFetchLatestRelease_DoesNotUseRESTWhenManifestMissing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/repos/") {
 			apiHits++
-			fmt.Fprint(w, `{"tag_name":"v1.2.3","assets":[]}`)
+			writeStub(t, w, `{"tag_name":"v1.2.3","assets":[]}`)
 			return
 		}
 		http.NotFound(w, r)

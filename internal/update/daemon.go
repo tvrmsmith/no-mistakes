@@ -68,12 +68,12 @@ func (u *updater) ensureDaemonUsesCurrentExecutable() error {
 
 func (u *updater) confirmDaemonTakeover(runningPath, currentPath string) bool {
 	if u.assumeYes {
-		fmt.Fprintf(u.stderrWriter(), "daemon is running from %s, but update is running from %s; replacing the running daemon because -y was provided\n", runningPath, currentPath)
+		u.errOut().Printf("daemon is running from %s, but update is running from %s; replacing the running daemon because -y was provided\n", runningPath, currentPath)
 		return true
 	}
 
-	fmt.Fprintf(u.stderrWriter(), "daemon is running from %s, but update is running from %s\n", runningPath, currentPath)
-	fmt.Fprint(u.stderrWriter(), "Replace the running daemon with this binary? [y/N] ")
+	u.errOut().Printf("daemon is running from %s, but update is running from %s\n", runningPath, currentPath)
+	u.errOut().Print("Replace the running daemon with this binary? [y/N] ")
 	return readYes(u.stdin)
 }
 

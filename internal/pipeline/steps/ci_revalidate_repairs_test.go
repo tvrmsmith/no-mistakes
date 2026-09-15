@@ -32,7 +32,7 @@ type ciRepairFixture struct {
 	logs     *[]string
 }
 
-func newCIRepairFixture(t *testing.T, revalidate bool, agentAction func(workDir string)) *ciRepairFixture {
+func newCIRepairFixture(t *testing.T, revalidate bool, agentAction func(t *testing.T, workDir string)) *ciRepairFixture {
 	t.Helper()
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
@@ -42,7 +42,7 @@ func newCIRepairFixture(t *testing.T, revalidate bool, agentAction func(workDir 
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -50,7 +50,7 @@ func newCIRepairFixture(t *testing.T, revalidate bool, agentAction func(workDir 
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -58,7 +58,7 @@ func newCIRepairFixture(t *testing.T, revalidate bool, agentAction func(workDir 
 
 	ag := &mockAgent{name: "test", runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 		if agentAction != nil {
-			agentAction(opts.CWD)
+			agentAction(t, opts.CWD)
 		}
 		return &agent.Result{Output: []byte(`{"summary":"repair the failing check"}`)}, nil
 	}}
@@ -129,8 +129,9 @@ func (f *ciRepairFixture) remoteHead(t *testing.T) string {
 }
 func (f *ciRepairFixture) log() string { return strings.Join(*f.logs, "\n") }
 
-func writeCIFix(workDir string) {
-	os.WriteFile(filepath.Join(workDir, "ci-fix.txt"), []byte("fixed"), 0o644)
+func writeCIFix(t *testing.T, workDir string) {
+	t.Helper()
+	writeFile(t, filepath.Join(workDir, "ci-fix.txt"), "fixed")
 }
 
 // TestCIStep_RevalidateRepairsPolicySelectsRepairDelivery is the behavioral
@@ -161,7 +162,7 @@ func TestCIStep_RevalidateRepairsPolicySelectsRepairDelivery(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := newCIRepairFixture(t, tc.revalidate, nil)
-			writeCIFix(f.dir)
+			writeCIFix(t, f.dir)
 			// commitRepair, not the whole monitor loop: the delivery decision
 			// is what this table is about, and driving Execute here spends a
 			// provider poll and several subprocesses per case for nothing.
@@ -279,7 +280,7 @@ func TestCIStep_AgentCommittedRepairFollowsThePolicy(t *testing.T) {
 			t.Parallel()
 			f := newCIRepairFixture(t, tc.revalidate, nil)
 			// The agent commits the repair itself and leaves a clean tree.
-			os.WriteFile(filepath.Join(f.dir, "resolved.txt"), []byte("resolved"), 0o644)
+			writeFile(t, filepath.Join(f.dir, "resolved.txt"), "resolved")
 			gitCmd(t, f.dir, "add", "-A")
 			gitCmd(t, f.dir, "commit", "-m", "agent resolved the failure")
 			repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
@@ -311,7 +312,7 @@ func TestCIStep_AgentCommittedRepairFollowsThePolicy(t *testing.T) {
 func TestCIStep_PartialPublicationRecordsNothing(t *testing.T) {
 	t.Parallel()
 	f := newCIRepairFixture(t, false, nil)
-	writeCIFix(f.dir)
+	writeCIFix(t, f.dir)
 	brokenGate := filepath.Join(t.TempDir(), "invalid-gate")
 	if err := os.MkdirAll(brokenGate, 0o755); err != nil {
 		t.Fatal(err)
@@ -551,7 +552,7 @@ func TestCIStep_ManualRepairFollowsTheSamePolicy(t *testing.T) {
 func TestCIStep_RepairWithoutReviewAuthorityRevalidatesRatherThanPublishing(t *testing.T) {
 	t.Parallel()
 	f := newCIRepairFixture(t, false, nil)
-	writeCIFix(f.dir)
+	writeCIFix(t, f.dir)
 	if err := f.sctx.DB.UpdateRunReviewApprovedHeadSHA(f.sctx.Run.ID, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +578,7 @@ func TestCIStep_RepairWithoutReviewAuthorityRevalidatesRatherThanPublishing(t *t
 // while its stale review approval still stands.
 func TestCIStep_FailedRevalidationWriteDoesNotAdvanceTheLiveHead(t *testing.T) {
 	f := newCIRepairFixture(t, true, nil)
-	writeCIFix(f.dir)
+	writeCIFix(t, f.dir)
 	priorHead := f.sctx.Run.HeadSHA
 	priorApproval := f.sctx.Run.ReviewApprovedHeadSHA
 

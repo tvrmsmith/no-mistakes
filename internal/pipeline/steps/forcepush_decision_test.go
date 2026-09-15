@@ -3,7 +3,6 @@ package steps
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -23,14 +22,14 @@ func newForcePushFixture(t *testing.T) (dir string, gitRun gitRunner, remote, fe
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base"), 0o644)
+	writeFile(t, filepath.Join(dir, "base.txt"), "base")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base")
 	gitCmd(t, dir, "remote", "add", "origin", remote)
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	featureSHA = gitCmd(t, dir, "rev-parse", "HEAD")
@@ -69,7 +68,7 @@ func TestResolveForcePushDecision_RemoteUnchangedSinceLastSeen(t *testing.T) {
 	t.Parallel()
 	dir, gitRun, remote, featureSHA := newForcePushFixture(t)
 	// New local head not yet on the remote (e.g. a rebase result).
-	os.WriteFile(filepath.Join(dir, "more.txt"), []byte("more"), 0o644)
+	writeFile(t, filepath.Join(dir, "more.txt"), "more")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "more")
 	newHead := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -93,13 +92,13 @@ func TestResolveForcePushDecision_RefusesUnincorporatedRemoteCommit(t *testing.T
 	gitCmd(t, other, "config", "user.name", "o")
 	gitCmd(t, other, "config", "user.email", "o@test.com")
 	gitCmd(t, other, "checkout", "feature")
-	os.WriteFile(filepath.Join(other, "out_of_band.txt"), []byte("unseen"), 0o644)
+	writeFile(t, filepath.Join(other, "out_of_band.txt"), "unseen")
 	gitCmd(t, other, "add", "-A")
 	gitCmd(t, other, "commit", "-m", "out of band")
 	gitCmd(t, other, "push", "origin", "feature")
 
 	// Our local head descends from the OLD feature tip, not the new remote tip.
-	os.WriteFile(filepath.Join(dir, "local.txt"), []byte("local"), 0o644)
+	writeFile(t, filepath.Join(dir, "local.txt"), "local")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "local")
 	newHead := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -128,7 +127,7 @@ func TestResolveForcePushDecision_AllowsWhenRemoteContentIncorporated(t *testing
 	gitCmd(t, other, "config", "user.name", "o")
 	gitCmd(t, other, "config", "user.email", "o@test.com")
 	gitCmd(t, other, "checkout", "feature")
-	os.WriteFile(filepath.Join(other, "shared.txt"), []byte("shared work"), 0o644)
+	writeFile(t, filepath.Join(other, "shared.txt"), "shared work")
 	gitCmd(t, other, "add", "-A")
 	gitCmd(t, other, "commit", "-m", "shared work")
 	remoteTip := gitCmd(t, other, "rev-parse", "HEAD")
@@ -138,7 +137,7 @@ func TestResolveForcePushDecision_AllowsWhenRemoteContentIncorporated(t *testing
 	// on it), so pushing drops nothing.
 	gitCmd(t, dir, "fetch", remote, "feature")
 	gitCmd(t, dir, "reset", "--hard", remoteTip)
-	os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("extra"), 0o644)
+	writeFile(t, filepath.Join(dir, "extra.txt"), "extra")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "extra on top")
 	newHead := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -164,7 +163,7 @@ func TestResolveForcePushDecision_AllowsRewriteOfKnownBaseHistory(t *testing.T) 
 	// Rewrite feature: drop the original commit, add a different one. The remote
 	// still holds the original (featureSHA), which the rewrite intentionally drops.
 	gitCmd(t, dir, "reset", "--hard", base)
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("rewritten"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "rewritten")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "rewritten feature")
 	newHead := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -193,7 +192,7 @@ func TestResolveForcePushDecision_RefusesOutOfBandEvenWithBase(t *testing.T) {
 	gitCmd(t, other, "config", "user.name", "o")
 	gitCmd(t, other, "config", "user.email", "o@test.com")
 	gitCmd(t, other, "checkout", "feature")
-	os.WriteFile(filepath.Join(other, "out_of_band.txt"), []byte("unseen"), 0o644)
+	writeFile(t, filepath.Join(other, "out_of_band.txt"), "unseen")
 	gitCmd(t, other, "add", "-A")
 	gitCmd(t, other, "commit", "-m", "out of band")
 	gitCmd(t, other, "push", "origin", "feature")
@@ -201,7 +200,7 @@ func TestResolveForcePushDecision_RefusesOutOfBandEvenWithBase(t *testing.T) {
 	// User rewrites feature off the base; the rewrite contains neither the
 	// original commit nor the out-of-band one.
 	gitCmd(t, dir, "reset", "--hard", base)
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("rewritten"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "rewritten")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "rewritten feature")
 	newHead := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -227,7 +226,7 @@ func TestResolveForcePushDecision_AllowsPushWhenRemoteEqualsPriorPipelinePushedG
 	dir, gitRun, remote, featureSHA := newForcePushFixture(t)
 
 	// Upstream main advances with a change that supersedes the feature commit.
-	os.WriteFile(filepath.Join(dir, "main_advance.txt"), []byte("advanced"), 0o644)
+	writeFile(t, filepath.Join(dir, "main_advance.txt"), "advanced")
 	gitCmd(t, dir, "checkout", "main")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "main advance")
@@ -238,7 +237,7 @@ func TestResolveForcePushDecision_AllowsPushWhenRemoteEqualsPriorPipelinePushedG
 	// the old feature commit is dropped/folded into a new commit.
 	gitCmd(t, dir, "checkout", "feature")
 	gitCmd(t, dir, "reset", "--hard", newBase)
-	os.WriteFile(filepath.Join(dir, "feature_v2.txt"), []byte("v2 work"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature_v2.txt"), "v2 work")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature v2")
 	newHead := gitCmd(t, dir, "rev-parse", "HEAD")

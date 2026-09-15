@@ -92,7 +92,9 @@ func writeDaemonRunError(stderr *os.File, err error) {
 			}
 		}
 	}
-	fmt.Fprintln(stderr, err)
+	// Last resort. The process exits nonzero straight after this, and a
+	// failed write to stderr has no second channel to report itself on.
+	_, _ = fmt.Fprintln(stderr, err)
 }
 
 func daemonLogSinkRootFromArgs(args []string) (string, bool, error) {

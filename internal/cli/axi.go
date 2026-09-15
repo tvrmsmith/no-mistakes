@@ -264,8 +264,7 @@ func runAxiHome(cmd *cobra.Command) error {
 	help = append(help, "How to drive the pipeline: `no-mistakes axi run --help`, or the `/no-mistakes` skill (loaded when you invoke `/no-mistakes`)")
 	fields = append(fields, toon.Field{Key: "help", Value: help})
 
-	emitDoc(cmd, fields...)
-	return nil
+	return emitDoc(cmd, fields...)
 }
 
 // runsFields renders a recent-runs table with an aggregate count, showing at

@@ -158,11 +158,10 @@ func emitGateContextRefusal(cmd *cobra.Command, result gatecontext.Result) error
 		allowed[0] = "no-mistakes axi status --run " + result.RunID
 		allowed[1] = "no-mistakes axi logs --run " + result.RunID + " --step <phase>"
 	}
-	emitDoc(cmd,
+	return emitDocExit(cmd, 1,
 		toon.Field{Key: "error", Value: toon.NewObject(errorFields...)},
 		toon.Field{Key: "note", Value: "The enclosing executor owns validation, push, PR, and CI. This step must return only its assigned phase."},
 		toon.Field{Key: "allowed", Value: allowed},
 		toon.Field{Key: "help", Value: []string{"Return control to the outer executor; do not initialize, start, reattach, rerun, respond to, synchronize, abort, or eject a pipeline from this step."}},
 	)
-	return &exitError{code: 1}
 }

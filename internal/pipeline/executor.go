@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1148,7 +1149,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			lastChunkNewline = true
 		}
 		e.emitLogChunk(run, repo, stepName, text)
-		fmt.Fprint(logFile, text)
+		writeStepLog(logFile, stepName, text)
 		touchLogActivity(text, true)
 	}
 	writeLogChunk := func(text string) {
@@ -1156,7 +1157,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			lastChunkNewline = strings.HasSuffix(text, "\n")
 		}
 		e.emitLogChunk(run, repo, stepName, text)
-		fmt.Fprint(logFile, text)
+		writeStepLog(logFile, stepName, text)
 		touchLogActivity(text, strings.Contains(text, "\n"))
 	}
 	onAgentLifecycle := func(event agent.LifecycleEvent) {
@@ -1255,7 +1256,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		Log:              writeLog,
 		LogChunk:         writeLogChunk,
 		LogFile: func(text string) {
-			fmt.Fprintln(logFile, text)
+			writeStepLog(logFile, stepName, text+"\n")
 			touchLogActivity(text, true)
 		},
 		CIReadinessChanged: ciReadinessChanged,
@@ -1299,7 +1300,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// credentialled upstream URL that slipped into a wrapped error can
 			// never land in the log file.
 			redactedErr := safeurl.RedactText(err.Error())
-			fmt.Fprintf(logFile, "\nerror: %s\n", redactedErr)
+			writeStepLog(logFile, stepName, fmt.Sprintf("\nerror: %s\n", redactedErr))
 			touchLogActivity("error: "+redactedErr, true)
 			// A clean daemon stop of a live CI monitor preserves it for the
 			// next start instead of failing it: the monitor is nearly
@@ -2228,4 +2229,13 @@ func selectedFindingCount(raw string, ids []string) int {
 		return len(ids)
 	}
 	return findingsCount(raw)
+}
+
+// writeStepLog appends to the step's own log file. The file is a record of the
+// work, not the work itself, so a failed write is reported and the step carries
+// on; failing the step here would throw away the run the log was recording.
+func writeStepLog(logFile io.Writer, stepName types.StepName, text string) {
+	if _, err := io.WriteString(logFile, text); err != nil {
+		slog.Warn("write step log", "step", stepName, "error", err)
+	}
 }

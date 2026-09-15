@@ -299,7 +299,7 @@ func TestPrintWorktreeRootGuidancePrintsConfigEntry(t *testing.T) {
 	dir := t.TempDir()
 	checkout := filepath.Join(dir, "src", "repo1")
 	root := filepath.Join(dir, "work", "repo1-runs")
-	printWorktreeRootGuidance(&out, p, checkout, root)
+	printWorktreeRootGuidance(newPrinter(&out), p, checkout, root)
 
 	got := out.String()
 	for _, want := range []string{"worktree_roots:", checkout + ": " + root, p.ConfigFile()} {
@@ -324,7 +324,7 @@ func TestPrintWorktreeRootGuidanceReportsExistingEntry(t *testing.T) {
 	var out bytes.Buffer
 
 	// The same directory spelled differently is the same entry.
-	printWorktreeRootGuidance(&out, p, checkout+string(filepath.Separator), root)
+	printWorktreeRootGuidance(newPrinter(&out), p, checkout+string(filepath.Separator), root)
 
 	got := out.String()
 	if !strings.Contains(got, "already configured") {
@@ -358,7 +358,7 @@ func TestPrintWorktreeRootGuidanceMergesIntoAnExistingBlock(t *testing.T) {
 	checkout := filepath.Join(dir, "src", "repo2")
 	root := filepath.Join(dir, "work", "repo2-runs")
 	var out bytes.Buffer
-	printWorktreeRootGuidance(&out, p, checkout, root)
+	printWorktreeRootGuidance(newPrinter(&out), p, checkout, root)
 
 	got := out.String()
 	entry := "  " + checkout + ": " + root
@@ -412,7 +412,7 @@ func TestPrintWorktreeRootGuidanceReplacesThisCheckoutsEntry(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printWorktreeRootGuidance(&out, p, checkout, newRoot)
+	printWorktreeRootGuidance(newPrinter(&out), p, checkout, newRoot)
 
 	got := out.String()
 	for _, want := range []string{strings.TrimSpace(oldEntry), strings.TrimSpace(newEntry)} {
@@ -441,7 +441,7 @@ func TestPrintWorktreeRootGuidanceReplacesThisCheckoutsEntry(t *testing.T) {
 
 	// Re-pointing to the directory already configured stays a no-op report.
 	var same bytes.Buffer
-	printWorktreeRootGuidance(&same, p, checkout, oldRoot)
+	printWorktreeRootGuidance(newPrinter(&same), p, checkout, oldRoot)
 	if !strings.Contains(same.String(), "already configured") {
 		t.Errorf("guidance for the configured root should report it is in effect, got:\n%s", same.String())
 	}
@@ -466,7 +466,7 @@ func TestPrintWorktreeRootGuidanceNamesTheEntryAsTheConfigSpellsIt(t *testing.T)
 	}
 
 	var out bytes.Buffer
-	printWorktreeRootGuidance(&out, p, checkout, newRoot)
+	printWorktreeRootGuidance(newPrinter(&out), p, checkout, newRoot)
 
 	got := out.String()
 	if !containsYAMLLine(got, configuredKey+": "+oldRoot) {
@@ -502,7 +502,7 @@ func TestPrintWorktreeRootGuidanceMatchesTheBlocksIndentation(t *testing.T) {
 
 	// A second repository placed somewhere: the entry is added under the block.
 	var out bytes.Buffer
-	printWorktreeRootGuidance(&out, p, checkout, root)
+	printWorktreeRootGuidance(newPrinter(&out), p, checkout, root)
 	entry := indentedYAMLLine(t, out.String(), checkout+": "+root)
 	merged := block + entry + "\n"
 	cfg, err := config.LoadGlobal(writeConfig(t, p, merged))
@@ -525,7 +525,7 @@ func TestPrintWorktreeRootGuidanceMatchesTheBlocksIndentation(t *testing.T) {
 	// Re-pointing the checkout the block already has: the line named for
 	// replacement is the one the file contains.
 	var repoint bytes.Buffer
-	printWorktreeRootGuidance(&repoint, p, existingCheckout, root)
+	printWorktreeRootGuidance(newPrinter(&repoint), p, existingCheckout, root)
 	if named := indentedYAMLLine(t, repoint.String(), existingCheckout+": "+existingRoot); named != "    "+existingCheckout+": "+existingRoot {
 		t.Errorf("guidance named %q for replacement, which is not the line the config contains", named)
 	}
@@ -595,7 +595,7 @@ func TestPrintWorktreeRootGuidanceReplacesAKeyWithNoBlockToAddTo(t *testing.T) {
 		}
 
 		var out bytes.Buffer
-		printWorktreeRootGuidance(&out, p, checkout, root)
+		printWorktreeRootGuidance(newPrinter(&out), p, checkout, root)
 		got := out.String()
 
 		// The line to replace is named as the file spells it.
@@ -646,7 +646,7 @@ func TestPrintWorktreeRootGuidanceRepointsAnInlineEntry(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printWorktreeRootGuidance(&out, p, checkout, newRoot)
+	printWorktreeRootGuidance(newPrinter(&out), p, checkout, newRoot)
 	got := out.String()
 
 	if !containsYAMLLine(got, strings.TrimSpace(document)) {

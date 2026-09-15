@@ -24,7 +24,7 @@ func TestCIStep_CommitAndPush_CommitsLocallyWithoutPushing(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -32,14 +32,14 @@ func TestCIStep_CommitAndPush_CommitsLocallyWithoutPushing(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	// Add uncommitted changes
-	os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("ci fix"), 0o644)
+	writeFile(t, filepath.Join(dir, "fix.txt"), "ci fix")
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
@@ -226,7 +226,7 @@ func TestCIStep_CommitAndPush_UsesStepEnvForAllGitCommands(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -234,12 +234,12 @@ func TestCIStep_CommitAndPush_UsesStepEnvForAllGitCommands(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
-	os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("ci fix"), 0o644)
+	writeFile(t, filepath.Join(dir, "fix.txt"), "ci fix")
 
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -378,7 +378,7 @@ func TestCIStep_CommitAndPush_NoChanges_ReconcilesStaleDatabaseHeadSHA(t *testin
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -386,7 +386,7 @@ func TestCIStep_CommitAndPush_NoChanges_ReconcilesStaleDatabaseHeadSHA(t *testin
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	actualHeadSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -432,7 +432,7 @@ func TestCIStep_CommitAndPush_NoChanges_ReconcilesStaleDatabaseHeadSHA_UsesStepE
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -440,7 +440,7 @@ func TestCIStep_CommitAndPush_NoChanges_ReconcilesStaleDatabaseHeadSHA_UsesStepE
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	actualHeadSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -499,7 +499,7 @@ func TestCIStep_CommitAndPush_NoDirtyChangesRecordsAdvancedLocalHead(t *testing.
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -507,13 +507,13 @@ func TestCIStep_CommitAndPush_NoDirtyChangesRecordsAdvancedLocalHead(t *testing.
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	originalHeadSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	os.WriteFile(filepath.Join(dir, "resolved.txt"), []byte("resolved"), 0o644)
+	writeFile(t, filepath.Join(dir, "resolved.txt"), "resolved")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "resolve conflict")
 	advancedHeadSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -561,7 +561,7 @@ func TestCIStep_CommitAndPush_UpdatesLocalBranchRefWithoutDetachedPush(t *testin
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -569,13 +569,13 @@ func TestCIStep_CommitAndPush_UpdatesLocalBranchRefWithoutDetachedPush(t *testin
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	originalHeadSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
 	gitCmd(t, dir, "checkout", "--detach", originalHeadSHA)
-	os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("ci fix"), 0o644)
+	writeFile(t, filepath.Join(dir, "fix.txt"), "ci fix")
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, originalHeadSHA, config.Commands{})

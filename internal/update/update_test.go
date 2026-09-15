@@ -53,9 +53,9 @@ func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
 				if r.URL.Path != "/releases/download/channels/channels.json" {
 					t.Fatalf("unexpected path %q", r.URL.Path)
 				}
-				fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}}`,
+				writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}}`,
 					tt.archiveName,
-				)
+				))
 			}))
 			defer server.Close()
 
@@ -113,15 +113,15 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/releases/download/channels/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			if strings.Contains(r.URL.Path, "/repos/") {
 				t.Fatalf("update download path must not call the GitHub REST API, got %q", r.URL.Path)
@@ -178,15 +178,15 @@ func TestUpdaterRunResetsDaemonAfterUpdate(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -236,15 +236,15 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -507,19 +507,19 @@ func TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
 			if archiveBroken {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -616,11 +616,11 @@ func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
 			// The operator answered the gate while the download ran, so the
 			// run is complete by the time the daemon is actually reset.
@@ -633,9 +633,9 @@ func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
 			if err := live.UpdateRunStatus(parked.ID, types.RunCompleted); err != nil {
 				t.Errorf("complete run during download: %v", err)
 			}
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -691,15 +691,15 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -765,15 +765,15 @@ func TestUpdaterRunFailsWhenDaemonResetLeavesDaemonOffline(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -834,15 +834,15 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -928,15 +928,15 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -1043,15 +1043,15 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -1118,7 +1118,7 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprint(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.2","assets":[]}}`)
+			writeStub(t, w, `{"schema_version":1,"stable":{"tag_name":"v1.2.2","assets":[]}}`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -1244,7 +1244,7 @@ func TestUpdaterCheckLatestBetaUsesManifest(t *testing.T) {
 			http.Error(w, "rate limited", http.StatusForbidden)
 			return
 		}
-		fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[]},"beta":{"tag_name":"v1.3.0-beta.2","prerelease":true,"assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}}`, archiveName)
+		writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[]},"beta":{"tag_name":"v1.3.0-beta.2","prerelease":true,"assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}}`, archiveName))
 	}))
 	defer server.Close()
 

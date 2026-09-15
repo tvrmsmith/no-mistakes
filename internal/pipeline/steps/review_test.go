@@ -439,7 +439,7 @@ func TestReviewStep_FixMode(t *testing.T) {
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
 			if callCount == 1 {
-				os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+				writeFile(t, filepath.Join(dir, "review-fix.txt"), "fixed")
 				return &agent.Result{Output: json.RawMessage(`{"summary":"  'address review findings.'  "}`)}, nil
 			}
 			// Review call — return clean findings
@@ -644,7 +644,7 @@ func TestReviewStep_FixMode_FocusedVerificationContract(t *testing.T) {
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
 			if callCount == 1 {
-				os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+				writeFile(t, filepath.Join(dir, "review-fix.txt"), "fixed")
 				return &agent.Result{Output: json.RawMessage(`{"summary":"address findings"}`)}, nil
 			}
 			j, _ := json.Marshal(cleanReviewFindings())
@@ -961,7 +961,7 @@ func TestReviewStep_RereviewTreatsFixRoundsAsPipelineAuthoredCode(t *testing.T) 
 			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				callCount++
 				if callCount == 1 {
-					os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+					writeFile(t, filepath.Join(dir, "review-fix.txt"), "fixed")
 					return &agent.Result{Output: json.RawMessage(`{"summary":"address findings"}`)}, nil
 				}
 				j, _ := json.Marshal(cleanReviewFindings())
@@ -1300,7 +1300,7 @@ func TestReviewStep_RereviewFlagsIntentContradictionAsAskUser(t *testing.T) {
 			if callCount == 1 {
 				// Fixer turn: "resolve" the race finding by deleting the
 				// required guarded removal (retry-only).
-				os.WriteFile(filepath.Join(dir, "fleet-sync.txt"), []byte("retry-only\n"), 0o644)
+				writeFile(t, filepath.Join(dir, "fleet-sync.txt"), "retry-only\n")
 				return &agent.Result{Output: json.RawMessage(`{"summary":"leave persistent refs locks intact"}`)}, nil
 			}
 			// Rereview: the change now contradicts the authoritative criteria,
@@ -1454,7 +1454,7 @@ func TestReviewStep_PushedIgnorePatternsCannotSuppressPathInstructions(t *testin
 	sctx.Config.Review = config.Review{PathInstructions: rules}
 	// The branch adds a source file so the run still has something to review,
 	// and ignores the fixture the trusted rule is scoped to.
-	os.WriteFile(filepath.Join(dir, "app.go"), []byte("package main\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.go"), "package main\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "add source file")
 	sctx.Run.HeadSHA = gitCmd(t, dir, "rev-parse", "HEAD")
@@ -1768,7 +1768,7 @@ func TestReviewStep_RereviewOffersRevertExitFromPriorRoundMachinery(t *testing.T
 			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				callCount++
 				if callCount == 1 {
-					os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+					writeFile(t, filepath.Join(dir, "review-fix.txt"), "fixed")
 					return &agent.Result{Output: json.RawMessage(`{"summary":"address findings"}`)}, nil
 				}
 				j, _ := json.Marshal(cleanReviewFindings())

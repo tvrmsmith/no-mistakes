@@ -342,7 +342,7 @@ func TestDoJSON_Success(t *testing.T) {
 			t.Error("expected x-custom header")
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"result":"ok"}`)
+		writeStub(t, w, `{"result":"ok"}`)
 	}))
 	defer server.Close()
 
@@ -360,7 +360,7 @@ func TestDoJSON_Success(t *testing.T) {
 func TestDoJSON_ErrorStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, "bad request")
+		writeStub(t, w, "bad request")
 	}))
 	defer server.Close()
 
@@ -379,7 +379,7 @@ func TestDoJSON_NilBody(t *testing.T) {
 			t.Error("should not set Content-Type for nil body")
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{}`)
+		writeStub(t, w, `{}`)
 	}))
 	defer server.Close()
 
@@ -426,7 +426,7 @@ func TestRovodevAgent_FullFlow(t *testing.T) {
 		switch {
 		case r.URL.Path == "/v3/sessions/create" && r.Method == http.MethodPost:
 			step++
-			fmt.Fprint(w, `{"session_id":"test-session-123"}`)
+			writeStub(t, w, `{"session_id":"test-session-123"}`)
 
 		case r.URL.Path == "/v3/inline-system-prompt" && r.Method == http.MethodPut:
 			step++
@@ -451,9 +451,9 @@ func TestRovodevAgent_FullFlow(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			// Real rovodev emits top-level usage fields and streams text
 			// via part_start + part_delta events.
-			fmt.Fprint(w, "event: request-usage\ndata: {\"input_tokens\":100,\"output_tokens\":50}\n\n")
-			fmt.Fprint(w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"{\\\"success\\\":true\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
-			fmt.Fprint(w, "event: part_delta\ndata: {\"index\":0,\"delta\":{\"content_delta\":\",\\\"summary\\\":\\\"all good\\\"}\",\"part_delta_kind\":\"text\"},\"event_kind\":\"part_delta\"}\n\n")
+			writeStub(t, w, "event: request-usage\ndata: {\"input_tokens\":100,\"output_tokens\":50}\n\n")
+			writeStub(t, w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"{\\\"success\\\":true\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
+			writeStub(t, w, "event: part_delta\ndata: {\"index\":0,\"delta\":{\"content_delta\":\",\\\"summary\\\":\\\"all good\\\"}\",\"part_delta_kind\":\"text\"},\"event_kind\":\"part_delta\"}\n\n")
 
 		case r.URL.Path == "/v3/sessions/test-session-123" && r.Method == http.MethodDelete:
 			step++
@@ -523,12 +523,12 @@ func TestRovodevAgent_NoSchema(t *testing.T) {
 		calledPaths[r.URL.Path] = true
 		switch r.URL.Path {
 		case "/v3/sessions/create":
-			fmt.Fprint(w, `{"session_id":"s1"}`)
+			writeStub(t, w, `{"session_id":"s1"}`)
 		case "/v3/set_chat_message":
 			w.WriteHeader(http.StatusOK)
 		case "/v3/stream_chat":
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"done\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
+			writeStub(t, w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"done\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
 		case "/v3/sessions/s1":
 			w.WriteHeader(http.StatusOK)
 		default:

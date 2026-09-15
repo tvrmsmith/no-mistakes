@@ -27,7 +27,7 @@ func TestLintStep_FixMode_CommitsChanges(t *testing.T) {
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
-			os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "lint-fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`{"summary":"  'fix lint issues,'  "}`)}, nil
 		},
 	}
@@ -88,7 +88,7 @@ func TestLintStep_FixMode_UsesFallbackSummaryWhenStructuredSummaryMalformed(t *t
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "lint-fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`not json`)}, nil
 		},
 	}
@@ -116,7 +116,7 @@ func TestLintStep_NoConfiguredLint_CommitsAgentFixesWithoutApproval(t *testing.T
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
-			os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "lint-fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"format code"}`)}, nil
 		},
 	}

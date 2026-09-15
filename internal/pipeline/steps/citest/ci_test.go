@@ -185,7 +185,7 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 	stepstest.GitCmd(t, dir, "config", "user.name", "test")
 	stepstest.GitCmd(t, dir, "config", "user.email", "test@test.com")
 	stepstest.GitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "init.txt"), "init")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -193,13 +193,13 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 	stepstest.GitCmd(t, dir, "push", "origin", "main")
 
 	stepstest.GitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "feature")
 	originalHeadSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
 	stepstest.GitCmd(t, dir, "push", "origin", "feature")
 
-	os.WriteFile(filepath.Join(dir, "resolved.txt"), []byte("resolved"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "resolved.txt"), "resolved")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "resolve conflict")
 	advancedHeadSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -1460,7 +1460,7 @@ func setupCIRerunRepo(t *testing.T) (dir, upstreamURL, baseSHA, headSHA string) 
 	stepstest.GitCmd(t, dir, "config", "user.name", "test")
 	stepstest.GitCmd(t, dir, "config", "user.email", "test@test.com")
 	stepstest.GitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "init.txt"), "init")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA = stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -1468,7 +1468,7 @@ func setupCIRerunRepo(t *testing.T) (dir, upstreamURL, baseSHA, headSHA string) 
 	stepstest.GitCmd(t, dir, "push", "origin", "main")
 
 	stepstest.GitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "feature")
 	headSHA = stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -1816,7 +1816,7 @@ func TestCIStep_MovedPublishedHeadClearsCIReadiness(t *testing.T) {
 	t.Parallel()
 	dir, upstream, baseSHA, headSHA := setupCIRerunRepo(t)
 
-	os.WriteFile(filepath.Join(dir, "out-of-band.txt"), []byte("out of band"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "out-of-band.txt"), "out of band")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "out of band commit")
 	stepstest.GitCmd(t, dir, "push", "origin", "feature")
@@ -2260,7 +2260,7 @@ func TestCIStep_GreenChecksAtAdvancedHeadAreRecognizedWhileRunTracksOlderHead(t 
 
 	// The branch advances past the commit the run still records, the way a
 	// pipeline fix commit does mid-run.
-	os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "fix.txt"), "pipeline fix")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "no-mistakes(document): align docs")
 	stepstest.GitCmd(t, dir, "push", "origin", "feature")
@@ -2324,7 +2324,7 @@ func TestCIStep_MovedPublishedHeadTerminatesInsteadOfRerunning(t *testing.T) {
 	dir, upstream, baseSHA, headSHA := setupCIRerunRepo(t)
 
 	// Someone else advances the published branch out of band.
-	os.WriteFile(filepath.Join(dir, "out-of-band.txt"), []byte("out of band"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "out-of-band.txt"), "out of band")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "out of band commit")
 	movedSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")

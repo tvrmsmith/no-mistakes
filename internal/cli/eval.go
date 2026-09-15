@@ -96,11 +96,12 @@ func newEvalCaptureCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "captured %d local review case(s)\n", len(cases))
+			out := newPrinter(cmd.OutOrStdout())
+			out.Printf("captured %d local review case(s)\n", len(cases))
 			for _, c := range cases {
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s  run %s round %s\n", c.ID, c.SourceRunID, c.SourceRoundID)
+				out.Printf("  %s  run %s round %s\n", c.ID, c.SourceRunID, c.SourceRoundID)
 			}
-			return nil
+			return out.Err()
 		},
 	}
 }
@@ -148,8 +149,9 @@ func newEvalMissIngestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "ingested %d false-negative gold finding(s) into case %s (%d total)\n", result.Added, result.CaseID, result.Total)
-			return nil
+			out := newPrinter(cmd.OutOrStdout())
+			out.Printf("ingested %d false-negative gold finding(s) into case %s (%d total)\n", result.Added, result.CaseID, result.Total)
+			return out.Err()
 		},
 	}
 	cmd.Flags().StringArrayVar(&findings, "finding", nil, "confirmed miss as JSON finding object with id and description, optional file, line, severity (error|warning|info, default error) and action (auto-fix|ask-user|no-op) (repeatable)")
@@ -174,7 +176,7 @@ func newEvalRunCmd() *cobra.Command {
 				return err
 			}
 			defer store.Close()
-			out := cmd.OutOrStdout()
+			out := newPrinter(cmd.OutOrStdout())
 			caseCount := 0
 			session, evaluations, runErr := eval.Replay(cmd.Context(), store, eval.ReplayOptions{
 				Set:       cases,
@@ -182,7 +184,7 @@ func newEvalRunCmd() *cobra.Command {
 				Repeats:   repeats,
 				OnPlan: func(session eval.Session, planned []eval.Case) {
 					caseCount = len(planned)
-					fmt.Fprintf(out, "replaying %d case(s) x %d repeat(s) with %s on %s (cohort %s)\n\n",
+					out.Printf("replaying %d case(s) x %d repeat(s) with %s on %s (cohort %s)\n\n",
 						len(planned), session.Repeats, session.Candidate, session.Set, session.Cohort)
 				},
 				OnResult: func(evaluation eval.Evaluation, completed, total int) {
@@ -190,14 +192,14 @@ func newEvalRunCmd() *cobra.Command {
 				},
 			})
 			if len(evaluations) > 0 {
-				fmt.Fprintln(out)
-				fmt.Fprintln(out, renderEvalRunSummary(session, evaluations, caseCount))
+				out.Println()
+				out.Println(renderEvalRunSummary(session, evaluations, caseCount))
 			}
-			fmt.Fprintf(out, "local eval session %s: %d replay(s), candidate %s, repeats %d\n", session.ID, len(evaluations), candidate, repeats)
+			out.Printf("local eval session %s: %d replay(s), candidate %s, repeats %d\n", session.ID, len(evaluations), candidate, repeats)
 			if runErr != nil {
 				return runErr
 			}
-			return nil
+			return out.Err()
 		},
 	}
 	cmd.Flags().StringVar(&cases, "cases", "", "case set: all, labeled (finding-level gold), diversified (official gold-only holdout), or tune")
@@ -229,8 +231,9 @@ func newEvalSetsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), renderEvalSetsDashboard(summaries))
-			return nil
+			out := newPrinter(cmd.OutOrStdout())
+			out.Println(renderEvalSetsDashboard(summaries))
+			return out.Err()
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh-diversified", false, "rebuild the official diversified pin set from current gold")
@@ -252,8 +255,9 @@ func newEvalReportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprint(cmd.OutOrStdout(), eval.RenderReport(reports))
-			return nil
+			out := newPrinter(cmd.OutOrStdout())
+			out.Print(eval.RenderReport(reports))
+			return out.Err()
 		},
 	}
 }
@@ -286,8 +290,9 @@ func newEvalRelabelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "relabeled %d local review case(s)\n", len(cases))
-			return nil
+			out := newPrinter(cmd.OutOrStdout())
+			out.Printf("relabeled %d local review case(s)\n", len(cases))
+			return out.Err()
 		},
 	}
 }

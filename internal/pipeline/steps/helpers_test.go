@@ -42,6 +42,18 @@ func (m *mockAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Result,
 
 func (m *mockAgent) Close() error { return nil }
 
+// writeStub wires stepstest.WriteStub into this package's short-helper idiom.
+func writeStub(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+	stepstest.WriteStub(t, w, body)
+}
+
+// writeFile wires stepstest.WriteFile into this package's short-helper idiom.
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	stepstest.WriteFile(t, path, content)
+}
+
 func gitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -107,13 +119,13 @@ func ensureGitRepoTemplate(t *testing.T) {
 		run("config", "user.email", "test@test.com")
 		run("checkout", "-b", "main")
 
-		os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base content"), 0o644)
+		writeFile(t, filepath.Join(dir, "base.txt"), "base content")
 		run("add", "-A")
 		run("commit", "-m", "base commit")
 		gitRepoTemplate.baseSHA = run("rev-parse", "HEAD")
 
 		run("checkout", "-b", "feature")
-		os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature code\n"), 0o644)
+		writeFile(t, filepath.Join(dir, "feature.txt"), "feature code\n")
 		run("add", "-A")
 		run("commit", "-m", "add feature")
 		gitRepoTemplate.headSHA = run("rev-parse", "HEAD")
@@ -283,13 +295,13 @@ func newFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			api.listCalls++
 			w.Header().Set("Content-Type", "application/json")
 			if api.existingPRID == 0 {
-				fmt.Fprint(w, `{"values":[]}`)
+				writeStub(t, w, `{"values":[]}`)
 				return
 			}
-			fmt.Fprintf(w, `{"values":[{"id":%d,"links":{"html":{"href":%q}}}]}`,
+			writeStub(t, w, fmt.Sprintf(`{"values":[{"id":%d,"links":{"html":{"href":%q}}}]}`,
 				api.existingPRID,
 				api.existingPRURL,
-			)
+			))
 		case r.Method == http.MethodPost && r.URL.Path == "/2.0/repositories/test/repo/pullrequests":
 			api.createCalls++
 			body, err := io.ReadAll(r.Body)
@@ -299,9 +311,9 @@ func newFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			api.lastCreateBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprintf(w, `{"id":99,"links":{"html":{"href":%q}}}`,
+			writeStub(t, w, fmt.Sprintf(`{"id":99,"links":{"html":{"href":%q}}}`,
 				api.createdPRURL,
-			)
+			))
 		case r.Method == http.MethodPut && r.URL.Path == fmt.Sprintf("/2.0/repositories/test/repo/pullrequests/%d", api.existingPRID):
 			api.updateCalls++
 			body, err := io.ReadAll(r.Body)
@@ -310,10 +322,10 @@ func newFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			}
 			api.lastUpdateBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"id":%d,"links":{"html":{"href":%q}}}`,
+			writeStub(t, w, fmt.Sprintf(`{"id":%d,"links":{"html":{"href":%q}}}`,
 				api.existingPRID,
 				api.existingPRURL,
-			)
+			))
 		default:
 			t.Fatalf("unexpected Bitbucket PR API request: %s %s", r.Method, r.URL.String())
 		}
@@ -366,31 +378,31 @@ func newFakeBitbucketCIAPI(t *testing.T, prState, statusesJSON string) *fakeBitb
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pullrequests/42":
 			api.prStateCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"id":42,"state":%q,"source":{"commit":{"hash":%q}}}`, api.prState, api.prSourceSHA)
+			writeStub(t, w, fmt.Sprintf(`{"id":42,"state":%q,"source":{"commit":{"hash":%q}}}`, api.prState, api.prSourceSHA))
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pullrequests/42/statuses":
 			api.statusesCalls++
 			api.lastStatusesQ = r.URL.Query().Get("q")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.statusesJSON)
+			writeStub(t, w, api.statusesJSON)
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines" && api.pipelinesJSON != "":
 			api.pipelinesCalls++
 			api.lastPipelineQ = r.URL.Query().Get("target.commit.hash")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.pipelinesJSON)
+			writeStub(t, w, api.pipelinesJSON)
 		case r.Method == http.MethodGet && api.stepsByPath[r.URL.Path] != "":
 			api.stepsCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.stepsByPath[r.URL.Path])
+			writeStub(t, w, api.stepsByPath[r.URL.Path])
 		case r.Method == http.MethodGet && api.stepLogsByPath[r.URL.Path] != "":
 			api.stepLogCalls++
-			fmt.Fprint(w, api.stepLogsByPath[r.URL.Path])
+			writeStub(t, w, api.stepLogsByPath[r.URL.Path])
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines/{pipeline-1}/steps" && api.stepsJSON != "":
 			api.stepsCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.stepsJSON)
+			writeStub(t, w, api.stepsJSON)
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines/{pipeline-1}/steps/{step-1}/log" && api.stepLog != "":
 			api.stepLogCalls++
-			fmt.Fprint(w, api.stepLog)
+			writeStub(t, w, api.stepLog)
 		default:
 			t.Fatalf("unexpected Bitbucket CI API request: %s %s", r.Method, r.URL.String())
 		}

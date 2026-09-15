@@ -32,15 +32,15 @@ func opencodeErrorServerWithEvents(t *testing.T, events string, bodies ...string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"id":"s1"}`)
+			writeStub(t, w, `{"id":"s1"}`)
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			if events != "" {
-				fmt.Fprint(w, events)
+				writeStub(t, w, events)
 			}
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
 			body := bodies[len(bodies)-1]
@@ -48,7 +48,7 @@ func opencodeErrorServerWithEvents(t *testing.T, events string, bodies ...string
 				body = bodies[sent]
 			}
 			sent++
-			fmt.Fprint(w, body)
+			writeStub(t, w, body)
 
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -341,18 +341,18 @@ func TestOpencodeAgent_ThinkingConflictAfterToolActivityDoesNotFallBack(t *testi
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
 			id := sessions.Add(1)
-			fmt.Fprintf(w, `{"id":"s%d"}`, id)
+			writeStub(t, w, fmt.Sprintf(`{"id":"s%d"}`, id))
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			if eventStreams.Add(1) == 1 {
-				fmt.Fprint(w, toolPartEvent)
-				fmt.Fprint(w, `data: {"payload":{"type":"session.error","properties":{"sessionID":"s1","error":{"name":"APIError","data":{"message":"tool_choice 'required' is incompatible with thinking enabled"}}}}}`+"\n\n")
+				writeStub(t, w, toolPartEvent)
+				writeStub(t, w, `data: {"payload":{"type":"session.error","properties":{"sessionID":"s1","error":{"name":"APIError","data":{"message":"tool_choice 'required' is incompatible with thinking enabled"}}}}}`+"\n\n")
 				return
 			}
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant"}}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant"}}`)
 		case r.URL.Path == "/session/s2/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg2","role":"assistant"},"parts":[{"type":"text","text":"{\"summary\":\"fallback ran anyway\"}"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg2","role":"assistant"},"parts":[{"type":"text","text":"{\"summary\":\"fallback ran anyway\"}"}]}`)
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -409,20 +409,20 @@ func opencodeStreamDeathServer(t *testing.T, events string) (*httptest.Server, *
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprintf(w, `{"id":"s%d"}`, sessions.Add(1))
+			writeStub(t, w, fmt.Sprintf(`{"id":"s%d"}`, sessions.Add(1)))
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			if streams.Add(1) == 1 {
-				fmt.Fprint(w, events)
+				writeStub(t, w, events)
 				killResponseStream(t, w)
 				return
 			}
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case strings.HasSuffix(r.URL.Path, "/message") && r.Method == http.MethodPost:
-			fmt.Fprint(w, structuredSuccessBody)
+			writeStub(t, w, structuredSuccessBody)
 
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -649,18 +649,18 @@ func opencodeSlowMessageServer(t *testing.T, events, answer string) (*httptest.S
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprintf(w, `{"id":"s%d"}`, sessions.Add(1))
+			writeStub(t, w, fmt.Sprintf(`{"id":"s%d"}`, sessions.Add(1)))
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			if streams.Add(1) == 1 {
-				fmt.Fprint(w, events)
+				writeStub(t, w, events)
 				killResponseStream(t, w)
 				close(streamDead)
 				return
 			}
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
 			select {
@@ -677,10 +677,10 @@ func opencodeSlowMessageServer(t *testing.T, events, answer string) (*httptest.S
 				}
 				return
 			}
-			fmt.Fprint(w, answer)
+			writeStub(t, w, answer)
 
 		case strings.HasSuffix(r.URL.Path, "/message") && r.Method == http.MethodPost:
-			fmt.Fprint(w, structuredSuccessBody)
+			writeStub(t, w, structuredSuccessBody)
 
 		default:
 			w.WriteHeader(http.StatusOK)

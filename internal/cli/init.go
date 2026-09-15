@@ -1,8 +1,8 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,16 +68,17 @@ func newInitCmd() *cobra.Command {
 					// and the gate is sound, so failing closed here means
 					// refusing to proceed, not undoing work the user would
 					// have to redo after a 'daemon restart'.
+					errOut := newPrinter(cmd.ErrOrStderr())
 					if ipc.IsVersionMismatch(err) {
 						if created {
-							fmt.Fprintf(cmd.ErrOrStderr(), "The gate was created and kept; init is idempotent, so re-running it is safe once the skew is resolved. %s\n", versionMismatchRemedy(err))
+							errOut.Printf("The gate was created and kept; init is idempotent, so re-running it is safe once the skew is resolved. %s\n", versionMismatchRemedy(err))
 						}
 					} else if created {
 						if _, ejectErr := gate.Eject(cmd.Context(), d, p, "."); ejectErr != nil {
 							return fmt.Errorf("%w, rollback init: %w", ensureDaemonError(err), ejectErr)
 						}
 					}
-					return ensureDaemonError(err)
+					return errors.Join(ensureDaemonError(err), errOut.Err())
 				}
 
 				// Install the agent skill at user level so agents can drive
@@ -85,40 +86,40 @@ func newInitCmd() *cobra.Command {
 				// skill write failure must not undo a successful gate setup.
 				_, skillErr := skill.InstallUser()
 
-				w := cmd.OutOrStdout()
-				fmt.Fprintln(w, sCyan.Render(banner))
-				fmt.Fprintln(w)
+				w := newPrinter(cmd.OutOrStdout())
+				w.Println(sCyan.Render(banner))
+				w.Println()
 				headline := "Gate initialized"
 				if !created {
 					headline = "Gate already initialized (refreshed)"
 				}
-				fmt.Fprintf(w, "  %s %s\n", sGreen.Render("✓"), headline)
-				fmt.Fprintln(w)
-				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  repo"), repo.WorkingPath)
-				fmt.Fprintf(w, "  %s  no-mistakes → %s\n", sDim.Render("  gate"), p.RepoDir(repo.ID))
+				w.Printf("  %s %s\n", sGreen.Render("✓"), headline)
+				w.Println()
+				w.Printf("  %s  %s\n", sDim.Render("  repo"), repo.WorkingPath)
+				w.Printf("  %s  no-mistakes → %s\n", sDim.Render("  gate"), p.RepoDir(repo.ID))
 				remoteURL := repo.UpstreamURL
 				if repo.ForkURL != "" {
 					remoteURL = safeurl.Redact(remoteURL)
 				}
-				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("remote"), remoteURL)
+				w.Printf("  %s  %s\n", sDim.Render("remote"), remoteURL)
 				if repo.ForkURL != "" {
-					fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  fork"), safeurl.Redact(repo.ForkURL))
+					w.Printf("  %s  %s\n", sDim.Render("  fork"), safeurl.Redact(repo.ForkURL))
 				}
 				if skillErr != nil {
-					fmt.Fprintf(w, "  %s  %s\n", sDim.Render(" skill"), sYellow.Render("skipped: "+skillErr.Error()))
+					w.Printf("  %s  %s\n", sDim.Render(" skill"), sYellow.Render("skipped: "+skillErr.Error()))
 				} else {
-					fmt.Fprintf(w, "  %s  %s %s\n", sDim.Render(" skill"), sGreen.Render("/no-mistakes"), sDim.Render("installed for agents at user level"))
+					w.Printf("  %s  %s %s\n", sDim.Render(" skill"), sGreen.Render("/no-mistakes"), sDim.Render("installed for agents at user level"))
 				}
 				if resolvedWorktreeRoot != "" {
 					printWorktreeRootGuidance(w, p, repo.WorkingPath, resolvedWorktreeRoot)
 				}
 				if legacy := skill.Vendored(repo.WorkingPath); len(legacy) > 0 {
-					fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  note"), sDim.Render("vendored skill copy ("+strings.Join(legacy, ", ")+") is no longer needed and can be removed"))
+					w.Printf("  %s  %s\n", sDim.Render("  note"), sDim.Render("vendored skill copy ("+strings.Join(legacy, ", ")+") is no longer needed and can be removed"))
 				}
-				fmt.Fprintln(w)
-				fmt.Fprintf(w, "  %s\n", sDim.Render("Push through the gate with:"))
-				fmt.Fprintf(w, "  %s\n", sBold.Render("git push no-mistakes <branch>"))
-				return nil
+				w.Println()
+				w.Printf("  %s\n", sDim.Render("Push through the gate with:"))
+				w.Printf("  %s\n", sBold.Render("git push no-mistakes <branch>"))
+				return w.Err()
 			})
 		},
 	}
@@ -305,32 +306,32 @@ func checkoutClaimingWorktreeRoot(p *paths.Paths, checkout, root string) (string
 // for the same reason: the siblings of a block mapping all sit at one column, so
 // an entry line at another one is the same unloadable document, and a line named
 // for replacement at another one is not a line the operator's file contains.
-func printWorktreeRootGuidance(w io.Writer, p *paths.Paths, workingPath, root string) {
+func printWorktreeRootGuidance(w *printer, p *paths.Paths, workingPath, root string) {
 	shape := config.InspectGlobalConfigMapping(p.ConfigFile(), "worktree_roots")
 	configuredKey, configuredRoot, configured := configuredWorktreeRootEntry(shape, workingPath)
 	if configured && worktrees.Canonical(configuredRoot) == worktrees.Canonical(root) {
-		fmt.Fprintf(w, "  %s  %s %s\n", sDim.Render("  runs"), sGreen.Render(root), sDim.Render("(already configured)"))
+		w.Printf("  %s  %s %s\n", sDim.Render("  runs"), sGreen.Render(root), sDim.Render("(already configured)"))
 		return
 	}
-	fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  runs"), root)
-	fmt.Fprintln(w)
+	w.Printf("  %s  %s\n", sDim.Render("  runs"), root)
+	w.Println()
 
 	indent := worktreeRootsEntryIndent(shape)
 	switch {
 	case !shape.Present:
-		fmt.Fprintf(w, "  %s\n", sDim.Render("Add this to "+p.ConfigFile()+" so runs are created there:"))
-		fmt.Fprintf(w, "  %s\n", sBold.Render("worktree_roots:"))
-		fmt.Fprintf(w, "  %s\n", sBold.Render(indent+workingPath+": "+root))
+		w.Printf("  %s\n", sDim.Render("Add this to "+p.ConfigFile()+" so runs are created there:"))
+		w.Printf("  %s\n", sBold.Render("worktree_roots:"))
+		w.Printf("  %s\n", sBold.Render(indent+workingPath+": "+root))
 	case !shape.AppendableBlock:
 		printWorktreeRootsBlockReplacement(w, p, shape, workingPath, configuredKey, root)
 	case configured:
-		fmt.Fprintf(w, "  %s\n", sDim.Render("Replace this line in "+p.ConfigFile()+" so runs are created there:"))
-		fmt.Fprintf(w, "  %s\n", sBold.Render(indent+configuredKey+": "+configuredRoot))
-		fmt.Fprintf(w, "  %s\n", sDim.Render("with:"))
-		fmt.Fprintf(w, "  %s\n", sBold.Render(indent+configuredKey+": "+root))
+		w.Printf("  %s\n", sDim.Render("Replace this line in "+p.ConfigFile()+" so runs are created there:"))
+		w.Printf("  %s\n", sBold.Render(indent+configuredKey+": "+configuredRoot))
+		w.Printf("  %s\n", sDim.Render("with:"))
+		w.Printf("  %s\n", sBold.Render(indent+configuredKey+": "+root))
 	default:
-		fmt.Fprintf(w, "  %s\n", sDim.Render("Add this under the existing worktree_roots: in "+p.ConfigFile()+" so runs are created there:"))
-		fmt.Fprintf(w, "  %s\n", sBold.Render(indent+workingPath+": "+root))
+		w.Printf("  %s\n", sDim.Render("Add this under the existing worktree_roots: in "+p.ConfigFile()+" so runs are created there:"))
+		w.Printf("  %s\n", sBold.Render(indent+workingPath+": "+root))
 	}
 }
 
@@ -349,15 +350,15 @@ func worktreeRootsEntryIndent(shape config.GlobalConfigMapping) string {
 // has, either re-pointing this checkout's or adding one for it - which is why it
 // is reached only for a document that parsed: entries nobody could read are
 // entries this rewrite would drop.
-func printWorktreeRootsBlockReplacement(w io.Writer, p *paths.Paths, shape config.GlobalConfigMapping, workingPath, configuredKey, root string) {
+func printWorktreeRootsBlockReplacement(w *printer, p *paths.Paths, shape config.GlobalConfigMapping, workingPath, configuredKey, root string) {
 	if shape.Line != "" {
-		fmt.Fprintf(w, "  %s\n", sDim.Render("Replace this line in "+p.ConfigFile()+" so runs are created there:"))
-		fmt.Fprintf(w, "  %s\n", sBold.Render(shape.Line))
-		fmt.Fprintf(w, "  %s\n", sDim.Render("with:"))
+		w.Printf("  %s\n", sDim.Render("Replace this line in "+p.ConfigFile()+" so runs are created there:"))
+		w.Printf("  %s\n", sBold.Render(shape.Line))
+		w.Printf("  %s\n", sDim.Render("with:"))
 	} else {
-		fmt.Fprintf(w, "  %s\n", sDim.Render("Replace the worktree_roots: entry in "+p.ConfigFile()+" so runs are created there:"))
+		w.Printf("  %s\n", sDim.Render("Replace the worktree_roots: entry in "+p.ConfigFile()+" so runs are created there:"))
 	}
-	fmt.Fprintf(w, "  %s\n", sBold.Render("worktree_roots:"))
+	w.Printf("  %s\n", sBold.Render("worktree_roots:"))
 	repointed := false
 	for _, existing := range shape.Entries {
 		value := existing.Value
@@ -365,10 +366,10 @@ func printWorktreeRootsBlockReplacement(w io.Writer, p *paths.Paths, shape confi
 			value = root
 			repointed = true
 		}
-		fmt.Fprintf(w, "  %s\n", sBold.Render("  "+existing.Key+": "+value))
+		w.Printf("  %s\n", sBold.Render("  "+existing.Key+": "+value))
 	}
 	if !repointed {
-		fmt.Fprintf(w, "  %s\n", sBold.Render("  "+workingPath+": "+root))
+		w.Printf("  %s\n", sBold.Render("  "+workingPath+": "+root))
 	}
 }
 
