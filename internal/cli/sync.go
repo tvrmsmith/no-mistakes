@@ -9,6 +9,7 @@ import (
 	toON "github.com/toon-format/toon-go"
 
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/spf13/cobra"
@@ -141,12 +142,12 @@ func openSyncService() (*branchsync.Service, func(), error) {
 	}
 	repo, err := findRepo(d)
 	if err != nil {
-		d.Close()
+		closers.Quiet(d)
 		return nil, nil, err
 	}
 	globalCfg, cfgErr := config.LoadGlobal(p.ConfigFile())
 	if cfgErr != nil {
-		d.Close()
+		closers.Quiet(d)
 		return nil, nil, cfgErr
 	}
 	return &branchsync.Service{DB: d, Repo: repo, WorkDir: ".", GateDir: p.RepoDir(repo.ID), Paths: p, RemoteTimeout: globalCfg.BranchSyncRemoteTimeout}, func() { _ = d.Close() }, nil

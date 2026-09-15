@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -21,7 +22,7 @@ func newRoundHistoryContext(t *testing.T) (*pipeline.StepContext, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	repo, err := database.InsertRepo(t.TempDir(), "https://example.invalid/repo", "main")
 	if err != nil {

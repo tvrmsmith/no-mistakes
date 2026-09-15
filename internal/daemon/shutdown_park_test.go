@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/lifecycle"
@@ -89,7 +90,7 @@ func startParkedRunWithRepoConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -483,7 +484,7 @@ func TestCleanShutdownStillFailsRunCancelledMidStep(t *testing.T) {
 
 	// The daemon drains in-flight handlers as it exits, so an idle client
 	// connection left open outlives the shutdown it is waiting for.
-	client.Close()
+	closers.Quiet(client)
 	if err := daemon.stopAndWait(t); err != nil {
 		t.Fatalf("daemon exited with error: %v", err)
 	}
@@ -712,10 +713,10 @@ func TestAbortTerminatesADeferredRun(t *testing.T) {
 	}
 	var result ipc.CancelRunResult
 	if err := client.Call(ipc.MethodCancelRun, &ipc.CancelRunParams{RunID: runID}, &result); err != nil {
-		client.Close()
+		closers.Quiet(client)
 		t.Fatalf("abort of a deferred run failed: %v", err)
 	}
-	client.Close()
+	closers.Quiet(client)
 
 	aborted := waitForRunTerminalState(t, d, runID)
 	if aborted.Status != types.RunCancelled {
@@ -863,7 +864,7 @@ func TestStaleMarkerRunDoesNotBlockALivePush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -898,7 +899,7 @@ func TestLivePushDoesNotDestroyAParkedRunOnTheSameBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	pushErr := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{

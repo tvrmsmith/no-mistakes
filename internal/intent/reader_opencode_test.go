@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	_ "modernc.org/sqlite"
 )
 
@@ -25,7 +26,7 @@ func buildOpenCodeDB(t *testing.T, sessionDir string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer closers.Quiet(db)
 	statements := []string{
 		`CREATE TABLE session (
 			id TEXT PRIMARY KEY,

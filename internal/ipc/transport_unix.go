@@ -4,6 +4,7 @@ package ipc
 
 import (
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"net"
 	"os"
 	"syscall"
@@ -20,7 +21,7 @@ import (
 // unclean exit) is removed before binding.
 func listen(endpoint string) (net.Listener, error) {
 	if conn, err := net.DialTimeout("unix", endpoint, 200*time.Millisecond); err == nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, fmt.Errorf("ipc socket %s is already in use by a live listener", endpoint)
 	}
 	_ = os.Remove(endpoint)

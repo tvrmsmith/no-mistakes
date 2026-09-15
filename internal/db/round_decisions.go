@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -63,7 +64,7 @@ func (d *DB) GetBranchDecisionRounds(repoID, branch, excludeRunID string, limit 
 	if err != nil {
 		return nil, false, fmt.Errorf("get branch decision rounds: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	var decisions []*BranchDecisionRound
 	for rows.Next() {

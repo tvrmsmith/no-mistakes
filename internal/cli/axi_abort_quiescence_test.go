@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -109,7 +110,7 @@ func newAbortQuiescenceFixtureWithCancel(t *testing.T, getRun func(context.Conte
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if client, dialErr := ipc.Dial(p.Socket()); dialErr == nil {
-			client.Close()
+			closers.Quiet(client)
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -393,7 +394,7 @@ func newDaemonDownAbortFixture(t *testing.T, status *types.RunStatus) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	if status == nil {
 		return ""
 	}

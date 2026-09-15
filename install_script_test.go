@@ -261,7 +261,6 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
 	gz := gzip.NewWriter(file)
 	tw := tar.NewWriter(gz)
 	data := []byte(binaryContent)
@@ -276,6 +275,11 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 		t.Fatal(err)
 	}
 	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The file close is where the compressed archive reaches the disk, so a
+	// test reading it back needs that error, not a truncated fixture.
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

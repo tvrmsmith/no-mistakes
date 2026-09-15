@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"log/slog"
 	"net"
 	"sync"
@@ -145,7 +146,7 @@ func (s *Server) CloseListener() {
 	ln := s.listener
 	s.mu.RUnlock()
 	if ln != nil {
-		ln.Close()
+		closers.Quiet(ln)
 	}
 }
 
@@ -176,7 +177,7 @@ func versionExemptMethod(method string) bool {
 }
 
 func (s *Server) handleConn(conn net.Conn) {
-	defer conn.Close()
+	defer closers.Quiet(conn)
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	encoder := json.NewEncoder(conn)

@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -77,7 +78,7 @@ func TestDriveRun_HealthyWaitStaysWithinRequestBudget(t *testing.T) {
 	if client == nil {
 		t.Fatal("IPC server did not become ready")
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
 	defer cancel()
@@ -437,7 +438,7 @@ func TestDriveRun_YesLeavesProtectedPathRefusalAwaitingResponse(t *testing.T) {
 	if client == nil {
 		t.Fatal("IPC server did not become ready")
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	refusal := pipeline.ProtectedPathOutcome(&pipeline.ProtectedPathError{Path: "package.lock", Rule: "*.lock"})
 	for _, status := range []types.StepStatus{types.StepStatusAwaitingApproval, types.StepStatusFixReview} {

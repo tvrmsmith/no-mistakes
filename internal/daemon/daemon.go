@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -70,7 +71,9 @@ func Run() (retErr error) {
 	if err != nil {
 		return fmt.Errorf("open daemon lifecycle log: %w", err)
 	}
-	defer lifecycleLog.Close()
+	// Closing the log writer is where its last buffered lines reach the disk,
+	// so it joins the run's error like the bootstrap capture above.
+	defer func() { retErr = errors.Join(retErr, lifecycleLog.Close()) }()
 	initLogger(lifecycleLog, "info")
 	defer func() {
 		if retErr != nil {
@@ -101,7 +104,7 @@ func Run() (retErr error) {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	logStartupPhase("database", databaseStarted)
 
 	return runWithOptionsLocked(p, d, globalCfg, nil, startupStarted)
@@ -197,7 +200,7 @@ func RunWithOptions(p *paths.Paths, d *db.DB, stepFactory StepFactory) error {
 // so startup reads and validates config.yaml exactly once. Re-reading it per
 // consumer would let one startup act on two different documents, and every later
 // read needs a fallback for a failure the caller has already refused to start on.
-func runWithOptionsLocked(p *paths.Paths, d *db.DB, globalCfg *config.GlobalConfig, stepFactory StepFactory, startupStarted time.Time) error {
+func runWithOptionsLocked(p *paths.Paths, d *db.DB, globalCfg *config.GlobalConfig, stepFactory StepFactory, startupStarted time.Time) (retErr error) {
 	// Refuse an unusable worktree placement before anything walks, sweeps, or
 	// removes a directory under it. This is the second half of worktree_roots
 	// validation: internal/config checks every entry it can judge without
@@ -212,7 +215,9 @@ func runWithOptionsLocked(p *paths.Paths, d *db.DB, globalCfg *config.GlobalConf
 		return fmt.Errorf("open managed server log: %w", err)
 	}
 	agent.SetManagedServerOutput(managedServerLog)
-	defer managedServerLog.Close()
+	// The close is where the managed server's last captured output reaches
+	// the disk, so it joins the daemon's error rather than being dropped.
+	defer func() { retErr = errors.Join(retErr, managedServerLog.Close()) }()
 	defer agent.SetManagedServerOutput(nil)
 
 	defer func() {

@@ -8,6 +8,7 @@ import (
 
 	toon "github.com/toon-format/toon-go"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
@@ -102,7 +103,7 @@ func classifyGateControlCaller(ctx context.Context) (gatecontext.Result, error) 
 	var database *db.DB
 	if opened, openErr := db.OpenReadOnly(p.DB()); openErr == nil {
 		database = opened
-		defer database.Close()
+		defer closers.Quiet(database)
 	} else if !os.IsNotExist(openErr) {
 		return gatecontext.Result{}, fmt.Errorf("open gate registry read-only: %w", openErr)
 	}
@@ -126,7 +127,7 @@ func queryDaemonGateContext(p *paths.Paths, cwd string, marker bool) (gatecontex
 	if err != nil {
 		return gatecontext.Result{}, fmt.Errorf("connect to daemon for gate execution context: %w", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var wire ipc.GateContextResult
 	if err := client.Call(ipc.MethodGateContext, &ipc.GateContextParams{CWD: cwd, MarkerPresent: marker}, &wire); err != nil {
 		return gatecontext.Result{}, fmt.Errorf("classify gate execution context: %w", err)

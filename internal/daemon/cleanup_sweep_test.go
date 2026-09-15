@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/procreap"
@@ -28,7 +29,7 @@ func TestCleanupOrphanWorktreesSweepsEveryRemovableDirectoryInOneSnapshot(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	workingPath := filepath.Join(t.TempDir(), "checkout")
 	if err := os.MkdirAll(workingPath, 0o755); err != nil {

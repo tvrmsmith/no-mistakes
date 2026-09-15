@@ -8,6 +8,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -41,7 +42,7 @@ func hideTable(t *testing.T, p *paths.Paths, table string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer closers.Quiet(conn)
 	if _, err := conn.Exec("ALTER TABLE " + table + " RENAME TO " + table + "_hidden"); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func breakActiveRunListing(t *testing.T, p *paths.Paths, d *db.DB, repoID string
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer closers.Quiet(conn)
 	if _, err := conn.Exec(
 		`INSERT INTO runs (id, repo_id, branch, head_sha, base_sha, status, parked_ms, created_at, updated_at)
 		 VALUES ('unscannable-run', ?, 'unscannable', 'a', 'b', ?, 'not-a-number', 1, 1)`,
@@ -74,7 +75,7 @@ func breakActiveRunListing(t *testing.T, p *paths.Paths, d *db.DB, repoID string
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer closers.Quiet(conn)
 		if _, err := conn.Exec(`DELETE FROM runs WHERE id = 'unscannable-run'`); err != nil {
 			t.Fatal(err)
 		}

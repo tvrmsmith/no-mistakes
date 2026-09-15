@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/spf13/cobra"
@@ -254,11 +255,11 @@ func writeFileNoSymlink(path string, data []byte, force bool) error {
 	defer os.Remove(tmpPath) // no-op once the rename below succeeds
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		closers.Quiet(tmp)
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	if err := tmp.Chmod(0644); err != nil {
-		tmp.Close()
+		closers.Quiet(tmp)
 		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -45,7 +46,7 @@ review_agents:
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ag.Close()
+	defer closers.Quiet(ag)
 	for _, tc := range []struct{ purpose, model, effort string }{
 		{"review", "anthropic-vertex/claude-opus-4-8", "max"},
 		{"review-fix", "google-vertex/gemini-3.8-flash", "max"},
@@ -142,7 +143,7 @@ func TestPushReceivedRoutesReviewRolesToIndependentProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{

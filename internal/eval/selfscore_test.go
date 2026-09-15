@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -68,14 +69,14 @@ func TestSelfScoreRecordedReviewsLeavesUnlabeledCasesPending(t *testing.T) {
 func TestReplayReportsPlanAndPerResultProgress(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	installFakeReviewAgent(t, p, `{"findings":[],"risk_level":"low","risk_rationale":"clean","risk_scope":"source-or-external"}`)
 
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}

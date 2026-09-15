@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -58,7 +59,7 @@ func TestNewWithOptions_ProfileReachesEachHarnessArgv(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer ag.Close()
+			defer closers.Quiet(ag)
 			if got := nativeExtraArgs(t, ag); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("extraArgs = %v, want %v", got, tt.want)
 			}
@@ -78,7 +79,7 @@ func TestNewWithOptions_RawOverrideKeepsWinning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ag.Close()
+	defer closers.Quiet(ag)
 	want := []string{"--model", "opus", "--permission-mode", "acceptEdits", "--effort", "low"}
 	if got := nativeExtraArgs(t, ag); !reflect.DeepEqual(got, want) {
 		t.Fatalf("extraArgs = %v, want %v", got, want)
@@ -98,7 +99,7 @@ func TestNewWithOptions_ZeroProfileLeavesArgvUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ag.Close()
+	defer closers.Quiet(ag)
 	if got := nativeExtraArgs(t, ag); !reflect.DeepEqual(got, raw) {
 		t.Fatalf("extraArgs = %v, want the raw args unchanged %v", got, raw)
 	}
@@ -134,7 +135,7 @@ func TestNewWithOptions_RefusesUnmappableKnob(t *testing.T) {
 	for _, tt := range tests {
 		ag, err := NewWithOptions(tt.agent, "bin", nil, Options{Profile: tt.profile})
 		if err == nil {
-			ag.Close()
+			closers.Quiet(ag)
 			t.Fatalf("NewWithOptions(%s, %+v) succeeded, want refusal", tt.agent, tt.profile)
 		}
 	}
@@ -152,7 +153,7 @@ func TestACPModelIsPinnedOnTheAcpxCommand(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer ag.Close()
+			defer closers.Quiet(ag)
 			args := ag.(*acpxAgent).buildArgs(RunOpts{CWD: "/w"})
 			modelIdx, execIdx := -1, -1
 			for i, arg := range args {
@@ -178,7 +179,7 @@ func TestACPWithoutModelKeepsItsPreviousArgv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer plain.Close()
+	defer closers.Quiet(plain)
 	for _, arg := range plain.(*acpxAgent).buildArgs(RunOpts{CWD: "/w"}) {
 		if arg == "--model" {
 			t.Fatal("acpx received --model with no model pinned")
@@ -196,7 +197,7 @@ func TestOpenCodeProfileRidesTheMessageBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ag.Close()
+	defer closers.Quiet(ag)
 	oc := ag.(*opencodeAgent)
 	if len(oc.extraArgs) != 0 {
 		t.Fatalf("opencode serve argv gained %v; the server rejects model flags", oc.extraArgs)
@@ -216,7 +217,7 @@ func TestOpenCodeWithoutProfileSendsNoModelOrVariant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ag.Close()
+	defer closers.Quiet(ag)
 	body := ag.(*opencodeAgent).messageBody("prompt", json.RawMessage(`{"type":"object"}`))
 	if _, ok := body["model"]; ok {
 		t.Fatalf("message body pinned a model with no profile: %#v", body)

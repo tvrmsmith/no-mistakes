@@ -11,6 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
 	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
@@ -275,7 +276,7 @@ func TestInspectorClassifiesAgainstADatabaseOlderThanTheBinary(t *testing.T) {
 		INSERT INTO runs VALUES ('run-1', 'repo-1', 'feature', 'head', 'base', 'running', NULL, NULL, 1, 1);
 		INSERT INTO step_results VALUES ('step-1', 'run-1', 'review', 1, 'running', NULL, NULL, NULL, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL);
 	`); err != nil {
-		legacy.Close()
+		closers.Quiet(legacy)
 		t.Fatal(err)
 	}
 	if err := legacy.Close(); err != nil {
@@ -286,7 +287,7 @@ func TestInspectorClassifiesAgainstADatabaseOlderThanTheBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the pre-upgrade database read-only: %v", err)
 	}
-	defer readOnly.Close()
+	defer closers.Quiet(readOnly)
 
 	p := paths.WithRoot(t.TempDir())
 	if err := p.EnsureDirs(); err != nil {

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
 	"github.com/spf13/cobra"
@@ -21,7 +22,7 @@ and removes the repo record from the database.`,
 				if err != nil {
 					return err
 				}
-				defer d.Close()
+				defer closers.Quiet(d)
 
 				repo, err := gate.Eject(cmd.Context(), d, p, ".")
 				if err != nil {

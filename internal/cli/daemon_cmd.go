@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -68,7 +69,7 @@ func newDaemonAdmitPushCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("connect to daemon: %w", err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			var result ipc.AdmitPushResult
 			if err := client.Call(ipc.MethodAdmitPush, &ipc.AdmitPushParams{Gate: gatePath}, &result); err != nil {
 				return err
@@ -151,7 +152,7 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("connect to daemon: %w", err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 
 			var result ipc.PushReceivedResult
 			if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{

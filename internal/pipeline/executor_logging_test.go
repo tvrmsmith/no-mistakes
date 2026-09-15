@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -93,7 +94,7 @@ func TestExecutor_LogChunkThrottlesStepActivityWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open counter db: %v", err)
 	}
-	defer counterDB.Close()
+	defer closers.Quiet(counterDB)
 	if _, err := counterDB.Exec(`
 		CREATE TABLE step_activity_update_count (n INTEGER NOT NULL);
 		INSERT INTO step_activity_update_count (n) VALUES (0);

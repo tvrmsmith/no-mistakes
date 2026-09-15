@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -363,7 +364,7 @@ func startDetachedDaemon(p *paths.Paths) error {
 	if err != nil {
 		return fmt.Errorf("open daemon bootstrap log: %w", err)
 	}
-	defer logFile.Close()
+	defer closers.Quiet(logFile)
 
 	cmd := exec.Command(exe, "daemon", "run", "--root", p.Root())
 	cmd.Env = upsertEnv(os.Environ(), "NM_HOME", p.Root())
@@ -654,7 +655,7 @@ func ReadDrainStatus(p *paths.Paths) (DrainStatus, error) {
 	if err != nil {
 		return DrainStatus{}, err
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.HealthResult
 	if err := client.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &result, ipc.DefaultDialTimeout); err != nil {
@@ -678,7 +679,7 @@ func daemonIsRunningViaIPC(p *paths.Paths) (bool, error) {
 		}
 		return false, fmt.Errorf("connect to daemon socket: %w", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.HealthResult
 	if err := client.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &result, ipc.DefaultDialTimeout); err != nil {
@@ -1113,7 +1114,7 @@ func daemonSocketAcceptingConnections(path string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	defer conn.Close()
+	defer closers.Quiet(conn)
 	return true, nil
 }
 

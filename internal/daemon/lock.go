@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
 
@@ -43,7 +44,7 @@ func acquireSingletonLock(p *paths.Paths) (*singletonLock, error) {
 	}
 	if lockErr := tryLockFile(f); lockErr != nil {
 		holder := readLockHolder(f)
-		f.Close()
+		closers.Quiet(f)
 		if holder != "" {
 			return nil, fmt.Errorf("%w (%s): %w", ErrSingletonLockHeld, holder, lockErr)
 		}

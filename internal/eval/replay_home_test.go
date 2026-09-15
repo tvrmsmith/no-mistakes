@@ -12,6 +12,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -40,7 +41,7 @@ func TestReplayUsesCallerHOMEAndKeepsIsolatedNMHOME(t *testing.T) {
 	writeFile(t, filepath.Join(sentinel, ".pi", "agent", "auth.json"), syntheticPiAuth)
 
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	probeDir := t.TempDir()
 	fakeDir := t.TempDir()
@@ -52,7 +53,7 @@ func TestReplayUsesCallerHOMEAndKeepsIsolatedNMHOME(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +130,7 @@ func TestReplayUsesCallerHOMEAndKeepsIsolatedNMHOME(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pipelineAgent.Close()
+	defer closers.Quiet(pipelineAgent)
 	schema := json.RawMessage(`{"type":"object","properties":{"findings":{"type":"array"}},"required":["findings"]}`)
 	if _, err := pipelineAgent.Run(ctx, agent.RunOpts{
 		Prompt:     "review",
@@ -216,7 +217,7 @@ func readProbe(t *testing.T, path string) map[string]string {
 	if err != nil {
 		t.Fatalf("read probe %s: %v", path, err)
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 	out := map[string]string{}
 	s := bufio.NewScanner(f)
 	for s.Scan() {

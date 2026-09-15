@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -16,13 +17,13 @@ import (
 func TestCaptureTwiceLeavesIdenticalCorpusState(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	first, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
@@ -66,7 +67,7 @@ func TestCaptureTwiceLeavesIdenticalCorpusState(t *testing.T) {
 func TestCaptureTwiceDoesNotDuplicateUserAddedGoldWithoutID(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	if err := sourceDB.SetStepRoundUserFindings(reviewRound.ID, &userFindings); err != nil {
 		t.Fatal(err)
@@ -79,7 +80,7 @@ func TestCaptureTwiceDoesNotDuplicateUserAddedGoldWithoutID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	for i := 0; i < 2; i++ {
 		cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 		if err != nil {
@@ -94,7 +95,7 @@ func TestCaptureTwiceDoesNotDuplicateUserAddedGoldWithoutID(t *testing.T) {
 func TestCaptureRepairsDuplicateUserAddedGoldWithoutID(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	if err := sourceDB.SetStepRoundUserFindings(reviewRound.ID, &userFindings); err != nil {
 		t.Fatal(err)
@@ -107,7 +108,7 @@ func TestCaptureRepairsDuplicateUserAddedGoldWithoutID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +134,7 @@ func TestCaptureRepairsDuplicateUserAddedGoldWithoutID(t *testing.T) {
 func TestRelabelRunTwiceLeavesIdenticalLabels(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.UpdateRunPRState(run.ID, "merged"); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestRelabelRunTwiceLeavesIdenticalLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -212,14 +213,14 @@ func TestRefreshDiversifiedTwiceKeepsTheSamePins(t *testing.T) {
 func TestReplayTwiceKeepsCorpusUntouchedAndCohortStable(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	installFakeReviewAgent(t, p, `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`)
 
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	captured, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +320,7 @@ func mustDiversifiedPinRows(t *testing.T, store *Store) []diversifiedPinRow {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var out []diversifiedPinRow
 	for rows.Next() {
 		var row diversifiedPinRow

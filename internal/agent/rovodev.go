@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"net/http"
 	"strings"
@@ -171,7 +172,7 @@ func (a *rovodevAgent) streamChat(ctx context.Context, baseURL, sessionID string
 	if err != nil {
 		return "", fmt.Errorf("rovodev stream: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closers.Quiet(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -197,7 +198,7 @@ func (a *rovodevAgent) deleteSession(baseURL, sessionID string) {
 	if req != nil {
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil && resp != nil {
-			resp.Body.Close()
+			closers.Quiet(resp.Body)
 		}
 	}
 }
@@ -373,7 +374,7 @@ func doJSON(ctx context.Context, method, url string, headers map[string]string, 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closers.Quiet(resp.Body)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

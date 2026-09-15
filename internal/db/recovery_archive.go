@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 )
 
 // RecoveryArchive is an immutable provenance snapshot for an existing Git
@@ -78,7 +79,7 @@ func (d *DB) GetRecoveryArchivesByRun(ownerRunID string) ([]*RecoveryArchive, er
 	if err != nil {
 		return nil, fmt.Errorf("get recovery archives: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	var records []*RecoveryArchive
 	for rows.Next() {

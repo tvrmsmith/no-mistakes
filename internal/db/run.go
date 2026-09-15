@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -265,7 +266,7 @@ func (d *DB) ActiveRunWorktrees() ([]RunWorktree, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get active run worktrees: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var out []RunWorktree
 	for rows.Next() {
 		var wt RunWorktree
@@ -345,7 +346,7 @@ func (d *DB) runWorktreesOutside(prefix, statusClause string) ([]RunWorktree, er
 	if err != nil {
 		return nil, fmt.Errorf("get run worktrees outside %s: %w", prefix, err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var out []RunWorktree
 	for rows.Next() {
 		var wt RunWorktree
@@ -432,7 +433,7 @@ func (d *DB) GetRunsByRepo(repoID string) ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get runs by repo: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var runs []*Run
 	for rows.Next() {
 		r := &Run{}
@@ -456,7 +457,7 @@ func (d *DB) GetRunsByRepoHead(repoID, branch, headSHA string) ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get runs by repo head: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var runs []*Run
 	for rows.Next() {
 		r := &Run{}
@@ -503,7 +504,7 @@ func (d *DB) GetActiveRuns() ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get active runs: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	var runs []*Run
 	for rows.Next() {

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -105,7 +106,7 @@ func (d *DB) GetStepsByRun(runID string) ([]*StepResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get steps by run: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var steps []*StepResult
 	for rows.Next() {
 		s := &StepResult{}

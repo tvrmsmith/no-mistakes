@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -256,11 +257,11 @@ func SubscribeContext(ctx context.Context, socketPath string, params *SubscribeP
 	// Send subscribe request.
 	req, err := NewRequest(MethodSubscribe, params)
 	if err != nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, nil, fmt.Errorf("marshal request: %w", err)
 	}
 	if err := encoder.Encode(req); err != nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, nil, fmt.Errorf("send request: %w", err)
 	}
 
@@ -277,7 +278,7 @@ func SubscribeContext(ctx context.Context, socketPath string, params *SubscribeP
 		if !stopInterrupt() {
 			<-interruptDone
 		}
-		conn.Close()
+		closers.Quiet(conn)
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -292,11 +293,11 @@ func SubscribeContext(ctx context.Context, socketPath string, params *SubscribeP
 	conn.SetReadDeadline(time.Time{})
 	var resp Response
 	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, nil, fmt.Errorf("parse response: %w", err)
 	}
 	if resp.Error != nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, nil, resp.Error
 	}
 
@@ -307,7 +308,7 @@ func SubscribeContext(ctx context.Context, socketPath string, params *SubscribeP
 	cancel := func() {
 		once.Do(func() {
 			close(done)
-			conn.Close()
+			closers.Quiet(conn)
 		})
 	}
 

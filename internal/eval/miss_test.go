@@ -8,13 +8,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 func TestCaptureSkipsIncompleteReviewRoundAndKeepsCompletedSibling(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +28,7 @@ func TestCaptureSkipsIncompleteReviewRoundAndKeepsCompletedSibling(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +41,7 @@ func TestCaptureSkipsIncompleteReviewRoundAndKeepsCompletedSibling(t *testing.T)
 func TestIngestPostPRMissWritesFalseNegativeGoldOnGreenReview(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +59,7 @@ func TestIngestPostPRMissWritesFalseNegativeGoldOnGreenReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	miss, err := ParsePostPRMissFinding(`{"id":"silent-wrong-set","severity":"error","file":"pkg/compute.go","line":12,"description":"returns the wrong set for a valid input"}`)
 	if err != nil {
@@ -121,7 +122,7 @@ func TestIngestPostPRMissWritesFalseNegativeGoldOnGreenReview(t *testing.T) {
 func TestIngestPostPRMissRefusesBlockingReview(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +134,7 @@ func TestIngestPostPRMissRefusesBlockingReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	miss, err := ParsePostPRMissFinding(`{"id":"x","description":"a miss","file":"a.go"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +148,7 @@ func TestIngestPostPRMissRefusesBlockingReview(t *testing.T) {
 func TestIngestPostPRMissRefusesWhenLaterPassIsBlocking(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +168,7 @@ func TestIngestPostPRMissRefusesWhenLaterPassIsBlocking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	miss, err := ParsePostPRMissFinding(`{"id":"x","description":"a miss","file":"a.go"}`)
 	if err != nil {
 		t.Fatal(err)

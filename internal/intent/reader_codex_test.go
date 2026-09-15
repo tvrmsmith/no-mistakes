@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	_ "modernc.org/sqlite"
 )
 
@@ -48,7 +49,7 @@ func buildCodexFixture(t *testing.T, cwd string) (homeDir, rolloutPath string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer closers.Quiet(db)
 	if _, err := db.Exec(`CREATE TABLE threads (
 		id TEXT PRIMARY KEY,
 		cwd TEXT NOT NULL,

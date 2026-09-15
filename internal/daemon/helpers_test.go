@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -112,7 +113,7 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -142,7 +143,7 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
 			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
-			client.Close()
+			closers.Quiet(client)
 		}
 		select {
 		case <-errCh:
@@ -274,7 +275,7 @@ func startTestDaemonInstance(t *testing.T, sf StepFactory) *testDaemonInstance {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	return restartTestDaemonInstance(t, p, d, sf)
 }
@@ -601,10 +602,10 @@ func shutdownTestDaemonAndWaitForCleanup(t *testing.T, p *paths.Paths) {
 		t.Fatalf("dial daemon for shutdown: %v", err)
 	}
 	if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil); err != nil {
-		client.Close()
+		closers.Quiet(client)
 		t.Fatalf("shut down daemon: %v", err)
 	}
-	client.Close()
+	closers.Quiet(client)
 
 	// Worktree removal is process-spawn-bound and runs before the socket
 	// disappears, so match the graceful-shutdown budget the run-goroutine

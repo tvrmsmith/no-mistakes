@@ -137,7 +137,7 @@ func recordGhStubInvocation(args []string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer closeStubLog(logPath, f)
 
 	inv := ghStubInvocation{
 		Time: time.Now().Format(time.RFC3339Nano),
@@ -150,7 +150,9 @@ func recordGhStubInvocation(args []string) {
 		body, _ := io.ReadAll(os.Stdin)
 		inv.Body = string(body)
 	}
-	_ = json.NewEncoder(f).Encode(inv)
+	if err := json.NewEncoder(f).Encode(inv); err != nil {
+		reportStubLogFailure(logPath, err)
+	}
 }
 
 // runTeaStub shadows any system-installed tea during the Gitea provider e2e
@@ -222,7 +224,7 @@ func recordTeaStubInvocation(args []string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer closeStubLog(logPath, f)
 
 	inv := teaStubInvocation{
 		Time:  time.Now().Format(time.RFC3339Nano),
@@ -232,7 +234,9 @@ func recordTeaStubInvocation(args []string) {
 		Head:  argAfter(args, "--head"),
 		Base:  argAfter(args, "--base"),
 	}
-	_ = json.NewEncoder(f).Encode(inv)
+	if err := json.NewEncoder(f).Encode(inv); err != nil {
+		reportStubLogFailure(logPath, err)
+	}
 }
 
 func argAfter(args []string, flag string) string {

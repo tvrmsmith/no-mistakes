@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/lifecycle/lifecycletest"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -629,7 +630,7 @@ func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
 				t.Errorf("open db during download: %v", err)
 				return
 			}
-			defer live.Close()
+			defer closers.Quiet(live)
 			if err := live.UpdateRunStatus(parked.ID, types.RunCompleted); err != nil {
 				t.Errorf("complete run during download: %v", err)
 			}

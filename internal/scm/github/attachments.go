@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"io/fs"
 	"net/http"
@@ -230,7 +231,7 @@ func (c *UserAssetClient) UploadFile(ctx context.Context, asset UserAsset) (stri
 	if err != nil {
 		return "", err
 	}
-	defer body.Close()
+	defer closers.Quiet(body)
 	openedInfo, err := body.Stat()
 	if err != nil {
 		return "", err
@@ -267,7 +268,7 @@ func (c *UserAssetClient) UploadFile(ctx context.Context, asset UserAsset) (stri
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer closers.Quiet(resp.Body)
 	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "", fmt.Errorf("user-attachments upload HTTP %d", resp.StatusCode)

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -42,7 +43,7 @@ func newInitCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				defer d.Close()
+				defer closers.Quiet(d)
 
 				if cmd.Flags().Changed("fork-url") && strings.TrimSpace(forkURL) == "" {
 					return fmt.Errorf("init: --fork-url must not be empty")

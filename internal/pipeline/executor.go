@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -1106,7 +1107,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	if err != nil {
 		return false, "", fmt.Errorf("create step log file %s: %w", stepName, err)
 	}
-	defer logFile.Close()
+	defer closers.Quiet(logFile)
 
 	// Build step context with log callback that emits events and writes to file.
 	// lastChunkNewline tracks whether the most recent chunk ended with \n,

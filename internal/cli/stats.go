@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/spf13/cobra"
@@ -37,7 +38,7 @@ func newStatsCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				defer database.Close()
+				defer closers.Quiet(database)
 
 				if agents || runID != "" {
 					return renderAgentPerfReport(out, database, runID)

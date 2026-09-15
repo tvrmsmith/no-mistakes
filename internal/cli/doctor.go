@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -101,7 +102,7 @@ func newDoctorCmd() *cobra.Command {
 							fail("database      ", fmt.Sprintf("error (%v)", err))
 							allOK = false
 						} else {
-							d.Close()
+							closers.Quiet(d)
 							ok("database      ", "ok")
 						}
 					}

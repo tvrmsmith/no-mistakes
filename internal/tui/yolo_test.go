@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -84,7 +85,7 @@ func TestModel_Yolo_AutoApprovesAwaitingStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusAwaitingApproval
@@ -136,7 +137,7 @@ func captureRespond(t *testing.T) (string, *ipc.Client, func() []ipc.RespondPara
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { closers.Quiet(client) })
 
 	return sock, client, func() []ipc.RespondParams {
 		mu.Lock()

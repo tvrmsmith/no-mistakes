@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -59,14 +60,14 @@ func TestSubscribeMalformedEvent(t *testing.T) {
 	// Start a fresh minimal server with raw socket control.
 	sock = socketPath(t)
 	ln := rawListen(t, sock)
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer closers.Quiet(conn)
 
 		scanner := bufio.NewScanner(conn)
 		if !scanner.Scan() {
@@ -123,7 +124,7 @@ func TestSubscribeConnectionClosedBeforeResponse(t *testing.T) {
 
 	// Start a raw server that closes connection immediately after accept.
 	ln := rawListen(t, sock)
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	go func() {
 		conn, err := ln.Accept()
@@ -133,7 +134,7 @@ func TestSubscribeConnectionClosedBeforeResponse(t *testing.T) {
 		// Read the request then close without responding.
 		scanner := bufio.NewScanner(conn)
 		scanner.Scan() // consume the request
-		conn.Close()
+		closers.Quiet(conn)
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -212,7 +213,7 @@ func TestSubscribeOversizedFrameEndsTheStreamAndHidesLaterEvents(t *testing.T) {
 	sock := socketPath(t)
 	os.Remove(sock)
 	ln := rawListen(t, sock)
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	oversized := strings.Repeat("d", 1024*1024+64)
 	go func() {
@@ -220,7 +221,7 @@ func TestSubscribeOversizedFrameEndsTheStreamAndHidesLaterEvents(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer closers.Quiet(conn)
 		scanner := bufio.NewScanner(conn)
 		if !scanner.Scan() {
 			return
@@ -261,7 +262,7 @@ func TestSubscribeBoundedFramesDeliverThroughTerminalEvent(t *testing.T) {
 	sock := socketPath(t)
 	os.Remove(sock)
 	ln := rawListen(t, sock)
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	findings := strings.Repeat("f", 64*1024)
 	go func() {
@@ -269,7 +270,7 @@ func TestSubscribeBoundedFramesDeliverThroughTerminalEvent(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer closers.Quiet(conn)
 		scanner := bufio.NewScanner(conn)
 		if !scanner.Scan() {
 			return

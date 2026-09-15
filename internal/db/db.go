@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/oklog/ulid/v2"
 	_ "modernc.org/sqlite"
 )
@@ -31,12 +32,12 @@ func Open(path string) (*DB, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	if _, err := sqlDB.Exec(schemaSQL); err != nil {
-		sqlDB.Close()
+		closers.Quiet(sqlDB)
 		return nil, fmt.Errorf("migrate db: %w", err)
 	}
 	for _, stmt := range migrationStatements {
 		if _, err := sqlDB.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			sqlDB.Close()
+			closers.Quiet(sqlDB)
 			return nil, fmt.Errorf("migrate db: %w", err)
 		}
 	}
@@ -56,7 +57,7 @@ func OpenReadOnly(path string) (*DB, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	if err := sqlDB.Ping(); err != nil {
-		sqlDB.Close()
+		closers.Quiet(sqlDB)
 		return nil, fmt.Errorf("open db read-only: %w", err)
 	}
 	return &DB{sql: sqlDB}, nil

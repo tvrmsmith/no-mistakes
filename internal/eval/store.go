@@ -13,6 +13,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	_ "modernc.org/sqlite"
 )
 
@@ -283,7 +284,7 @@ func (s *Store) listCases(set string, refreshDiversified bool) ([]Case, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list eval cases: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var all []Case
 	for rows.Next() {
 		var id, dir string
@@ -354,7 +355,7 @@ func (s *Store) loadDiversifiedPins() ([]diversifiedPin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list diversified pins: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var pins []diversifiedPin
 	for rows.Next() {
 		var pin diversifiedPin
@@ -398,7 +399,7 @@ func (s *Store) casesForRun(runID string) ([]Case, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list eval cases for run: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var out []Case
 	for rows.Next() {
 		var id, dir string
@@ -442,7 +443,7 @@ func (s *Store) pendingFindingCounts() (map[string]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sum queued candidate findings: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	out := map[string]int{}
 	for rows.Next() {
 		var caseID string

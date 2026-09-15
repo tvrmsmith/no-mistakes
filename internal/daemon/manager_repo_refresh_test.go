@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -111,7 +112,7 @@ func TestRunStartURLRefreshFailuresWarnSafelyAndContinueWithOldRegistration(t *t
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer raw.Close()
+				defer closers.Quiet(raw)
 				if _, err := raw.Exec(`CREATE TRIGGER reject_run_start_repo_url_update BEFORE UPDATE OF upstream_url, fork_url ON repos BEGIN SELECT RAISE(FAIL, 'injected URL write failure'); END`); err != nil {
 					t.Fatal(err)
 				}

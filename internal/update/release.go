@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"net/http"
 	"net/url"
@@ -125,7 +126,7 @@ func (u *updater) downloadAsset(ctx context.Context, assetURL string, limit int6
 	if err != nil {
 		return nil, fmt.Errorf("download asset: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closers.Quiet(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download asset: unexpected status %d", resp.StatusCode)
 	}

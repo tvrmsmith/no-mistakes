@@ -1,6 +1,10 @@
 package db
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/kunchenguid/no-mistakes/internal/closers"
+)
 
 // RunAgentSession is the minimum session-resume metadata for one durable
 // per-run, per-role agent session. Production resumes only the review-fixer
@@ -42,7 +46,7 @@ func (d *DB) GetRunAgentSessions(runID string) ([]RunAgentSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get run agent sessions: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	var sessions []RunAgentSession
 	for rows.Next() {

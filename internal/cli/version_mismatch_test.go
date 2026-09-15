@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -460,7 +461,7 @@ func TestInitKeepsTheGateItCreatedWhenTheDaemonIsSkewed(t *testing.T) {
 	if openErr != nil {
 		t.Fatalf("open db: %v", openErr)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	repos, repoErr := d.GetRepos()
 	if repoErr != nil {
 		t.Fatalf("get repos: %v", repoErr)

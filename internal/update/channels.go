@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"net/http"
 )
@@ -140,7 +141,7 @@ func (u *updater) fetchReleaseFromManifest(ctx context.Context) (*releaseRespons
 	if err != nil {
 		return nil, fmt.Errorf("fetch channel manifest: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closers.Quiet(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch channel manifest: unexpected status %d", resp.StatusCode)
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -547,7 +548,7 @@ func backdateStepStart(t *testing.T, p *paths.Paths, stepID string, elapsed time
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer raw.Close()
+	defer closers.Quiet(raw)
 	started := time.Now().Add(-elapsed).Unix()
 	if _, err := raw.Exec(`UPDATE step_results SET started_at = ? WHERE id = ?`, started, stepID); err != nil {
 		t.Fatal(err)
@@ -890,7 +891,7 @@ func deleteRunRow(t *testing.T, p *paths.Paths, runID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer raw.Close()
+	defer closers.Quiet(raw)
 	if _, err := raw.Exec(`DELETE FROM runs WHERE id = ?`, runID); err != nil {
 		t.Fatal(err)
 	}

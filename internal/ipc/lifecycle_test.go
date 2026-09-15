@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -23,7 +24,7 @@ func TestServerClose(t *testing.T) {
 	for time.Now().Before(deadline) {
 		c, err := ipc.Dial(sock)
 		if err == nil {
-			c.Close()
+			closers.Quiet(c)
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -63,7 +64,7 @@ func TestServerInvalidJSON(t *testing.T) {
 
 	// Send invalid JSON and verify parse error response.
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	// Write invalid JSON.
 	if _, err := fmt.Fprintln(conn, "this is not json"); err != nil {
@@ -97,7 +98,7 @@ func TestServerExitsWhenListenerClosed(t *testing.T) {
 	for time.Now().Before(deadline) {
 		c, err := ipc.Dial(sock)
 		if err == nil {
-			c.Close()
+			closers.Quiet(c)
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -132,7 +133,7 @@ func TestServerDoubleClose(t *testing.T) {
 	for time.Now().Before(deadline) {
 		c, err := ipc.Dial(sock)
 		if err == nil {
-			c.Close()
+			closers.Quiet(c)
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -155,7 +156,7 @@ func TestCallServerDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	// Close the server, causing the connection to drop.
 	srv.Close()
@@ -179,7 +180,7 @@ func TestServerEmptyLine(t *testing.T) {
 
 	// Connect raw and send an empty line, then a valid request.
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	// Send empty line first.
 	conn.Write([]byte("\n"))

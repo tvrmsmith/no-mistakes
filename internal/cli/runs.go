@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/spf13/cobra"
 )
@@ -20,7 +21,7 @@ func newRunsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer d.Close()
+			defer closers.Quiet(d)
 
 			repo, err := findRepo(d)
 			if err != nil {

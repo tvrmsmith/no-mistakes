@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	toon "github.com/toon-format/toon-go"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -867,7 +868,7 @@ func TestAxiHomeStartsCurrentBranchWhenOtherBranchIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepoWithID("repo-1", rawRoot, "origin", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)
@@ -1038,7 +1039,7 @@ func TestAxiStatusIgnoresInvalidGlobalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepoWithID("repo-1", rawRoot, "origin", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)
@@ -1101,7 +1102,7 @@ func TestAxiRunReportsInvalidGlobalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	if _, err := database.InsertRepoWithID("repo-1", rawRoot, "origin", "main"); err != nil {
 		t.Fatalf("insert repo: %v", err)
 	}

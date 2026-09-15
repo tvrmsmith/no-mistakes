@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -46,7 +47,7 @@ func TestServerAuthenticatesLocalPeerPID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result struct {
 		PID int `json:"pid"`
 	}

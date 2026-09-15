@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 )
 
 func (a *opencodeAgent) ensureServer(ctx context.Context, cwd string, env []string) (string, error) {
@@ -76,7 +77,7 @@ func (a *opencodeAgent) connectEventStream(ctx context.Context, baseURL string) 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		closers.Quiet(resp.Body)
 		return nil, fmt.Errorf("opencode event stream failed with %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -140,7 +141,7 @@ func (a *opencodeAgent) deleteSession(baseURL, sessionID string) {
 	if req != nil {
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil && resp != nil {
-			resp.Body.Close()
+			closers.Quiet(resp.Body)
 		}
 	}
 }

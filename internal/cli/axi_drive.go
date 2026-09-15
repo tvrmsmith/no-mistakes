@@ -15,6 +15,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
@@ -1440,7 +1441,7 @@ func runAxiAbortByRunID(cmd *cobra.Command, runID string) error {
 	if err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("connect to daemon: %v", err))
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.CancelRunResult
 	if err := client.Call(ipc.MethodCancelRun, &ipc.CancelRunParams{RunID: runID}, &result); err != nil {
@@ -1531,7 +1532,7 @@ func resolveDaemonDownAbortTruth(cmd *cobra.Command, p *paths.Paths, runID strin
 	if err != nil {
 		return emitUnconfirmedAbort(cmd, runID, "", fmt.Sprintf("the daemon is not running and the durable run record could not be opened: %v", err), nil, false)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	run, err := database.GetRun(runID)
 	if err != nil {
 		return emitUnconfirmedAbort(cmd, runID, "", fmt.Sprintf("the daemon is not running and the durable run record could not be read: %v", err), nil, false)

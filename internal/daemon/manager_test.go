@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -29,7 +30,7 @@ func TestValidateRecoveredSessionProviders_RejectsUnavailableFixerProvider(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepo("/tmp/repo", "https://example.com/repo.git", "main")
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +46,7 @@ func TestValidateRecoveredSessionProviders_RejectsUnavailableFixerProvider(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer claude.Close()
+	defer closers.Quiet(claude)
 	if err := validateRecoveredSessionProviders(database, run.ID, claude); err == nil || !strings.Contains(err.Error(), `session provider "codex" is no longer configured`) {
 		t.Fatalf("validate recovered fixer provider error = %v", err)
 	}
@@ -67,7 +68,7 @@ func TestPushReceivedTracksRunTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -125,7 +126,7 @@ func TestProofLaunchReceiptBindsIndependentGenerationAndFirstObserver(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer client.Close()
+		defer closers.Quiet(client)
 		var result ipc.StartFreshRunResult
 		err = client.Call(ipc.MethodStartFreshRun, &ipc.StartFreshRunParams{
 			RepoID: repo.ID, Branch: "main", HeadSHA: headSHA, Intent: intent,
@@ -190,7 +191,7 @@ func TestProofLaunchReceiptPushCrashWindowConcurrentClaimsAndImmutableReplay(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var pushed ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main",
@@ -237,7 +238,7 @@ func TestProofLaunchReceiptPushCrashWindowConcurrentClaimsAndImmutableReplay(t *
 		go func() {
 			c, err := ipc.Dial(p.Socket())
 			if err == nil {
-				defer c.Close()
+				defer closers.Quiet(c)
 				var result ipc.StartFreshRunResult
 				err = c.Call(ipc.MethodStartFreshRun, &ipc.StartFreshRunParams{
 					RepoID: repo.ID, Branch: "main", HeadSHA: headSHA, Intent: intent,
@@ -302,7 +303,7 @@ func TestPushReceivedSkipStepsConfiguresExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -349,7 +350,7 @@ func TestPushReceivedAllowsDifferentBranchRunsConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -494,7 +495,7 @@ func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -709,7 +710,7 @@ func TestPushReceivedConcurrentDifferentBranchRunsAvoidSharedConfigLock(t *testi
 				errs[i] = err
 				return
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			var res ipc.PushReceivedResult
 			errs[i] = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 				Gate: p.RepoDir(repoID),
@@ -769,7 +770,7 @@ func TestRerunSkipStepsConfiguresExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -822,7 +823,7 @@ func TestRerunInheritsIntentFromSelectedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -891,7 +892,7 @@ func TestRerunInheritsPRBaseBranchFromSelectedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -936,7 +937,7 @@ func TestRerunInheritsPRURLFromSelectedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -981,7 +982,7 @@ func TestRerunDoesNotInheritClosedPRURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -1132,7 +1133,7 @@ func TestPushReceivedReturnsBeforeIntentSummarization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	started := time.Now()
 	var result ipc.PushReceivedResult
@@ -1198,7 +1199,7 @@ func TestPushReceivedTracksRunTelemetryAfterPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -1258,7 +1259,7 @@ func TestPushReceivedDemoModeBypassesAgentResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -1307,7 +1308,7 @@ func TestProofLaunchFallbackReturnsReusedWhenObserverClaimsDuringSetup(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	const intent = "claim while the fallback initializes"
 	var fresh ipc.StartFreshRunResult
 	done := make(chan error, 1)
@@ -1328,7 +1329,7 @@ func TestProofLaunchFallbackReturnsReusedWhenObserverClaimsDuringSetup(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer observer.Close()
+	defer closers.Quiet(observer)
 	var first ipc.ClaimLaunchReceiptResult
 	if err := observer.Call(ipc.MethodClaimLaunchReceipt, &ipc.ClaimLaunchReceiptParams{
 		RepoID: repo.ID, Branch: "main", SubmittedHeadSHA: head,
@@ -1366,7 +1367,7 @@ func TestProofLaunchFallbackInheritsOnlyLivePRIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			launch := func(nonce, base string) *db.Run {
 				t.Helper()
 				var result ipc.StartFreshRunResult

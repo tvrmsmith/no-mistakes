@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -107,7 +108,7 @@ func (r *claudeReader) Load(_ context.Context, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("claude open: %w", err)
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
@@ -152,7 +153,7 @@ func claudePeekMetadata(path string) (*claudeMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)

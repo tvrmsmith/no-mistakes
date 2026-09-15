@@ -8,6 +8,7 @@ import (
 
 	toon "github.com/toon-format/toon-go"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -68,10 +69,10 @@ type axiEnvOptions struct {
 
 func (e *axiEnv) close() {
 	if e.client != nil {
-		e.client.Close()
+		closers.Quiet(e.client)
 	}
 	if e.d != nil {
-		e.d.Close()
+		closers.Quiet(e.d)
 	}
 }
 
@@ -109,11 +110,11 @@ func openAxiEnvWithOptions(opts axiEnvOptions) (*axiEnv, error) {
 	if err != nil {
 		if opts.deferGlobalConfigErrorForRunningDaemon {
 			if !daemonAliveForConfigDeferral(p) {
-				d.Close()
+				closers.Quiet(d)
 				return nil, err
 			}
 		} else if opts.ensureDaemonConn {
-			d.Close()
+			closers.Quiet(d)
 			return nil, err
 		}
 		globalCfg = config.DefaultGlobalConfig()
@@ -122,13 +123,13 @@ func openAxiEnvWithOptions(opts axiEnvOptions) (*axiEnv, error) {
 	if opts.explicitRunID != "" {
 		run, lookupErr := d.GetRun(opts.explicitRunID)
 		if lookupErr != nil {
-			d.Close()
+			closers.Quiet(d)
 			return nil, fmt.Errorf("get run: %w", lookupErr)
 		}
 		if run != nil {
 			repo, repoErr := d.GetRepo(run.RepoID)
 			if repoErr != nil {
-				d.Close()
+				closers.Quiet(d)
 				return nil, fmt.Errorf("get run repository: %w", repoErr)
 			}
 			env.repo = repo
@@ -136,7 +137,7 @@ func openAxiEnvWithOptions(opts axiEnvOptions) (*axiEnv, error) {
 	} else {
 		repo, findErr := findRepo(d)
 		if findErr != nil {
-			d.Close()
+			closers.Quiet(d)
 			return nil, findErr
 		}
 		env.repo = repo

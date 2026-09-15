@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -106,7 +107,7 @@ func TestRunWorktreeIsCreatedInConfiguredRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -186,7 +187,7 @@ func TestRunSetupFailureLeavesNoWorktreeBehind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: gateDir,
@@ -229,7 +230,7 @@ func TestRunCreationJudgesOnlyItsOwnPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	push := func(gateID, head, branch string) (ipc.PushReceivedResult, error) {
 		var result ipc.PushReceivedResult
@@ -275,7 +276,7 @@ func TestCleanupOrphanWorktrees_ConfiguredRootRemovesOnlyRunDirectories(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	workingPath := filepath.Join(t.TempDir(), "checkout")
 	if err := os.MkdirAll(workingPath, 0o755); err != nil {
@@ -347,7 +348,7 @@ func TestCleanupOrphanWorktrees_UnconfiguredRepoUsesDefaultRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	root := filepath.Join(t.TempDir(), "repo-runs")
 	other := filepath.Join(t.TempDir(), "other-checkout")
@@ -445,7 +446,7 @@ func TestDaemonRefusesToStartWithWorktreeRootInsideAnotherRegisteredCheckout(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	victim, err := d.InsertRepoWithID("victimrepo", filepath.Join(t.TempDir(), "victim"), "https://example.com/owner/victim", "main")
 	if err != nil {
@@ -489,7 +490,7 @@ func TestDaemonRefusesToStartWithWorktreeRootInsideItsOwnWorktreesDirectory(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	// A second repository with a live run, whose worktree the misread would
 	// have deleted along with the directory holding it.
@@ -544,7 +545,7 @@ func TestCleanupOrphanWorktrees_OperatorRootRemovesOnlyWhatARunRecorded(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	workingPath := filepath.Join(t.TempDir(), "checkout")
 	root := filepath.Join(t.TempDir(), "repo-runs")
@@ -643,7 +644,7 @@ func TestStartupSweepSetIsBoundedByThePresentNotByRunHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -728,7 +729,7 @@ func TestCleanupOrphanWorktrees_ReachesARootTheConfigNoLongerNames(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -775,7 +776,7 @@ func TestStepDiff_ReadsThePlacementItsRunRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	workingPath := filepath.Join(t.TempDir(), "checkout")
 	repo, err := d.InsertRepoWithID("repo1", workingPath, "https://example.com/owner/repo1", "main")
@@ -830,7 +831,7 @@ func TestPrepareRecoveredRun_LocatesThePlacementItsRunRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, headSHA := setupTestGitRepo(t, p, d, "repo1")
 	run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
@@ -878,7 +879,7 @@ func TestPrepareRecoveredRun_UnrecordedRunKeepsItsDefaultPlacement(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, headSHA := setupTestGitRepo(t, p, d, "repo1")
 	run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
@@ -924,7 +925,7 @@ func TestReportUnusableWorktreeRoots_NamesEntriesThatDoNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	registered := filepath.Join(t.TempDir(), "checkout")
 	stale := filepath.Join(t.TempDir(), "moved-away")

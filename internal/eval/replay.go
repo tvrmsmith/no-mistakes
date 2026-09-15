@@ -15,6 +15,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
@@ -269,7 +270,7 @@ func replayOne(ctx context.Context, store *Store, c Case, session Session, candi
 		evaluation.CompletedAt = time.Now().Unix()
 		return evaluation
 	}
-	defer baseAgent.Close()
+	defer closers.Quiet(baseAgent)
 	observed := &observedAgent{inner: agent.WithSteering(baseAgent, isolatedPaths.EvidenceDir()), ownership: ownership}
 
 	replayDB, stepResultID, fixing, previousFindings, err := replayRoundContext(isolatedPaths, c, workDir)
@@ -278,7 +279,7 @@ func replayOne(ctx context.Context, store *Store, c Case, session Session, candi
 		evaluation.CompletedAt = time.Now().Unix()
 		return evaluation
 	}
-	defer replayDB.Close()
+	defer closers.Quiet(replayDB)
 
 	startingHeadSHA := c.StartingHeadSHA
 	if startingHeadSHA == "" {
@@ -383,7 +384,7 @@ func replayRoundContext(p *paths.Paths, c Case, workDir string) (*db.DB, string,
 		return nil, "", false, "", fmt.Errorf("open isolated replay database: %w", err)
 	}
 	fail := func(err error) (*db.DB, string, bool, string, error) {
-		database.Close()
+		closers.Quiet(database)
 		return nil, "", false, "", err
 	}
 	repo, err := database.InsertRepoWithID("eval-repo", workDir, "local://eval", c.DefaultBranch)

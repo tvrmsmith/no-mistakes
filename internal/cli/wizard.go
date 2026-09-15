@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
@@ -221,7 +222,7 @@ func runWizardWithMode(ctx context.Context, p *paths.Paths, state *repoState, sk
 	defer agent.SetServerPIDsDirForOwner("", "")
 
 	suggester := newWizardAgentSuggester(cfg, workDir, nil, nil)
-	defer suggester.Close()
+	defer closers.Quiet(suggester)
 
 	wizCfg := wizard.Config{
 		Context:       ctx,
@@ -303,7 +304,7 @@ func captureAgentServerOutput(p *paths.Paths) func() {
 	agent.SetManagedServerOutput(f)
 	return func() {
 		agent.SetManagedServerOutput(nil)
-		f.Close()
+		closers.Quiet(f)
 	}
 }
 

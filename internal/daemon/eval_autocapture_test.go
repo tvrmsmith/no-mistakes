@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/eval"
@@ -83,7 +84,7 @@ func capturedCaseCount(t *testing.T, p *paths.Paths) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := store.ListCases("all")
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +106,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	gateDir := p.RepoDir("eval-repo")
 	if err := git.InitBare(ctx, gateDir); err != nil {

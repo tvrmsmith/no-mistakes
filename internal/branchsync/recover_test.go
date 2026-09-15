@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
@@ -123,7 +124,7 @@ func newRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +180,7 @@ func newDivergentArchiveRecoverFixture(t *testing.T) (*recoverFixture, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -1059,7 +1060,7 @@ func newUnmovedRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -2211,7 +2212,7 @@ func newRebasedRecoverFixtureWithPipelineWork(t *testing.T, status types.RunStat
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)

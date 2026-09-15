@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/eval"
@@ -65,7 +66,7 @@ func evalRepoNames(p *paths.Paths) map[string]string {
 	if err != nil {
 		return nil
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repos, err := database.GetRepos()
 	if err != nil {
 		return nil
@@ -83,12 +84,12 @@ func newEvalCaptureCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			store, err := eval.Open(p.EvalDir())
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			if cfg, cfgErr := config.LoadGlobal(p.ConfigFile()); cfgErr == nil {
 				store.SetDiversifiedSize(cfg.Eval.DiversifiedSize)
 			}
@@ -139,12 +140,12 @@ func newEvalMissIngestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			store, err := eval.Open(p.EvalDir())
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			result, err := eval.IngestPostPRMiss(cmd.Context(), store, p, database, args[0], misses)
 			if err != nil {
 				return err
@@ -175,7 +176,7 @@ func newEvalRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			out := newPrinter(cmd.OutOrStdout())
 			caseCount := 0
 			session, evaluations, runErr := eval.Replay(cmd.Context(), store, eval.ReplayOptions{
@@ -221,7 +222,7 @@ func newEvalSetsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			if refresh {
 				if _, err := store.RefreshDiversified(); err != nil {
 					return err
@@ -250,7 +251,7 @@ func newEvalReportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			reports, err := eval.Report(store)
 			if err != nil {
 				return err
@@ -272,12 +273,12 @@ func newEvalRelabelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			store, err := eval.Open(p.EvalDir())
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			if cfg, cfgErr := config.LoadGlobal(p.ConfigFile()); cfgErr == nil {
 				store.SetDiversifiedSize(cfg.Eval.DiversifiedSize)
 			}

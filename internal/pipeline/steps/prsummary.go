@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -815,7 +816,7 @@ func readEmbeddedArtifactText(fsPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer closers.Quiet(file)
 
 	headSize := maxEmbeddedArtifactBytes / 2
 	tailSize := maxEmbeddedArtifactBytes - headSize

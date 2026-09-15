@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +38,7 @@ func TestClientTrackSendsUmamiEventPayload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read body: %v", err)
 		}
-		defer r.Body.Close()
+		defer closers.Quiet(r.Body)
 
 		var got requestBody
 		if err := json.Unmarshal(body, &got); err != nil {
@@ -127,7 +128,7 @@ func TestClientPageviewSendsUmamiPageviewPayload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read body: %v", err)
 		}
-		defer r.Body.Close()
+		defer closers.Quiet(r.Body)
 
 		var got requestBody
 		if err := json.Unmarshal(body, &got); err != nil {

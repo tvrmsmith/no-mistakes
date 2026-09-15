@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -39,7 +40,7 @@ func SeedResumableParkedRun(t *testing.T, p *paths.Paths, repoPath, branch strin
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 
 	repo, err := database.InsertRepo(repoPath, "git@github.com:user/"+filepath.Base(repoPath)+".git", "main")
 	if err != nil {
@@ -111,7 +112,7 @@ func SetGateAgentPID(t *testing.T, p *paths.Paths, runID string, pid int) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 
 	rows, err := database.GetStepsByRun(runID)
 	if err != nil {

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"strings"
 )
 
@@ -93,7 +94,7 @@ func (d *DB) RepoWorkingPaths() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get repo working paths: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	var paths []string
 	for rows.Next() {
@@ -117,7 +118,7 @@ func (d *DB) GetRepos() ([]*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get repos: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	var repos []*Repo
 	for rows.Next() {

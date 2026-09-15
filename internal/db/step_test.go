@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -38,7 +39,7 @@ func TestAutomaticSkipReasonMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	if err := d.CompleteSkippedStep(step.ID, 0, 12, "ci.log", "provider unavailable"); err != nil {
 		t.Fatal(err)
 	}

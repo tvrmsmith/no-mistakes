@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 )
 
 var errOpencodeThinkingToolChoiceConflict = errors.New("opencode provider rejects required tool choice while thinking is enabled")
@@ -143,7 +144,7 @@ func (a *opencodeAgent) runOnceWithFormat(ctx context.Context, opts RunOpts, nat
 	if err != nil {
 		return nil, err
 	}
-	defer eventBody.Close()
+	defer closers.Quiet(eventBody)
 
 	// Send message concurrently — blocks until agent completes
 	msgCtx, msgCancel := context.WithCancel(ctx)

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -191,7 +192,7 @@ func TestIsRunningFailsFastWhenSocketAcceptsButDoesNotRespond(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	accepted := make(chan net.Conn, 1)
 	go func() {
@@ -282,7 +283,7 @@ func TestStopDetachedDaemonFallsBackToPIDWhenSocketIsBroken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	originalDial := daemonDial
 	daemonDial = func(string) (*ipc.Client, error) {
@@ -360,7 +361,7 @@ func TestStopDetachedDaemonRejectsStalePIDFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	originalDial := daemonDial
 	daemonDial = func(string) (*ipc.Client, error) {
@@ -414,7 +415,7 @@ func TestStopDetachedDaemonRejectsUnrelatedLiveProcessPIDFallback(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	originalDial := daemonDial
 	daemonDial = func(string) (*ipc.Client, error) {
@@ -789,7 +790,7 @@ func TestStopDetachedDaemonKeepsArtifactsWhenPIDMissingButDaemonLooksLive(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	originalDial := daemonDial
 	daemonDial = func(string) (*ipc.Client, error) {

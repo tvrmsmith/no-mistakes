@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 )
 
@@ -76,7 +77,7 @@ func sessionTestDB(t *testing.T) (*db.DB, *db.Run) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 	repo, err := d.InsertRepo("/tmp/repo", "https://github.com/test/repo", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)

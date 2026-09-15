@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -29,7 +30,7 @@ func stepDiffFixture(t *testing.T, contents string) (*RunManager, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	repo, err := database.InsertRepoWithID("testrepo", filepath.Join(root, "clone"), "https://example.test/repo", "main")
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/runenv"
 )
 
@@ -67,7 +68,7 @@ func getAvailablePort() (int, error) {
 		return 0, fmt.Errorf("allocate port: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	closers.Quiet(ln)
 	return port, nil
 }
 
@@ -166,7 +167,7 @@ func (s *managedServer) waitForHealth(ctx context.Context, path string) error {
 
 		resp, err := client.Get(url)
 		if err == nil {
-			resp.Body.Close()
+			closers.Quiet(resp.Body)
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}

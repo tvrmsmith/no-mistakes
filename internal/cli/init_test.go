@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -121,7 +122,7 @@ func TestResolveWorktreeRootRefusesRootInsideAnotherRegisteredCheckout(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	// Registered, with no entry in the config at all.
 	otherCheckout := filepath.Join(t.TempDir(), "other-checkout")

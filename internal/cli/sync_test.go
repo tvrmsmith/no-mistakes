@@ -14,6 +14,7 @@ import (
 	toon "github.com/toon-format/toon-go"
 
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -129,7 +130,7 @@ func rewriteCLIPipelineHead(t *testing.T, f *cliSyncFixture, commits []pipelineC
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	if err := database.UpdateRunHeadSHA(f.runID, f.pushed); err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +552,7 @@ func newCLIMissingPreservedHeadFixture(t *testing.T, extraStranded int) cliRecov
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	run, err := database.GetRun(f.runID)
 	if err != nil || run == nil {
 		t.Fatalf("load stranded run: %#v, %v", run, err)
@@ -583,7 +584,7 @@ func cliRecoverRunCustodyStamps(t *testing.T, runID string) (stamped, total int)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	seed, err := database.GetRun(runID)
 	if err != nil || seed == nil {
 		t.Fatalf("load seed run: %#v, %v", seed, err)
@@ -783,7 +784,7 @@ func TestAxiSurfacesReportUserOwnedReleaseAfterUnmovedPrePushAbort(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	run, err := database.GetRun(f.runID)
 	if err != nil || run == nil {
 		t.Fatalf("reload run: %#v, %v", run, err)
@@ -1302,7 +1303,7 @@ func TestAxiBindRecoveryArchiveRejectsTagsAndRemoteTrackingRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	records, err := database.GetRecoveryArchivesByRun(f.runID)
 	if err != nil {
 		t.Fatal(err)

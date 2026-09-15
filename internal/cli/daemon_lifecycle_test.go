@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -430,7 +431,7 @@ func setLifecycleParkedRunStepPlan(t *testing.T, p *paths.Paths, plan []types.St
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	runs, err := database.GetActiveRuns()
 	if err != nil {
 		t.Fatalf("get active runs: %v", err)
@@ -461,7 +462,7 @@ func createLifecycleGuardSingleRunningRun(t *testing.T, p *paths.Paths) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepo("/tmp/project-running", "git@github.com:user/project-running.git", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)
@@ -484,7 +485,7 @@ func createLifecycleGuardRuns(t *testing.T, p *paths.Paths) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepo("/tmp/project", "git@github.com:user/project.git", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)

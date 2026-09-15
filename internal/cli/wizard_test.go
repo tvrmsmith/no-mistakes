@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -95,7 +96,7 @@ func TestWizardAgentSuggester_IsLazy(t *testing.T) {
 		lookups++
 		return errors.New("no supported agent found")
 	}, nil)
-	defer suggester.Close()
+	defer closers.Quiet(suggester)
 
 	if lookups != 0 {
 		t.Fatalf("expected no agent resolution during setup, got %d", lookups)
@@ -135,7 +136,7 @@ func TestWizardAgentSuggester_ForwardsAgentArgsOverride(t *testing.T) {
 			return &fakeSuggesterAgent{}, nil
 		},
 	)
-	defer suggester.Close()
+	defer closers.Quiet(suggester)
 
 	if err := suggester.ensure(context.Background()); err != nil {
 		t.Fatalf("ensure failed: %v", err)
@@ -168,7 +169,7 @@ func TestWizardAgentSuggester_ForwardsACPRegistryOverrides(t *testing.T) {
 			return &fakeSuggesterAgent{}, nil
 		},
 	)
-	defer suggester.Close()
+	defer closers.Quiet(suggester)
 
 	if err := suggester.ensure(context.Background()); err != nil {
 		t.Fatalf("ensure failed: %v", err)
@@ -256,7 +257,7 @@ func newFakeSuggester(t *testing.T, ag *fakeSuggesterAgent) *wizardAgentSuggeste
 func TestWizardAgentSuggester_CachesCommitFromBranchCall(t *testing.T) {
 	ag := &fakeSuggesterAgent{}
 	s := newFakeSuggester(t, ag)
-	defer s.Close()
+	defer closers.Quiet(s)
 
 	branch, err := s.suggestBranch(context.Background())
 	if err != nil {
@@ -284,7 +285,7 @@ func TestWizardAgentSuggester_FallsBackToCommitCall(t *testing.T) {
 	// the cache stays empty — suggestCommit should fall back to its own call.
 	ag := &fakeSuggesterAgent{}
 	s := newFakeSuggester(t, ag)
-	defer s.Close()
+	defer closers.Quiet(s)
 
 	commit, err := s.suggestCommit(context.Background())
 	if err != nil {
@@ -305,7 +306,7 @@ func TestWizardAgentSuggester_CacheConsumedOnce(t *testing.T) {
 	// calls suggestCommit twice).
 	ag := &fakeSuggesterAgent{}
 	s := newFakeSuggester(t, ag)
-	defer s.Close()
+	defer closers.Quiet(s)
 
 	if _, err := s.suggestBranch(context.Background()); err != nil {
 		t.Fatalf("suggestBranch failed: %v", err)
@@ -324,7 +325,7 @@ func TestWizardAgentSuggester_CacheConsumedOnce(t *testing.T) {
 func TestWizardAgentSuggester_CanceledContextSkipsCachedCommit(t *testing.T) {
 	ag := &fakeSuggesterAgent{}
 	s := newFakeSuggester(t, ag)
-	defer s.Close()
+	defer closers.Quiet(s)
 
 	if _, err := s.suggestBranch(context.Background()); err != nil {
 		t.Fatalf("suggestBranch failed: %v", err)
@@ -372,7 +373,7 @@ func TestWizardAgentSuggester_EmptyRetryClearsCachedCommit(t *testing.T) {
 		func(context.Context, *config.Config) error { return nil },
 		func(types.AgentName, string, []string, agent.Options) (agent.Agent, error) { return ag, nil },
 	)
-	defer s.Close()
+	defer closers.Quiet(s)
 
 	if _, err := s.suggestBranch(context.Background()); err != nil {
 		t.Fatalf("first suggestBranch failed: %v", err)
@@ -578,7 +579,7 @@ func TestAwaitDaemonRunRegistration_ErrorsWhenNoRunAppears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	// Use a short timeout - no run will ever register because nothing
 	// triggers one.
@@ -612,7 +613,7 @@ func TestAwaitDaemonRunRegistration_UsesNMHomeInTimeoutError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	err = awaitDaemonRunRegistration(context.Background(), client, "repo123", "feat/missing", 200*time.Millisecond)
 	if err == nil {

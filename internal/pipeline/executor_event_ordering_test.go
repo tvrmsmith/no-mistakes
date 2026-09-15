@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -143,7 +144,7 @@ func TestExecutor_ApprovalPersistenceFailureDoesNotPublishOrWaitAtGate(t *testin
 			SELECT RAISE(FAIL, 'findings write failed');
 		END
 	`); err != nil {
-		control.Close()
+		closers.Quiet(control)
 		t.Fatal(err)
 	}
 	if err := control.Close(); err != nil {

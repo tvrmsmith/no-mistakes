@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -29,7 +30,7 @@ func attachRun(ctx context.Context, w io.Writer, runID string, rootDefault bool,
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	// When no run ID is given, resolve the repo before starting the daemon
 	// so we fail fast (and avoid orphan daemon processes) when not in a git repo.
@@ -51,7 +52,7 @@ func attachRun(ctx context.Context, w io.Writer, runID string, rootDefault bool,
 	if err != nil {
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var run *ipc.RunInfo
 	var repoID string

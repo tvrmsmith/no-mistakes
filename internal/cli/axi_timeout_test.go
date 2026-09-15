@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -61,7 +62,7 @@ func TestDriveRun_SlowGetRunRetriesAfterHealthProbe(t *testing.T) {
 	startIPCServer(t, srv, socketPath)
 
 	client := dialReady(t, socketPath)
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	started := time.Now()
 	run, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
@@ -100,7 +101,7 @@ func TestDriveRun_GetRunRPCErrorIsNotRetried(t *testing.T) {
 	startIPCServer(t, srv, socketPath)
 
 	client := dialReady(t, socketPath)
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	_, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
 	if err == nil || !strings.Contains(err.Error(), "database unavailable") {
@@ -129,7 +130,7 @@ func TestDriveRun_SlowGetRunWithFailedHealthIsDead(t *testing.T) {
 	startIPCServer(t, srv, socketPath)
 
 	client := dialReady(t, socketPath)
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	_, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
 	if err == nil || !strings.Contains(err.Error(), "health probe failed") {
@@ -512,7 +513,7 @@ func startIPCServer(t *testing.T, srv *ipc.Server, socketPath string) {
 			t.Error("fake daemon did not stop")
 		}
 	})
-	dialReady(t, socketPath).Close()
+	closers.Quiet(dialReady(t, socketPath))
 }
 
 func dialReady(t *testing.T, socketPath string) *ipc.Client {

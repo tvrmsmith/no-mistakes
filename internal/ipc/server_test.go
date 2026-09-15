@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -31,7 +32,7 @@ func startServer(t *testing.T, sock string) *ipc.Server {
 	for time.Now().Before(deadline) {
 		c, err := ipc.Dial(sock)
 		if err == nil {
-			c.Close()
+			closers.Quiet(c)
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

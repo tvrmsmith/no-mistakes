@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -24,7 +25,7 @@ const piServedMuseReply = `{"type":"message_end","message":{"role":"assistant","
 func TestReplayPiModelIdentityComparison(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	fakeDir := t.TempDir()
 	installFakePiJSONL(t, fakeDir, piServedGrok46Reply)
@@ -34,7 +35,7 @@ func TestReplayPiModelIdentityComparison(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestReplayPiModelIdentityComparison(t *testing.T) {
 func TestReplayPiAcceptsRequestedModelWithDifferentProviderSidecar(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	fakeDir := t.TempDir()
 	installFakePiJSONL(t, fakeDir, piServedMuseReply)
@@ -91,7 +92,7 @@ func TestReplayPiAcceptsRequestedModelWithDifferentProviderSidecar(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}

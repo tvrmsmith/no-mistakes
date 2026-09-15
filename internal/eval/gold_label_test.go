@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -13,7 +14,7 @@ import (
 func TestCaptureWritesAutoFixMergedAsTruePositive(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, strPtr(`["real-bug"]`), db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +31,7 @@ func TestCaptureWritesAutoFixMergedAsTruePositive(t *testing.T) {
 func TestCaptureLeavesAutoFixOpenUnlabeled(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, strPtr(`["real-bug"]`), db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestCaptureLeavesAutoFixOpenUnlabeled(t *testing.T) {
 func TestCaptureLeavesAutoFixClosedUnlabeled(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, strPtr(`["real-bug"]`), db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestCaptureLeavesAutoFixClosedUnlabeled(t *testing.T) {
 func TestCaptureLabelsSelectedAutoFixAsTruePositiveEvenWhenLaterRoundReRaisesIt(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(firstRound.ID, strPtr(`["real-bug"]`), db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestCaptureLabelsSelectedAutoFixAsTruePositiveEvenWhenLaterRoundReRaisesIt(
 func TestCaptureLabelsBothRoundsOfASupersededAutoFix(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(firstRound.ID, strPtr(`["real-bug"]`), db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +137,7 @@ func TestCaptureLabelsBothRoundsOfASupersededAutoFix(t *testing.T) {
 func TestCaptureWritesShippedUnfixedAsFalsePositive(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +164,7 @@ func TestCaptureWritesShippedUnfixedAsFalsePositive(t *testing.T) {
 func TestCaptureLabelsUnselectedFindingAsFalsePositiveEvenWhenALaterRoundDropsIt(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(firstRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +208,7 @@ func TestCaptureWritesEmptyActionShippedUnfixedAsFalsePositive(t *testing.T) {
 	ctx := context.Background()
 	findings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	p, sourceDB, run, _, reviewRound := setupCapturedRunWithFindings(t, ctx, findings)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +233,7 @@ func TestCaptureDoesNotLabelNoOpShippedUnfixed(t *testing.T) {
 	ctx := context.Background()
 	findings := `{"findings":[{"id":"note","severity":"info","file":"main.go","line":1,"description":"style","action":"no-op","review_scope":"source"}],"risk_level":"low","risk_rationale":"note","risk_scope":"source-or-external"}`
 	p, sourceDB, run, _, reviewRound := setupCapturedRunWithFindings(t, ctx, findings)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +254,7 @@ func TestCaptureShippedUnfixedLeavesSelectedSiblingAsTP(t *testing.T) {
 	ctx := context.Background()
 	findings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"auto-fix","review_scope":"source"},{"id":"noise","severity":"warning","file":"main.go","line":1,"description":"style","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	p, sourceDB, run, _, reviewRound := setupCapturedRunWithFindings(t, ctx, findings)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, strPtr(`["real-bug"]`), db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +281,7 @@ func TestCaptureShippedUnfixedLeavesSelectedSiblingAsTP(t *testing.T) {
 func TestRelabelPromotesAutoFixWhenPRLaterMerges(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, strPtr(`["real-bug"]`), db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +325,7 @@ func TestRelabelPromotesAutoFixWhenPRLaterMerges(t *testing.T) {
 func TestRelabelDoesNotClobberAdjudicatedLabels(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, strPtr(`["real-bug"]`), db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +374,7 @@ func TestRelabelDoesNotClobberAdjudicatedLabels(t *testing.T) {
 func TestCaptureWritesShippedUnfixedEvenWhenTheFinalRoundNoLongerRaisesIt(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(firstRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +414,7 @@ func TestCaptureWritesShippedUnfixedEvenWhenTheFinalRoundNoLongerRaisesIt(t *tes
 func TestRelabelReplacesShippedUnfixedWhenTheRoundLaterRecordsAFixDecision(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(firstRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +481,7 @@ func TestMergeGoldClearsStoredShippedUnfixedWhenRecomputedUnlabeled(t *testing.T
 func TestRelabelClearsStoredShippedUnfixedFPWhenRecomputedUnlabeled(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(firstRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +636,7 @@ func TestGoldFromRoundLabelsByRecordedDecision(t *testing.T) {
 func TestCaptureKeepsUserFixWithoutMerge(t *testing.T) {
 	ctx := context.Background()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	gold := captureOne(t, ctx, p, sourceDB, run.ID)
 	if gold.Source != goldSourceUserFix || gold.Kind != GoldTruePositive {
 		t.Fatalf("user-fix gold = %#v, want recorded-user-fix without merge", gold)

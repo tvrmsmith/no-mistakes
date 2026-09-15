@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	_ "modernc.org/sqlite"
 )
 
@@ -47,7 +48,7 @@ func (r *opencodeReader) Discover(ctx context.Context, opts DiscoverOpts) ([]*Se
 	if err != nil {
 		return nil, fmt.Errorf("opencode open: %w", err)
 	}
-	defer db.Close()
+	defer closers.Quiet(db)
 
 	matcher := newRepoMatcher(ctx, opts.OriginCWD)
 	// OpenCode timestamps are unix milliseconds.
@@ -62,7 +63,7 @@ func (r *opencodeReader) Discover(ctx context.Context, opts DiscoverOpts) ([]*Se
 	if err != nil {
 		return nil, nil
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	var out []*Session
 	for rows.Next() {
@@ -97,7 +98,7 @@ func (r *opencodeReader) Load(ctx context.Context, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("opencode open: %w", err)
 	}
-	defer db.Close()
+	defer closers.Quiet(db)
 
 	msgs, ordered, err := opencodeMessages(ctx, db, s.SessionID)
 	if err != nil {
@@ -110,7 +111,7 @@ func (r *opencodeReader) Load(ctx context.Context, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("opencode parts: %w", err)
 	}
-	defer partRows.Close()
+	defer closers.Quiet(partRows)
 
 	type aggregated struct {
 		text  strings.Builder
@@ -199,7 +200,7 @@ func opencodeMessages(ctx context.Context, db *sql.DB, sessionID string) (map[st
 	if err != nil {
 		return nil, nil, fmt.Errorf("opencode messages: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	msgs := map[string]opencodeMessage{}
 	var ordered []string

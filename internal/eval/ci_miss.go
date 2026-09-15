@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -156,7 +157,7 @@ func AutoIngestCIFalseNegatives(ctx context.Context, p *paths.Paths, database *d
 	if err != nil {
 		return IngestResult{}, false, err
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	result, err := IngestPostPRMiss(ctx, store, p, database, runID, misses)
 	if err != nil {

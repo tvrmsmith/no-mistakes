@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 )
 
@@ -262,7 +263,7 @@ func (h *Host) runWithDescription(ctx context.Context, body string, buildArgs fu
 	path := f.Name()
 	defer os.Remove(path)
 	if _, err := f.WriteString(clampDescription(body)); err != nil {
-		f.Close()
+		closers.Quiet(f)
 		return nil, fmt.Errorf("write PR description temp file: %w", err)
 	}
 	if err := f.Close(); err != nil {

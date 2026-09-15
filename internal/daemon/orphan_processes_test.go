@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -40,7 +41,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			repo, head := setupTestGitRepo(t, p, database, "protected-reaping")
 			run, err := database.InsertRun(repo.ID, "main", head, head)
 			if err != nil {
@@ -143,7 +144,7 @@ func TestSweepOrphanRunProcessesReapsFinishedRunAndSparesActiveOne(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", "/nonexistent/work", "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -198,7 +199,7 @@ func TestSweepOrphanRunProcessesReachesRecordedWorktreeAndSparesUnclaimedOnes(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -329,7 +330,7 @@ func TestResumeRecoveredRunSweepsWorktreeProcessesBeforeRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -390,7 +391,7 @@ func TestRemoveRunWorktreeSweepsBeforeRemoving(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	_, headSHA := setupTestGitRepo(t, p, d, "repo1")
 
 	root := filepath.Join(t.TempDir(), "repo-runs")
@@ -447,7 +448,7 @@ func TestRunSetupFailureSweepsTheWorktreeItRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result ipc.PushReceivedResult
 	pushErr := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir("setup-failure-repo"),

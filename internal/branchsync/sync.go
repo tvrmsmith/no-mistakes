@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -340,12 +341,12 @@ func OpenCurrent() (*Service, func(), error) {
 	}
 	root, err := git.FindGitRoot(".")
 	if err != nil {
-		database.Close()
+		closers.Quiet(database)
 		return nil, nil, fmt.Errorf("not in a git repository")
 	}
 	repo, err := database.GetRepoByPath(root)
 	if err != nil {
-		database.Close()
+		closers.Quiet(database)
 		return nil, nil, err
 	}
 	if repo == nil {
@@ -355,12 +356,12 @@ func OpenCurrent() (*Service, func(), error) {
 		}
 	}
 	if err != nil || repo == nil {
-		database.Close()
+		closers.Quiet(database)
 		return nil, nil, fmt.Errorf("repo not initialized")
 	}
 	globalCfg, cfgErr := config.LoadGlobal(p.ConfigFile())
 	if cfgErr != nil {
-		database.Close()
+		closers.Quiet(database)
 		return nil, nil, cfgErr
 	}
 	return &Service{DB: database, Repo: repo, WorkDir: root, GateDir: p.RepoDir(repo.ID), Paths: p, RemoteTimeout: globalCfg.BranchSyncRemoteTimeout}, func() { _ = database.Close() }, nil

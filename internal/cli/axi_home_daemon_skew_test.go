@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -109,7 +110,7 @@ func runAxiHomeForTest(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	if _, err := database.InsertRepoWithID("repo-1", rawRoot, "origin", "main"); err != nil {
 		t.Fatalf("insert repo: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -17,7 +18,7 @@ func openTestDB(t *testing.T) *DB {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 	return d
 }
 
@@ -49,7 +50,7 @@ func TestOpenReadOnlyRequiresExistingDBAndDoesNotMigrate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnly: %v", err)
 	}
-	defer readonly.Close()
+	defer closers.Quiet(readonly)
 	if _, err := readonly.GetRepos(); err != nil {
 		t.Fatalf("read repos: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestOpenMigratesRunSyncProvenanceWithoutBackfillingMutableHead(t *testing.T
 		INSERT INTO runs VALUES ('run-1', 'repo-1', 'feature', 'mutable-head', 'base', 'completed', NULL, NULL, 1, 1);
 	`)
 	if err != nil {
-		legacy.Close()
+		closers.Quiet(legacy)
 		t.Fatal(err)
 	}
 	if err := legacy.Close(); err != nil {
@@ -121,7 +122,7 @@ func TestOpenMigratesRunSyncProvenanceWithoutBackfillingMutableHead(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 	run, err := d.GetRun("run-1")
 	if err != nil {
 		t.Fatal(err)
@@ -316,7 +317,7 @@ func TestOpenMigratesExistingStepRoundsColumns(t *testing.T) {
 			created_at INTEGER NOT NULL
 		);
 	`); err != nil {
-		legacyDB.Close()
+		closers.Quiet(legacyDB)
 		t.Fatalf("create legacy step_rounds table: %v", err)
 	}
 	if err := legacyDB.Close(); err != nil {
@@ -327,13 +328,13 @@ func TestOpenMigratesExistingStepRoundsColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open migrated db: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	rows, err := d.sql.Query(`PRAGMA table_info(step_rounds)`)
 	if err != nil {
 		t.Fatalf("pragma table_info(step_rounds): %v", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	columns := map[string]bool{}
 	for rows.Next() {
@@ -377,7 +378,7 @@ func TestOpenMigratesReposForkURLColumn(t *testing.T) {
 		INSERT INTO repos (id, working_path, upstream_url, default_branch, created_at)
 		VALUES ('repo-1', '/work/repo', 'git@github.com:parent/repo.git', 'main', 123);
 	`); err != nil {
-		legacyDB.Close()
+		closers.Quiet(legacyDB)
 		t.Fatalf("create legacy repos table: %v", err)
 	}
 	if err := legacyDB.Close(); err != nil {
@@ -388,7 +389,7 @@ func TestOpenMigratesReposForkURLColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open migrated db: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	if !hasColumn(t, d, "repos", "fork_url") {
 		t.Fatal("expected migrated fork_url column")
@@ -435,7 +436,7 @@ func TestOpenMigratesStepActivityColumns(t *testing.T) {
 			completed_at INTEGER
 		);
 	`); err != nil {
-		legacyDB.Close()
+		closers.Quiet(legacyDB)
 		t.Fatalf("create legacy step_results table: %v", err)
 	}
 	if err := legacyDB.Close(); err != nil {
@@ -446,7 +447,7 @@ func TestOpenMigratesStepActivityColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open migrated db: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	for _, column := range []string{"round_started_at", "last_activity_at", "last_activity", "agent_pid"} {
 		if !hasColumn(t, d, "step_results", column) {
@@ -461,7 +462,7 @@ func hasColumn(t *testing.T, d *DB, table, column string) bool {
 	if err != nil {
 		t.Fatalf("pragma table_info(%s): %v", table, err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	for rows.Next() {
 		var cid int
 		var name string
@@ -488,7 +489,7 @@ func TestOpenWaitsForTransientMigrationLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open locker db: %v", err)
 	}
-	defer locker.Close()
+	defer closers.Quiet(locker)
 	if _, err := locker.Exec("BEGIN EXCLUSIVE"); err != nil {
 		t.Fatalf("begin exclusive lock: %v", err)
 	}

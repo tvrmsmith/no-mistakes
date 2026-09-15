@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -34,7 +35,7 @@ func TestProtectedPathRefusalCancellationCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			var result ipc.PushReceivedResult
 			push := &ipc.PushReceivedParams{Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main", Old: strings.Repeat("0", 40), New: head}
 			if err := client.Call(ipc.MethodPushReceived, push, &result); err != nil {
@@ -128,7 +129,7 @@ func TestProtectedPathRefusalSurvivesShutdownCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main", Old: strings.Repeat("0", 40), New: head,
@@ -152,7 +153,7 @@ func TestProtectedPathRefusalSurvivesShutdownCleanup(t *testing.T) {
 	if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	client.Close()
+	closers.Quiet(client)
 	deadline = time.Now().Add(15 * time.Second)
 	for {
 		if _, err := os.Stat(p.Socket()); os.IsNotExist(err) {
@@ -180,7 +181,7 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			repo, head := setupTestGitRepo(t, p, database, "protected-crash")
 			run, err := database.InsertRun(repo.ID, "main", head, head)
 			if err != nil {
@@ -313,7 +314,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/feature",
@@ -429,7 +430,7 @@ func TestProtectedPathRefusalParksBeforeManagerCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			var result ipc.PushReceivedResult
 			if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 				Gate: p.RepoDir("protected-paths"), Ref: "refs/heads/main",

@@ -3,6 +3,7 @@ package logstore
 import (
 	"bytes"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"os"
 	"path/filepath"
 	"sync"
@@ -35,7 +36,7 @@ func TestRotatingWriterBoundsBytesAndRetainsNewestBackups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer closers.Quiet(w)
 
 	if n, err := w.Write([]byte("AAAABBBBCCCCDD")); err != nil || n != 14 {
 		t.Fatalf("Write = %d, %v, want 14, nil", n, err)
@@ -55,7 +56,7 @@ func TestRotatingWriterConcurrentWritesStayBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer closers.Quiet(w)
 
 	const writers = 12
 	const writesPerGoroutine = 200
@@ -91,12 +92,12 @@ func TestRotationKeepsCurrentInodeForHeldDescriptors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer closers.Quiet(w)
 	held, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close()
+	defer closers.Quiet(held)
 
 	if _, err := w.Write([]byte("old!")); err != nil {
 		t.Fatal(err)
@@ -126,7 +127,7 @@ func TestOpenCompactsLegacyUnboundedLogAndPrunesRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer closers.Quiet(w)
 
 	assertFileContent(t, path, "4444")
 	assertFileContent(t, path+".1", "3333")
@@ -144,7 +145,7 @@ func TestRotateAtStartupPreservesCrashOutputAndHeldDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close()
+	defer closers.Quiet(held)
 	policy := Policy{MaxBytes: 32, Backups: 2}
 
 	if err := RotateAtStartup(path, policy); err != nil {

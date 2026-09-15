@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -245,7 +246,7 @@ func (d *DB) getRepos() ([]*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get repos: %w", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 
 	var repos []*Repo
 	for rows.Next() {

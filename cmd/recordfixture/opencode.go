@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"net"
 	"net/http"
@@ -197,7 +198,7 @@ func captureOpencodeFlavour(ctx context.Context, baseURL, dir, prompt, schema st
 	// Best-effort delete session.
 	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete, baseURL+"/session/"+sess.ID, nil)
 	if resp, err := http.DefaultClient.Do(req); err == nil {
-		resp.Body.Close()
+		closers.Quiet(resp.Body)
 	}
 	return nil
 }
@@ -378,7 +379,7 @@ func waitHealth(ctx context.Context, baseURL string) error {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/global/health", nil)
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil {
-			resp.Body.Close()
+			closers.Quiet(resp.Body)
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
@@ -411,7 +412,7 @@ func postJSON(ctx context.Context, url string, body any) (parsed []byte, raw []b
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer closers.Quiet(resp.Body)
 	raw, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, nil, err
@@ -441,7 +442,7 @@ func streamSSE(ctx context.Context, url string, w io.Writer, ready chan<- struct
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer closers.Quiet(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
@@ -459,6 +460,6 @@ func freePort() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer l.Close()
+	defer closers.Quiet(l)
 	return l.Addr().(*net.TCPAddr).Port, nil
 }

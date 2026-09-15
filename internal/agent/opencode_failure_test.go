@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -396,7 +397,7 @@ func killResponseStream(t *testing.T, w http.ResponseWriter) {
 	if err != nil {
 		t.Fatalf("hijack: %v", err)
 	}
-	conn.Close()
+	closers.Quiet(conn)
 }
 
 // opencodeStreamDeathServer serves a first turn whose SSE stream dies

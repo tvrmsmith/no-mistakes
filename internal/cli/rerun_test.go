@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
@@ -161,7 +162,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer closers.Quiet(d)
 			cliGit(t, dir, "init", "-b", "main")
 			cliGit(t, dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
 			chdir(t, dir)
@@ -248,7 +249,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer client.Close()
+				defer closers.Quiet(client)
 				env := &axiEnv{p: p, d: d, repo: repo, cfg: config.DefaultGlobalConfig(), client: client}
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
@@ -313,7 +314,7 @@ func TestRerunRefusesDifferentCleanHeadCLI(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { d.Close() })
+			t.Cleanup(func() { closers.Quiet(d) })
 			startTestDaemon(t, p, d)
 			cliGit(t, dir, "init", "-b", "main")
 			cliGit(t, dir, "config", "user.name", "Test")

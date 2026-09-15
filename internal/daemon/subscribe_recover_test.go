@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -33,7 +34,7 @@ func TestSubscribeReceivesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -169,7 +170,7 @@ func TestSubscribeToSlowRunReceivesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -242,7 +243,7 @@ func TestSubscribeToCompletedRunYieldsOneGapThenCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -337,14 +338,14 @@ func TestRecoverStaleRunsOnStartup(t *testing.T) {
 	}
 	d.StartStep(staleStep.ID)
 
-	d.Close()
+	closers.Quiet(d)
 
 	// Start daemon — it should recover the stale run.
 	d, err = db.Open(p.DB())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -365,7 +366,7 @@ func TestRecoverStaleRunsOnStartup(t *testing.T) {
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
 			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
-			client.Close()
+			closers.Quiet(client)
 		}
 		select {
 		case <-errCh:
@@ -508,7 +509,7 @@ func TestRecoverOnStartup_ResumesParkedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	repo, headSHA := setupTestGitRepo(t, p, d, "resume-parked-run")
 	run, err := d.InsertRun(repo.ID, "main", headSHA, headSHA)
 	if err != nil {
@@ -651,7 +652,7 @@ func TestRecoverOnStartup_ReconcilesHistoricalCIGateFromCurrentPRState(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer closers.Quiet(d)
 			repo, headSHA := setupTestGitRepo(t, p, d, "reconcile-parked-ci-"+strings.ToLower(state))
 			run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
 			if err != nil {
@@ -762,7 +763,7 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -783,7 +784,7 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
 			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
-			client.Close()
+			closers.Quiet(client)
 		}
 		select {
 		case <-errCh:
@@ -813,7 +814,7 @@ func TestSkipWorktreeCleanup_CIMonitorInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	repo, headSHA := setupTestGitRepo(t, p, d, "ci-skip-repo")
 	ctx := context.Background()
@@ -906,7 +907,7 @@ func TestRecoverIsolatesGateRepoHooksPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	migrateGateConfigs(ctx, database, p)
 
 	// Effective core.hookspath should now resolve to the bare's hooks dir.
@@ -964,7 +965,7 @@ exit 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	migrateGateConfigs(ctx, database, p)
 
 	data, err := os.ReadFile(hookPath)

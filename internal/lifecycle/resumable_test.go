@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/lifecycle/lifecycletest"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -21,7 +22,7 @@ func runFromState(t *testing.T, p *paths.Paths, runID string) *db.Run {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	run, err := database.GetRun(runID)
 	if err != nil {
 		t.Fatal(err)

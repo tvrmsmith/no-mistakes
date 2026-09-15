@@ -1,6 +1,7 @@
 package db
 
 import (
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -131,7 +132,7 @@ func TestAgentInvocations_PrivacySafeShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("table info: %v", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	var columns []string
 	for rows.Next() {
 		var name string
@@ -168,7 +169,7 @@ func TestAgentInvocations_HasRunTimelineIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("index list: %v", err)
 	}
-	defer rows.Close()
+	defer closers.Quiet(rows)
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
@@ -366,7 +367,7 @@ func TestOpenMigratesAgentInvocationsAndParkedMS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepo("/tmp/repo", "https://github.com/test/repo", "main")
 	if err != nil {
@@ -423,7 +424,7 @@ func TestOpenMigratesSessionFidelityColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	got, err := d.GetAgentInvocationsByRun(run.ID)
 	if err != nil {

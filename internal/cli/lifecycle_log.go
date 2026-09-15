@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
 
@@ -45,7 +46,7 @@ func logDrainLifecycleInvocation(command string, force, drain bool) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 	_, _ = f.WriteString(line)
 }
 

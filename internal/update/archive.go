@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"path/filepath"
 )
@@ -23,7 +24,7 @@ func extractBinaryFromTarGz(archive []byte, binaryName string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open tar.gz: %w", err)
 	}
-	defer gz.Close()
+	defer closers.Quiet(gz)
 
 	tr := tar.NewReader(gz)
 	for {
@@ -63,7 +64,7 @@ func readZipEntry(file *zip.File) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open zip entry: %w", err)
 	}
-	defer rc.Close()
+	defer closers.Quiet(rc)
 	return readExtractedBinary(rc)
 }
 

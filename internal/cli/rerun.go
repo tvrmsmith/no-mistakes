@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -28,7 +29,7 @@ func newRerunCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				defer d.Close()
+				defer closers.Quiet(d)
 
 				repo, err := findRepo(d)
 				if err != nil {
@@ -50,7 +51,7 @@ func newRerunCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("connect to daemon: %w", err)
 				}
-				defer client.Close()
+				defer closers.Quiet(client)
 
 				callerHead, err := rerunCallerHead(cmd.Context())
 				if err != nil {
