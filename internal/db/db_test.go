@@ -165,7 +165,7 @@ func TestSetRunWorktreeDirRecordsPlacementDurably(t *testing.T) {
 	if run.WorktreePath() != "" {
 		t.Fatalf("new run started with a placement: %q", run.WorktreePath())
 	}
-	dir := filepath.Join("/work", "repo-runs", run.ID)
+	dir := "/work/repo-runs/" + run.ID
 	if err := d.SetRunWorktreeDir(run.ID, dir); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestRunWorktreesOutsideReturnsOnlyRecordedPlacementsElsewhere(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaultRoot := filepath.Join("/nm-home", "worktrees")
+	defaultRoot := "/nm-home/worktrees"
 
 	inDefaultTree, err := d.InsertRun(repo.ID, "a", "head", "base")
 	if err != nil {
@@ -206,7 +206,7 @@ func TestRunWorktreesOutsideReturnsOnlyRecordedPlacementsElsewhere(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	elsewhereDir := filepath.Join("/work", "repo-runs", elsewhere.ID)
+	elsewhereDir := "/work/repo-runs/" + elsewhere.ID
 	if err := d.SetRunWorktreeDir(elsewhere.ID, elsewhereDir); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestActiveRunWorktreesOutsideReturnsOnlyRunsStillActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaultRoot := filepath.Join("/nm-home", "worktrees")
+	defaultRoot := "/nm-home/worktrees"
 
 	statuses := map[types.RunStatus]bool{
 		types.RunPending:   true,
@@ -259,7 +259,7 @@ func TestActiveRunWorktreesOutsideReturnsOnlyRunsStillActive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := d.SetRunWorktreeDir(run.ID, filepath.Join("/work", "repo-runs", run.ID)); err != nil {
+		if err := d.SetRunWorktreeDir(run.ID, "/work/repo-runs/"+run.ID); err != nil {
 			t.Fatal(err)
 		}
 		if err := d.UpdateRunStatus(run.ID, status); err != nil {

@@ -645,15 +645,16 @@ func renderTestingArtifact(artifact types.TestArtifact, opts testingSummaryOptio
 	}
 
 	var b strings.Builder
-	if target != "" && isImageArtifact(artifact.Kind, target) {
+	switch {
+	case target != "" && isImageArtifact(artifact.Kind, target):
 		fmt.Fprintf(&b, "**%s**\n\n![%s](%s)\n", html.EscapeString(label), markdownAltText(label), target)
-	} else if target != "" && isVideoArtifact(artifact.Kind, target) {
+	case target != "" && isVideoArtifact(artifact.Kind, target):
 		if opts.flavor == prBodyMarkdown {
 			fmt.Fprintf(&b, "- Evidence: [%s](%s)\n", html.EscapeString(label), target)
 		} else {
 			fmt.Fprintf(&b, "**%s**\n\n<video src=\"%s\" controls></video>\n", html.EscapeString(label), html.EscapeString(target))
 		}
-	} else if !hasFile {
+	case !hasFile:
 		if target != "" {
 			fmt.Fprintf(&b, "- Evidence: [%s](%s)\n", html.EscapeString(label), target)
 		} else if localPath != "" {

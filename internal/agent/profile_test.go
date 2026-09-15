@@ -145,29 +145,31 @@ func TestNewWithOptions_RefusesUnmappableKnob(t *testing.T) {
 // after the target or the exec subcommand.
 func TestACPModelIsPinnedOnTheAcpxCommand(t *testing.T) {
 	for _, name := range []types.AgentName{types.AgentCursor, "acp:custom"} {
-		ag, err := NewWithOptions(name, "acpx", nil, Options{
-			Profile: agentcfg.Profile{Model: "gpt-5"},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer ag.Close()
-		args := ag.(*acpxAgent).buildArgs(RunOpts{CWD: "/w"})
-		modelIdx, execIdx := -1, -1
-		for i, arg := range args {
-			switch arg {
-			case "--model":
-				modelIdx = i
-			case "exec":
-				execIdx = i
+		t.Run(string(name), func(t *testing.T) {
+			ag, err := NewWithOptions(name, "acpx", nil, Options{
+				Profile: agentcfg.Profile{Model: "gpt-5"},
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if modelIdx < 0 || args[modelIdx+1] != "gpt-5" {
-			t.Fatalf("%s argv missing --model gpt-5: %v", name, args)
-		}
-		if execIdx < 0 || modelIdx > execIdx {
-			t.Fatalf("%s placed --model outside acpx's own options: %v", name, args)
-		}
+			defer ag.Close()
+			args := ag.(*acpxAgent).buildArgs(RunOpts{CWD: "/w"})
+			modelIdx, execIdx := -1, -1
+			for i, arg := range args {
+				switch arg {
+				case "--model":
+					modelIdx = i
+				case "exec":
+					execIdx = i
+				}
+			}
+			if modelIdx < 0 || args[modelIdx+1] != "gpt-5" {
+				t.Fatalf("%s argv missing --model gpt-5: %v", name, args)
+			}
+			if execIdx < 0 || modelIdx > execIdx {
+				t.Fatalf("%s placed --model outside acpx's own options: %v", name, args)
+			}
+		})
 	}
 }
 

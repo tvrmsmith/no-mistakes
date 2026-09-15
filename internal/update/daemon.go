@@ -134,7 +134,9 @@ func runningDaemonExecutablePath(p *paths.Paths) (string, error) {
 
 func executablePathForPID(pid int) (string, error) {
 	if currentGOOS == "linux" {
-		return os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+		// procfs is Linux-only and always slash-separated, so this is a literal
+		// path rather than a host-specific join.
+		return os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
 	}
 	if currentGOOS == "windows" {
 		return windowsExecutablePathForPID(pid)

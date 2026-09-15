@@ -378,12 +378,13 @@ func TestCIStep_PublishRepairRebindsAttestationAcrossRepairPushes(t *testing.T) 
 	logFile := filepath.Join(t.TempDir(), "gh.log")
 	f.sctx.Repo.UpstreamURL = "https://github.com/test/repo.git"
 	env := fakeCIGH(t, "OPEN", `[{"name":"test","state":"FAILURE","bucket":"fail"}]`)
-	f.sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=fix: ci",
 		"FAKE_CLI_LOG="+logFile,
 	)
+	f.sctx.Env = env
 	f.sctx.Ctx = context.Background()
 	writeCIFix(f.dir)
 
@@ -515,12 +516,13 @@ func TestCIStep_PublishRepairDoesNotMintAttestation(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "gh.log")
 	f.sctx.Repo.UpstreamURL = "https://github.com/test/repo.git"
 	env := fakeCIGH(t, "OPEN", `[{"name":"test","state":"FAILURE","bucket":"fail"}]`)
-	f.sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=feat: hand rolled",
 		"FAKE_CLI_LOG="+logFile,
 	)
+	f.sctx.Env = env
 	f.sctx.Ctx = context.Background()
 	writeCIFix(f.dir)
 
@@ -590,12 +592,13 @@ func TestPushStep_AttestsHeadBeforePush(t *testing.T) {
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
 	env := fakeCIGH(t, "OPEN", `[]`)
-	sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=fix: existing pr",
 		"FAKE_CLI_LOG="+logFile,
 	)
+	sctx.Env = env
 
 	if _, err := (&PushStep{}).Execute(sctx); err != nil {
 		t.Fatalf("push step failed: %v", err)
@@ -719,12 +722,13 @@ func TestPushStep_AttestationWriteFailureAbortsBeforePush(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := fakeCIGH(t, "OPEN", `[]`)
-	sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=fix: existing pr",
 		"FAKE_CLI_PR_EDIT_ERR=provider unavailable",
 	)
+	sctx.Env = env
 
 	_, err := (&PushStep{}).Execute(sctx)
 	if err == nil || !strings.Contains(err.Error(), "pipeline attestation write failed") {
@@ -868,12 +872,13 @@ func TestPushStep_DoesNotMintAttestation(t *testing.T) {
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
 	env := fakeCIGH(t, "OPEN", `[]`)
-	sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=feat: hand rolled",
 		"FAKE_CLI_LOG="+logFile,
 	)
+	sctx.Env = env
 
 	if _, err := (&PushStep{}).Execute(sctx); err != nil {
 		t.Fatalf("push step failed: %v", err)

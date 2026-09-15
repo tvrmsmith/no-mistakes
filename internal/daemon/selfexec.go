@@ -850,11 +850,15 @@ func requestDrain(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
 func sendShutdownRequest(client *ipc.Client, opts StopOptions) (ipc.ShutdownResult, error) {
 	var result ipc.ShutdownResult
 	if !opts.Drain {
-		return result, client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &result)
+		// The call fills result through the pointer, so it has to complete
+		// before result is read for the return.
+		err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &result)
+		return result, err
 	}
 	timeout := drainTimeoutOrDefault(opts.DrainTimeout)
 	params := &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: timeout.Milliseconds(), DrainOnly: opts.DrainOnly}
-	return result, client.CallWithTimeout(ipc.MethodShutdown, params, &result, drainCallTimeout(opts.DrainTimeout))
+	err := client.CallWithTimeout(ipc.MethodShutdown, params, &result, drainCallTimeout(opts.DrainTimeout))
+	return result, err
 }
 
 func drainTimeoutOrDefault(d time.Duration) time.Duration {

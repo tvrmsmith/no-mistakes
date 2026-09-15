@@ -150,7 +150,8 @@ func TestPRStep_UsesResolvedForgeProviderForSelfHostedRemote(t *testing.T) {
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
-	sctx.Env = append(env, "GH_TOKEN="+credentialSentinel)
+	env = append(env, "GH_TOKEN="+credentialSentinel)
+	sctx.Env = env
 	sctx.Repo.UpstreamURL = "git@work-code:test/repo.git"
 	sctx.ForgeContext = &forgecontext.Context{
 		Provider: scm.ProviderGitHub,

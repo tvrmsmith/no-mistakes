@@ -339,7 +339,8 @@ func boundedCILogEvidence(label, raw string, retrievalErr error, maxBytes int) s
 	}
 	content := strings.TrimSpace(raw)
 	budget := maxBytes - len(header)
-	if retrievalErr != nil {
+	switch {
+	case retrievalErr != nil:
 		markerBudget := budget
 		if content != "" && markerBudget > budget/2 {
 			markerBudget = budget / 2
@@ -354,9 +355,9 @@ func boundedCILogEvidence(label, raw string, retrievalErr error, maxBytes int) s
 			content += "\n"
 		}
 		content += marker
-	} else if content == "" {
+	case content == "":
 		content = truncateCILogContent("[no log output returned]", budget)
-	} else {
+	default:
 		content = truncateCILogContent(content, budget)
 	}
 	return header + content

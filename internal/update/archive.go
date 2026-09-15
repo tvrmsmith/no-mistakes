@@ -51,14 +51,20 @@ func extractBinaryFromZip(archive []byte, binaryName string) ([]byte, error) {
 		if filepath.Base(file.Name) != binaryName {
 			continue
 		}
-		rc, err := file.Open()
-		if err != nil {
-			return nil, fmt.Errorf("open zip entry: %w", err)
-		}
-		defer rc.Close()
-		return readExtractedBinary(rc)
+		return readZipEntry(file)
 	}
 	return nil, fmt.Errorf("binary not found in zip: %s", binaryName)
+}
+
+// readZipEntry owns the entry reader so the close is a function-scoped defer
+// rather than one queued inside the caller's loop.
+func readZipEntry(file *zip.File) ([]byte, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open zip entry: %w", err)
+	}
+	defer rc.Close()
+	return readExtractedBinary(rc)
 }
 
 func readExtractedBinary(r io.Reader) ([]byte, error) {

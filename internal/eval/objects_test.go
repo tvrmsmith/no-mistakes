@@ -227,13 +227,21 @@ func TestConcurrentCaptureKeepsThePublishedCaseRestorable(t *testing.T) {
 
 	const workers = 8
 	stores := make([]*Store, workers)
+	// Registered before the loop so a failure part way through still closes
+	// the stores already opened.
+	defer func() {
+		for _, store := range stores {
+			if store != nil {
+				store.Close()
+			}
+		}
+	}()
 	for i := range stores {
 		store, err := Open(p.EvalDir())
 		if err != nil {
 			t.Fatal(err)
 		}
 		stores[i] = store
-		defer store.Close()
 	}
 	start := make(chan struct{})
 	errs := make(chan error, workers)

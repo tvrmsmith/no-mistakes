@@ -105,11 +105,12 @@ func startServerWithPort(ctx context.Context, agentName, bin string, args []stri
 	srv := &managedServer{cmd: cmd, port: port, pidFile: pidFile, exited: make(chan struct{}), healthTimeout: defaultHealthTimeout}
 	go func() {
 		srv.waitErr = cmd.Wait()
-		if srv.stopping.Load() {
+		switch {
+		case srv.stopping.Load():
 			slog.Info("managed agent server stopped", "agent", agentName, "pid", cmd.Process.Pid)
-		} else if srv.waitErr != nil {
+		case srv.waitErr != nil:
 			slog.Warn("managed agent server exited", "agent", agentName, "pid", cmd.Process.Pid, "error", srv.waitErr)
-		} else {
+		default:
 			slog.Warn("managed agent server exited", "agent", agentName, "pid", cmd.Process.Pid, "error", "unexpected clean exit")
 		}
 		close(srv.exited)

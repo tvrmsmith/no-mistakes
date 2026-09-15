@@ -122,7 +122,7 @@ const maxSubscribersPerRun = 32
 // NewRunManager creates a RunManager. Pass nil for stepFactory to use default steps.
 func NewRunManager(database *db.DB, p *paths.Paths, stepFactory StepFactory) *RunManager {
 	if stepFactory == nil {
-		stepFactory = func() []pipeline.Step { return steps.AllSteps() }
+		stepFactory = steps.AllSteps
 	}
 	return &RunManager{
 		executors:     make(map[string]*pipeline.Executor),

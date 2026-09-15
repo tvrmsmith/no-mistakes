@@ -107,7 +107,7 @@ func TestStepRoundHistorySectionBoundsDeclinedFindings(t *testing.T) {
 
 	items := make([]string, 0, maxDecisionLinesPerSection+5)
 	for i := 0; i < maxDecisionLinesPerSection+5; i++ {
-		items = append(items, fmt.Sprintf(`{"id":"finding-%02d","severity":"error","description":"%s","action":"ask-user"}`,
+		items = append(items, fmt.Sprintf(`{"id":"finding-%02d","severity":"error","description":%q,"action":"ask-user"}`,
 			i, strings.Repeat("x", maxDecisionLineBytes)))
 	}
 	findings := `{"findings":[` + strings.Join(items, ",") + `]}`

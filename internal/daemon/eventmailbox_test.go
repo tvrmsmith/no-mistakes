@@ -321,7 +321,7 @@ func TestMailbox_PublisherNeverBlocksOnWedgedSubscribers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer sub.Close()
+		t.Cleanup(sub.Close)
 	}
 	done := make(chan struct{})
 	go func() {
@@ -551,7 +551,7 @@ func TestMailbox_SubscriberCapIsEnforced(t *testing.T) {
 		if err != nil {
 			t.Fatalf("subscribe %d: %v", i, err)
 		}
-		defer sub.Close()
+		t.Cleanup(sub.Close)
 	}
 	if _, err := m.Subscribe("run-1"); err == nil {
 		t.Fatalf("subscribe beyond %d succeeded, want a refusal", maxSubscribersPerRun)

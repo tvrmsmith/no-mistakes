@@ -324,11 +324,12 @@ func renderDiff(raw string, width, viewHeight, offset int, stepLabel string, fin
 	scrollHint := ""
 	if viewHeight > 0 && len(lines) > viewHeight {
 		remaining := len(lines) - end
-		if offset > 0 && remaining > 0 {
+		switch {
+		case offset > 0 && remaining > 0:
 			scrollHint = fmt.Sprintf("↑ %d  ↓ %d more lines (j/k)", offset, remaining)
-		} else if remaining > 0 {
+		case remaining > 0:
 			scrollHint = fmt.Sprintf("↓ %d more lines (j/k)", remaining)
-		} else if offset > 0 {
+		case offset > 0:
 			scrollHint = fmt.Sprintf("↑ %d lines (j/k)", offset)
 		}
 	}

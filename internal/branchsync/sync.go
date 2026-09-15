@@ -1841,7 +1841,8 @@ func (s *Service) classifyRelation(ctx context.Context, state *State, pushed, ba
 		state.NextAction = nil
 		return
 	}
-	if objectExists(ctx, s.workDir(), pushed) {
+	switch {
+	case objectExists(ctx, s.workDir(), pushed):
 		switch {
 		case isAncestor(ctx, s.workDir(), state.Local.Head, pushed):
 			state.State = StateBehind
@@ -1872,10 +1873,10 @@ func (s *Service) classifyRelation(ctx context.Context, state *State, pushed, ba
 			state.Error = "local and pipeline-pushed histories have diverged; no files or refs were changed"
 			return
 		}
-	} else if state.Local.Head == state.Pipeline.SubmittedHead && state.Pipeline.SubmittedHead != pushed {
+	case state.Local.Head == state.Pipeline.SubmittedHead && state.Pipeline.SubmittedHead != pushed:
 		state.State = StateBehind
 		state.Relation = RelationBehind
-	} else {
+	default:
 		state.State = StateAmbiguousContext
 		state.Relation = RelationUnknown
 		state.Safety = "blocked_relation_unknown"

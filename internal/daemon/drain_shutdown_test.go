@@ -546,9 +546,13 @@ func TestShutdown_ConcurrentDrainsOnlyOneDrains(t *testing.T) {
 		if dialErr != nil {
 			t.Fatalf("dial daemon: %v", dialErr)
 		}
-		defer client.Close()
 		clients = append(clients, client)
 	}
+	defer func() {
+		for _, client := range clients {
+			client.Close()
+		}
+	}()
 	launch := make(chan struct{})
 	for _, client := range clients {
 		go func(client *ipc.Client) {

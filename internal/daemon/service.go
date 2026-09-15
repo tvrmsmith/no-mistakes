@@ -417,10 +417,8 @@ func reloadManagedServiceDefinition(p *paths.Paths) error {
 	if serviceManagerBypassed() {
 		return nil
 	}
-	switch runtimeGOOS {
-	case "linux":
-		_, err := serviceCommandRunner("systemctl", "--user", "daemon-reload")
-		if err != nil {
+	if runtimeGOOS == "linux" {
+		if _, err := serviceCommandRunner("systemctl", "--user", "daemon-reload"); err != nil {
 			return fmt.Errorf("systemctl daemon-reload: %w", err)
 		}
 	}
@@ -453,8 +451,7 @@ func resetFailedManagedService(p *paths.Paths) {
 	if serviceManagerBypassed() {
 		return
 	}
-	switch runtimeGOOS {
-	case "linux":
+	if runtimeGOOS == "linux" {
 		_, _ = serviceCommandRunner("systemctl", "--user", "reset-failed", systemdServiceName(p))
 	}
 }

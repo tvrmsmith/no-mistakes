@@ -876,8 +876,11 @@ func recordClaudeHelperAttempt() int {
 	if err != nil {
 		os.Exit(6)
 	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.WriteString("x"); err != nil {
+	// Closed explicitly rather than deferred: every failure here leaves through
+	// os.Exit, which runs no deferred call, so the append would not be flushed.
+	_, writeErr := f.WriteString("x")
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
 		os.Exit(6)
 	}
 	data, err := os.ReadFile(path)

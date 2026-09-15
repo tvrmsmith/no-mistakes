@@ -345,7 +345,7 @@ func localGH2990() string {
 	if !ok {
 		return ""
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../.."))
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	p := filepath.Join(root, ".scratch-gh", "gh_2.99.0_macOS_arm64", "bin", "gh")
 	if st, err := os.Stat(p); err == nil && !st.IsDir() {
 		return p

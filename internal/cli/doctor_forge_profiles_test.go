@@ -108,7 +108,9 @@ func writeDoctorProfileGHBinary(t *testing.T, dir, profileDir string) {
 	contents := fmt.Sprintf("#!/bin/sh\n[ \"$GH_CONFIG_DIR\" = %q ] || exit 10\n[ -z \"$GH_TOKEN\" ] || exit 11\nexit 0\n", profileDir)
 	if runtime.GOOS == "windows" {
 		name = "gh.cmd"
-		contents = fmt.Sprintf("@echo off\r\nif not \"%%GH_CONFIG_DIR%%\"==\"%s\" exit /b 10\r\nif defined GH_TOKEN exit /b 11\r\nexit /b 0\r\n", profileDir)
+		// Concatenated rather than formatted: %q would escape the backslashes in
+		// a Windows path and the batch comparison needs the path verbatim.
+		contents = "@echo off\r\nif not \"%GH_CONFIG_DIR%\"==\"" + profileDir + "\" exit /b 10\r\nif defined GH_TOKEN exit /b 11\r\nexit /b 0\r\n"
 	}
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o755); err != nil {
 		t.Fatal(err)

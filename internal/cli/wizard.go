@@ -323,7 +323,7 @@ func awaitDaemonRunRegistration(ctx context.Context, client *ipc.Client, repoID,
 		return err
 	}
 	if run == nil {
-		logPath := filepath.Join("~/.no-mistakes", "repos", repoID+".git", "notify-push.log")
+		logPath := filepath.Join("~", ".no-mistakes", "repos", repoID+".git", "notify-push.log")
 		if p, pathErr := paths.New(); pathErr == nil {
 			logPath = filepath.Join(p.RepoDir(repoID), "notify-push.log")
 		}
