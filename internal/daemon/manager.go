@@ -1649,6 +1649,19 @@ func (m *RunManager) withBranchLock(repoID, branch string, action func() (string
 	return action()
 }
 
+// recordRunError stores on the run row why setup failed, for the caller that is already
+// returning that failure to its own caller.
+//
+// A write failure is logged rather than returned. The row is where an operator reads the
+// reason, so dropping the write leaves a failed run with no explanation; but the error the
+// caller returns is the one that matters, and replacing it with a database error would hide the
+// cause behind its own bookkeeping. Same position as the step-plan write further down.
+func (m *RunManager) recordRunError(runID, message string) {
+	if err := m.db.UpdateRunError(runID, message); err != nil {
+		slog.Warn("failed to record the run error on the run", "run_id", runID, "run_error", message, "error", err)
+	}
+}
+
 // startRunWithIntentSourceLocked performs run creation while the caller owns
 // the repository/branch lock. Proof fields are empty for ordinary launches.
 func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent, source, launchNonce, validationGeneration, intentDigest, prBaseBranch, inheritedPRURL string) (string, error) {
@@ -1710,7 +1723,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	if inherited := strings.TrimSpace(inheritedPRURL); inherited != "" {
 		if err := m.db.UpdateRunPRURL(run.ID, inherited); err != nil {
-			m.db.UpdateRunError(run.ID, fmt.Sprintf("inherit PR URL: %s", err))
+			m.recordRunError(run.ID, fmt.Sprintf("inherit PR URL: %s", err))
 			trackStartFailure("inherit_pr_url")
 			return "", fmt.Errorf("inherit PR URL: %w", err)
 		}
@@ -1719,7 +1732,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 
 	globalCfg, err := config.LoadGlobal(m.paths.ConfigFile())
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("load config: %s", err))
 		trackStartFailure("load_global_config")
 		return "", fmt.Errorf("load global config: %w", err)
 	}
@@ -1734,23 +1747,23 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	layout := worktrees.New(m.paths, globalCfg.WorktreeRoots)
 	checkouts, err := registeredCheckouts(m.db)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("list registered checkouts: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("list registered checkouts: %s", err))
 		trackStartFailure("list_registered_checkouts")
 		return "", fmt.Errorf("list registered checkouts: %w", err)
 	}
 	if err := layout.ValidateCheckout(repo.WorkingPath, checkouts...); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("worktree placement: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("worktree placement: %s", err))
 		trackStartFailure("invalid_worktree_placement")
 		return "", fmt.Errorf("worktree placement: %w", err)
 	}
 	wtDir := layout.Dir(repo.ID, repo.WorkingPath, run.ID)
 	if err := m.db.SetRunWorktreeDir(run.ID, wtDir); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("record worktree placement: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("record worktree placement: %s", err))
 		trackStartFailure("record_worktree_placement")
 		return "", fmt.Errorf("record worktree placement: %w", err)
 	}
 	if err := git.WorktreeAdd(ctx, gateDir, wtDir, headSHA); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("create worktree: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("create worktree: %s", err))
 		trackStartFailure("create_worktree")
 		return "", fmt.Errorf("create worktree: %w", err)
 	}
@@ -1768,13 +1781,13 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}()
 
 	if err := git.CopyLocalUserIdentity(ctx, repo.WorkingPath, wtDir); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("configure worktree git identity: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("configure worktree git identity: %s", err))
 		trackStartFailure("configure_worktree_identity")
 		return "", fmt.Errorf("configure worktree git identity: %w", err)
 	}
 	if storedPRBaseBranch != "" {
 		if err := steps.VerifyRemoteBranchExists(ctx, wtDir, storedPRBaseBranch); err != nil {
-			m.db.UpdateRunError(run.ID, err.Error())
+			m.recordRunError(run.ID, err.Error())
 			trackStartFailure("pr_base_branch_missing")
 			return "", err
 		}
@@ -1809,14 +1822,14 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// shared config, where it would outlive the setting.
 	if !globalCfg.SignCommits {
 		if err := git.DisableCommitSigning(ctx, wtDir); err != nil {
-			m.db.UpdateRunError(run.ID, fmt.Sprintf("disable commit signing: %s", err))
+			m.recordRunError(run.ID, fmt.Sprintf("disable commit signing: %s", err))
 			trackStartFailure("disable_commit_signing")
 			return "", fmt.Errorf("disable commit signing: %w", err)
 		}
 	}
 	repoCfg, err := config.LoadRepo(wtDir)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("load config: %s", err))
 		trackStartFailure("load_repo_config")
 		return "", fmt.Errorf("load repo config: %w", err)
 	}
@@ -1837,7 +1850,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// SECURITY: a trusted-config fetch failure must abort, not silently disable
 	// the disable_project_settings opt-out (see assertGateTrustedConfigReadable).
 	if err := assertGateTrustedConfigReadable(ctx, wtDir, repo.DefaultBranch, trustedSHA); err != nil {
-		m.db.UpdateRunError(run.ID, err.Error())
+		m.recordRunError(run.ID, err.Error())
 		trackStartFailure("trusted_config_unreadable")
 		return "", err
 	}
@@ -1853,7 +1866,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	cfg := config.Merge(globalCfg, effectiveRepoCfg)
 	if err := m.paths.ValidateEvidenceRoot(cfg.Test.Evidence.LocalRoot); err != nil {
-		m.db.UpdateRunError(run.ID, err.Error())
+		m.recordRunError(run.ID, err.Error())
 		trackStartFailure("evidence_root")
 		return "", err
 	}
@@ -1874,7 +1887,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	if len(effectiveSkips) > 0 {
 		run.SkippedSteps = effectiveSkips
 		if err := m.setRunSkippedSteps(run.ID, effectiveSkips); err != nil {
-			m.db.UpdateRunError(run.ID, fmt.Sprintf("persist run skip set: %s", err))
+			m.recordRunError(run.ID, fmt.Sprintf("persist run skip set: %s", err))
 			trackStartFailure("persist_skip_set")
 			return "", fmt.Errorf("persist run skip set: %w", err)
 		}
@@ -1882,14 +1895,14 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 
 	if globalCfg.Eval.CaptureProvenance {
 		if err := cfg.EnableEvalProvenance(globalCfg, effectiveRepoCfg); err != nil {
-			m.db.UpdateRunError(run.ID, err.Error())
+			m.recordRunError(run.ID, err.Error())
 			trackStartFailure("eval_provenance")
 			return "", err
 		}
 	}
 	forgeCtx, err := forgecontext.Resolve(ctx, cfg.ForgeProfiles, repo.UpstreamURL, repo.ForkURL)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("resolve forge profile: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("resolve forge profile: %s", err))
 		trackStartFailure("resolve_forge_profile")
 		return "", fmt.Errorf("resolve forge profile: %w", err)
 	}
@@ -1899,7 +1912,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// fail-closed check.
 	ag, err := newPipelineAgent(ctx, cfg, m.paths.EvidenceRoot(cfg.Test.Evidence.LocalRoot), exec.LookPath, forgeEnvironment(forgeCtx))
 	if err != nil {
-		m.db.UpdateRunError(run.ID, err.Error())
+		m.recordRunError(run.ID, err.Error())
 		trackStartFailure("create_agent")
 		return "", err
 	}
@@ -2159,7 +2172,14 @@ func (m *RunManager) relabelEvalRun(ctx context.Context, cfg *config.Config, run
 		slog.Warn("failed to open eval store for relabel", "run_id", runID, "error", err)
 		return
 	}
-	defer store.Close()
+	defer func() {
+		// The store is written to, so a close failure can mean the relabel never reached disk.
+		// Warned about for the same reason every other failure in this function is: the caller
+		// is a background goroutine with nowhere to return to.
+		if err := store.Close(); err != nil {
+			slog.Warn("failed to close the eval store after relabel", "run_id", runID, "error", err)
+		}
+	}()
 	if cfg != nil {
 		store.SetDiversifiedSize(cfg.Eval.DiversifiedSize)
 	}
@@ -2328,7 +2348,7 @@ func (m *RunManager) registerActiveRun(runID string, executor *pipeline.Executor
 func (m *RunManager) refuseStartedRun(runID string, ag agent.Agent, cancel context.CancelCauseFunc, refusal error) {
 	cancel(refusal)
 	if ag != nil {
-		ag.Close()
+		_ = ag.Close()
 	}
 	m.closeSubscribers(runID)
 	if err := m.db.UpdateRunErrorStatus(runID, refusal.Error(), types.RunCancelled); err != nil {
