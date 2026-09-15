@@ -55,11 +55,21 @@ type pipelineAttestation struct {
 	// omitted entirely for a run whose test step recorded no verdict (every
 	// run from before the contract), which is itself the answer: unknown.
 	LiveValidation *pipelineAttestationLiveValidation `json:"live_validation,omitempty"`
+	// AllowTestCommandOverride is the trusted repo-config reason that opts
+	// this repository into letting require-no-mistakes accept a Test step
+	// approved over a failing configured commands.test. Omitted when the repo
+	// has not opted in. Additive: older attestations without the field are
+	// read as not opted in.
+	AllowTestCommandOverride string `json:"allow_test_command_override,omitempty"`
 }
 
 type pipelineAttestationStep struct {
 	Step   types.StepName   `json:"step"`
 	Status types.StepStatus `json:"status"`
+	// OverrideReason is the durable marker that the Test step was approved over
+	// a failing configured commands.test. Omitted for every other step, ordinary
+	// Test completions, and attestations that predate the field.
+	OverrideReason string `json:"override_reason,omitempty"`
 }
 
 // pipelineAttestationLiveValidation reports the run's verdict and how much of
@@ -107,6 +117,14 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 // Unknown, GitHub, GitLab, and Azure stay on today's HTML. Bitbucket Cloud is
 // no-HTML markdown: no attestation comment, no <details>.
 func BuildPipelineSummaryFor(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string, provider scm.Provider) (string, string) {
+	return buildPipelineSummaryFor(steps, rounds, headSHA, provider, pipelineAttestationPolicy{})
+}
+
+type pipelineAttestationPolicy struct {
+	AllowTestCommandOverride string
+}
+
+func buildPipelineSummaryFor(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string, provider scm.Provider, policy pipelineAttestationPolicy) (string, string) {
 	if len(steps) == 0 {
 		return "", ""
 	}
@@ -141,7 +159,7 @@ func BuildPipelineSummaryFor(steps []*db.StepResult, rounds map[string][]*db.Ste
 	b.WriteString(noMistakesPRSignature)
 	b.WriteString("\n\n")
 	if flavor == prBodyHTML {
-		b.WriteString(buildPipelineAttestation(steps, rounds, headSHA))
+		b.WriteString(buildPipelineAttestationWithPolicy(steps, rounds, headSHA, policy))
 		b.WriteString("\n\n")
 	}
 	for i, detail := range detailBlocks {
@@ -159,7 +177,11 @@ func BuildPipelineSummaryFor(steps []*db.StepResult, rounds map[string][]*db.Ste
 // when no-mistakes writes the PR body. Its compact JSON is deliberately data
 // only: consumers decide their own policy from the step names and statuses.
 func buildPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string) string {
-	attestation := newPipelineAttestation(steps, rounds, headSHA)
+	return buildPipelineAttestationWithPolicy(steps, rounds, headSHA, pipelineAttestationPolicy{})
+}
+
+func buildPipelineAttestationWithPolicy(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string, policy pipelineAttestationPolicy) string {
+	attestation := newPipelineAttestation(steps, rounds, headSHA, policy)
 	payload, err := json.Marshal(attestation)
 	if err != nil {
 		return ""
@@ -167,7 +189,7 @@ func buildPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.St
 	return pipelineAttestationCommentPrefix + string(payload) + pipelineAttestationCommentClosingToken
 }
 
-func newPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string) pipelineAttestation {
+func newPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string, policy pipelineAttestationPolicy) pipelineAttestation {
 	attestation := pipelineAttestation{
 		HeadSHA: headSHA,
 		Steps:   make([]pipelineAttestationStep, 0, len(steps)),
@@ -176,17 +198,33 @@ func newPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.Step
 		if sr == nil {
 			continue
 		}
-		attestation.Steps = append(attestation.Steps, pipelineAttestationStep{
+		item := pipelineAttestationStep{
 			Step:   sr.StepName,
 			Status: sr.Status,
-		})
+		}
+		if sr.StepName == types.StepTest && sr.OverrideReason != nil {
+			item.OverrideReason = strings.TrimSpace(*sr.OverrideReason)
+			if item.OverrideReason != "" {
+				attestation.AllowTestCommandOverride = strings.TrimSpace(policy.AllowTestCommandOverride)
+			}
+		}
+		attestation.Steps = append(attestation.Steps, item)
 	}
+	// A custom gate shares its anchor's order, so the tie-break decides where
+	// the published record places it. A gate runs immediately AFTER its anchor,
+	// and a lexicographic tie-break would put it before ("gate.review.x" sorts
+	// ahead of "review"), so coreness decides first. Peers - two gates on the
+	// same anchor - keep the recorded order, which GetStepsByRun makes
+	// deterministic and equal to declaration, hence execution, order.
 	sort.SliceStable(attestation.Steps, func(i, j int) bool {
 		left, right := attestation.Steps[i].Step, attestation.Steps[j].Step
 		if left.Order() != right.Order() {
 			return left.Order() < right.Order()
 		}
-		return left < right
+		if left.IsCustomGate() != right.IsCustomGate() {
+			return !left.IsCustomGate()
+		}
+		return false
 	})
 	attestation.LiveValidation = attestedLiveValidation(steps, rounds, headSHA)
 	return attestation
@@ -232,21 +270,22 @@ func attestedLiveValidation(steps []*db.StepResult, rounds map[string][]*db.Step
 // so the only honest statuses to (re)publish are the ones the last real
 // attestation already carried.
 func rebindPipelineAttestationHead(body, newHeadSHA string) (string, bool) {
-	return rebindPipelineAttestationWithSteps(body, newHeadSHA, nil)
+	return rebindPipelineAttestationWithSteps(body, newHeadSHA, nil, pipelineAttestationPolicy{})
 }
 
 // rebindPipelineAttestationWithSteps rewrites the first live v1 attestation
-// comment to bind newHeadSHA. When steps is nil it behaves exactly like
-// rebindPipelineAttestationHead, keeping whatever step statuses the existing
-// attestation already carried. When steps is non-nil, it replaces the
-// attestation's step list outright with the caller's own statuses instead of
-// reusing the old ones - for a caller (the Push step) that attests a head it
+// comment to bind newHeadSHA. When steps is nil it keeps whatever step statuses
+// the existing attestation already carried, including a Test override_reason.
+// allow_test_command_override still comes from the caller's current trusted
+// policy, not the previous attestation. When steps is non-nil, it replaces
+// the attestation's step list outright with the caller's own statuses instead
+// of reusing the old ones - for a caller (the Push step) that attests a head it
 // is about to push using this run's own current step statuses, rather than
 // borrowing whatever an older, possibly different, attestation claimed. It
 // still returns the original body and false when no live attestation is
 // present, so a caller cannot mint one for a PR that was not raised through
 // no-mistakes.
-func rebindPipelineAttestationWithSteps(body, newHeadSHA string, steps []*db.StepResult) (string, bool) {
+func rebindPipelineAttestationWithSteps(body, newHeadSHA string, steps []*db.StepResult, policy pipelineAttestationPolicy) (string, bool) {
 	newHeadSHA = strings.TrimSpace(newHeadSHA)
 	if newHeadSHA == "" {
 		return body, false
@@ -266,12 +305,22 @@ func rebindPipelineAttestationWithSteps(body, newHeadSHA string, steps []*db.Ste
 		return body, false
 	}
 	if steps == nil {
+		// A CI repair that did not re-run Test keeps the prior Test result,
+		// including an approved-over-failure override_reason. The caller's
+		// current trusted policy still owns allow_test_command_override, so a
+		// restamp cannot retain a removed waiver or omit a newly added one.
 		steps = make([]*db.StepResult, 0, len(attestation.Steps))
 		for _, s := range attestation.Steps {
-			steps = append(steps, &db.StepResult{StepName: s.Step, Status: s.Status})
+			sr := &db.StepResult{StepName: s.Step, Status: s.Status}
+			if s.Step == types.StepTest {
+				if reason := strings.TrimSpace(s.OverrideReason); reason != "" {
+					sr.OverrideReason = &reason
+				}
+			}
+			steps = append(steps, sr)
 		}
 	}
-	rebound := newPipelineAttestation(steps, nil, newHeadSHA)
+	rebound := newPipelineAttestation(steps, nil, newHeadSHA, policy)
 	// Step statuses may be republished for a head the pipeline did not
 	// re-validate. Live validation is a factual claim about one commit's
 	// behavior, so it is derived only from current step findings and never

@@ -150,6 +150,7 @@ On startup, the daemon checks for runs that were left in `pending` or `running` 
 
 - Completes legacy active rows whose persisted PR state is already `merged` or `closed`, including their CI step, before active-run recovery and parked-run planning
 - Resumes a parked gate whose worktree and step history validate
+- Rebuilds a parked run with the repository gate list pinned in `runs.gates_json` when that run started, never the current default-branch list. An absent pin on an older run means the core pipeline, while an invalid pin refuses recovery
 - Re-resolves and validates any configured repository forge profile before rebuilding the recovered run, so resumed provider checks and agents use the same repository-scoped identity model rather than persisted credentials or ambient active accounts
 - Fails a preserved run it cannot resume only on evidence a completed read actually returned, such as a missing worktree, a head that no longer matches, an incomplete gate step, or a drifted step plan, and records that reason on the run; a read that did not complete instead defers the run, which keeps its row, its gate, and its worktree for a later start
 - Performs no stale-run sweep and no worktree cleanup at all when the active-run listing itself cannot be read, since a failed listing is not evidence that there is nothing to preserve

@@ -118,7 +118,7 @@ func parkRunAwaitingAgentErr(database *db.DB, run *db.Run) error {
 		return err
 	}
 	findings := "[]"
-	return database.ParkStepForApproval(run.ID, sr.ID, types.StepStatusAwaitingApproval, 0, &findings)
+	return database.ParkStepForApproval(run.ID, sr.ID, types.StepStatusAwaitingApproval, 0, 0, &findings)
 }
 
 // markCIMonitorActive gives a run a single active CI step and a PR URL, the
@@ -958,7 +958,7 @@ func TestDrain_JustApprovedCIGateIsNotCutAsAMonitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	findings := "[]"
-	if err := database.ParkStepForApproval(run.ID, sr.ID, types.StepStatusAwaitingApproval, 0, &findings); err != nil {
+	if err := database.ParkStepForApproval(run.ID, sr.ID, types.StepStatusAwaitingApproval, 0, 0, &findings); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpdateRunPRURL(run.ID, "https://github.com/user/project/pull/7"); err != nil {

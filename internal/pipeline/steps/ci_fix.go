@@ -560,12 +560,29 @@ func (s *CIStep) commitRepair(sctx *pipeline.StepContext, summary string) (ciRep
 	if summary == "" {
 		summary = "repair failing checks"
 	}
-	message, err := sctx.Config.Commit.RenderFixMessage(types.StepCI, summary)
+	message, err := sctx.Config.Commit.RenderFixMessageForBranch(types.StepCI, summary, sctx.Run.Branch)
 	if err != nil {
 		return ciRepairResult{}, fmt.Errorf("render CI repair commit message: %w", err)
 	}
 	if err := stagePipelineChanges(sctx); err != nil {
 		return ciRepairResult{}, fmt.Errorf("stage CI changes: %w", err)
+	}
+	staged, err := stagedChangesPresent(func(args ...string) (string, error) {
+		return stepGitRun(sctx, args...)
+	})
+	if err != nil {
+		return ciRepairResult{}, fmt.Errorf("inspect staged CI changes: %w", err)
+	}
+	if !staged {
+		sctx.Log("no staged CI changes to commit")
+		headSHA, err := stepGitHeadSHA(sctx)
+		if err != nil {
+			return ciRepairResult{}, fmt.Errorf("resolve head after empty CI handoff: %w", err)
+		}
+		if headSHA != sctx.Run.HeadSHA {
+			return s.recordRepair(sctx, headSHA)
+		}
+		return ciRepairResult{}, nil
 	}
 	if _, err := stepGitRun(sctx, "commit", "-m", message); err != nil {
 		return ciRepairResult{}, fmt.Errorf("commit: %w", err)
@@ -666,10 +683,10 @@ func ciRepairContinuityGap(sctx *pipeline.StepContext, headSHA string) string {
 // Review has approved it again. The CI monitor turns that into a restart at
 // Format.
 func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, headSHA string) (ciRepairResult, error) {
-	ref := normalizedBranchRef(sctx.Run.Branch)
-	if _, err := stepGitRun(sctx, "update-ref", ref, headSHA); err != nil {
-		return ciRepairResult{}, fmt.Errorf("update local branch ref: %w", err)
+	if err := updateNonSharedBranchRef(sctx, headSHA); err != nil {
+		return ciRepairResult{}, err
 	}
+	startingHead := sctx.Run.HeadSHA
 	// Durable first, then in memory. Advancing the live head before the write
 	// succeeds leaves the monitor watching a head the durable record does not
 	// know about, still holding its old review approval, with the revalidation
@@ -679,6 +696,7 @@ func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, headSHA string) (
 	}
 	sctx.Run.HeadSHA = headSHA
 	sctx.Run.ReviewApprovedHeadSHA = nil
+	pipeline.PersistUncertifiedPipelineRange(sctx, startingHead, headSHA)
 	sctx.Log("committed CI repair for revalidation")
 	return ciRepairResult{HeadAdvanced: true, Revalidate: true}, nil
 }
@@ -725,8 +743,8 @@ func (s *CIStep) publishRepair(sctx *pipeline.StepContext, headSHA string) (ciRe
 // Push step (which always runs after this run's review/test/document have
 // already completed).
 //
-// It is a no-op - not an error - when: the provider is not GitHub (only
-// GitHub emits the HTML attestation comment and implements PRContentReader);
+// It is a no-op - not an error - when: the provider has no supported raw
+// content contract;
 // the branch is the configured PR base branch (the PR step never manages a
 // PR there either, see effectivePRBaseBranch); the SCM host is unavailable
 // (matches the PR step's own skip semantics); or no PR exists yet for this
@@ -736,7 +754,7 @@ func (s *CIStep) publishRepair(sctx *pipeline.StepContext, headSHA string) (ciRe
 // not settle) is wrapped in errAttestationWriteFailed and returned.
 func attestHeadBeforePush(sctx *pipeline.StepContext, headSHA string, steps []*db.StepResult) error {
 	provider := resolvedProvider(sctx)
-	if provider != scm.ProviderGitHub {
+	if !supportsPRTemplates(provider) {
 		return nil
 	}
 	branch := strings.TrimPrefix(sctx.Run.Branch, "refs/heads/")
@@ -767,28 +785,37 @@ func attestHeadBeforePush(sctx *pipeline.StepContext, headSHA string, steps []*d
 	if pr == nil {
 		return nil
 	}
-	if err := restampPRAttestationWithSteps(sctx.Ctx, host, pr, headSHA, steps, sctx.Log); err != nil {
+	if err := restampPRAttestationWithSteps(sctx.Ctx, host, pr, headSHA, steps, sctx.Log, attestationPolicyFrom(sctx)); err != nil {
 		return fmt.Errorf("%w: %v", errAttestationWriteFailed, err)
 	}
 	return nil
+}
+
+func attestationPolicyFrom(sctx *pipeline.StepContext) pipelineAttestationPolicy {
+	policy := pipelineAttestationPolicy{}
+	if sctx != nil && sctx.Config != nil {
+		policy.AllowTestCommandOverride = strings.TrimSpace(sctx.Config.Test.AllowApproveOverFailure)
+	}
+	return policy
 }
 
 // restampPRAttestation re-reads the current PR body, rewrites only the live
 // pipeline-attestation marker to newHeadSHA, and writes the body back without
 // sending a title. It does not insert an attestation that was not already
 // there. A host without PRContentReader is skipped with a warning rather than
-// failed: missing-reader is not a settlement miss, and making it fatal parks
-// every non-GitHub publish.
+// failed: missing-reader is not a settlement miss. All currently supported
+// providers have readers; this keeps the optional-interface fallback intact.
 func restampPRAttestation(ctx context.Context, host scm.Host, pr *scm.PR, newHeadSHA string, logfn func(string)) error {
-	return restampPRAttestationWithSteps(ctx, host, pr, newHeadSHA, nil, logfn)
+	return restampPRAttestationWithSteps(ctx, host, pr, newHeadSHA, nil, logfn, pipelineAttestationPolicy{})
 }
 
 // restampPRAttestationWithSteps is restampPRAttestation with an explicit step
-// list. A nil steps keeps whatever statuses the existing attestation already
-// carried (rebindPipelineAttestationWithSteps' nil behavior); a non-nil steps
-// replaces them outright. See attestHeadBeforePush for why a caller picks
-// one over the other.
-func restampPRAttestationWithSteps(ctx context.Context, host scm.Host, pr *scm.PR, newHeadSHA string, steps []*db.StepResult, logfn func(string)) error {
+// list and the current trusted attestation policy. A nil steps keeps whatever
+// statuses the existing attestation already carried; a non-nil steps replaces
+// them outright. allow_test_command_override always comes from policy, never
+// from the previous attestation. See attestHeadBeforePush for why a caller
+// picks one steps argument over the other.
+func restampPRAttestationWithSteps(ctx context.Context, host scm.Host, pr *scm.PR, newHeadSHA string, steps []*db.StepResult, logfn func(string), policy pipelineAttestationPolicy) error {
 	reader, ok := host.(scm.PRContentReader)
 	if !ok || pr == nil {
 		if logfn != nil && !ok {
@@ -801,12 +828,22 @@ func restampPRAttestationWithSteps(ctx context.Context, host scm.Host, pr *scm.P
 	for attempt := 1; attempt <= attempts; attempt++ {
 		content, err := reader.GetPRContent(ctx, pr)
 		if err == nil {
-			updated, rebound := rebindPipelineAttestationWithSteps(content.Body, newHeadSHA, steps)
+			updated, rebound, rebindErr := rebindOwnedPRAttestation(content.Body, newHeadSHA, steps, policy)
+			if rebindErr != nil {
+				return fmt.Errorf("rebind PR appendix: %w", rebindErr)
+			}
+			// Azure's adapter clamps ordinary descriptions. Owned writes must
+			// fail before that boundary can cut off author text or the digest.
+			if rebound && hasPRAppendixMarkers(updated) {
+				if err := validateOwnedPRBudget(updated, scm.MaxPRBodyChars(host.Provider())); err != nil {
+					return err
+				}
+			}
 			if !rebound || updated == content.Body {
 				return nil
 			}
 
-			// UpdatePR replaces the complete body and GitHub offers no atomic
+			// UpdatePR replaces the complete body; this is not an atomic
 			// marker-only edit. Confirm that the body is still the version we
 			// prepared before writing it. If someone edited it meanwhile, retry
 			// from their version instead of overwriting their changes.

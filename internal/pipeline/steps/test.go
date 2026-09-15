@@ -23,6 +23,8 @@ import (
 // TestStep runs baseline tests, gathers evidence for user intent, and optionally asks the agent to fix failures.
 type TestStep struct{}
 
+var _ pipeline.ApprovalOverrideVerifier = (*TestStep)(nil)
+
 func (s *TestStep) Name() types.StepName { return types.StepTest }
 
 func (s *TestStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
@@ -331,8 +333,12 @@ Previous test findings to address:
 		if multiUnit {
 			description = fmt.Sprintf("unit %s: tests failed with exit code %d", unit.Name, exitCode)
 		}
+		// The category is what configuredTestCommandOverrideReason matches on, so
+		// an approval over a failing unit is recorded as an override rather than
+		// reading like a genuinely green completion.
 		baselineFindings = []Finding{{
 			Severity:    types.FindingSeverityError,
+			Category:    types.FindingCategoryTestCommand,
 			Description: description,
 		}}
 		baselineSummary = logConfiguredCommandOutput(sctx, output, types.StepTest)
@@ -481,6 +487,7 @@ Derive the scenarios:
 
 Drive each scenario:
 - Stand the product up the way an end user runs it, in an isolated environment, and drive each scenario end-to-end against that running product.
+- When a live scenario drives a TUI through a pseudo-terminal, give the pty a non-zero window size (TIOCSWINSZ) before the TUI reads its grid, and drain the master. A 0x0 grid makes the TUI exit immediately with a symptom such as "terminal reported a zero-sized grid" and never register, so a live UI check silently becomes a fake. Bare script(1) and pty.fork() from a non-tty parent typically yield that 0x0 grid.
 - Mark a scenario "live": true ONLY when you drove it against the real product in this run. A unit test, a stub, a mock, a recorded fixture, or reading the code is NOT live.
 - When a scenario cannot be driven live here, return it with result "untested" and a reason naming the specific tool, credential, permission, or authority that stopped you, and how to provide it. Never guess a pass, and never mark a scenario live because you believe it would work.
 - Report every scenario in the "scenarios" array with name, result ("pass", "fail", or "untested"), live, evidence, and reason.
@@ -1129,4 +1136,62 @@ func testAgentError(ctx context.Context, timeout time.Duration, prefix string, e
 		return fmt.Errorf("%s: %w", prefix, err)
 	}
 	return nil
+}
+
+// VerifyApprovalOverride implements pipeline.ApprovalOverrideVerifier. It
+// records an explicit override when a human answers ActionApprove on a Test
+// gate that is parked because the configured commands.test exited non-zero,
+// so that completion cannot read as a silent green pass the way a genuinely
+// passing command does. The condition is the parked findings of this step
+// (the command result from this execution), not a re-run. A step with no
+// configured command, or whose command passed and parked for another reason,
+// returns "" so the executor records an ordinary completion.
+func (s *TestStep) VerifyApprovalOverride(sctx *pipeline.StepContext) (string, error) {
+	if sctx == nil {
+		return "could not verify configured test command: step context is not available", nil
+	}
+	if err := sctx.Ctx.Err(); err != nil {
+		return "", err
+	}
+	findings, exitCode, err := parkedTestStepState(sctx)
+	if err != nil {
+		return fmt.Sprintf("could not verify configured test command: %v", err), nil
+	}
+	if exitCode == nil {
+		return "could not verify configured test command: test step exit code is not available", nil
+	}
+	if *exitCode == 0 {
+		return "", nil
+	}
+	return configuredTestCommandOverrideReason(findings), nil
+}
+
+func parkedTestStepState(sctx *pipeline.StepContext) (types.Findings, *int, error) {
+	if sctx.DB == nil || sctx.StepResultID == "" {
+		return types.Findings{}, nil, fmt.Errorf("test step result is not available")
+	}
+	sr, err := sctx.DB.GetStepResult(sctx.StepResultID)
+	if err != nil {
+		return types.Findings{}, nil, err
+	}
+	if sr == nil {
+		return types.Findings{}, nil, fmt.Errorf("test step result is not available")
+	}
+	if sr.FindingsJSON == nil || strings.TrimSpace(*sr.FindingsJSON) == "" {
+		return types.Findings{}, sr.ExitCode, nil
+	}
+	findings, err := types.ParseFindingsJSON(*sr.FindingsJSON)
+	return findings, sr.ExitCode, err
+}
+
+func configuredTestCommandOverrideReason(findings types.Findings) string {
+	for _, item := range findings.Items {
+		if item.Category == types.FindingCategoryTestCommand {
+			if desc := strings.TrimSpace(item.Description); desc != "" {
+				return desc
+			}
+			return "configured test command failed"
+		}
+	}
+	return ""
 }

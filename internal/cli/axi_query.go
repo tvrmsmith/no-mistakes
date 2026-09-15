@@ -204,10 +204,19 @@ func newAxiLogsCmd() *cobra.Command {
 			return runAxiLogs(cmd, step, runID, full)
 		},
 	}
-	cmd.Flags().StringVar(&step, "step", "", "step name: "+stepNameList()+" (required)")
+	cmd.Flags().StringVar(&step, "step", "", "step name: "+stepNameList()+", or a repository gate step name (required)")
 	cmd.Flags().StringVar(&runID, "run", "", "run ID (default: current branch's active or most recent)")
 	cmd.Flags().BoolVar(&full, "full", false, "show the entire log instead of the tail")
 	return cmd
+}
+
+// validLogStepsHelp names every step whose log this command can read. A
+// repository gate keeps its own step log, and the truncation marker a failing
+// command gate emits tells the operator to read it with exactly this command,
+// so the gate names have to be accepted here.
+func validLogStepsHelp() string {
+	return validStepsHelp() + ", " +
+		"or a repository gate step name as shown in `no-mistakes axi status` (for example gate.test.mutation-budget)"
 }
 
 // runAxiLogs renders a step log. It is a read-only query: it does not emit
@@ -216,11 +225,11 @@ func runAxiLogs(cmd *cobra.Command, step, runID string, full bool) error {
 	step = strings.TrimSpace(step)
 	if step == "" {
 		return emitError(cmd, 2, "--step is required",
-			validStepsHelp())
+			validLogStepsHelp())
 	}
-	if !validStep(types.StepName(step)) {
+	if !validReadableStep(types.StepName(step)) {
 		return emitError(cmd, 2, fmt.Sprintf("unknown step %q", step),
-			validStepsHelp())
+			validLogStepsHelp())
 	}
 
 	env, err := openAxiQueryEnv(runID)

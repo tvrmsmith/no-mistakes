@@ -117,7 +117,7 @@ This is a hard failure, not a degraded validation mode.
 
 ### Check PATH
 
-The daemon uses the same binary-discovery order described in [Choosing an Agent](/no-mistakes/guides/agents/). When it's running through a managed service, it reloads `PATH` from your login shell on macOS and Linux and appends common install locations such as `~/.local/bin`, `~/go/bin`, `~/.cargo/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, and `/bin`.
+The daemon uses the same binary-discovery order described in [Choosing an Agent](/no-mistakes/guides/agents/). Its effective `PATH` comes from the startup process described in [Environment the daemon sees](/no-mistakes/reference/environment/#environment-the-daemon-sees).
 
 If a native agent is installed in a version-manager shim directory or another nonstandard location, set an explicit override in `~/.no-mistakes/config.yaml`:
 
@@ -138,7 +138,7 @@ acp_registry_overrides:
 For Antigravity or Gemini-based driving agents, install a supported native agent CLI separately or configure a working ACP target such as `agent: acp:gemini` with `acpx` installed.
 The calling agent is the AXI driver, not an implicit pipeline-agent backend.
 
-The daemon logs its effective `PATH` at startup in `~/.no-mistakes/logs/daemon.log` with the message `daemon environment ready`. If the log contains `login shell environment resolution failed` or `login shell environment resolution returned no entries`, the daemon used a degraded fallback `PATH` that may omit version-manager directories such as nvm, fnm, or volta, so tools like `pnpm` may be missing.
+The daemon logs its effective `PATH` at startup in `~/.no-mistakes/logs/daemon.log` with the message `daemon environment ready`. A `login shell environment resolution failed` or `login shell environment resolution returned no entries` warning means the fallback `PATH` may omit version-manager tools. A `login shell binary is missing` warning means the configured shell was absent and the daemon waited for it. Restart the daemon to pick up a shell that appeared or changed later; reinstalling the service is not a substitute. The [environment reference](/no-mistakes/reference/environment/#environment-the-daemon-sees) owns the retry, fallback, and service bootstrap details.
 
 ### Restart the daemon after installing a new agent
 
@@ -183,6 +183,51 @@ This means the live remote branch changed after the pipeline's last observed hea
 
 Fetch and inspect the configured push target, then rebase or merge the remote work into your branch before pushing through `no-mistakes` again.
 If the overwrite is intentional, push manually to the actual remote after reviewing the commits that would be discarded.
+
+### Push fails with `refusing to allow an OAuth App to create or update workflow ... without workflow scope`
+
+This means the branch touches a `.github/workflows/*.yml` or `*.yaml` file and the push credential (a GitHub OAuth token or PAT stored for the push target's host) lacks the `workflow` scope.
+GitHub rejects the push before the pipeline can open or update the PR.
+
+Resolve it by adding the `workflow` scope to your GitHub credential before pushing through `no-mistakes` again:
+
+```sh
+# If you authenticated gh via OAuth (web browser):
+gh auth refresh -s workflow
+
+# If you authenticated gh with a classic PAT, its scopes are immutable —
+# create a new classic PAT that includes the workflow scope at
+# https://github.com/settings/tokens, then re-authenticate:
+gh auth login --with-token < new-pat.txt
+
+# If you authenticated gh with a fine-grained PAT, its repository
+# permissions are editable — set Workflows to Read and write at
+# https://github.com/settings/personal-access-tokens (the token value
+# stays the same, so no re-authentication is needed).
+
+# Then configure git to use the refreshed credential:
+gh auth setup-git
+```
+
+If your push target's HTTPS remote embeds the PAT in its URL (for example `https://<token>@github.com/...`), `gh auth setup-git` updates only the credential helper — no-mistakes pushes using the token in the remote URL, so that URL must be refreshed too.
+
+no-mistakes keeps its own copy of the push target's URL on the gate's bare repo, so updating the URL in your checkout alone is not enough: re-run `no-mistakes init` afterward so the gate picks up the refreshed URL.
+
+```sh
+git remote set-url origin https://<new-token>@github.com/<owner>/<repo>.git
+no-mistakes init
+```
+
+If you push to a fork (see [GitHub fork contributions](/no-mistakes/guides/provider-integration/#github-fork-contributions)), the fork URL is stored separately and a bare `no-mistakes init` preserves it. Pass the refreshed URL explicitly:
+
+```sh
+no-mistakes init --fork-url https://<new-token>@github.com/<fork-owner>/<repo>.git
+```
+
+Prefer authenticating through the credential helper (`gh auth setup-git`) over embedding a PAT in the URL — a clean URL with no embedded token needs no `init` after a credential refresh.
+
+This only affects branches that modify workflow files.
+A branch that touches no `.github/workflows/*.yml` or `*.yaml` pushes normally with a standard `repo`-scoped token.
 
 ### Rebase pauses because the branch carries unpushed default-branch commits
 

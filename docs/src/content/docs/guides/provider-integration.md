@@ -100,6 +100,11 @@ Re-running `no-mistakes init` later preserves the stored fork URL unless you pas
 Fork routing currently requires both `origin` and `--fork-url` to be GitHub remotes with owner/repo paths.
 GitLab, Forgejo, Bitbucket, and Azure DevOps fork MR/PR routing are not implemented yet; if a legacy or manually edited repo record has `fork_url` set for those providers, PR creation skips instead of opening an unsafe self PR.
 
+#### Workflow-file changes require the `workflow` scope
+
+If your branch touches a `.github/workflows/*.yml` or `*.yaml` file, the push to your fork requires a GitHub credential with the `workflow` scope; GitHub rejects it with `refusing to allow an OAuth App to create or update workflow ... without workflow scope` when the stored token lacks it.
+See [Troubleshooting](/no-mistakes/guides/troubleshooting/#push-fails-with-refusing-to-allow-an-oauth-app-to-create-or-update-workflow--without-workflow-scope) for the recovery steps.
+
 ## GitLab
 
 Install the GitLab CLI and authenticate:
@@ -198,11 +203,11 @@ well as their SSH forms (`git@ssh.dev.azure.com:v3/...`).
 
 **What you get:**
 
-- PR creation and update (`az repos pr create` / `update`); Azure DevOps caps
-  PR descriptions at 4000 characters, so the pipeline builds the body within
-  that budget and applies a final truncation backstop with a visible marker.
+- PR creation and update (`az repos pr create` / `update`).
   See the [PR step reference](/no-mistakes/reference/pipeline-steps/#pr) for
-  section composition and truncation behavior.
+  ordinary description composition and truncation, and
+  [`pr.template`](/no-mistakes/reference/repo-config/#prtemplate) for
+  author-preserving publication and its provider limits.
 - CI status polling - Azure branch policy evaluations (build validation and
   status checks) are read via `az repos pr policy list` until the PR is
   completed, abandoned, or the configured `ci_timeout` idle window elapses
@@ -301,5 +306,5 @@ no-mistakes doctor
 `doctor` checks `gh` and `az` availability. It also validates every configured forge profile, including its provider config, target host, and online authentication. Without profiles, confirm `glab` is installed and authenticated for GitLab. For Forgejo, run `FORGEJO_BASE_URL=<host> forgejo-axi status --json` from the daemon's environment. For Bitbucket Cloud, confirm the two env vars are set in that environment. For Azure DevOps, confirm the `azure-devops` extension is installed (`az extension show --name azure-devops`) and a PAT is available. For Gitea, confirm `tea` is installed and has a login configured for your instance (`tea logins list`).
 
 :::note
-When the daemon runs through a managed service (launchd, systemd, Task Scheduler), it reloads environment from your login shell on macOS and Linux so CLI auth and provider token variables are picked up, and it augments `PATH` with common binary directories. If credentials or PATH-derived tools are missing, check `~/.no-mistakes/logs/daemon.log` for a login-shell environment resolution warning. On Windows it reuses the current process environment.
+Provider CLIs and credentials inherit the daemon's startup environment. If credentials or PATH-derived tools are missing, check `~/.no-mistakes/logs/daemon.log` for a login-shell environment resolution warning, then see [Environment the daemon sees](/no-mistakes/reference/environment/#environment-the-daemon-sees) for the platform-specific resolution and restart behavior.
 :::

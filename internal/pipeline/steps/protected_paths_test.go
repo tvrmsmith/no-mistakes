@@ -188,7 +188,9 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 			select {
 			case err = <-done:
 				done <- err
-			case <-time.After(15 * time.Second):
+			// Rebased repairs run Review, Test, attestation, and Push before
+			// monitoring resumes. Allow for Windows Git process startup costs.
+			case <-time.After(60 * time.Second):
 				t.Fatal("explicit retry did not finish")
 			}
 			local, remote := f.localHead(t), f.remoteHead(t)
@@ -254,7 +256,7 @@ func persistCIRefusal(t *testing.T, f *ciRepairFixture, outcome *pipeline.StepOu
 	if _, err := f.sctx.DB.InsertStepRound(f.sctx.StepResultID, len(rounds)+1, "initial", &outcome.Findings, nil, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.sctx.DB.ParkStepForApproval(f.sctx.Run.ID, f.sctx.StepResultID, types.StepStatusAwaitingApproval, 1, &outcome.Findings); err != nil {
+	if err := f.sctx.DB.ParkStepForApproval(f.sctx.Run.ID, f.sctx.StepResultID, types.StepStatusAwaitingApproval, outcome.ExitCode, 1, &outcome.Findings); err != nil {
 		t.Fatal(err)
 	}
 }

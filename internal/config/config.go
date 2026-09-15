@@ -99,6 +99,21 @@ const (
 	// show that - every merge-conflict repair, since a rebase rewrites the
 	// head - revalidates from Format instead. See CI.RevalidateRepairs.
 	DefaultCIRevalidateRepairs = false
+	// RebaseStrategyRebase replays the branch on top of the moved base. It is
+	// the historical behavior and the default.
+	RebaseStrategyRebase = "rebase"
+	// RebaseStrategyMerge integrates the moved base with a merge commit whose
+	// first parent is the branch head the pipeline reviewed.
+	RebaseStrategyMerge = "merge"
+	// DefaultRebaseStrategy is how the rebase step integrates a base branch
+	// that moved under the gated branch when rebase.strategy is unset.
+	//
+	// It is "rebase" because that is what every existing installation already
+	// does: the merge shape changes the commits a run publishes, so it is an
+	// explicit opt-in rather than something a version bump turns on under a
+	// repository that never asked for it. See Rebase.Strategy for what the
+	// merge shape buys.
+	DefaultRebaseStrategy = RebaseStrategyRebase
 	// DefaultEvalMaxCases caps the auto-captured local eval corpus. Cases
 	// share one object pool per repository, so the marginal cost of a case is
 	// its JSON records plus the objects its commits actually introduced, not a
@@ -189,8 +204,11 @@ type GlobalConfig struct {
 	// budget can be set for a repository whose default branch this machine's
 	// user does not control (the common case when contributing to someone
 	// else's project), and a trusted repo value still wins over it.
-	CI     CIRaw
-	Commit CommitRaw
+	CI CIRaw
+	// Rebase is the operator's own rebase-step default. A trusted repo
+	// value still wins over it.
+	Rebase RebaseRaw
+	Commit GlobalCommitRaw
 	Intent IntentRaw
 	Test   TestRaw
 	// Eval is resolved at load time because it is global-only: it describes
@@ -264,7 +282,8 @@ type globalConfigRaw struct {
 	SignCommits             *bool                      `yaml:"sign_commits"`
 	AutoFix                 AutoFixRaw                 `yaml:"auto_fix"`
 	CI                      CIRaw                      `yaml:"ci"`
-	Commit                  CommitRaw                  `yaml:"commit"`
+	Rebase                  RebaseRaw                  `yaml:"rebase"`
+	Commit                  GlobalCommitRaw            `yaml:"commit"`
 	Intent                  IntentRaw                  `yaml:"intent"`
 	Test                    TestRaw                    `yaml:"test"`
 	Eval                    EvalRaw                    `yaml:"eval"`
@@ -323,12 +342,19 @@ type RepoConfig struct {
 	SkipSteps []types.StepName `yaml:"skip_steps"`
 	AutoFix   AutoFixRaw       `yaml:"auto_fix"`
 	CI        CIRaw            `yaml:"ci"`
-	Commit    CommitRaw        `yaml:"commit"`
-	Intent    IntentRaw        `yaml:"intent"`
-	Test      TestRaw          `yaml:"test"`
-	// PR carries pull-request routing settings. BaseBranch controls where a PR
-	// lands, so EffectiveRepoConfig treats it as trusted-only unless the
-	// repository explicitly opts into pushed settings.
+	// Rebase is gate-control: EffectiveRepoConfig keeps it trusted-only so a
+	// pushed branch cannot opt its own integration out of the shape the
+	// maintainer chose.
+	Rebase RebaseRaw `yaml:"rebase"`
+	Commit CommitRaw `yaml:"commit"`
+	Intent IntentRaw `yaml:"intent"`
+	Test   TestRaw   `yaml:"test"`
+	// PR carries pull-request settings. BaseBranch controls where a PR lands,
+	// Template and PublishIntent control trusted publication policy, and
+	// TitleFormat controls repository title convention. EffectiveRepoConfig keeps
+	// BaseBranch trusted-only unless the repository opts into pushed settings,
+	// leaves TitleFormat on the pushed branch, and keeps Template and
+	// PublishIntent trusted-only.
 	PR PRRaw `yaml:"pr"`
 	// Providers carries provider-specific settings. Repo values overlay the
 	// global ones field by field. Every field is opt-in and defaults false, and
@@ -348,6 +374,18 @@ type RepoConfig struct {
 	// pushed branch must not be able to inject or weaken the guidance that
 	// reviews it.
 	Review ReviewRaw `yaml:"review"`
+	// Gates are repository-declared extra checks that run immediately after
+	// their anchor core step. They are additive only: a gate cannot skip,
+	// reorder, or replace a core step, and a failing gate parks for an operator
+	// decision.
+	// A gate executes shell on the daemon host, so it is honored ONLY from the
+	// trusted default-branch copy of .no-mistakes.yaml (see
+	// EffectiveRepoConfig), regardless of
+	// allow_repo_commands: unlike commands.{test,lint,format}, which a
+	// maintainer can opt into reading from a pushed branch because they only
+	// re-run that branch's own suite, a gate defines what validating the branch
+	// MEANS, and a contributor must not author the check that clears them.
+	Gates []Gate `yaml:"gates"`
 	// DisableProjectSettings opts the repository out of loading project-level
 	// agent settings/instructions (AGENTS.md/CLAUDE.md and the equivalent
 	// per-harness project settings) into gate agents. It exists for
@@ -469,6 +507,13 @@ type PRRaw struct {
 	// repository explicitly opts into pushed-branch settings with
 	// allow_repo_commands.
 	BaseBranch string `yaml:"base_branch"`
+	// Template and PublishIntent are repository-only publication policy. Both
+	// remain trusted-only even when allow_repo_commands is enabled.
+	Template      string `yaml:"template"`
+	PublishIntent *bool  `yaml:"publish_intent"`
+	// TitleFormat controls PR title rendering when set. It is a non-executing
+	// repository convention and is therefore read from the pushed branch.
+	TitleFormat *string `yaml:"title_format"`
 }
 
 // PathInstruction is one glob-scoped block of review guidance. Path follows the
@@ -589,12 +634,14 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 		SkipSteps              []types.StepName `yaml:"skip_steps"`
 		AutoFix                AutoFixRaw       `yaml:"auto_fix"`
 		CI                     CIRaw            `yaml:"ci"`
+		Rebase                 RebaseRaw        `yaml:"rebase"`
 		Commit                 CommitRaw        `yaml:"commit"`
 		Intent                 IntentRaw        `yaml:"intent"`
 		Test                   TestRaw          `yaml:"test"`
 		PR                     PRRaw            `yaml:"pr"`
 		Document               DocumentRaw      `yaml:"document"`
 		Review                 ReviewRaw        `yaml:"review"`
+		Gates                  []Gate           `yaml:"gates"`
 		DisableProjectSettings bool             `yaml:"disable_project_settings"`
 		NoCI                   bool             `yaml:"no_ci"`
 		Restart                RestartRaw       `yaml:"restart"`
@@ -614,12 +661,14 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.SkipSteps = raw.SkipSteps
 	c.AutoFix = raw.AutoFix
 	c.CI = raw.CI
+	c.Rebase = raw.Rebase
 	c.Commit = raw.Commit
 	c.Intent = raw.Intent
 	c.Test = raw.Test
 	c.PR = raw.PR
 	c.Document = raw.Document
 	c.Review = raw.Review
+	c.Gates = raw.Gates
 	c.DisableProjectSettings = raw.DisableProjectSettings
 	c.NoCI = raw.NoCI
 	c.Restart = raw.Restart
@@ -704,6 +753,38 @@ type CI struct {
 	RevalidateRepairs bool
 }
 
+// RebaseRaw is the YAML representation of rebase-step settings.
+type RebaseRaw struct {
+	Strategy string `yaml:"strategy"`
+}
+
+// Rebase holds the resolved rebase-step settings.
+type Rebase struct {
+	// Strategy selects how the rebase step integrates a base branch that moved
+	// under the gated branch.
+	//
+	// "rebase" (default): replay the branch's commits on top of the new base.
+	// Every branch commit is rewritten, so the reviewed head no longer exists
+	// on the branch, publication needs a force push that rewrites an open PR's
+	// head, and the resolution of any conflict leaves no evidence behind - the
+	// result is just commits, with nothing to compare the two sides against.
+	//
+	// "merge": integrate the base with a `git merge --no-ff` commit whose FIRST
+	// parent is the head the pipeline reviewed. Three things follow. The
+	// reviewed head stays an ancestor, so the CI step's continuity rule
+	// (see CI.RevalidateRepairs) is satisfied by ancestry rather than by a
+	// content guess. Publication is a fast-forward, so an open PR's head is
+	// appended to rather than rewritten and a review attestation bound to an
+	// exact SHA survives. And the merge commit keeps both parents, so whether a
+	// conflict resolution deleted content one side introduced stays decidable
+	// afterwards, by anything, from outside the pipeline. The conflict
+	// resolver is told to resolve additively to match.
+	//
+	// The cost is a merge commit per integration. On a squash-merged default
+	// branch they never reach it; on a merge-committed one they do.
+	Strategy string
+}
+
 // AutoFix holds resolved per-step auto-fix attempt limits.
 // A value of 0 means auto-fix is disabled (requires manual approval).
 type AutoFix struct {
@@ -747,7 +828,11 @@ type Config struct {
 	SessionReuse          bool
 	Eval                  Eval
 	Commands              Commands
-	IgnorePatterns        []string
+	// Gates are the repository's extra checks, already trusted-only by the
+	// time they reach here (EffectiveRepoConfig sourced them from the trusted
+	// default-branch copy).
+	Gates          []Gate
+	IgnorePatterns []string
 	// TrustedIgnorePatterns is the default-branch copy of IgnorePatterns. Read
 	// it, not IgnorePatterns, when an ignore entry exempts a changed file from
 	// a gate rather than merely narrowing the run's scope.
@@ -755,6 +840,7 @@ type Config struct {
 	ProtectedPaths        []string
 	AutoFix               AutoFix
 	CI                    CI
+	Rebase                Rebase
 	Commit                Commit
 	Intent                Intent
 	Test                  Test
@@ -882,6 +968,10 @@ type AzureDevOpsProvider struct {
 // PR is the resolved pull-request configuration.
 type PR struct {
 	BaseBranch string
+	Template   string
+	// Nil preserves the historical default: publish the extracted intent.
+	PublishIntent *bool
+	TitleFormat   string
 }
 
 // Document is the resolved document-step config. Instructions come from the
@@ -919,6 +1009,15 @@ type TestRaw struct {
 	// EffectiveRepoConfig): a contributor's pushed branch must not be able to
 	// rewrite the runbook the agent that validates it follows.
 	Instructions string `yaml:"instructions"`
+	// AllowApproveOverFailure is the recorded reason that opts this
+	// repository into letting require-no-mistakes accept a Test step that
+	// was approved over a failing configured commands.test. Empty (the default)
+	// is off: an approved-over-failure test step is non-compliant. A non-empty
+	// value is the opt-in and the reason the required check can see. It is
+	// honored ONLY from the trusted default-branch copy of .no-mistakes.yaml
+	// (see EffectiveRepoConfig): a contributor's pushed branch must not be able
+	// to waive the configured-test gate that validates it.
+	AllowApproveOverFailure string `yaml:"allow_approve_over_failure"`
 }
 
 // TestUnit is one independently testable part of a repository: a service in a
@@ -1005,14 +1104,16 @@ type EvidenceRaw struct {
 	MaxRuns   *int    `yaml:"max_runs"`
 }
 
-// Test is the resolved test-step config. Instructions comes from the trusted
-// default-branch repo config only (see TestRaw).
+// Test is the resolved test-step config. Instructions and
+// AllowApproveOverFailure come from the trusted default-branch repo config
+// only (see TestRaw).
 type Test struct {
 	Evidence Evidence
 	// Units lists the repository's independently testable units, sourced
 	// per TestUnit's trust rules. Nil means no unit layout is configured.
-	Units        []TestUnit
-	Instructions string
+	Units                   []TestUnit
+	Instructions            string
+	AllowApproveOverFailure string
 }
 
 // Evidence is the resolved test-evidence config. When StoreInRepo is true, the
@@ -1330,7 +1431,7 @@ ci:
   # Whether EVERY CI repair must re-pass the whole pipeline before it is
   # published, or only the ones whose continuity with the reviewed head cannot
   # be proven. Defaults to false: a repair that descends from the reviewed head
-  # is published through the same guarded force-push path the Push step uses and
+  # is published through the same guarded push path the Push step uses and
   # CI keeps monitoring, so one repair costs one agent round. A repair that
   # cannot show that ancestry revalidates from Format anyway - a merge-conflict
   # repair always does, because rebasing rewrites the head. Set true to restart
@@ -1348,10 +1449,17 @@ ci:
 review:
   narrow_after_round: 2
 
-# Auto-fix commit subject template. Available variables: {{.Step}} and {{.Summary}}.
-# Repo config may override this value.
+# Auto-fix commit subject template. Available variables: {{.Step}}, {{.Summary}}, and {{.Branch}}.
+# {{.Branch}} is the normalized branch name, or the only capture group from
+# branch_pattern when configured. A branch pattern with no match fails safely.
+# Global-only branch_replacement can add literal text around that group with ${1}.
+# Repo config may override fix_message and branch_pattern.
 # commit:
+#   branch_pattern: '^PROJ/([0-9]+)$'
+#   branch_replacement: 'PROJ-${1}'
 #   fix_message: "no-mistakes({{.Step}}): {{.Summary}}"
+# To use the captured identifier in the subject, replace fix_message with:
+#   fix_message: "{{.Branch}}: {{.Summary}}"
 
 # User-intent extraction. When you push a branch, no-mistakes can read recent
 # transcripts from your local agent (Claude Code, Codex, OpenCode, Rovo Dev, Pi,
@@ -2234,13 +2342,16 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
-	if err := validateCommitRaw(raw.Commit); err != nil {
+	if err := validateGlobalCommitRaw(raw.Commit); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
 	if err := validateTestRaw(raw.Test); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
 	if err := validateEvalRaw(raw.Eval); err != nil {
+		return nil, fmt.Errorf("parse global config: %w", err)
+	}
+	if err := validateRebaseRaw(raw.Rebase); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
 
@@ -2375,6 +2486,7 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	}
 	cfg.AutoFix = raw.AutoFix
 	cfg.CI = raw.CI
+	cfg.Rebase = raw.Rebase
 	cfg.Commit = raw.Commit
 	cfg.Intent = raw.Intent
 	cfg.Test = raw.Test
@@ -2528,6 +2640,12 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
 	cfg.SkipSteps = skipSteps
+	if err := validateGates(cfg.Gates); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
+	if err := validateRebaseRaw(cfg.Rebase); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	cfg.PR.BaseBranch = strings.TrimSpace(cfg.PR.BaseBranch)
 	if err := validatePRRaw(cfg.PR); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
@@ -2545,11 +2663,18 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 // back to the repository's forge default branch" and is intentionally not
 // normalized to any particular name here.
 func validatePRRaw(pr PRRaw) error {
-	if pr.BaseBranch == "" {
-		return nil
+	if pr.BaseBranch != "" {
+		if _, err := evidence.NormalizeBranch(pr.BaseBranch); err != nil {
+			return fmt.Errorf("pr.base_branch: %w", err)
+		}
 	}
-	if _, err := evidence.NormalizeBranch(pr.BaseBranch); err != nil {
-		return fmt.Errorf("pr.base_branch: %w", err)
+	if err := ValidatePRTemplatePath(pr.Template); err != nil {
+		return err
+	}
+	if pr.TitleFormat != nil {
+		if err := validatePRTitleFormat(*pr.TitleFormat); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2710,7 +2835,9 @@ func validateMetricsRaw(metrics MetricsRaw) error {
 // trusted-only for the same reason: a pushed branch must not weaken the
 // documentation rules that gate itself. Review (the path-scoped guidance
 // injected into the review gate prompt) is trusted-only for the same reason: a
-// pushed branch must not steer the reviewer that gates it. DisableProjectSettings
+// pushed branch must not steer the reviewer that gates it. Gates (extra
+// repository-declared shell checks) are trusted-only for the same reason.
+// DisableProjectSettings
 // is also trusted-only so a pushed branch cannot enable or defeat the gate-agent
 // project-instruction boundary. NoCI is trusted-only so a pushed branch cannot
 // self-declare no-CI and bypass its own checks, and CI (the transient-rerun
@@ -2720,7 +2847,8 @@ func validateMetricsRaw(metrics MetricsRaw) error {
 // validation) is trusted-only for the same reason as auto_fix.min_severity: it
 // is a gate strength, and widening it to "**" would disable the restart rule
 // for a pushed branch's own commits. These gate-control
-// fields ignore allowRepoCommands. PR is the explicit exception: the
+// fields ignore allowRepoCommands, as do pr.template and pr.publish_intent.
+// PR.BaseBranch is the explicit exception: the
 // allowRepoCommands opt-in also permits a pushed PR target because it controls
 // where a maintainer-authorized PR lands, not code execution.
 // When allowRepoCommands is
@@ -2733,16 +2861,18 @@ func validateMetricsRaw(metrics MetricsRaw) error {
 // branch - this blocks the supply-chain vector for repos that ship
 // .no-mistakes.yaml only on feature branches.
 //
-// Non-executing fields (ignore patterns, auto-fix, commit, intent, test, and
-// providers) are always taken from the pushed copy, matching prior behavior,
+// Non-executing fields (ignore patterns, auto-fix, commit, intent, test,
+// PR title format, and providers) are always taken from the pushed copy, matching prior behavior,
 // since they cannot run arbitrary shell, select a process, or spend the
-// maintainer's CI minutes. Four exceptions live inside them.
+// maintainer's CI minutes. Five exceptions live inside them.
 // test.evidence.branch names a git ref the daemon pushes to,
-// test.instructions steers the gate that validates the pushed branch, and
-// auto_fix.min_severity is a gate strength rather than an effort bound; all
-// three are trusted-only unconditionally. test.units is the fourth and
-// behaves differently: it runs shell with the maintainer's credentials, so it
-// follows Commands and Agent below, including their allowRepoCommands opt-in.
+// test.instructions steers the gate that validates the pushed branch,
+// test.allow_approve_over_failure waives the required check for an
+// approved-over-failure commands.test, and auto_fix.min_severity is a gate
+// strength rather than an effort bound; all four are trusted-only
+// unconditionally. test.units is the fifth and behaves differently: it runs
+// shell with the maintainer's credentials, so it follows Commands and Agent
+// below, including their allowRepoCommands opt-in.
 func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
 	if pushed == nil {
 		pushed = &RepoConfig{}
@@ -2758,6 +2888,13 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// must not silently drop the maintainer's review rules when the pushed
 		// branch happens to carry no review block.
 		effective.Review = trusted.Review
+		// gates define what validating the pushed branch means - they execute
+		// shell on the daemon host - so they are
+		// trusted-only for exactly the reason review.path_instructions is, and
+		// likewise regardless of allow_repo_commands: that opt-in covers a
+		// branch re-running its own suite, never a branch authoring the extra
+		// check that clears it.
+		effective.Gates = copyGates(trusted.Gates)
 		// disable_project_settings is a security boundary: honor it ONLY from the
 		// trusted default-branch copy so a pushed branch cannot turn the opt-out
 		// off (and re-enable its own AGENTS.md) or on. A nil trusted copy here
@@ -2777,6 +2914,14 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// before it is published, so a pushed branch must not be able to turn
 		// the maintainer's revalidation requirement off for its own repairs.
 		effective.CI = trusted.CI
+		// rebase.strategy is gate-control in the same sense no_ci is. It decides
+		// whether integrating a moved base leaves an auditable merge commit
+		// behind - two parents a resolution can be checked against afterwards -
+		// or rewrites the branch and leaves nothing. A pushed branch must not be
+		// able to opt its own integration out of the shape the maintainer chose,
+		// in either direction, so it is trusted-only regardless of
+		// allow_repo_commands.
+		effective.Rebase = trusted.Rebase
 		// test.evidence.branch names the git ref evidence commits are pushed
 		// to with the maintainer's credentials. It is trusted-only so a pushed
 		// branch cannot aim them at another branch of the repository; the rest
@@ -2826,19 +2971,31 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// must not be able to rewrite or weaken the guidance that steers the
 		// gate validating their own branch.
 		effective.Test.Instructions = trusted.Test.Instructions
+		// test.allow_approve_over_failure opts the required check into
+		// accepting a Test step approved over a failing commands.test. It is
+		// trusted-only for the same reason no_ci is: a pushed branch must not
+		// waive the gate that certifies it.
+		effective.Test.AllowApproveOverFailure = trusted.Test.AllowApproveOverFailure
 		// pr.base_branch controls where the contributor's PR lands, so it is
 		// trusted-only unless the repository explicitly opts into pushed
-		// settings alongside commands and agent selection.
+		// settings alongside commands and agent selection. TitleFormat is a
+		// non-executing convention and remains sourced from the pushed copy.
+		// pr.template and pr.publish_intent control public narrative policy, so
+		// they remain trusted-only regardless of the commands opt-in.
 		if !allowRepoCommands {
-			effective.PR = trusted.PR
+			effective.PR.BaseBranch = trusted.PR.BaseBranch
 		}
+		effective.PR.Template = trusted.PR.Template
+		effective.PR.PublishIntent = trusted.PR.PublishIntent
 	} else {
 		effective.Document = DocumentRaw{}
 		effective.ProtectedPaths = nil
 		effective.Review = ReviewRaw{}
+		effective.Gates = nil
 		effective.DisableProjectSettings = false
 		effective.NoCI = false
 		effective.CI = CIRaw{}
+		effective.Rebase = RebaseRaw{}
 		effective.Test.Evidence.Branch = nil
 		effective.AutoFix.MinSeverity = nil
 		effective.SkipSteps = nil
@@ -2846,9 +3003,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.Metrics = MetricsRaw{}
 		effective.TrustedIgnorePatterns = nil
 		effective.Test.Instructions = ""
+		effective.Test.AllowApproveOverFailure = ""
 		if !allowRepoCommands {
-			effective.PR = PRRaw{}
+			effective.PR.BaseBranch = ""
 		}
+		effective.PR.Template = ""
+		effective.PR.PublishIntent = nil
 	}
 	if allowRepoCommands {
 		return &effective
@@ -3257,6 +3417,32 @@ func ciDefaults() CI {
 	}
 }
 
+// rebaseDefaults returns the default rebase-step settings.
+func rebaseDefaults() Rebase {
+	return Rebase{Strategy: DefaultRebaseStrategy}
+}
+
+// applyRebaseOverrides applies a raw strategy onto resolved defaults.
+// The value was already validated at parse time, so an unrecognized one cannot
+// reach here; an empty string is treated as "not set" so a repository can
+// comment the key out without inventing a third meaning.
+func applyRebaseOverrides(dst *Rebase, src *RebaseRaw) {
+	if v := strings.TrimSpace(src.Strategy); v != "" {
+		dst.Strategy = v
+	}
+}
+
+// validateRebaseRaw fails the config closed on an unrecognized rebase.strategy.
+// Silently falling back to the default would let a typo ("merges") quietly keep
+// rewriting history a maintainer asked to stop rewriting.
+func validateRebaseRaw(r RebaseRaw) error {
+	switch strings.TrimSpace(r.Strategy) {
+	case "", RebaseStrategyRebase, RebaseStrategyMerge:
+		return nil
+	}
+	return fmt.Errorf("rebase.strategy: %q is not a valid strategy (want %q or %q)", r.Strategy, RebaseStrategyRebase, RebaseStrategyMerge)
+}
+
 // applyCIOverrides applies non-nil raw values onto resolved defaults, clamping
 // the rerun budget into range: a negative value disables reruns rather than
 // inverting the bound, and anything above MaxCIRerunTransient is capped so a
@@ -3348,6 +3534,13 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	applyCIOverrides(&ci, &global.CI)
 	applyCIOverrides(&ci, &repo.CI)
 
+	// The repo value is trusted-only (EffectiveRepoConfig sourced it from the
+	// default branch), so a maintainer's chosen integration shape survives a
+	// pushed branch and still overrides the operator's machine-wide default.
+	rebase := rebaseDefaults()
+	applyRebaseOverrides(&rebase, &global.Rebase)
+	applyRebaseOverrides(&rebase, &repo.Rebase)
+
 	intent := intentDefaults()
 	applyIntentOverrides(&intent, &global.Intent)
 	applyIntentOverrides(&intent, &repo.Intent)
@@ -3364,6 +3557,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	// to describe. repo here is the EffectiveRepoConfig result, so this value
 	// is already trusted-only.
 	test.Instructions = strings.TrimSpace(repo.Test.Instructions)
+	test.AllowApproveOverFailure = strings.TrimSpace(repo.Test.AllowApproveOverFailure)
 
 	// Global-only on purpose: review breadth is a gate strength, so a pushed
 	// branch must not be able to narrow the review of its own change.
@@ -3399,13 +3593,32 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	if global.Commit.FixMessage != nil {
 		commit.FixMessage = *global.Commit.FixMessage
 	}
+	if global.Commit.BranchPattern != nil {
+		commit.BranchPattern = *global.Commit.BranchPattern
+	}
+	if global.Commit.BranchReplacement != nil {
+		commit.BranchReplacement = *global.Commit.BranchReplacement
+	}
 	if repo.Commit.FixMessage != nil {
 		commit.FixMessage = *repo.Commit.FixMessage
+	}
+	if repo.Commit.BranchPattern != nil {
+		commit.BranchPattern = *repo.Commit.BranchPattern
+		commit.BranchReplacement = ""
 	}
 
 	providers := Providers{}
 	applyProvidersOverrides(&providers, &global.Providers)
 	applyProvidersOverrides(&providers, &repo.Providers)
+
+	pr := PR{
+		BaseBranch:    strings.TrimSpace(repo.PR.BaseBranch),
+		Template:      repo.PR.Template,
+		PublishIntent: repo.PR.PublishIntent,
+	}
+	if repo.PR.TitleFormat != nil {
+		pr.TitleFormat = *repo.PR.TitleFormat
+	}
 
 	cfg := &Config{
 		Agent:                 global.Agent,
@@ -3431,18 +3644,20 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Eval:                  global.Eval,
 		SCM:                   global.SCM,
 		Commands:              repo.Commands,
+		Gates:                 copyGates(repo.Gates),
 		IgnorePatterns:        repo.IgnorePatterns,
 		TrustedIgnorePatterns: repo.TrustedIgnorePatterns,
 		ProtectedPaths:        repo.ProtectedPaths,
 		AutoFix:               af,
 		CI:                    ci,
+		Rebase:                rebase,
 		Commit:                commit,
 		Intent:                intent,
 		Test:                  test,
 		Document:              Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
 		Review:                review,
 		SignCommits:           global.SignCommits,
-		PR:                    PR{BaseBranch: strings.TrimSpace(repo.PR.BaseBranch)},
+		PR:                    pr,
 		ForgeProfiles:         global.ForgeProfiles,
 		Providers:             providers,
 		// repo is the EffectiveRepoConfig result, so this value is already

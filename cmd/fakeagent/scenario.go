@@ -49,6 +49,15 @@ type Action struct {
 	// Stage lists paths to git-add after edits are applied.
 	Stage []string `yaml:"stage,omitempty"`
 
+	// Git runs git invocations in CWD after edits and staging, each entry the
+	// argument list for one `git` call. File edits alone cannot express HOW an
+	// agent ended an in-progress operation, which is exactly what the rebase
+	// step's merge-shape guard judges: concluding a merge with
+	// `git commit --no-edit`, abandoning it with `git merge --abort`, or
+	// replacing it with a rebase are three different histories from the same
+	// resolved files. A scenario needs to be able to produce each one.
+	Git [][]string `yaml:"git,omitempty"`
+
 	// DelayMS pauses before responding, for e2e tests that need an observable active run.
 	DelayMS int `yaml:"delay_ms,omitempty"`
 }
@@ -196,7 +205,30 @@ func applyActionInDir(wd string, action Action) error {
 	if err := applyEditsInDir(wd, action.Edits); err != nil {
 		return err
 	}
-	return stageFilesInDir(wd, action.Stage)
+	if err := stageFilesInDir(wd, action.Stage); err != nil {
+		return err
+	}
+	return runGitInDir(wd, action.Git)
+}
+
+// runGitInDir runs each scenario git invocation in wd. A failure is returned
+// rather than logged: a scenario that says "conclude the merge" and silently
+// did not would make the pipeline's own guard look like the thing under test.
+func runGitInDir(wd string, invocations [][]string) error {
+	for _, args := range invocations {
+		if len(args) == 0 {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = wd
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err != nil {
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	return nil
 }
 
 func applyEditsInDir(wd string, edits []Edit) error {

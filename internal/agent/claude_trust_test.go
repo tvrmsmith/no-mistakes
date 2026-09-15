@@ -356,8 +356,10 @@ func TestClaudeAgent_NonBitingWarningIsReportedOnTheParseErrorPath(t *testing.T)
 
 	res, err := a.runOnce(ctx, opts)
 
-	if res != nil {
-		t.Fatalf("result = %+v, want nil for an interrupted stream", res)
+	// An interrupted stream still reports the tokens it already spent, so the
+	// result is usage-only rather than nil; it must carry no turn output.
+	if res != nil && (len(res.Output) > 0 || res.Text != "") {
+		t.Fatalf("result = %+v, want at most reported usage for an interrupted stream", res)
 	}
 	if err == nil {
 		t.Fatal("expected the interrupted event stream to fail")

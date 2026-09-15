@@ -3,7 +3,7 @@ title: Pipeline
 description: The eleven steps that run on every gated push.
 ---
 
-The pipeline runs a fixed, opinionated sequence of steps. Order is not configurable. What each step runs *is*.
+The pipeline has a fixed, opinionated sequence of nine core steps. Their order is not configurable. What each core step runs is.
 
 ```
 intent → rebase → format → lint → test → metrics → document → review → push → pr → ci
@@ -23,12 +23,15 @@ flowchart LR
 
 This page is the overview. For each step's exact behavior, defaults, skip rules, and fix-commit format, see [Pipeline Steps](/no-mistakes/reference/pipeline-steps/).
 
+A repository can add to this sequence but never subtract from it: [`gates`](/no-mistakes/reference/repo-config/#gates) declares extra checks that run immediately after a core step, and nothing there can skip, reorder, or replace one.
+
 ## What a passed gate means
 
 The pipeline is opinionated so that "passed the gate" has a stable meaning:
 
 - the branch was checked against fresh remote upstream and the pushed-branch target first
 - format, lint, tests, the metrics gate when configured, user-facing test evidence when available, docs, and review happened before any branch push to the configured target
+- every repository-declared gate ran at its configured point before Push, unless the operator explicitly skipped it after a failure
 - the human stayed in control when a step needed judgment
 - the final branch update was guarded against discarding unincorporated commits already on the push target
 - push, PR creation, and CI monitoring only happened after the local gate was satisfied
@@ -63,11 +66,11 @@ The pipeline is opinionated so that "passed the gate" has a stable meaning:
   A later run's initial review also receives fix-round provenance for any uncertified pipeline-authored commits left on the branch when a previous run's re-review did not complete.
 - **Push → PR → CI** happens after all local checks pass.
   CI publishes a repair through the Push step's guarded path and keeps monitoring only when it can prove the repair descends from the reviewed head; otherwise the repair revalidates from Format before Push republishes it, which is what a merge-conflict repair always does. [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs) sets that intent: `false` (default) publishes when it is provable, `true` revalidates every repair.
-  CI is the only step that talks to the outside world for validation.
+  CI owns remote validation after publication. A repository gate command still runs before Push, although the command itself may contact an external service.
 
-## What each step can do
+## What core steps can do
 
-Every step can:
+Core steps use these outcomes as applicable:
 
 - **Complete** cleanly and advance the pipeline.
 - **Return findings** with severity (`error`, `warning`, `info`) and an action (`auto-fix`, `ask-user`, `no-op`).
@@ -89,6 +92,7 @@ You can't reorder steps. You *can*:
 - Control auto-fix limits per step.
 - Ignore paths during review and documentation checks.
 - Disable or tune transcript-based intent extraction when intent is not supplied directly.
+- Add repository gates after selected core steps.
 - Skip steps for one run with `no-mistakes --skip <steps>`, `git push -o no-mistakes.skip=<steps>`, `no-mistakes axi run --skip <steps>`, or from the TUI.
 
 See [Configuration](/no-mistakes/guides/configuration/).
@@ -97,6 +101,6 @@ See [Configuration](/no-mistakes/guides/configuration/).
 
 - The step order.
 - Skipping specific steps permanently - per-run skips are allowed, but the pipeline itself always has all eleven.
-- Adding new steps.
+- Removing or replacing a core step. A repository can add extra [`gates`](/no-mistakes/reference/repo-config/#gates) after one, which only ever adds to what a pass means.
 
-This is intentional. The pipeline is opinionated so that "passed the gate" means the same thing across repos.
+This is intentional. A pass has the same core guarantees across repositories, and repository gates can add guarantees without removing any of them.

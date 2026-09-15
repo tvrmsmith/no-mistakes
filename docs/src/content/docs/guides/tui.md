@@ -77,6 +77,7 @@ Step status icons:
 | `✗` | Failed |
 
 Completed steps show their duration.
+Configured repository gates appear immediately after their anchor under names such as `gate.test.mutation-budget`.
 Steps with fixed findings, and steps currently fixing reported findings, show a right-aligned count such as `2/3 fixed` or `0/3 fixed`.
 The first number counts completed fixes, not findings selected for an in-progress fix.
 Connectors (`│`) between steps are hidden when the terminal height is under 30 lines.

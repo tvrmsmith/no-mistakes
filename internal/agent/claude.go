@@ -371,7 +371,7 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 			retErr = fmt.Errorf("claude parse events: %w: %s", err, detail)
 		}
 		emitAgentExited(opts, "claude", pid, retErr)
-		return nil, retErr
+		return resultFromUsage(usage), retErr
 	}
 
 	waitErr := started.wait()
@@ -392,13 +392,13 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	if waitErr != nil {
 		retErr := claudeExitError(waitErr, stderrBuf, &stream)
 		emitAgentExited(opts, "claude", pid, retErr)
-		return nil, retErr
+		return resultFromUsage(usage), retErr
 	}
 
 	if result == nil {
 		retErr := errors.New(withClaudeStreamDetail("claude returned no result event", &stream))
 		emitAgentExited(opts, "claude", pid, retErr)
-		return nil, retErr
+		return resultFromUsage(usage), retErr
 	}
 
 	res, err := finalizeClaudeResult(result, opts.JSONSchema, usage, &stream)
@@ -435,12 +435,13 @@ func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage To
 		// return carries the stream diagnostics exactly like the parse-error,
 		// wait-error, and no-result paths. Without them the error names no
 		// cause classifyTransient can recognize, and a recoverable stall fails
-		// the run instead of spending a retry.
-		return nil, errors.New(withClaudeStreamDetail(
+		// the run instead of spending a retry. The usage collected so far still
+		// rides along, so a failed turn reports honest token counts.
+		return resultFromUsage(usage), errors.New(withClaudeStreamDetail(
 			fmt.Sprintf("claude error: subtype=%s", result.Subtype), stream))
 	}
 	if len(schema) > 0 && result.StructuredOutput == nil {
-		return nil, rejectStructuredOutput(errNoStructuredOutput)
+		return resultFromUsage(usage), rejectStructuredOutput(errNoStructuredOutput)
 	}
 
 	return &Result{
