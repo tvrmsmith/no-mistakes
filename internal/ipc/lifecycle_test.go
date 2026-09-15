@@ -183,12 +183,12 @@ func TestServerEmptyLine(t *testing.T) {
 	defer closers.Quiet(conn)
 
 	// Send empty line first.
-	conn.Write([]byte("\n"))
+	sendFrame(t, conn, "\n")
 
 	// Send valid request.
 	req, _ := ipc.NewRequest("echo", nil)
 	enc := json.NewEncoder(conn)
-	enc.Encode(req)
+	encodeFrame(t, enc, req)
 
 	// Read response — should get a valid response (empty line was skipped).
 	scanner := bufio.NewScanner(conn)

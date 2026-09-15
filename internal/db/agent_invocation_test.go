@@ -132,7 +132,7 @@ func TestAgentInvocations_PrivacySafeShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("table info: %v", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var columns []string
 	for rows.Next() {
 		var name string
@@ -169,7 +169,7 @@ func TestAgentInvocations_HasRunTimelineIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("index list: %v", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {

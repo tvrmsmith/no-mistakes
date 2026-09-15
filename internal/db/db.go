@@ -3,7 +3,9 @@ package db
 import (
 	"crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -88,4 +90,16 @@ func newID() string {
 // now returns the current unix timestamp in seconds.
 func now() int64 {
 	return time.Now().Unix()
+}
+
+// discardTx undoes a transaction that did not commit. A committed transaction
+// answers sql.ErrTxDone here, which is the ordinary way out of every deferred
+// rollback in this package and not a failure. Anything else means the
+// transaction this code meant to discard is still open, so it is logged: the
+// caller is already returning the error that caused the rollback, and a second
+// one would hide it.
+func discardTx(tx *sql.Tx) {
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		slog.Warn("discard transaction failed", "error", err)
+	}
 }

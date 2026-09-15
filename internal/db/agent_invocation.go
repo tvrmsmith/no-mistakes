@@ -188,7 +188,7 @@ func (d *DB) GetAgentInvocationsByRun(runID string) ([]AgentInvocation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get agent invocations: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var invocations []AgentInvocation
 	for rows.Next() {
@@ -313,7 +313,7 @@ func (d *DB) AgentInvocationAggregates() ([]AgentInvocationAggregate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent invocation aggregates: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var aggregates []AgentInvocationAggregate
 	for rows.Next() {

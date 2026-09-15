@@ -549,3 +549,14 @@ func runGitDirect(dir string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// removeEvidenceDir deletes a run's evidence directory and fails the test when
+// it cannot. Evidence is collected outside the worktree, so t.TempDir does not
+// reclaim it and a leaked directory would leave the next run's evidence mixed
+// with this one's.
+func removeEvidenceDir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("remove evidence dir %s: %v", dir, err)
+	}
+}

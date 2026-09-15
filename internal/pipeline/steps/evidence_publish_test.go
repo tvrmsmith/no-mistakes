@@ -53,7 +53,7 @@ func newEvidencePublishContext(t *testing.T, branch string) (sctx *pipeline.Step
 func writeRunEvidence(t *testing.T, sctx *pipeline.StepContext, files map[string]string) {
 	t.Helper()
 	dir := testEvidenceDir(sctx)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { removeEvidenceDir(t, dir) })
 	for rel, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {

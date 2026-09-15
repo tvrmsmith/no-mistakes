@@ -79,7 +79,7 @@ func (d *DB) GetRecoveryArchivesByRun(ownerRunID string) ([]*RecoveryArchive, er
 	if err != nil {
 		return nil, fmt.Errorf("get recovery archives: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var records []*RecoveryArchive
 	for rows.Next() {

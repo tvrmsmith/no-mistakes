@@ -281,7 +281,7 @@ func (d *DB) GetRoundsByStep(stepResultID string) ([]*StepRound, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get rounds by step: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var rounds []*StepRound
 	for rows.Next() {
 		r := &StepRound{}

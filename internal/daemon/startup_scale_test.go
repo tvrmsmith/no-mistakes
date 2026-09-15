@@ -45,7 +45,7 @@ func startColdDetachedFixture(t *testing.T, gateCount int, delayedGit bool) time
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	t.Cleanup(func() { removeTempRoot(t, root) })
 	p := paths.WithRoot(root)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)

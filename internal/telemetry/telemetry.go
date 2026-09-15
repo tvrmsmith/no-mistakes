@@ -303,7 +303,7 @@ func (c *Client) send(ctx context.Context, payload []byte) {
 	if err != nil {
 		return
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 

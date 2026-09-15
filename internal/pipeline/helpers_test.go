@@ -312,3 +312,13 @@ func writeTestFile(t *testing.T, dir, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+// respondOrFail answers the gate the executor is parked at, failing the test
+// when the executor refuses the answer. A refused response leaves the run
+// parked, which the waits below would report as an unrelated timeout.
+func respondOrFail(t *testing.T, exec *Executor, step types.StepName, action types.ApprovalAction, findingIDs []string) {
+	t.Helper()
+	if err := exec.Respond(step, action, findingIDs); err != nil {
+		t.Fatalf("respond %s %s: %v", step, action, err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kunchenguid/no-mistakes/internal/closers"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"io"
 	"net"
 	"net/http"
@@ -109,7 +110,7 @@ func captureOpencodeFlavour(ctx context.Context, baseURL, dir, prompt, schema st
 	if err != nil {
 		return fmt.Errorf("tempdir: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer scratch.RemoveAll(tmp)
 
 	sessionBody := map[string]any{
 		"directory": tmp,
@@ -198,7 +199,7 @@ func captureOpencodeFlavour(ctx context.Context, baseURL, dir, prompt, schema st
 	// Best-effort delete session.
 	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete, baseURL+"/session/"+sess.ID, nil)
 	if resp, err := http.DefaultClient.Do(req); err == nil {
-		closers.Quiet(resp.Body)
+		defer func() { closers.Quiet(resp.Body) }()
 	}
 	return nil
 }
@@ -370,20 +371,30 @@ func (c *opencodeSSECapture) idleDone() <-chan struct{} {
 	return c.idleCh
 }
 
+// probeOpencodeHealth reports whether one health request answered 200. The
+// poll below calls it per attempt so each response body closes with its own
+// request instead of piling up until the wait ends.
+func probeOpencodeHealth(ctx context.Context, baseURL string) (bool, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/global/health", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { closers.Quiet(resp.Body) }()
+	return resp.StatusCode == http.StatusOK, nil
+}
+
 func waitHealth(ctx context.Context, baseURL string) error {
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/global/health", nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			closers.Quiet(resp.Body)
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		healthy, err := probeOpencodeHealth(ctx, baseURL)
+		if healthy {
+			return nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
 		select {
@@ -412,7 +423,7 @@ func postJSON(ctx context.Context, url string, body any) (parsed []byte, raw []b
 	if err != nil {
 		return nil, nil, err
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 	raw, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, nil, err
@@ -442,7 +453,7 @@ func streamSSE(ctx context.Context, url string, w io.Writer, ready chan<- struct
 	if err != nil {
 		return err
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 	if resp.StatusCode != http.StatusOK {
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {

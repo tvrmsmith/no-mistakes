@@ -46,7 +46,7 @@ func (d *DB) GetRunAgentSessions(runID string) ([]RunAgentSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get run agent sessions: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var sessions []RunAgentSession
 	for rows.Next() {

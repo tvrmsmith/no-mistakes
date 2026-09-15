@@ -13,6 +13,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	nmgit "github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 )
 
 // Disambiguator chooses among multiple accepted transcript matches when the
@@ -63,7 +64,7 @@ func (d *agentDisambiguator) Disambiguate(ctx context.Context, diffFiles []strin
 	if err != nil {
 		return DisambiguationChoice{}, err
 	}
-	defer os.RemoveAll(dir)
+	defer scratch.RemoveAll(dir)
 
 	packetPaths := make([]string, 0, len(candidates))
 	for i, candidate := range candidates {

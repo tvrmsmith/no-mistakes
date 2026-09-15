@@ -38,7 +38,7 @@ func TestClientTrackSendsUmamiEventPayload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read body: %v", err)
 		}
-		defer closers.Quiet(r.Body)
+		defer func() { closers.Quiet(r.Body) }()
 
 		var got requestBody
 		if err := json.Unmarshal(body, &got); err != nil {
@@ -128,7 +128,7 @@ func TestClientPageviewSendsUmamiPageviewPayload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read body: %v", err)
 		}
-		defer closers.Quiet(r.Body)
+		defer func() { closers.Quiet(r.Body) }()
 
 		var got requestBody
 		if err := json.Unmarshal(body, &got); err != nil {

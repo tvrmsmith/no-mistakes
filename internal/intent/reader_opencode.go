@@ -63,7 +63,7 @@ func (r *opencodeReader) Discover(ctx context.Context, opts DiscoverOpts) ([]*Se
 	if err != nil {
 		return nil, nil
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var out []*Session
 	for rows.Next() {
@@ -111,7 +111,7 @@ func (r *opencodeReader) Load(ctx context.Context, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("opencode parts: %w", err)
 	}
-	defer closers.Quiet(partRows)
+	defer func() { closers.Quiet(partRows) }()
 
 	type aggregated struct {
 		text  strings.Builder
@@ -200,7 +200,7 @@ func opencodeMessages(ctx context.Context, db *sql.DB, sessionID string) (map[st
 	if err != nil {
 		return nil, nil, fmt.Errorf("opencode messages: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	msgs := map[string]opencodeMessage{}
 	var ordered []string

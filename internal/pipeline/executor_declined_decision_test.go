@@ -33,7 +33,7 @@ func runGateAndRespond(t *testing.T, action types.ApprovalAction, findings strin
 	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
-	exec.Respond(types.StepReview, action, nil)
+	respondOrFail(t, exec, types.StepReview, action, nil)
 
 	select {
 	case <-done:
@@ -215,7 +215,7 @@ func TestExecutor_FixResolutionStillRecordsAUserSelection(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
-	exec.Respond(types.StepReview, types.ActionFix, []string{"journal-version-deduplication"})
+	respondOrFail(t, exec, types.StepReview, types.ActionFix, []string{"journal-version-deduplication"})
 
 	select {
 	case err := <-done:

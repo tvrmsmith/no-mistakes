@@ -33,14 +33,7 @@ func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
 		t.Fatalf("write .env: %v", err)
 	}
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd(): %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir(): %v", err)
-	}
-	defer os.Chdir(prevWD)
+	t.Chdir(dir)
 
 	sink := Default()
 	client, ok := sink.(*Client)
@@ -83,14 +76,7 @@ func TestDefaultPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
 		t.Fatalf("write .env: %v", err)
 	}
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd(): %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir(): %v", err)
-	}
-	defer os.Chdir(prevWD)
+	t.Chdir(dir)
 
 	sink := Default()
 	client, ok := sink.(*Client)
@@ -219,14 +205,7 @@ func TestDefaultIgnoresDotEnvOutsideRepo(t *testing.T) {
 		t.Fatalf("mkdir .git: %v", err)
 	}
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd(): %v", err)
-	}
-	if err := os.Chdir(subDir); err != nil {
-		t.Fatalf("Chdir(): %v", err)
-	}
-	defer os.Chdir(prevWD)
+	t.Chdir(subDir)
 
 	if _, ok := Default().(*Client); ok {
 		t.Fatal("Default() should ignore dotenv outside repo")

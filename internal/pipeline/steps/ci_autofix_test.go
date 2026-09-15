@@ -1158,7 +1158,9 @@ func TestCIStep_AutoFixPromptIncludesMustFixInstruction(t *testing.T) {
 		},
 	}
 	pinCIMonitorClock(step)
-	driveCI(t, step, sctx)
+	if _, err := driveCI(t, step, sctx); err != nil {
+		t.Fatalf("drive CI step: %v", err)
+	}
 
 	if capturedPrompt == "" {
 		t.Fatal("expected agent to be called with a prompt")

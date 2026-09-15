@@ -287,7 +287,7 @@ func (c *Client) GetStepLog(ctx context.Context, repo RepoRef, pipelineUUID, ste
 	if err != nil {
 		return "", fmt.Errorf("Bitbucket GET %s: %w", path, err)
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("Bitbucket GET %s: status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
@@ -409,7 +409,7 @@ func (c *Client) doJSONPathOrURL(ctx context.Context, method, pathOrURL string, 
 	if err != nil {
 		return fmt.Errorf("Bitbucket %s %s: %w", method, requestLabel, err)
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)

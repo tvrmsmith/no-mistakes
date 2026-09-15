@@ -360,11 +360,19 @@ func TestEnsureDefaultGlobalConfig_SkipsOnStatPermissionError(t *testing.T) {
 	if err := os.Chmod(dir, 0o000); err != nil {
 		t.Skip("cannot restrict directory permissions")
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	t.Cleanup(func() {
+		// Without this the temp dir cannot be read back, so t.TempDir's own
+		// cleanup fails on a directory this test locked.
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Errorf("restore permissions on %s: %v", dir, err)
+		}
+	})
 
 	EnsureDefaultGlobalConfig(path)
 
-	os.Chmod(dir, 0o755)
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("restore permissions on %s: %v", dir, err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("failed to read config: %v", err)

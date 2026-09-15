@@ -126,7 +126,7 @@ func (u *updater) downloadAsset(ctx context.Context, assetURL string, limit int6
 	if err != nil {
 		return nil, fmt.Errorf("download asset: %w", err)
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download asset: unexpected status %d", resp.StatusCode)
 	}

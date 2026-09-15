@@ -310,7 +310,7 @@ func TestRecoverStaleRunsOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -331,12 +331,16 @@ func TestRecoverStaleRunsOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.UpdateRunStatus(staleRun.ID, types.RunRunning)
+	if err := d.UpdateRunStatus(staleRun.ID, types.RunRunning); err != nil {
+		t.Fatalf("mark stale run running: %v", err)
+	}
 	staleStep, err := d.InsertStepResult(staleRun.ID, types.StepReview)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.StartStep(staleStep.ID)
+	if err := d.StartStep(staleStep.ID); err != nil {
+		t.Fatalf("start stale step: %v", err)
+	}
 
 	closers.Quiet(d)
 
@@ -365,7 +369,9 @@ func TestRecoverStaleRunsOnStartup(t *testing.T) {
 	t.Cleanup(func() {
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
-			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
+			// Best effort: the test may have stopped the daemon
+			// already, and it is the wait below that proves it exited.
+			_ = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
 			closers.Quiet(client)
 		}
 		select {
@@ -404,7 +410,7 @@ func TestRecoverOnStartup_FinalizesLegacyTerminalPRRun(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = os.RemoveAll(root) })
+			t.Cleanup(func() { removeTempRoot(t, root) })
 			p := paths.WithRoot(root)
 			if err := p.EnsureDirs(); err != nil {
 				t.Fatal(err)
@@ -496,7 +502,7 @@ func TestRecoverOnStartup_ResumesParkedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -633,7 +639,7 @@ func TestRecoverOnStartup_ReconcilesHistoricalCIGateFromCurrentPRState(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+			t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 			p := paths.WithRoot(tmpDir)
 			if err := p.EnsureDirs(); err != nil {
 				t.Fatal(err)
@@ -745,7 +751,7 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -757,7 +763,9 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(orphanDir, "test.txt"), []byte("orphan"), 0o644)
+	if err := os.WriteFile(filepath.Join(orphanDir, "test.txt"), []byte("orphan"), 0o644); err != nil {
+		t.Fatalf("write orphan file: %v", err)
+	}
 
 	d, err := db.Open(p.DB())
 	if err != nil {
@@ -783,7 +791,9 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 	t.Cleanup(func() {
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
-			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
+			// Best effort: the test may have stopped the daemon
+			// already, and it is the wait below that proves it exited.
+			_ = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
 			closers.Quiet(client)
 		}
 		select {

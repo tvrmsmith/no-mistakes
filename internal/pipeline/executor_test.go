@@ -495,7 +495,9 @@ func TestExecutor_StepResultUsesDurationOverride(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	dbSteps, _ := database.GetStepsByRun(run.ID)
 	if len(dbSteps) != 1 {

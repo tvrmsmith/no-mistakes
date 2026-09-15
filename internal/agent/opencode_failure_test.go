@@ -63,7 +63,7 @@ func runOpencodeAgainst(t *testing.T, server *httptest.Server) (*Result, error) 
 	t.Helper()
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 	return a.Run(context.Background(), RunOpts{
 		Prompt:     "review this code",
@@ -362,7 +362,7 @@ func TestOpencodeAgent_ThinkingConflictAfterToolActivityDoesNotFallBack(t *testi
 	}))
 	defer server.Close()
 
-	a := &opencodeAgent{bin: "opencode", server: &managedServer{port: mustParsePort(server.URL)}}
+	a := &opencodeAgent{bin: "opencode", server: &managedServer{port: mustParsePort(t, server.URL)}}
 	result, err := a.Run(context.Background(), RunOpts{
 		Prompt:     "review the changes",
 		CWD:        t.TempDir(),

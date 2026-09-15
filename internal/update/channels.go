@@ -141,7 +141,7 @@ func (u *updater) fetchReleaseFromManifest(ctx context.Context) (*releaseRespons
 	if err != nil {
 		return nil, fmt.Errorf("fetch channel manifest: %w", err)
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch channel manifest: unexpected status %d", resp.StatusCode)
 	}

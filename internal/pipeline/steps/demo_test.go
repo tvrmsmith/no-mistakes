@@ -247,12 +247,15 @@ func TestStreamDemoLogStopsAfterCancellation(t *testing.T) {
 	})
 
 	var logs []string
-	streamDemoLog(&pipeline.StepContext{
+	err := streamDemoLog(&pipeline.StepContext{
 		Ctx:      ctx,
 		Log:      func(s string) { logs = append(logs, s) },
 		LogChunk: func(string) {},
 		LogFile:  func(string) {},
 	}, "first\nsecond", 2*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("streamDemoLog = %v, want context.Canceled", err)
+	}
 
 	if len(logs) != 1 {
 		t.Fatalf("expected logging to stop after cancellation, got %d lines", len(logs))

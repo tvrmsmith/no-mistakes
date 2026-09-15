@@ -11,6 +11,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 )
 
 const (
@@ -138,7 +139,7 @@ func publishOnce(ctx context.Context, req Request, branch, dir string, files []c
 	if err != nil {
 		return nil, fmt.Errorf("create evidence index: %w", err)
 	}
-	defer os.RemoveAll(indexDir)
+	defer scratch.RemoveAll(indexDir)
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(indexDir, "index")}
 
 	if tip != "" {

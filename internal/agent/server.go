@@ -165,12 +165,8 @@ func (s *managedServer) waitForHealth(ctx context.Context, path string) error {
 		default:
 		}
 
-		resp, err := client.Get(url)
-		if err == nil {
-			closers.Quiet(resp.Body)
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
+		if healthyResponse(client, url) {
+			return nil
 		}
 
 		select {
@@ -179,6 +175,18 @@ func (s *managedServer) waitForHealth(ctx context.Context, path string) error {
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// healthyResponse reports whether one probe answered 200. The poll above calls
+// it per attempt so each response body closes with its own request instead of
+// piling up until the server is healthy.
+func healthyResponse(client *http.Client, url string) bool {
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer func() { closers.Quiet(resp.Body) }()
+	return resp.StatusCode == http.StatusOK
 }
 
 func serverExitedBeforeHealthyError(waitErr error) error {

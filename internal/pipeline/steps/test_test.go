@@ -397,7 +397,9 @@ func TestTestStep_FixMode_AgentWritesNewTests_ProceedsAutomatically(t *testing.T
 	}
 
 	var f Findings
-	json.Unmarshal([]byte(outcome.Findings), &f)
+	if err := json.Unmarshal([]byte(outcome.Findings), &f); err != nil {
+		t.Fatalf("parse findings: %v", err)
+	}
 	foundTestFile := false
 	for _, item := range f.Items {
 		if strings.Contains(item.Description, "component.spec.tsx") {

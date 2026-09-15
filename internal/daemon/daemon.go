@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
@@ -28,6 +29,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/procreap"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -312,8 +314,8 @@ func runWithOptionsLocked(p *paths.Paths, d *db.DB, globalCfg *config.GlobalConf
 	// A new daemon may have already replaced the socket.
 	if pidData, err := os.ReadFile(pidPath); err == nil {
 		if current, readErr := readDaemonPIDFileData(pidData); readErr == nil && current.PID == pidRecord.PID && current.StartedAt.Equal(pidRecord.StartedAt) {
-			os.Remove(pidPath)
-			os.Remove(socketPath)
+			scratch.Remove(pidPath)
+			scratch.Remove(socketPath)
 		}
 	}
 	slog.Info("daemon stopped")
@@ -795,7 +797,12 @@ func cleanupOrphanWorktrees(d *db.DB, p *paths.Paths, leftover []db.RunWorktree)
 		removeOrphanWorktree(ctx, wt)
 	}
 	for _, dir := range repoDirs {
-		os.Remove(dir)
+		// Drops the per-repo parent once its last worktree is gone. A
+		// directory that still holds a live run's worktree is the normal
+		// case, so only an unexpected failure is reported.
+		if err := os.Remove(dir); err != nil && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("remove empty repo worktree directory failed", "dir", dir, "error", err)
+		}
 	}
 }
 

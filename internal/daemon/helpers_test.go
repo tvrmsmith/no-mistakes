@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,7 +89,12 @@ func TestMain(m *testing.M) {
 	// Agent harnesses inject git config (e.g. safe.bareRepository=explicit)
 	// via GIT_CONFIG_COUNT/KEY_n/VALUE_n; tests that need it re-set it with
 	// t.Setenv (issue #362).
-	os.Unsetenv("GIT_CONFIG_COUNT")
+	// Leaving it set would let that config reach every git call these tests
+	// make, which is the leak this drops.
+	if err := os.Unsetenv("GIT_CONFIG_COUNT"); err != nil {
+		fmt.Fprintf(os.Stderr, "unset GIT_CONFIG_COUNT: %v\n", err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
 }
 
@@ -102,7 +108,7 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -142,7 +148,9 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 		// Ensure daemon stops.
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
-			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
+			// Best effort: the test may have stopped the daemon
+			// already, and it is the wait below that proves it exited.
+			_ = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
 			closers.Quiet(client)
 		}
 		select {
@@ -257,7 +265,7 @@ func startTestDaemonInstance(t *testing.T, sf StepFactory) *testDaemonInstance {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -641,4 +649,16 @@ func breakTrustedRepoConfig(t *testing.T, gateDir string) {
 	gitCmd(t, clone, "add", ".no-mistakes.yaml")
 	gitCmd(t, clone, "commit", "-m", "unparseable trusted config")
 	gitCmd(t, clone, "push", "origin", "HEAD:refs/heads/main")
+}
+
+// removeTempRoot deletes a test's temp root and fails the test when it cannot.
+// These roots are created with os.MkdirTemp rather than t.TempDir because a
+// unix socket path has a small OS limit (~104 bytes on macOS) and t.TempDir
+// embeds the full test name, so nothing else cleans them up. t.TempDir fails
+// the test on a removal it cannot make, and so does this.
+func removeTempRoot(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("remove temp root %s: %v", dir, err)
+	}
 }

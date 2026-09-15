@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +13,12 @@ import (
 // Ambient GIT_CONFIG_* injection from agent harnesses would leak into every
 // git call these tests make, so drop it for the package.
 func TestMain(m *testing.M) {
-	os.Unsetenv("GIT_CONFIG_COUNT")
+	// Leaving it set would let that config reach every git call these tests
+	// make, which is the leak this drops.
+	if err := os.Unsetenv("GIT_CONFIG_COUNT"); err != nil {
+		fmt.Fprintf(os.Stderr, "unset GIT_CONFIG_COUNT: %v\n", err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
 }
 

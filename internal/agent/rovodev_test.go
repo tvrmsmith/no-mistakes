@@ -473,7 +473,7 @@ func TestRovodevAgent_FullFlow(t *testing.T) {
 	}
 	// Parse the test server's port from URL
 	a.server = &managedServer{
-		port: mustParsePort(server.URL),
+		port: mustParsePort(t, server.URL),
 	}
 
 	var chunks []string
@@ -539,7 +539,7 @@ func TestRovodevAgent_NoSchema(t *testing.T) {
 
 	a := &rovodevAgent{
 		bin:    "acli",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	result, err := a.Run(context.Background(), RunOpts{
@@ -563,9 +563,12 @@ func TestRovodevAgent_NoSchema(t *testing.T) {
 	}
 }
 
-func mustParsePort(url string) int {
+func mustParsePort(t *testing.T, url string) int {
+	t.Helper()
 	// url format: http://127.0.0.1:PORT
 	var port int
-	fmt.Sscanf(url, "http://127.0.0.1:%d", &port)
+	if _, err := fmt.Sscanf(url, "http://127.0.0.1:%d", &port); err != nil {
+		t.Fatalf("parse port from %q: %v", url, err)
+	}
 	return port
 }

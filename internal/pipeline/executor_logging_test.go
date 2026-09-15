@@ -45,7 +45,9 @@ func TestExecutor_LogCallback(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, onEvent)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -254,7 +256,9 @@ func TestExecutor_LogVsLogChunk(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, onEvent)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -280,7 +284,9 @@ func TestExecutor_RunLogDir(t *testing.T) {
 	workDir := t.TempDir()
 
 	exec := NewExecutor(database, p, nil, nil, []Step{newPassStep(types.StepReview)}, nil)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	// Verify log dir was created
 	logDir := p.RunLogDir(run.ID)
@@ -313,7 +319,9 @@ func TestExecutor_LogFileWritten(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	// Verify log file exists and contains the log messages
 	logPath := filepath.Join(p.RunLogDir(run.ID), "review.log")
@@ -434,7 +442,9 @@ func TestExecutor_LogFileMultipleSteps(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step1, step2}, nil)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	// Each step should have its own log file
 	reviewLog, err := os.ReadFile(filepath.Join(p.RunLogDir(run.ID), "review.log"))

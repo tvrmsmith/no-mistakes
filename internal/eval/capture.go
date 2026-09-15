@@ -19,6 +19,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	"gopkg.in/yaml.v3"
 )
@@ -319,7 +320,7 @@ func writeCase(ctx context.Context, store *Store, gateDir string, c Case, global
 	if err != nil {
 		return fmt.Errorf("create temporary case: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer scratch.RemoveAll(tmp)
 	for _, dir := range []string{filepath.Join(tmp, "config"), filepath.Join(tmp, "original"), filepath.Join(tmp, "evals")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err

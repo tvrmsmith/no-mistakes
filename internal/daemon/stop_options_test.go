@@ -25,7 +25,7 @@ func stopOptionsRoot(t *testing.T) *paths.Paths {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() { removeTempRoot(t, dir) })
 	p := paths.WithRoot(dir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)

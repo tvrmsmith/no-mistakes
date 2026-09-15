@@ -34,7 +34,7 @@ func shortTempRoot(t *testing.T) *paths.Paths {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { removeTempRoot(t, dir) })
 	p := paths.WithRoot(dir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestRegisterHandlers_HealthReportsProtocolVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { removeTempRoot(t, dir) })
 	sock := filepath.Join(dir, "s")
 
 	if err := srv.Listen(sock); err != nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -224,7 +225,7 @@ func replayOne(ctx context.Context, store *Store, c Case, session Session, candi
 		evaluation.CompletedAt = time.Now().Unix()
 		return evaluation
 	}
-	defer os.RemoveAll(root)
+	defer scratch.RemoveAll(root)
 
 	isolatedPaths := paths.WithRoot(filepath.Join(root, "nmhome"))
 	if err := isolatedPaths.EnsureDirs(); err != nil {

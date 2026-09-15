@@ -411,7 +411,11 @@ func TestIntentStep_Integration_RespectsTimeout(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		(&IntentStep{}).Execute(sctx)
+		// Runs off the test goroutine, where t.Errorf is allowed and
+		// t.Fatalf is not.
+		if _, err := (&IntentStep{}).Execute(sctx); err != nil {
+			t.Errorf("execute intent step: %v", err)
+		}
 		close(done)
 	}()
 	select {

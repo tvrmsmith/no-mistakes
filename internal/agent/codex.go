@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
@@ -83,7 +84,7 @@ func (a *codexAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error)
 			_ = os.Remove(schemaPath)
 			return nil, fmt.Errorf("codex schema temp file close: %w", err)
 		}
-		defer os.Remove(schemaPath)
+		defer scratch.Remove(schemaPath)
 	}
 
 	resumeID := ""

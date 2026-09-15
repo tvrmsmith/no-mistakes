@@ -56,7 +56,7 @@ func TestOpencodeAgent_FullFlow(t *testing.T) {
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	var chunks []string
@@ -139,7 +139,7 @@ func TestOpencodeAgent_BackfillsAssistantTextWhenStreamCannotClassifyOrphans(t *
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	var chunks []string
@@ -193,7 +193,7 @@ func TestOpencodeAgent_BackfillsAllAssistantResponseParts(t *testing.T) {
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	var chunks []string
@@ -239,7 +239,7 @@ func TestOpencodeAgent_BackfillsMissingResponseSuffixAfterStreaming(t *testing.T
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	var chunks []string
@@ -289,7 +289,7 @@ func TestOpencodeAgent_BackfillsMissingResponseSuffixAfterToolStep(t *testing.T)
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	var chunks []string
@@ -339,7 +339,7 @@ func TestOpencodeAgent_DoesNotSeparateBackfillWhenToolStepPrecedesFirstText(t *t
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	var chunks []string
@@ -388,7 +388,7 @@ func TestOpencodeAgent_NoSchema(t *testing.T) {
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	result, err := a.Run(context.Background(), RunOpts{
@@ -438,7 +438,7 @@ func TestOpencodeAgent_FinalAnswerPreferred(t *testing.T) {
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	result, err := a.Run(context.Background(), RunOpts{
@@ -495,7 +495,7 @@ func TestOpencodeAgent_StructuredOutputError(t *testing.T) {
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
 	result, err := a.Run(context.Background(), RunOpts{
@@ -584,7 +584,7 @@ func TestOpencodeAgent_ThinkingToolChoiceConflictFallsBackToValidatedText(t *tes
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 		profile: agentcfg.Profile{
 			Model:  "openai/gpt-5",
 			Effort: agentcfg.EffortHigh,
@@ -657,7 +657,7 @@ func TestOpencodeAgent_ThinkingToolChoiceFallbackRejectsSchemaViolation(t *testi
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 	result, err := a.Run(context.Background(), RunOpts{
 		Prompt:     "review the changes",
@@ -706,7 +706,7 @@ func TestOpencodeAgent_ThinkingToolChoiceConflictFromSSEFallsBackOnce(t *testing
 	}))
 	defer server.Close()
 
-	a := &opencodeAgent{bin: "opencode", server: &managedServer{port: mustParsePort(server.URL)}}
+	a := &opencodeAgent{bin: "opencode", server: &managedServer{port: mustParsePort(t, server.URL)}}
 	result, err := a.Run(context.Background(), RunOpts{
 		Prompt:     "review the changes",
 		CWD:        t.TempDir(),
@@ -746,7 +746,7 @@ func TestOpencodeAgent_UnrelatedThinkingLimitationDoesNotFallback(t *testing.T) 
 
 	a := &opencodeAgent{
 		bin:    "opencode",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 	_, err := a.Run(context.Background(), RunOpts{
 		Prompt:     "review the changes",

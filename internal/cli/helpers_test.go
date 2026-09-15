@@ -160,14 +160,7 @@ func setupTestRepo(t *testing.T) string {
 	run(t, repoDir, "git", "commit", "--allow-empty", "-m", "initial")
 
 	// Save and change to the repo dir.
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(repoDir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Chdir(repoDir)
 	t.Cleanup(func() {
 		p := paths.WithRoot(nmHome)
 		_, _ = daemon.IsRunning(p)
@@ -196,14 +189,7 @@ func run(t *testing.T, dir string, name string, args ...string) {
 // chdir changes to the given directory and restores the original on cleanup.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(origDir) })
+	t.Chdir(dir)
 }
 
 func executeCmd(args ...string) (string, error) {
@@ -260,7 +246,7 @@ func makeSocketSafeTempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() { removeTempRoot(t, dir) })
 	return dir
 }
 
@@ -302,4 +288,16 @@ func startTestDaemon(t *testing.T, p *paths.Paths, d *db.DB) {
 			t.Error("daemon did not stop within 3s")
 		}
 	})
+}
+
+// removeTempRoot deletes a test's temp root and fails the test when it cannot.
+// These roots are created with os.MkdirTemp rather than t.TempDir because a
+// unix socket path has a small OS limit (~104 bytes on macOS) and t.TempDir
+// embeds the full test name, so nothing else cleans them up. t.TempDir fails
+// the test on a removal it cannot make, and so does this.
+func removeTempRoot(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("remove temp root %s: %v", dir, err)
+	}
 }

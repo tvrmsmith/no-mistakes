@@ -246,7 +246,7 @@ func (d *DB) getRepos() ([]*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get repos: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var repos []*Repo
 	for rows.Next() {

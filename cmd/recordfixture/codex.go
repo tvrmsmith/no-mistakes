@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/kunchenguid/no-mistakes/internal/closers"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,7 +55,7 @@ func captureCodex(ctx context.Context, bin string, forward []string, prompt, out
 	if err != nil {
 		return fmt.Errorf("tempdir: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer scratch.RemoveAll(tmp)
 	cmd.Dir = tmp
 
 	f, err := os.Create(outPath)

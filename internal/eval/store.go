@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -284,7 +286,7 @@ func (s *Store) listCases(set string, refreshDiversified bool) ([]Case, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list eval cases: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var all []Case
 	for rows.Next() {
 		var id, dir string
@@ -355,7 +357,7 @@ func (s *Store) loadDiversifiedPins() ([]diversifiedPin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list diversified pins: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var pins []diversifiedPin
 	for rows.Next() {
 		var pin diversifiedPin
@@ -375,7 +377,7 @@ func (s *Store) replaceDiversifiedPins(pins []diversifiedPin) error {
 	if err != nil {
 		return fmt.Errorf("begin diversified pin update: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 	if _, err := tx.Exec(`DELETE FROM diversified_pins`); err != nil {
 		return fmt.Errorf("clear diversified pins: %w", err)
 	}
@@ -399,7 +401,7 @@ func (s *Store) casesForRun(runID string) ([]Case, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list eval cases for run: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var out []Case
 	for rows.Next() {
 		var id, dir string
@@ -443,7 +445,7 @@ func (s *Store) pendingFindingCounts() (map[string]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sum queued candidate findings: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	out := map[string]int{}
 	for rows.Next() {
 		var caseID string
@@ -723,4 +725,14 @@ func dominantLanguage(files []string, fallback string) string {
 		return "mixed"
 	}
 	return entries[0].name
+}
+
+// discardTx undoes a transaction that did not commit. A committed transaction
+// answers sql.ErrTxDone, which is the ordinary way out and not a failure; the
+// caller is already returning the error that caused the rollback, so anything
+// else is logged rather than raised over it.
+func discardTx(tx *sql.Tx) {
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		slog.Warn("discard transaction failed", "error", err)
+	}
 }

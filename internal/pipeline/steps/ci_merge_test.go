@@ -125,7 +125,9 @@ func TestCIStep_MergeConflictAndCIFailure_FixPromptIncludesBoth(t *testing.T) {
 		},
 	}
 	pinCIMonitorClock(step)
-	driveCI(t, step, sctx)
+	if _, err := driveCI(t, step, sctx); err != nil {
+		t.Fatalf("drive CI step: %v", err)
+	}
 
 	if capturedPrompt == "" {
 		t.Fatal("expected agent to be called")
@@ -201,7 +203,9 @@ func TestCIStep_MergeConflictOnly_AutoFix(t *testing.T) {
 		},
 	}
 	pinCIMonitorClock(step)
-	driveCI(t, step, sctx)
+	if _, err := driveCI(t, step, sctx); err != nil {
+		t.Fatalf("drive CI step: %v", err)
+	}
 
 	if !agentCalled {
 		t.Fatal("expected agent to be called to resolve merge conflict")

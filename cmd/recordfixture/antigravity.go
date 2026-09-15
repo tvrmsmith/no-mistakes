@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/kunchenguid/no-mistakes/internal/closers"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
@@ -54,7 +55,7 @@ func captureAgy(ctx context.Context, bin string, forward []string, prompt, outPa
 	if err != nil {
 		return fmt.Errorf("tempdir: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer scratch.RemoveAll(tmp)
 	cmd.Dir = tmp
 
 	// Capture into a temporary sibling so a nonzero exit or cancellation
@@ -73,7 +74,7 @@ func captureAgy(ctx context.Context, bin string, forward []string, prompt, outPa
 		if !captured {
 			closers.Quiet(f)
 		}
-		os.Remove(staging)
+		scratch.Remove(staging)
 	}()
 
 	cmd.Stdout = f

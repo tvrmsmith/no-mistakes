@@ -34,7 +34,7 @@ func shortNMHome(t *testing.T) *paths.Paths {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(nmHome) })
+	t.Cleanup(func() { removeTempRoot(t, nmHome) })
 	t.Setenv("NM_HOME", nmHome)
 
 	p := paths.WithRoot(nmHome)

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"strings"
 )
 
@@ -265,7 +267,14 @@ func writeGateFileAtomic(path string, content []byte, mode os.FileMode, pattern 
 		return err
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	// Discards the staging file on any way out that did not rename it. A
+	// successful rename leaves nothing here to remove.
+	renamed := false
+	defer func() {
+		if !renamed {
+			scratch.Remove(tmpPath)
+		}
+	}()
 	if _, err := tmp.Write(content); err != nil {
 		_ = tmp.Close()
 		return err
@@ -277,7 +286,11 @@ func writeGateFileAtomic(path string, content []byte, mode os.FileMode, pattern 
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	renamed = true
+	return nil
 }
 
 // GateConfigCurrent is a subprocess-free restart check for a gate that has

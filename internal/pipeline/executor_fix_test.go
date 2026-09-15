@@ -54,7 +54,7 @@ func TestExecutor_FixEmitsFixReviewStatusWithoutStreamingTheDiff(t *testing.T) {
 	}
 
 	// Send fix action
-	exec.Respond(types.StepReview, types.ActionFix, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionFix, nil)
 
 	// The gate is announced by status alone. The working-tree diff is
 	// derived state served on demand (ipc.MethodGetStepDiff); it is
@@ -71,7 +71,7 @@ func TestExecutor_FixEmitsFixReviewStatusWithoutStreamingTheDiff(t *testing.T) {
 	}
 
 	// Approve to end
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 
 	select {
 	case err := <-done:
@@ -244,14 +244,14 @@ func TestExecutor_FixReviewNoChanges(t *testing.T) {
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
-	exec.Respond(types.StepReview, types.ActionFix, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionFix, nil)
 
 	fixEvent := waitForEvent(t, events, ipc.EventStepCompleted, string(types.StepStatusFixReview))
 	if fixEvent.Status == nil || *fixEvent.Status != string(types.StepStatusFixReview) {
 		t.Errorf("expected fix_review status, got %v", fixEvent.Status)
 	}
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -292,7 +292,7 @@ func TestExecutor_FixSetsPreviousFindings(t *testing.T) {
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
-	exec.Respond(types.StepReview, types.ActionFix, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionFix, nil)
 
 	select {
 	case err := <-done:

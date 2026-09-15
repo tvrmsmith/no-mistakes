@@ -266,7 +266,7 @@ func (d *DB) ActiveRunWorktrees() ([]RunWorktree, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get active run worktrees: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var out []RunWorktree
 	for rows.Next() {
 		var wt RunWorktree
@@ -346,7 +346,7 @@ func (d *DB) runWorktreesOutside(prefix, statusClause string) ([]RunWorktree, er
 	if err != nil {
 		return nil, fmt.Errorf("get run worktrees outside %s: %w", prefix, err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var out []RunWorktree
 	for rows.Next() {
 		var wt RunWorktree
@@ -433,7 +433,7 @@ func (d *DB) GetRunsByRepo(repoID string) ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get runs by repo: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var runs []*Run
 	for rows.Next() {
 		r := &Run{}
@@ -457,7 +457,7 @@ func (d *DB) GetRunsByRepoHead(repoID, branch, headSHA string) ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get runs by repo head: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var runs []*Run
 	for rows.Next() {
 		r := &Run{}
@@ -504,7 +504,7 @@ func (d *DB) GetActiveRuns() ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get active runs: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var runs []*Run
 	for rows.Next() {
@@ -592,7 +592,7 @@ func (d *DB) SetRunsCustodyReturned(ids []string) error {
 	if err != nil {
 		return fmt.Errorf("set runs custody returned: begin: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 	ts := now()
 	for _, id := range ids {
 		if _, err := tx.Exec(`UPDATE runs SET custody_returned_at = COALESCE(custody_returned_at, ?), updated_at = ? WHERE id = ?`, ts, ts, id); err != nil {
@@ -627,7 +627,7 @@ func (d *DB) UpdateRunPRState(id, state string) error {
 	if err != nil {
 		return fmt.Errorf("update run PR state: begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 
 	var current sql.NullString
 	if err := tx.QueryRow(`SELECT pr_state FROM runs WHERE id = ?`, id).Scan(&current); err != nil {
@@ -661,7 +661,7 @@ func (d *DB) ReconcileTerminalPRRuns() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("reconcile terminal PR runs: begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 
 	ids, err := terminalPRRunIDs(tx)
 	if err != nil {
@@ -1019,7 +1019,7 @@ func (d *DB) failActiveRuns(errMsg string, status types.RunStatus, scope string,
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 
 	var ciCount int64
 	if recoverCIMonitors {

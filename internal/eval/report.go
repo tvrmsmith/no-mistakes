@@ -78,7 +78,7 @@ func (s *Store) evaluations() ([]Evaluation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list eval results: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var result []Evaluation
 	for rows.Next() {
 		var path string

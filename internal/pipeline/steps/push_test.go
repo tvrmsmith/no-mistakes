@@ -393,7 +393,7 @@ func TestPushStep_DoesNotPublishTestEvidenceIntoThePushedBranch(t *testing.T) {
 	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(evidenceDir) })
+	t.Cleanup(func() { removeEvidenceDir(t, evidenceDir) })
 	if err := os.WriteFile(filepath.Join(evidenceDir, "checkout.png"), []byte("png"), 0o644); err != nil {
 		t.Fatal(err)
 	}

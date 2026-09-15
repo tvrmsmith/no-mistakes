@@ -42,7 +42,7 @@ func TestExecutor_ApprovalFix(t *testing.T) {
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 
 	// Send fix action
-	exec.Respond(types.StepReview, types.ActionFix, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionFix, nil)
 
 	// Wait for step to re-execute and complete (it passes on second call)
 	select {

@@ -334,7 +334,7 @@ func TestOpenMigratesExistingStepRoundsColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pragma table_info(step_rounds): %v", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	columns := map[string]bool{}
 	for rows.Next() {
@@ -462,7 +462,7 @@ func hasColumn(t *testing.T, d *DB, table, column string) bool {
 	if err != nil {
 		t.Fatalf("pragma table_info(%s): %v", table, err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	for rows.Next() {
 		var cid int
 		var name string
@@ -522,5 +522,15 @@ func TestOpenWaitsForTransientMigrationLock(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Open did not finish after the migration lock was released")
+	}
+}
+
+// mustSetup fails the test when a fixture call did not succeed. A test whose
+// setup failed silently goes on to assert against a database that never got
+// the rows the test describes, and reports that as the behavior under test.
+func mustSetup(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("fixture setup: %v", err)
 	}
 }

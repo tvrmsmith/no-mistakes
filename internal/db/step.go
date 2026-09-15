@@ -106,7 +106,7 @@ func (d *DB) GetStepsByRun(runID string) ([]*StepResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get steps by run: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var steps []*StepResult
 	for rows.Next() {
 		s := &StepResult{}
@@ -155,7 +155,7 @@ func (d *DB) ParkStepForApproval(runID, stepID string, status types.StepStatus, 
 	if err != nil {
 		return fmt.Errorf("begin approval park: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 
 	ts := now()
 	stepResult, err := tx.Exec(
@@ -287,7 +287,7 @@ func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int,
 	if err != nil {
 		return fmt.Errorf("begin complete review step: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 
 	ts := now()
 	result, err := tx.Exec(

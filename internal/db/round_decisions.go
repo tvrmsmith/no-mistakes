@@ -64,7 +64,7 @@ func (d *DB) GetBranchDecisionRounds(repoID, branch, excludeRunID string, limit 
 	if err != nil {
 		return nil, false, fmt.Errorf("get branch decision rounds: %w", err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var decisions []*BranchDecisionRound
 	for rows.Next() {

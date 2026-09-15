@@ -268,7 +268,7 @@ func (c *UserAssetClient) UploadFile(ctx context.Context, asset UserAsset) (stri
 	if err != nil {
 		return "", err
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "", fmt.Errorf("user-attachments upload HTTP %d", resp.StatusCode)

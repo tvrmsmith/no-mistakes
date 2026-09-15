@@ -1904,7 +1904,11 @@ func TestCIStep_SameNamedCancelledChecksShareOneRerunBudget(t *testing.T) {
 		}
 		return nil
 	})
-	step.Execute(sctx)
+	// The poll hook above cancels the run once the budget question is
+	// settled, so the step ending on that cancellation is this test's exit.
+	if _, err := step.Execute(sctx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("execute CI step: %v", err)
+	}
 
 	if got := strings.Count(ghLog(t, logFile), "run rerun"); got != 1 {
 		t.Fatalf("rerun requests = %d, want exactly one for a budget of one, gh log:\n%s", got, ghLog(t, logFile))

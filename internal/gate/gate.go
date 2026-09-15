@@ -134,9 +134,9 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 		// already-initialized gate when a repair pass fails.
 		if existing == nil {
 			if remoteURL, remoteErr := git.GetRemoteURL(ctx, absRoot, RemoteName); remoteErr == nil && remoteURL == bareDir {
-				git.RemoveRemote(ctx, absRoot, RemoteName)
+				noteTeardown(git.RemoveRemote(ctx, absRoot, RemoteName), "remove gate remote", absRoot)
 			}
-			os.RemoveAll(bareDir)
+			noteTeardown(os.RemoveAll(bareDir), "remove gate repository", bareDir)
 		}
 		return nil, false, err
 	}
@@ -162,8 +162,8 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 	repo, err := d.InsertRepoWithIDAndFork(id, absRoot, redactedUpstreamURL, forkURL, branch)
 	if err != nil {
 		// Rollback: remove remote and bare repo.
-		git.RemoveRemote(ctx, absRoot, RemoteName)
-		os.RemoveAll(bareDir)
+		noteTeardown(git.RemoveRemote(ctx, absRoot, RemoteName), "remove gate remote", absRoot)
+		noteTeardown(os.RemoveAll(bareDir), "remove gate repository", bareDir)
 		return nil, false, fmt.Errorf("insert repo: %w", err)
 	}
 
@@ -326,7 +326,9 @@ func Eject(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.R
 
 	// Delete bare repo.
 	bareDir := p.RepoDir(repo.ID)
-	os.RemoveAll(bareDir)
+	if err := os.RemoveAll(bareDir); err != nil {
+		slog.Warn("failed to remove bare repo during eject", "path", bareDir, "error", err)
+	}
 
 	// Delete worktrees for this repo. This happens before the repo record is
 	// deleted, because in a configured root the run rows are what identify
@@ -370,13 +372,22 @@ func Eject(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.R
 //
 // Failures are logged rather than fatal: an eject that cannot delete a leftover
 // worktree must still finish removing the gate.
+// removeDefaultWorktreeDir drops the per-repo directory the gate owns outright,
+// reporting a failure on the same terms as the recorded paths below it: eject
+// keeps going, and what is left behind is for an operator to see.
+func removeDefaultWorktreeDir(dir string) {
+	if err := os.RemoveAll(dir); err != nil {
+		slog.Warn("failed to remove default worktree directory during eject", "path", dir, "error", err)
+	}
+}
+
 func removeRepoWorktrees(d *db.DB, p *paths.Paths, repo *db.Repo) {
 	defaultDir := filepath.Join(p.WorktreesDir(), repo.ID)
 
 	runs, err := d.GetRunsByRepo(repo.ID)
 	if err != nil {
 		slog.Warn("failed to list runs while removing worktrees during eject", "repo_id", repo.ID, "error", err)
-		os.RemoveAll(defaultDir)
+		removeDefaultWorktreeDir(defaultDir)
 		return
 	}
 	var recorded []string
@@ -394,7 +405,7 @@ func removeRepoWorktrees(d *db.DB, p *paths.Paths, repo *db.Repo) {
 	}
 	sweepRunWorktrees(p.WorktreesDir(), sweepable, "eject")
 
-	os.RemoveAll(defaultDir)
+	removeDefaultWorktreeDir(defaultDir)
 	for _, path := range recorded {
 		if err := os.RemoveAll(path); err != nil {
 			slog.Warn("failed to remove run worktree during eject", "path", path, "error", err)
@@ -418,4 +429,14 @@ func reachableRunWorktree(dir string, status types.RunStatus) bool {
 		return true
 	}
 	return status == types.RunPending || status == types.RunRunning
+}
+
+// noteTeardown reports a step of a failed gate setup that could not be undone.
+// The caller is already returning the error that triggered the rollback, and
+// raising this one over it would hide the cause; what it leaves behind is a
+// half-provisioned gate the operator has to see to clean up.
+func noteTeardown(err error, op, path string) {
+	if err != nil {
+		slog.Warn("gate rollback step failed", "op", op, "path", path, "error", err)
+	}
 }

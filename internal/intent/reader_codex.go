@@ -69,7 +69,7 @@ func (r *codexReader) Discover(ctx context.Context, opts DiscoverOpts) ([]*Sessi
 		// threads table missing or schema changed: treat as no data.
 		return nil, nil
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 
 	var out []*Session
 	for rows.Next() {

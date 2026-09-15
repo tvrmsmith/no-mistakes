@@ -17,6 +17,10 @@ import (
 //
 // A handle whose close finishes a write is not this: check that error and
 // return it, because the bytes may never have landed.
+//
+// A *sql.Rows or *sql.Stmt takes the closure form, defer func() {
+// closers.Quiet(rows) }(), because the leak checker over those handles only
+// recognises a Close it can see spelled out at the deferring site.
 func Quiet(c io.Closer) {
 	if err := c.Close(); err != nil {
 		slog.Warn("close failed", "at", callSite(), "handle", fmt.Sprintf("%T", c), "error", err)

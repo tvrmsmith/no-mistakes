@@ -159,12 +159,16 @@ func unsetEnv(t *testing.T, keys ...string) {
 	for _, key := range keys {
 		key := key
 		orig, ok := os.LookupEnv(key)
-		os.Unsetenv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
 		t.Cleanup(func() {
 			if ok {
-				_ = os.Setenv(key, orig)
-			} else {
-				os.Unsetenv(key)
+				if err := os.Setenv(key, orig); err != nil {
+					t.Errorf("restore %s: %v", key, err)
+				}
+			} else if err := os.Unsetenv(key); err != nil {
+				t.Errorf("unset %s: %v", key, err)
 			}
 		})
 	}

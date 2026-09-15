@@ -320,7 +320,7 @@ func mustDiversifiedPinRows(t *testing.T, store *Store) []diversifiedPinRow {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closers.Quiet(rows)
+	defer func() { closers.Quiet(rows) }()
 	var out []diversifiedPinRow
 	for rows.Next() {
 		var row diversifiedPinRow

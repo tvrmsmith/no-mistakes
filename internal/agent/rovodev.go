@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -172,7 +173,7 @@ func (a *rovodevAgent) streamChat(ctx context.Context, baseURL, sessionID string
 	if err != nil {
 		return "", fmt.Errorf("rovodev stream: %w", err)
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -188,7 +189,12 @@ func (a *rovodevAgent) cancelSession(baseURL, sessionID string) {
 	headers := map[string]string{"x-session-id": sessionID}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	doJSON(ctx, http.MethodPost, baseURL+"/v3/cancel", headers, nil)
+	// The turn this cancels is already over for the caller, so a refused
+	// cancel changes nothing it can act on. It does mean the server may still
+	// be working on a session no one is reading, which is worth a log line.
+	if _, err := doJSON(ctx, http.MethodPost, baseURL+"/v3/cancel", headers, nil); err != nil {
+		slog.Warn("rovodev cancel session failed", "session", sessionID, "error", err)
+	}
 }
 
 func (a *rovodevAgent) deleteSession(baseURL, sessionID string) {
@@ -198,7 +204,7 @@ func (a *rovodevAgent) deleteSession(baseURL, sessionID string) {
 	if req != nil {
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil && resp != nil {
-			closers.Quiet(resp.Body)
+			defer func() { closers.Quiet(resp.Body) }()
 		}
 	}
 }
@@ -374,7 +380,7 @@ func doJSON(ctx context.Context, method, url string, headers map[string]string, 
 	if err != nil {
 		return nil, err
 	}
-	defer closers.Quiet(resp.Body)
+	defer func() { closers.Quiet(resp.Body) }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

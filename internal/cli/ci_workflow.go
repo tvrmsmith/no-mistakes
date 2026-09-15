@@ -11,6 +11,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/spf13/cobra"
 )
 
@@ -252,7 +253,14 @@ func writeFileNoSymlink(path string, data []byte, force bool) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+	// Discards the staging file on any way out that did not rename it. A
+	// successful rename leaves nothing here to remove.
+	renamed := false
+	defer func() {
+		if !renamed {
+			scratch.Remove(tmpPath)
+		}
+	}()
 
 	if _, err := tmp.Write(data); err != nil {
 		closers.Quiet(tmp)
@@ -268,5 +276,6 @@ func writeFileNoSymlink(path string, data []byte, force bool) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename temp file into place: %w", err)
 	}
+	renamed = true
 	return nil
 }

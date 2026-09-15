@@ -155,7 +155,7 @@ func TestExecutor_AutoFixRespectsMaxAttempts(t *testing.T) {
 	}
 
 	// Now approve manually to finish
-	exec.Respond(types.StepLint, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepLint, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -188,7 +188,7 @@ func TestExecutor_AutoFixDisabledWithZero(t *testing.T) {
 		t.Errorf("expected 1 call (no auto-fix), got %d", callCount)
 	}
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -219,7 +219,7 @@ func TestExecutor_AutoFixNilConfigUsesDefaults(t *testing.T) {
 		t.Errorf("expected 1 call (nil config, no auto-fix), got %d", callCount)
 	}
 
-	exec.Respond(types.StepReview, types.ActionAbort, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionAbort, nil)
 	<-done
 }
 
@@ -362,7 +362,7 @@ func TestExecutor_AutoFixSkipsHumanReviewFindings(t *testing.T) {
 		t.Fatalf("expected 1 call (no auto-fix for ask-user findings), got %d", callCount)
 	}
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -386,7 +386,7 @@ func TestExecutor_HumanReviewFindingsRequireApprovalWithoutNeedsApprovalFlag(t *
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -443,7 +443,7 @@ func TestExecutor_AutoFixMixedFindings(t *testing.T) {
 		t.Errorf("expected 2 calls (initial + 1 auto-fix), got %d", callCount)
 	}
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 

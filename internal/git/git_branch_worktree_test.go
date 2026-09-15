@@ -70,7 +70,11 @@ func TestFindMainRepoRoot(t *testing.T) {
 	if err := WorktreeAdd(ctx, mainRepo, wtDir, "wt-branch"); err != nil {
 		t.Fatalf("WorktreeAdd failed: %v", err)
 	}
-	t.Cleanup(func() { WorktreeRemove(ctx, mainRepo, wtDir) })
+	t.Cleanup(func() {
+		if err := WorktreeRemove(ctx, mainRepo, wtDir); err != nil {
+			t.Errorf("remove worktree %s: %v", wtDir, err)
+		}
+	})
 
 	// FindGitRoot from worktree returns the worktree path.
 	wtRoot, err := FindGitRoot(wtDir)
@@ -219,7 +223,11 @@ func TestFindMainRepoRootFromWorktreeStillResolvesToMain(t *testing.T) {
 	if err := WorktreeAdd(ctx, mainRepo, wtDir, "wt-branch"); err != nil {
 		t.Fatalf("WorktreeAdd: %v", err)
 	}
-	t.Cleanup(func() { WorktreeRemove(ctx, mainRepo, wtDir) })
+	t.Cleanup(func() {
+		if err := WorktreeRemove(ctx, mainRepo, wtDir); err != nil {
+			t.Errorf("remove worktree %s: %v", wtDir, err)
+		}
+	})
 
 	got, err := FindMainRepoRoot(wtDir)
 	if err != nil {

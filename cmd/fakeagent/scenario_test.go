@@ -13,14 +13,7 @@ import (
 func TestApplyEditsCreatesParentDirectoriesForNewFiles(t *testing.T) {
 	dir := t.TempDir()
 
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir temp dir: %v", err)
-	}
-	defer os.Chdir(wd)
+	t.Chdir(dir)
 
 	if err := applyEdits([]Edit{{Path: filepath.Join("nested", "dir", "note.txt"), New: "hello\n"}}); err != nil {
 		t.Fatalf("applyEdits: %v", err)
@@ -87,16 +80,9 @@ func TestApplyEditsRejectsPathsOutsideWorkingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	outside := filepath.Join(filepath.Dir(dir), "outside.txt")
 
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir temp dir: %v", err)
-	}
-	defer os.Chdir(wd)
+	t.Chdir(dir)
 
-	err = applyEdits([]Edit{{Path: filepath.Join("..", filepath.Base(outside)), New: "hello\n"}})
+	err := applyEdits([]Edit{{Path: filepath.Join("..", filepath.Base(outside)), New: "hello\n"}})
 	if err == nil {
 		t.Fatal("applyEdits succeeded, want error")
 	}
@@ -115,16 +101,9 @@ func TestApplyEditsRejectsSymlinkPathsOutsideWorkingDirectory(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir temp dir: %v", err)
-	}
-	defer os.Chdir(wd)
+	t.Chdir(dir)
 
-	err = applyEdits([]Edit{{Path: filepath.Join("escape", "outside.txt"), New: "hello\n"}})
+	err := applyEdits([]Edit{{Path: filepath.Join("escape", "outside.txt"), New: "hello\n"}})
 	if err == nil {
 		t.Fatal("applyEdits succeeded, want error")
 	}
@@ -149,14 +128,7 @@ func TestRunClaudeFailsWhenScenarioEditReplacementMissing(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir temp dir: %v", err)
-	}
-	defer os.Chdir(wd)
+	t.Chdir(dir)
 
 	scenario := &Scenario{Actions: []Action{{
 		Match: "fix it",

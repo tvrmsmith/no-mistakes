@@ -207,7 +207,9 @@ func (s *Server) handleConn(conn net.Conn) {
 		if err := json.Unmarshal(line, &req); err != nil {
 			slog.Warn("ipc request failed", "method", "<parse>", "error", "invalid json")
 			resp := NewErrorResponse(0, ErrParseError, "invalid json")
-			encoder.Encode(resp)
+			if err := encoder.Encode(resp); err != nil {
+				slog.Warn("ipc response write failed", "method", "<parse>", "error", err)
+			}
 			continue
 		}
 
