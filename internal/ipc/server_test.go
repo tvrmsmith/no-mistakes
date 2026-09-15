@@ -39,7 +39,7 @@ func startServer(t *testing.T, sock string) *ipc.Server {
 	t.Cleanup(func() {
 		srv.Close()
 		if err := <-errCh; err != nil {
-			// server returns nil on clean close
+			t.Errorf("server returned %v on clean close, want nil", err)
 		}
 	})
 	return srv

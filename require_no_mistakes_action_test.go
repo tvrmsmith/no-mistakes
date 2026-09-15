@@ -179,8 +179,8 @@ func runRequireAction(t *testing.T, run actionRun) actionResult {
 		}
 	}
 
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		result.conclusion = "success"
 	default:
 		var exitErr *exec.ExitError

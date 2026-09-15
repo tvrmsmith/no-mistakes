@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -825,9 +824,5 @@ func newTestHostWithOptions(recorder *fakeRecorder, available func(string) bool)
 }
 
 func TestMain(m *testing.M) {
-	if runtime.GOOS == "windows" {
-		// The helper-process fake remains portable; this branch documents that
-		// no shell executable is involved in these contract tests.
-	}
 	os.Exit(m.Run())
 }

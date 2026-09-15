@@ -293,7 +293,9 @@ func sanitizeUserAttachmentURL(raw, host string) (string, error) {
 	if err != nil || parsed.Host == "" {
 		return "", errors.New("user-attachments response was not an absolute URL")
 	}
-	if !strings.EqualFold(parsed.Scheme, "https") && !(strings.EqualFold(parsed.Scheme, "http") && strings.EqualFold(parsed.Hostname(), "github.localhost")) {
+	httpsScheme := strings.EqualFold(parsed.Scheme, "https")
+	localhostHTTP := strings.EqualFold(parsed.Scheme, "http") && strings.EqualFold(parsed.Hostname(), "github.localhost")
+	if !httpsScheme && !localhostHTTP {
 		return "", errors.New("user-attachments response used an unexpected URL scheme")
 	}
 	if !userAttachmentHostOK(parsed.Hostname(), host) {

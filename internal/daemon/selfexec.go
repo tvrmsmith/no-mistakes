@@ -1153,8 +1153,8 @@ func waitForDaemonStopBudget(p *paths.Paths, instance daemonInstance, timeout ti
 	// its own consistency validation; fall back to the captured instance for
 	// a daemon that already removed its PID file but is still running.
 	pid, err := ReadPID(p)
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		if err := validateDaemonPIDFallback(p, pid); err != nil {
 			return err
 		}

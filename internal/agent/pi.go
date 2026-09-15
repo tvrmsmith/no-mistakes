@@ -199,6 +199,9 @@ func (a *piAgent) buildArgs(session *SessionRef) []string {
 	return args
 }
 
+// piHexDigits is every character a UUID field may contain.
+const piHexDigits = "0123456789abcdefABCDEF"
+
 // isPiSessionID accepts only the full canonical UUID Pi emits in its JSON
 // session header. It deliberately rejects paths and partial UUIDs accepted by
 // Pi's CLI because no-mistakes must never resume an ambiguous global session.
@@ -213,7 +216,7 @@ func isPiSessionID(id string) bool {
 			}
 			continue
 		}
-		if !(id[i] >= '0' && id[i] <= '9') && !(id[i] >= 'a' && id[i] <= 'f') && !(id[i] >= 'A' && id[i] <= 'F') {
+		if !strings.ContainsRune(piHexDigits, rune(id[i])) {
 			return false
 		}
 	}

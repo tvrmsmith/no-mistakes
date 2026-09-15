@@ -149,11 +149,11 @@ func isUnsafeInvisibleFixMessageRune(r rune) bool {
 }
 
 func validateFixMessageTemplate(tmpl *template.Template) error {
-	if len(tmpl.Templates()) != 1 || tmpl.Tree == nil || tmpl.Tree.Root == nil {
+	if len(tmpl.Templates()) != 1 || tmpl.Tree == nil || tmpl.Root == nil {
 		return fmt.Errorf("commit.fix_message supports only literal text and {{.Step}} or {{.Summary}} placeholders")
 	}
 	placeholders := 0
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		switch node := node.(type) {
 		case *parse.TextNode:
 		case *parse.ActionNode:
@@ -173,7 +173,7 @@ func validateFixMessageTemplate(tmpl *template.Template) error {
 
 func predictFixMessageBytes(tmpl *template.Template, data fixMessageData) (int, error) {
 	size := 0
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		nodeBytes := 0
 		switch node := node.(type) {
 		case *parse.TextNode:

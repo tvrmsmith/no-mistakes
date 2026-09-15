@@ -67,8 +67,8 @@ func runVerifyPy(t *testing.T, body, headSHA string) (conclusion, output string)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	err := cmd.Run()
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		return "success", buf.String()
 	default:
 		var exitErr *exec.ExitError

@@ -1115,8 +1115,7 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
 			fmt.Fprint(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.2","assets":[]}}`)

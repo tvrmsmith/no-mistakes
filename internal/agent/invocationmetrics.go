@@ -389,13 +389,18 @@ func leadingVerb(sub string) (verb string, rest []string) {
 	return "", nil
 }
 
+// isEnvNameRune reports whether r may appear in an environment variable name.
+func isEnvNameRune(r rune) bool {
+	return r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+}
+
 func isEnvAssignment(tok string) bool {
 	eq := strings.IndexByte(tok, '=')
 	if eq <= 0 {
 		return false
 	}
 	for _, r := range tok[:eq] {
-		if !(r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+		if !isEnvNameRune(r) {
 			return false
 		}
 	}

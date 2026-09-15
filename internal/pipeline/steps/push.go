@@ -301,12 +301,15 @@ func reviewApprovedHead(sctx *pipeline.StepContext, run *db.Run) (string, string
 	return approvedHead, ""
 }
 
+// hexDigits is every character a git object ID may contain.
+const hexDigits = "0123456789abcdefABCDEF"
+
 func isFullGitObjectID(value string) bool {
 	if len(value) != 40 && len(value) != 64 {
 		return false
 	}
 	for _, r := range value {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+		if !strings.ContainsRune(hexDigits, r) {
 			return false
 		}
 	}

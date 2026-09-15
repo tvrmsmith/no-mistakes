@@ -745,9 +745,7 @@ func parseJSONDecimal(number json.Number) (jsonDecimal, bool) {
 	if exponentIndex := strings.IndexAny(raw, "eE"); exponentIndex >= 0 {
 		mantissa = raw[:exponentIndex]
 		exponentText := raw[exponentIndex+1:]
-		if strings.HasPrefix(exponentText, "+") {
-			exponentText = exponentText[1:]
-		}
+		exponentText = strings.TrimPrefix(exponentText, "+")
 		if exponentText == "" {
 			return jsonDecimal{}, false
 		}

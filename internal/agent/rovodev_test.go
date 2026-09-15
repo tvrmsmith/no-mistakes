@@ -521,15 +521,15 @@ func TestRovodevAgent_NoSchema(t *testing.T) {
 	calledPaths := make(map[string]bool)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calledPaths[r.URL.Path] = true
-		switch {
-		case r.URL.Path == "/v3/sessions/create":
+		switch r.URL.Path {
+		case "/v3/sessions/create":
 			fmt.Fprint(w, `{"session_id":"s1"}`)
-		case r.URL.Path == "/v3/set_chat_message":
+		case "/v3/set_chat_message":
 			w.WriteHeader(http.StatusOK)
-		case r.URL.Path == "/v3/stream_chat":
+		case "/v3/stream_chat":
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"done\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
-		case r.URL.Path == "/v3/sessions/s1":
+		case "/v3/sessions/s1":
 			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusOK)

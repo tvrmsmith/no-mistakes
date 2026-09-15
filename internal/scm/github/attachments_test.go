@@ -326,11 +326,6 @@ func TestGH2990IssueCreateHelpDocumentsAttach(t *testing.T) {
 			t.Errorf("gh 2.99.0 issue create help missing %q", want)
 		}
 	}
-	if strings.Contains(help, "GitHub Enterprise Server is not supported") {
-		// Help for issue create does not need to repeat the GHES trap; the
-		// upload client owns that. This assertion documents that we do not
-		// treat help prose as the GHES contract.
-	}
 	version, err := exec.Command(gh, "--version").CombinedOutput()
 	if err != nil {
 		t.Fatalf("gh --version: %v", err)

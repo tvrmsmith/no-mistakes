@@ -457,7 +457,7 @@ func TestRenderDiff_ScrollUpIndicator(t *testing.T) {
 	b.WriteString("+++ b/main.go\n")
 	b.WriteString("@@ -1,20 +1,20 @@\n")
 	for i := 0; i < 20; i++ {
-		b.WriteString(fmt.Sprintf("+line %d\n", i))
+		fmt.Fprintf(&b, "+line %d\n", i)
 	}
 
 	// Scroll down 5 lines, view height 5 - should have lines above AND below.
@@ -486,7 +486,7 @@ func TestRenderDiff_ScrollUpOnlyAtBottom(t *testing.T) {
 	b.WriteString("+++ b/main.go\n")
 	b.WriteString("@@ -1,5 +1,5 @@\n")
 	for i := 0; i < 5; i++ {
-		b.WriteString(fmt.Sprintf("+line %d\n", i))
+		fmt.Fprintf(&b, "+line %d\n", i)
 	}
 
 	// 9 total lines, view height 5, offset 4 - at the bottom.

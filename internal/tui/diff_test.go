@@ -266,7 +266,7 @@ func TestRenderDiff_ScrollIndicatorInBottomBorder(t *testing.T) {
 	b.WriteString("+++ b/main.go\n")
 	b.WriteString("@@ -1,20 +1,20 @@\n")
 	for i := 0; i < 20; i++ {
-		b.WriteString(fmt.Sprintf("+line %d\n", i))
+		fmt.Fprintf(&b, "+line %d\n", i)
 	}
 
 	got := stripANSI(renderDiff(b.String(), 80, 5, 0, "", ""))

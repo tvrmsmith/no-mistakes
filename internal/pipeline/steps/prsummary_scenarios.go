@@ -76,7 +76,7 @@ func renderLiveValidationLine(scenarios []types.TestScenario, verdict string) st
 		b.WriteString("no verdict recorded")
 	}
 	if total > 0 {
-		b.WriteString(fmt.Sprintf(" - %d of %d scenarios driven live against the product", live, total))
+		fmt.Fprintf(&b, " - %d of %d scenarios driven live against the product", live, total)
 	}
 	return b.String()
 }
@@ -133,13 +133,13 @@ func renderScenarioTable(scenarios []types.TestScenario, flavor prBodyFlavor) st
 		if result == types.ScenarioResultUntested && strings.TrimSpace(scenario.Reason) != "" {
 			basis = strings.TrimSpace(scenario.Reason)
 		}
-		b.WriteString(fmt.Sprintf("| %s | %s %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %s %s | %s | %s |\n",
 			name,
 			scenarioResultEmoji(result),
 			result,
 			live,
 			scenarioCell(basis, flavor),
-		))
+		)
 		rows++
 	}
 	if rows == 0 {

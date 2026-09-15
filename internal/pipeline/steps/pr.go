@@ -64,9 +64,7 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	ctx := sctx.Ctx
 
 	branch := sctx.Run.Branch
-	if strings.HasPrefix(branch, "refs/heads/") {
-		branch = strings.TrimPrefix(branch, "refs/heads/")
-	}
+	branch = strings.TrimPrefix(branch, "refs/heads/")
 	baseBranch := effectivePRBaseBranch(sctx)
 	if branch == baseBranch {
 		sctx.Log(fmt.Sprintf("skipping PR creation on base branch %s", branch))

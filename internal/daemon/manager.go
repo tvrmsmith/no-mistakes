@@ -2446,9 +2446,7 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 		order = append(order, id)
 	}
 	sort.Strings(order)
-	for _, id := range order {
-		report.Waited = append(report.Waited, id)
-	}
+	report.Waited = append(report.Waited, order...)
 
 	// Fan every done channel into one funnel so the deadline/ctx race can be
 	// expressed as a single select, without reflect.Select over a dynamic set.

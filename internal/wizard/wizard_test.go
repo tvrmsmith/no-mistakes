@@ -584,7 +584,7 @@ func TestWizardTracksCompletedKeyActions(t *testing.T) {
 	m = advance(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m = advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feat: add wizard telemetry")})
 	m = advance(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m = advance(m, tea.KeyMsg{Type: tea.KeyEnter})
+	advance(m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	if !containsWizardEvent(r.telemetry, "branch_created", "source", "user") {
 		t.Fatal("expected branch_created telemetry with user source")
@@ -609,7 +609,7 @@ func TestWizardTracksAbortOnPushDecline(t *testing.T) {
 	m := NewModel(cfg)
 	m = drain(m, m.Init())
 
-	m = advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 
 	if !containsWizardEvent(r.telemetry, "aborted", "reason", "decline_push") {
 		t.Fatal("expected aborted telemetry with decline_push reason")
@@ -621,7 +621,7 @@ func TestWizardTracksAgentSourcedBranchAction(t *testing.T) {
 	m := NewModel(baseConfig(r))
 	m = drain(m, m.Init())
 
-	m = advance(m, tea.KeyMsg{Type: tea.KeyEnter})
+	advance(m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	if !containsWizardEvent(r.telemetry, "branch_created", "source", "agent") {
 		t.Fatal("expected branch_created telemetry with agent source")
@@ -760,7 +760,7 @@ func TestWaitForRun_CompletedTelemetrySkippedOnWaitError(t *testing.T) {
 
 	m := NewModel(cfg)
 	m = drain(m, m.Init())
-	m = advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 
 	if containsWizardEvent(r.telemetry, "completed", "", nil) {
 		t.Fatal("completed telemetry should not fire when wait fails")

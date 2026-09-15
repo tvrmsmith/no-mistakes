@@ -427,7 +427,7 @@ func TestBuildACPStructuredPrompt(t *testing.T) {
 		if schemaIdx < 0 {
 			t.Errorf("schema not found in output: %s", got)
 		}
-		if !(promptIdx < headerIdx && headerIdx < schemaIdx) {
+		if promptIdx >= headerIdx || headerIdx >= schemaIdx {
 			t.Errorf("expected order prompt < header < schema; got prompt=%d header=%d schema=%d", promptIdx, headerIdx, schemaIdx)
 		}
 	})

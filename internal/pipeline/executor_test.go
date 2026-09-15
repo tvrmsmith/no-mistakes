@@ -107,14 +107,14 @@ func TestExecutor_RestartsValidationFromRequestedStep(t *testing.T) {
 	ci := &adaptiveCallStep{name: types.StepCI, fn: func(sctx *StepContext) (*StepOutcome, error) {
 		order = append(order, types.StepCI)
 		ciCalls++
-		switch {
-		case ciCalls == 1:
+		switch ciCalls {
+		case 1:
 			return &StepOutcome{
 				NeedsApproval: true,
 				AutoFixable:   true,
 				Findings:      `{"findings":[{"severity":"error","description":"CI check failing: test","action":"auto-fix","category":"ci-check","check":"test"}],"summary":"1 CI check failing"}`,
 			}, nil
-		case ciCalls == 2:
+		case 2:
 			if !sctx.Fixing || sctx.PreviousFindings == "" {
 				t.Errorf("fix round: Fixing=%v PreviousFindings=%q, want the auto-fix findings handed over", sctx.Fixing, sctx.PreviousFindings)
 			}

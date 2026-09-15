@@ -295,7 +295,7 @@ func TestNoMistakesBinary_WaitAndSlowDaemon(t *testing.T) {
 	bin := buildNoMistakesBinary(t)
 
 	help := execNoMistakes(t, bin, "axi", "run", "--help")
-	if !strings.Contains(help, "--wait") || !(strings.Contains(help, "8m0s") || strings.Contains(help, "8m")) {
+	if !strings.Contains(help, "--wait") || (!strings.Contains(help, "8m0s") && !strings.Contains(help, "8m")) {
 		t.Fatalf("real binary axi run --help missing default --wait 8m:\n%s", help)
 	}
 	respondHelp := execNoMistakes(t, bin, "axi", "respond", "--help")
