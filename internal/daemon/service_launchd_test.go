@@ -310,3 +310,59 @@ func TestRenderLaunchAgentForwardsEveryProxyEnvKey(t *testing.T) {
 		}
 	}
 }
+
+// A failed `launchctl print` used to report managedServiceExited whatever the
+// failure was. The only caller acts on that state and ignores an error, so a
+// launchctl that could not answer became evidence that the daemon had died.
+// Only launchctl's own "could not find service" says the label is unloaded.
+func TestLaunchdManagedStateSeparatesAnUnloadedLabelFromAFailedRead(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    string
+		err       error
+		wantState managedServiceState
+		wantErr   bool
+	}{
+		{
+			name:      "unloaded label is the exited state",
+			output:    "Could not find service \"com.kunchenguid.no-mistakes.daemon\" in domain for login",
+			err:       fmt.Errorf("launchctl print: exit status 113"),
+			wantState: managedServiceExited,
+		},
+		{
+			name:      "any other failure is unreadable, not exited",
+			output:    "Bootstrap failed: 5: Input/output error",
+			err:       fmt.Errorf("launchctl print: exit status 5"),
+			wantState: managedServiceUnknown,
+			wantErr:   true,
+		},
+		{
+			name:      "a running service still reads as running",
+			output:    "state = running\npid = 4242",
+			wantState: managedServiceRunning,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+			cleanup := stubServiceRuntime(t)
+			defer cleanup()
+			runtimeGOOS = "darwin"
+			serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
+			serviceCommandRunner = func(string, ...string) ([]byte, error) {
+				return []byte(tc.output), tc.err
+			}
+
+			state, err := managedDaemonServiceState(p, managedServiceLaunch{})
+			if tc.wantErr && err == nil {
+				t.Fatal("want the launchctl failure reported, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if state != tc.wantState {
+				t.Fatalf("state = %v, want %v", state, tc.wantState)
+			}
+		})
+	}
+}

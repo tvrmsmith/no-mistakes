@@ -38,7 +38,14 @@ func (u *updater) ensureDaemonUsesCurrentExecutable() error {
 	// than this update - exactly what this guard exists to catch - so it must
 	// reach the takeover prompt rather than skip it.
 	case ipc.IsVersionMismatch(err):
-	case err != nil, !alive:
+	// daemonIsRunning already answers a missing socket as (false, nil), so an
+	// error here is a probe that could not complete, not an absent daemon.
+	// Skipping the guard on it is the case it exists to prevent: the update
+	// would replace the binary a running daemon is executing from, having
+	// failed to look.
+	case err != nil:
+		return fmt.Errorf("cannot determine whether a daemon is running: %w", err)
+	case !alive:
 		return nil
 	}
 	runningPath, err := daemonExecutablePath(u.paths)

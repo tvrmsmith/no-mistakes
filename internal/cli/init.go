@@ -189,11 +189,16 @@ func resolveWorktreeRoot(p *paths.Paths, d *db.DB, workDir, root string) (string
 // did not load - and registering into it is never useful: the daemon refuses to
 // start on that same config, so the registration lands in a CLI that is already
 // down, and the placement it may have broken then surfaces as a second fault to
-// find by hand.
+// find by hand. A checkout that cannot be resolved is refused for the same
+// reason: it is the subject of every comparison below, so an unresolved one
+// would pass this gate by having nothing to judge rather than by being safe.
 func assertCheckoutHoldsNoConfiguredWorktreeRoot(p *paths.Paths, workDir string) error {
 	checkout, err := git.FindMainRepoRoot(workDir)
-	if err != nil || strings.TrimSpace(checkout) == "" {
-		return nil
+	if err != nil {
+		return fmt.Errorf("init: %s must be inside a git repository: %w", workDir, err)
+	}
+	if strings.TrimSpace(checkout) == "" {
+		return fmt.Errorf("init: git reported no main working tree for %s", workDir)
 	}
 	cfg, err := config.LoadGlobal(p.ConfigFile())
 	if err != nil {

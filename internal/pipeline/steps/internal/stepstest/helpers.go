@@ -50,7 +50,13 @@ func ExecuteWithAutoFix(t *testing.T, step pipeline.Step, sctx *pipeline.StepCon
 		}
 		parsed, parseErr := types.ParseFindingsJSON(outcome.Findings)
 		if parseErr != nil {
-			return outcome, nil
+			// Ending the loop here would report the auto-fixable outcome as one
+			// the executor declined to fix, which is the opposite of what the
+			// executor does with unparseable findings (see
+			// pipeline.autoFixableFindingsJSON, which passes them through). A
+			// step under test that emits findings this helper cannot read is a
+			// bug in the test, so say so instead of absorbing it.
+			t.Fatalf("parse auto-fix findings: %v (findings: %s)", parseErr, outcome.Findings)
 		}
 		normalized := types.NormalizeFindings(parsed, string(step.Name()))
 		fixable := types.AutoFixableFindings(normalized, types.FindingSeverityWarning)

@@ -313,6 +313,7 @@ func TestStartStopsDetachedDaemonBeforeRestartingStaleManagedService(t *testing.
 			// A racing Windows TCP connection can report an error after the
 			// in-process daemon has shut down. For this service-ordering test,
 			// that state deterministically means the old daemon is stopped.
+			t.Logf("health check failed (%v); this test reads that as the old daemon being stopped", err)
 			return false, nil
 		}
 		return alive, nil

@@ -254,9 +254,21 @@ func ensureWorkingRemote(ctx context.Context, absRoot, bareDir, reposDir string,
 // treated as a fresh init instead: no gate remote, an orphan gate with no
 // record, or a copy whose original still exists on disk.
 func reattachRelocatedRepo(ctx context.Context, d *db.DB, p *paths.Paths, absRoot string) (*db.Repo, error) {
+	// Ask whether the remote exists before asking for its URL. `remote get-url`
+	// fails both for a repo that has no gate remote and for a git that cannot
+	// read the repo at all, and treating the second as the first would let a
+	// broken read reattach nothing and hand the caller a fresh init over a gate
+	// that is still there.
+	present, err := git.HasRemote(ctx, absRoot, RemoteName)
+	if err != nil {
+		return nil, fmt.Errorf("read the remotes of %s: %w", absRoot, err)
+	}
+	if !present {
+		return nil, nil
+	}
 	remoteURL, err := git.GetRemoteURL(ctx, absRoot, RemoteName)
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("read the %s remote url: %w", RemoteName, err)
 	}
 	id := strings.TrimSuffix(filepath.Base(remoteURL), ".git")
 	if p.RepoDir(id) != remoteURL {

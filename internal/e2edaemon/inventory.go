@@ -238,7 +238,10 @@ func (inv *Inventory) readUnlocked() (*inventoryFile, error) {
 	}
 	var file inventoryFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		// Corrupt inventory: treat as empty so recovery can continue.
+		// Carry on from empty so a corrupt file cannot wedge every later run,
+		// but say so: the next write replaces the file, so whatever daemons it
+		// recorded stop being reapable here and nothing else will report it.
+		fmt.Fprintf(os.Stderr, "e2edaemon: inventory %s is corrupt and its entries are being discarded: %v\n", inv.path(), err)
 		return &inventoryFile{Version: 1}, nil
 	}
 	if file.Version == 0 {

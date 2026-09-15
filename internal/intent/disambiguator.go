@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -129,6 +130,21 @@ func (d *agentDisambiguator) Disambiguate(ctx context.Context, diffFiles []strin
 	return DisambiguationChoice{AgentName: strings.TrimSpace(parsed.AgentName), SessionID: strings.TrimSpace(parsed.SessionID)}, nil
 }
 
+// gitSaysNotARepository reports whether err is git answering that the
+// directory is outside any repository, rather than the probe failing to run.
+// git exits non-zero for both, so the two are told apart by git having exited
+// at all plus the message it exits with. Only the answer is a negative result;
+// a probe that never ran leaves the worktree question unanswered.
+func gitSaysNotARepository(err error) bool {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "not a git repository") ||
+		strings.Contains(text, "this operation must be run in a work tree")
+}
+
 type disambiguatorWorktreeSnapshot struct {
 	status     string
 	head       string
@@ -141,7 +157,16 @@ func disambiguatorWorktreeState(ctx context.Context, cwd string) (disambiguatorW
 		return disambiguatorWorktreeSnapshot{}, false, nil
 	}
 	inside, err := nmgit.Run(ctx, cwd, "rev-parse", "--is-inside-work-tree")
-	if err != nil || strings.TrimSpace(inside) != "true" {
+	if err != nil {
+		if gitSaysNotARepository(err) {
+			return disambiguatorWorktreeSnapshot{}, false, nil
+		}
+		// This snapshot is the guard that reverts whatever the disambiguator
+		// agent touches, so a read that failed must not disarm it: the caller
+		// would run the agent unwatched and keep its edits.
+		return disambiguatorWorktreeSnapshot{}, false, fmt.Errorf("check whether %s is a git worktree: %w", cwd, err)
+	}
+	if strings.TrimSpace(inside) != "true" {
 		return disambiguatorWorktreeSnapshot{}, false, nil
 	}
 	head, err := nmgit.Run(ctx, cwd, "rev-parse", "HEAD")
