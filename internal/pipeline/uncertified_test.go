@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -24,7 +23,7 @@ func TestExecutor_BindsUncertifiedRangeOntoInitialReview(t *testing.T) {
 		return &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}, nil
 	}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	if fixing {
@@ -57,7 +56,7 @@ func TestBindUncertifiedPipelineRange_CopiesOntoStepContext(t *testing.T) {
 	}
 
 	sctx := &StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
@@ -79,7 +78,7 @@ func TestBindUncertifiedPipelineRange_MissingFromGateWarnsAndContinues(t *testin
 	}
 	var logs []string
 	sctx := &StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
@@ -102,7 +101,7 @@ func TestBindUncertifiedPipelineRange_DoesNotBindWhileFixing(t *testing.T) {
 		t.Fatal(err)
 	}
 	sctx := &StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
@@ -122,7 +121,7 @@ func TestApprovedReview_ClearsUncertifiedRange(t *testing.T) {
 	}
 	step := &mockStep{name: types.StepReview, outcome: &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
@@ -149,7 +148,7 @@ func TestParkedReview_DoesNotClearUncertifiedRange(t *testing.T) {
 	}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
 	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+	go func() { done <- exec.Execute(t.Context(), run, repo, t.TempDir()) }()
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
 	if err != nil {
@@ -178,7 +177,7 @@ func TestFailedReview_DoesNotClearUncertifiedRange(t *testing.T) {
 	}
 	step := newFailStep(types.StepReview, fmt.Errorf("review agent failed"))
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err == nil {
+	if err := exec.Execute(t.Context(), run, repo, t.TempDir()); err == nil {
 		t.Fatal("expected failed review")
 	}
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
@@ -209,7 +208,7 @@ func TestApprovedReview_ClearsUncertifiedRangeWhenApprovedHeadIsDescendant(t *te
 	}
 	step := &mockStep{name: types.StepReview, outcome: &StepOutcome{ReviewApprovedHeadSHA: approved}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, dir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, dir); err != nil {
 		t.Fatal(err)
 	}
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
@@ -241,7 +240,7 @@ func TestApprovedReview_DoesNotClearWhenApprovedHeadIsNotDescendant(t *testing.T
 	}
 	step := &mockStep{name: types.StepReview, outcome: &StepOutcome{ReviewApprovedHeadSHA: other}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, dir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, dir); err != nil {
 		t.Fatal(err)
 	}
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
@@ -268,7 +267,7 @@ func TestPersistUncertifiedPipelineRange_KeepsFromSHAAcrossRunsOnSameLineage(t *
 	h2 := currentSHA(t, dir)
 
 	PersistUncertifiedPipelineRange(&StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     runA,
@@ -280,7 +279,7 @@ func TestPersistUncertifiedPipelineRange_KeepsFromSHAAcrossRunsOnSameLineage(t *
 		t.Fatal(err)
 	}
 	PersistUncertifiedPipelineRange(&StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     runB,
@@ -311,7 +310,7 @@ func TestPersistUncertifiedPipelineRange_KeepsFromSHAOnSameRun(t *testing.T) {
 	h2 := currentSHA(t, dir)
 
 	sctx := &StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
@@ -340,7 +339,7 @@ func TestPersistUncertifiedPipelineRange_ReplacesRangeWhenHistoryDiverged(t *tes
 	h1 := currentSHA(t, dir)
 
 	PersistUncertifiedPipelineRange(&StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     runA,
@@ -362,7 +361,7 @@ func TestPersistUncertifiedPipelineRange_ReplacesRangeWhenHistoryDiverged(t *tes
 		t.Fatal(err)
 	}
 	PersistUncertifiedPipelineRange(&StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     runB,
@@ -409,7 +408,7 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *
 	}
 
 	sctx := &StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
@@ -455,7 +454,7 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_LeavesRangeWhenOldHeadDidNotCo
 	newHead := currentSHA(t, dir)
 
 	RemapUncertifiedPipelineRangeAfterRebase(&StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
@@ -473,7 +472,7 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_LeavesRangeWhenOldHeadDidNotCo
 
 func currentSHA(t *testing.T, dir string) string {
 	t.Helper()
-	sha, err := git.HeadSHA(context.Background(), dir)
+	sha, err := git.HeadSHA(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

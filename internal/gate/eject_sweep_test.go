@@ -1,7 +1,6 @@
 package gate
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,7 +26,7 @@ func TestEjectSweepsEveryReachablePlacementInOneSweep(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -84,7 +83,7 @@ func TestEjectSweepsTheDefaultTreeBeforeRemovingIt(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {

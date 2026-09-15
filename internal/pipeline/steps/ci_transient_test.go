@@ -39,7 +39,7 @@ func (h *fakePreRunHost) PreRunFailures(_ context.Context, checks []scm.Check) (
 func markContext(t *testing.T, rerunBudget int) *pipeline.StepContext {
 	t.Helper()
 	return &pipeline.StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Config: &config.Config{CI: config.CI{RerunTransient: rerunBudget}},
 		Log:    func(string) {},
 	}

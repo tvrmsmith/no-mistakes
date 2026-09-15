@@ -417,7 +417,7 @@ func TestEnsurePrepared_RestoresAfterCleanupTimeout(t *testing.T) {
 	previousCleanup := runPreparationCleanup
 	prepareCleanupTimeout = time.Millisecond
 	runPreparationCleanup = func(ctx context.Context, workDir, head string, submodules []preparationSubmodule) error {
-		if err := cleanupPreparationChanges(context.Background(), workDir, head, submodules); err != nil {
+		if err := cleanupPreparationChanges(t.Context(), workDir, head, submodules); err != nil {
 			return err
 		}
 		<-ctx.Done()
@@ -565,7 +565,7 @@ func TestPreparationSnapshot_RetainsRecoveryData(t *testing.T) {
 	if err := os.Remove(snapshot.repositories[0].indexSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	err = snapshot.restore(context.Background())
+	err = snapshot.restore(t.Context())
 	if err == nil {
 		t.Fatal("restore unexpectedly succeeded with missing snapshot index")
 	}

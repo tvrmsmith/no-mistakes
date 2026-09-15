@@ -26,7 +26,7 @@ func (m mutatingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Resu
 func (m mutatingAgent) Close() error { return nil }
 
 func TestAgentDisambiguatorRestoresAfterBranchSwitchWithDirtyConflict(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 	mainHead := gitTestOutput(t, repo, "rev-parse", "HEAD")
 
@@ -66,7 +66,7 @@ func TestAgentDisambiguatorRestoresAfterBranchSwitchWithDirtyConflict(t *testing
 }
 
 func TestAgentDisambiguatorRemovesIgnoredSideEffects(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.log\n"), 0o644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
@@ -99,7 +99,7 @@ func TestAgentDisambiguatorRemovesIgnoredSideEffects(t *testing.T) {
 }
 
 func TestAgentDisambiguatorPreservesPreexistingIgnoredFiles(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
@@ -142,7 +142,7 @@ func TestAgentDisambiguatorPreservesPreexistingIgnoredFiles(t *testing.T) {
 }
 
 func TestAgentDisambiguatorPreservesPreexistingIgnoredDirectory(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("cache/\n"), 0o644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
@@ -192,7 +192,7 @@ func TestAgentDisambiguatorPreservesPreexistingIgnoredDirectory(t *testing.T) {
 }
 
 func TestAgentDisambiguatorRemovesNestedGitRepositorySideEffect(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
@@ -223,7 +223,7 @@ func TestAgentDisambiguatorRemovesNestedGitRepositorySideEffect(t *testing.T) {
 }
 
 func TestAgentDisambiguatorPreservesPreexistingIgnoredSymlink(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
@@ -260,7 +260,7 @@ func TestAgentDisambiguatorPreservesPreexistingIgnoredSymlink(t *testing.T) {
 }
 
 func TestAgentDisambiguatorReturnsCleanupErrorAfterAgentError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {

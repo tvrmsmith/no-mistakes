@@ -547,7 +547,7 @@ func TestPRStep_GitHubForkCreatesParentPRWithForkHead(t *testing.T) {
 	sctx.Repo.ForkURL = "https://github.com/fork-owner/no-mistakes.git"
 	sctx.Config.PR.BaseBranch = "develop"
 	sctx.Run.Branch = "refs/heads/feature"
-	forgeCtx, err := forgecontext.Resolve(context.Background(), config.ForgeProfiles{
+	forgeCtx, err := forgecontext.Resolve(t.Context(), config.ForgeProfiles{
 		"github.com": {GHConfigDir: profileDir},
 	}, sctx.Repo.UpstreamURL, sctx.Repo.ForkURL)
 	if err != nil {

@@ -1,7 +1,6 @@
 package bitbucket
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -89,7 +88,7 @@ func TestListPRStatusesFollowsPagination(t *testing.T) {
 		},
 	}
 
-	statuses, err := client.ListPRStatuses(context.Background(), repo, 42)
+	statuses, err := client.ListPRStatuses(t.Context(), repo, 42)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +121,7 @@ func TestListPRStatusesRejectsCrossOriginPagination(t *testing.T) {
 		},
 	}
 
-	_, err := client.ListPRStatuses(context.Background(), repo, 42)
+	_, err := client.ListPRStatuses(t.Context(), repo, 42)
 	if err == nil {
 		t.Fatal("expected cross-origin pagination to fail")
 	}
@@ -154,7 +153,7 @@ func TestFindOpenPRBySourceAndDestinationBranchFiltersSourceRepo(t *testing.T) {
 		},
 	}
 
-	pr, err := client.FindOpenPRBySourceBranch(context.Background(), repo, "feature", "main")
+	pr, err := client.FindOpenPRBySourceBranch(t.Context(), repo, "feature", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +183,7 @@ func TestFindOpenPRBySourceBranchCanonicalizesForeignHTMLLink(t *testing.T) {
 		},
 	}
 
-	pr, err := client.FindOpenPRBySourceBranch(context.Background(), repo, "feature", "main")
+	pr, err := client.FindOpenPRBySourceBranch(t.Context(), repo, "feature", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +227,7 @@ func TestFindOpenPRBySourceBranchRejectsInvalidResponse(t *testing.T) {
 				},
 			}
 
-			pr, err := client.FindOpenPRBySourceBranch(context.Background(), repo, "feature", "main")
+			pr, err := client.FindOpenPRBySourceBranch(t.Context(), repo, "feature", "main")
 			if err == nil {
 				t.Fatal("FindOpenPRBySourceBranch() error = nil, want response error")
 			}
@@ -276,7 +275,7 @@ func TestCreatePRSetsDraftFieldWhenRequested(t *testing.T) {
 				httpClient: &http.Client{Timeout: time.Second},
 			}
 
-			pr, err := client.CreatePR(context.Background(), repo, "feature", "main", "title", "body", tt.draft)
+			pr, err := client.CreatePR(t.Context(), repo, "feature", "main", "title", "body", tt.draft)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -331,7 +330,7 @@ func TestListPipelinesByCommitFollowsPagination(t *testing.T) {
 		},
 	}
 
-	pipelines, err := client.ListPipelinesByCommit(context.Background(), repo, "abc123")
+	pipelines, err := client.ListPipelinesByCommit(t.Context(), repo, "abc123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +376,7 @@ func TestListPipelineStepsFollowsPagination(t *testing.T) {
 		},
 	}
 
-	steps, err := client.ListPipelineSteps(context.Background(), repo, "{pipe}")
+	steps, err := client.ListPipelineSteps(t.Context(), repo, "{pipe}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +415,7 @@ func TestGetStepLogCapsResponseToTail(t *testing.T) {
 		},
 	}
 
-	logOutput, err := client.GetStepLog(context.Background(), repo, "{pipe}", "{step}")
+	logOutput, err := client.GetStepLog(t.Context(), repo, "{pipe}", "{step}")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,7 +12,7 @@ func TestOpencodeSSECaptureWaitsForIdle(t *testing.T) {
 	t.Helper()
 
 	capture := newOpencodeSSECapture("")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -36,7 +36,7 @@ func TestOpencodeSSECaptureIgnoresSessionIdleSubstringOutsideIdleEvent(t *testin
 	t.Helper()
 
 	capture := newOpencodeSSECapture("")
-	idleCtx, idleCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	idleCtx, idleCancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer idleCancel()
 
 	if _, err := capture.Write([]byte("event: message\ndata: {\"type\":\"message.updated\",\"text\":\"contains \\\"session.idle\\\" in content\"}\n\n")); err != nil {
@@ -46,7 +46,7 @@ func TestOpencodeSSECaptureIgnoresSessionIdleSubstringOutsideIdleEvent(t *testin
 		t.Fatalf("wait for idle error = %v, want deadline exceeded", err)
 	}
 
-	realIdleCtx, realIdleCancel := context.WithTimeout(context.Background(), time.Second)
+	realIdleCtx, realIdleCancel := context.WithTimeout(t.Context(), time.Second)
 	defer realIdleCancel()
 	if _, err := capture.Write([]byte("event: message\ndata: {\"type\":\"session.idle\"}\n\n")); err != nil {
 		t.Fatalf("write idle event: %v", err)
@@ -60,7 +60,7 @@ func TestOpencodeSSECaptureRecognizesNestedSessionIdleEvent(t *testing.T) {
 	t.Helper()
 
 	capture := newOpencodeSSECapture("")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
 	if _, err := capture.Write([]byte("event: message\ndata: {\"payload\":{\"type\":\"session.idle\"}}\n\n")); err != nil {
@@ -75,7 +75,7 @@ func TestOpencodeSSECaptureRecognizesTopLevelSessionIdleEvent(t *testing.T) {
 	t.Helper()
 
 	capture := newOpencodeSSECapture("target-session")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
 	if _, err := capture.Write([]byte("event: message\ndata: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"target-session\"}}\n\n")); err != nil {
@@ -90,7 +90,7 @@ func TestOpencodeSSECaptureIgnoresTopLevelIdleForOtherSession(t *testing.T) {
 	t.Helper()
 
 	capture := newOpencodeSSECapture("target-session")
-	idleCtx, idleCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	idleCtx, idleCancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer idleCancel()
 
 	if _, err := capture.Write([]byte("event: message\ndata: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"other-session\"}}\n\n")); err != nil {
@@ -100,7 +100,7 @@ func TestOpencodeSSECaptureIgnoresTopLevelIdleForOtherSession(t *testing.T) {
 		t.Fatalf("wait for idle error = %v, want deadline exceeded", err)
 	}
 
-	realIdleCtx, realIdleCancel := context.WithTimeout(context.Background(), time.Second)
+	realIdleCtx, realIdleCancel := context.WithTimeout(t.Context(), time.Second)
 	defer realIdleCancel()
 	if _, err := capture.Write([]byte("event: message\ndata: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"target-session\"}}\n\n")); err != nil {
 		t.Fatalf("write target idle event: %v", err)
@@ -114,7 +114,7 @@ func TestOpencodeSSECaptureIgnoresIdleForOtherSession(t *testing.T) {
 	t.Helper()
 
 	capture := newOpencodeSSECapture("target-session")
-	idleCtx, idleCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	idleCtx, idleCancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer idleCancel()
 
 	if _, err := capture.Write([]byte("event: message\ndata: {\"payload\":{\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"other-session\"}}}\n\n")); err != nil {
@@ -124,7 +124,7 @@ func TestOpencodeSSECaptureIgnoresIdleForOtherSession(t *testing.T) {
 		t.Fatalf("wait for idle error = %v, want deadline exceeded", err)
 	}
 
-	realIdleCtx, realIdleCancel := context.WithTimeout(context.Background(), time.Second)
+	realIdleCtx, realIdleCancel := context.WithTimeout(t.Context(), time.Second)
 	defer realIdleCancel()
 	if _, err := capture.Write([]byte("event: message\ndata: {\"payload\":{\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"target-session\"}}}\n\n")); err != nil {
 		t.Fatalf("write target idle event: %v", err)

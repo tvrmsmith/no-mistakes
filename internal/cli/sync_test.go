@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -1140,10 +1139,10 @@ func TestAxiSyncRecoverDivergedRefusesThenKeepLocalSucceeds(t *testing.T) {
 
 func TestAxiArchiveBackedRecoveryKeepsExactRequiredHeadAndBothHistories(t *testing.T) {
 	f := newCLIDivergentArchiveFixture(t)
-	if _, err := git.Run(context.Background(), f.local, "merge-base", "--is-ancestor", f.submitted, f.preserved); err == nil {
+	if _, err := git.Run(t.Context(), f.local, "merge-base", "--is-ancestor", f.submitted, f.preserved); err == nil {
 		t.Fatal("synthetic later head unexpectedly descends from required head")
 	}
-	if _, err := git.Run(context.Background(), f.local, "merge-base", "--is-ancestor", f.preserved, f.submitted); err == nil {
+	if _, err := git.Run(t.Context(), f.local, "merge-base", "--is-ancestor", f.preserved, f.submitted); err == nil {
 		t.Fatal("synthetic required head unexpectedly descends from later head")
 	}
 
@@ -1508,7 +1507,7 @@ func TestHumanSyncRecoverRequiresConfirmationOutsideTTY(t *testing.T) {
 
 func cliGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := git.Run(context.Background(), dir, args...)
+	out, err := git.Run(t.Context(), dir, args...)
 	if err != nil {
 		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
 	}

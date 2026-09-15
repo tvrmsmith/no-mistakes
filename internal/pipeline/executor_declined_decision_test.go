@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -30,7 +29,7 @@ func runGateAndRespond(t *testing.T, action types.ApprovalAction, findings strin
 	exec := NewExecutor(database, p, nil, nil, []Step{step, newPassStep(types.StepTest)}, nil)
 
 	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+	go func() { done <- exec.Execute(t.Context(), run, repo, workDir) }()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	respondOrFail(t, exec, types.StepReview, action, nil)
@@ -147,7 +146,7 @@ func TestExecutor_RecoveredGateResolutionsWithoutASelectionRecordTheDecline(t *t
 
 			exec := NewExecutor(database, p, nil, nil, []Step{newApprovalStep(types.StepTest, declinedTestFindings)}, nil)
 			done := make(chan error, 1)
-			go func() { done <- exec.Resume(context.Background(), run, repo, t.TempDir()) }()
+			go func() { done <- exec.Resume(t.Context(), run, repo, t.TempDir()) }()
 
 			deadline := time.Now().Add(5 * time.Second)
 			for {
@@ -213,7 +212,7 @@ func TestExecutor_FixResolutionStillRecordsAUserSelection(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{step, newPassStep(types.StepTest)}, nil)
 
 	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+	go func() { done <- exec.Execute(t.Context(), run, repo, workDir) }()
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	respondOrFail(t, exec, types.StepReview, types.ActionFix, []string{"journal-version-deduplication"})
 

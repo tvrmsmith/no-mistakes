@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -712,7 +711,7 @@ func TestRerunParamsIncludeSkipSteps(t *testing.T) {
 func TestPreflightGuardReportsWorkingTreeCheckError(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	guard := preflightGuard(context.Background(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
+	guard := preflightGuard(t.Context(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
 	if guard == nil {
 		t.Fatal("expected guard for failed working tree check")
 	}
@@ -751,7 +750,7 @@ func TestPreflightGuardDirtyTreeNamesUntrackedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	guard := preflightGuard(context.Background(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
+	guard := preflightGuard(t.Context(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
 	if guard == nil {
 		t.Fatal("expected guard for uncommitted changes")
 	}
@@ -795,7 +794,7 @@ func TestPreflightGuardDirtyTreeTrackedOnlyHasNoUntrackedList(t *testing.T) {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	guard := preflightGuard(context.Background(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
+	guard := preflightGuard(t.Context(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
 	if guard == nil {
 		t.Fatal("expected guard for uncommitted changes")
 	}
@@ -893,7 +892,7 @@ func TestAxiHomeStartsCurrentBranchWhenOtherBranchIsActive(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiHome(cmd); err != nil {
 		t.Fatalf("axi home: %v\n%s", err, out.String())
@@ -951,7 +950,7 @@ func TestAxiStatusEscapesControlBytesInAwaitingTestGate(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiStatus(cmd, dbRun.ID); err != nil {
 		t.Fatalf("axi status: %v\n%s", err, out.String())
@@ -993,7 +992,7 @@ func TestAxiLogsFullEscapesControlByteOutsideTailWithoutRewritingLog(t *testing.
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiLogs(cmd, "test", dbRun.ID, true); err != nil {
 		t.Fatalf("axi logs --full: %v\n%s", err, out.String())
@@ -1061,7 +1060,7 @@ func TestAxiStatusIgnoresInvalidGlobalConfig(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiStatus(cmd, dbRun.ID); err != nil {
 		t.Fatalf("axi status should not fail on invalid global config: %v\n%s", err, out.String())
@@ -1109,7 +1108,7 @@ func TestAxiRunReportsInvalidGlobalConfig(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiRun(cmd, false, nil, "user goal", ""); err == nil {
 		t.Fatalf("axi run should fail on invalid global config:\n%s", out.String())
@@ -1133,7 +1132,7 @@ func TestAxiAbortByRunIDNoOpWhenDaemonStopped(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiAbortByRunID(cmd, "some-run-id"); err != nil {
 		t.Fatalf("abort by id: %v\n%s", err, out.String())

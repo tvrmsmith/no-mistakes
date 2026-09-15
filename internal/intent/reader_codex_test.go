@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -74,7 +73,7 @@ func TestCodexReader_ParsesAllTurnsFromRollout(t *testing.T) {
 	home, _ := buildCodexFixture(t, repoCWD)
 
 	r := NewCodexReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -91,7 +90,7 @@ func TestCodexReader_ParsesAllTurnsFromRollout(t *testing.T) {
 		t.Errorf("Discover should not populate Messages, got %d", len(s.Messages))
 	}
 
-	if err := r.Load(context.Background(), s); err != nil {
+	if err := r.Load(t.Context(), s); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	// Expect: user(event_msg) + assistant(text) + assistant(tool_call paths only) + user(response_item)
@@ -129,7 +128,7 @@ func TestCodexReader_ParsesAllTurnsFromRollout(t *testing.T) {
 func TestCodexReader_FiltersByCWD(t *testing.T) {
 	home, _ := buildCodexFixture(t, "/some/other/path")
 	r := NewCodexReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   "/different",
 		WindowStart: time.Now().Add(-time.Hour),
@@ -145,7 +144,7 @@ func TestCodexReader_FiltersByCWD(t *testing.T) {
 
 func TestCodexReader_NoStateDB(t *testing.T) {
 	r := NewCodexReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: t.TempDir()})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -161,7 +160,7 @@ func TestCodexReader_MissingRollout(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewCodexReader()
-	sessions, _ := r.Discover(context.Background(), DiscoverOpts{
+	sessions, _ := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -171,7 +170,7 @@ func TestCodexReader_MissingRollout(t *testing.T) {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
 	// Load must error gracefully when the rollout is gone, not panic.
-	if err := r.Load(context.Background(), sessions[0]); err == nil {
+	if err := r.Load(t.Context(), sessions[0]); err == nil {
 		t.Error("expected error when rollout missing")
 	}
 }

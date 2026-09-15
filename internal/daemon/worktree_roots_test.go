@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"bytes"
-	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -810,7 +809,7 @@ func TestStepDiff_ReadsThePlacementItsRunRecorded(t *testing.T) {
 	// The operator pastes a different root while the run is parked.
 	configureWorktreeRoot(t, p, workingPath, filepath.Join(t.TempDir(), "somewhere-else"))
 
-	diff, truncated, err := NewRunManager(d, p, nil).StepDiff(context.Background(), run.ID)
+	diff, truncated, err := NewRunManager(d, p, nil).StepDiff(t.Context(), run.ID)
 	if err != nil {
 		t.Fatalf("step diff after a mid-run placement edit: %v", err)
 	}
@@ -858,7 +857,7 @@ func TestPrepareRecoveredRun_LocatesThePlacementItsRunRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.prepareRecoveredRun(context.Background(), stored); err != nil && strings.Contains(err.Error(), "worktree is missing") {
+	if _, err := m.prepareRecoveredRun(t.Context(), stored); err != nil && strings.Contains(err.Error(), "worktree is missing") {
 		t.Fatalf("recovery lost the run's recorded worktree %q: %v", created, err)
 	}
 }
@@ -906,7 +905,7 @@ func TestPrepareRecoveredRun_UnrecordedRunKeepsItsDefaultPlacement(t *testing.T)
 	if stored.WorktreePath() != "" {
 		t.Fatalf("fixture recorded a placement %q, want the pre-upgrade NULL", stored.WorktreePath())
 	}
-	if _, err := NewRunManager(d, p, nil).prepareRecoveredRun(context.Background(), stored); err != nil && strings.Contains(err.Error(), "worktree is missing") {
+	if _, err := NewRunManager(d, p, nil).prepareRecoveredRun(t.Context(), stored); err != nil && strings.Contains(err.Error(), "worktree is missing") {
 		t.Fatalf("recovery looked past the default placement of a run that recorded none: %v", err)
 	}
 }

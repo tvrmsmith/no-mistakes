@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestProvisionGateDoesNotStampUnsupportedHookIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	workDir := filepath.Join(root, "work")
 	if out, err := exec.Command("git", "init", workDir).CombinedOutput(); err != nil {
@@ -145,7 +145,7 @@ func TestInit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestInitUnderSafeBareRepositoryExplicit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, created, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -277,7 +277,7 @@ func TestInitRefusesManagedValidationWorktreeBeforePartialMutation(t *testing.T)
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	database := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 	repo, _, err := Init(ctx, database, p, workDir)
 	if err != nil {
 		t.Fatalf("init outer gate: %v", err)
@@ -329,7 +329,7 @@ func TestInitIsIdempotent(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, created, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -377,7 +377,7 @@ func TestInitWithForkPreservesForkOnPlainReinit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	parentURL := "https://github.com/parent/project.git"
 	forkURL := "https://github.com/fork/project.git"
@@ -434,7 +434,7 @@ func TestInitRefreshUpdatesRepoMetadata(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, created, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -523,7 +523,7 @@ func TestInitRefreshUsesPersistedRepoID(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	legacyID := "legacy-repo"
 	originURL, err := gitpkg.GetRemoteURL(ctx, workDir, "origin")
@@ -575,7 +575,7 @@ func TestInitRepairsBrokenGate(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -619,7 +619,7 @@ func TestInitReattachesGateAfterWorkingDirRename(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -692,7 +692,7 @@ func TestInitCreatesFreshGateForCopiedWorkingDir(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -742,7 +742,7 @@ func TestInitRepointsOrphanGateRemoteOnFreshInit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -780,7 +780,7 @@ func TestInitDoesNotOverwriteExistingNoMistakesRemoteOnFreshInit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	customRemote := filepath.Join(resolveSymlinks(t, t.TempDir()), "custom.git")
 	if out, err := exec.Command("git", "init", "--bare", customRemote).CombinedOutput(); err != nil {
@@ -812,7 +812,7 @@ func TestInitRefreshPreservesCustomPostReceiveHook(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -851,7 +851,7 @@ func TestInitNoOrigin(t *testing.T) {
 	}
 	d := openTestDB(t, p)
 
-	_, _, err := Init(context.Background(), d, p, work)
+	_, _, err := Init(t.Context(), d, p, work)
 	if err == nil {
 		t.Fatal("expected error when no origin remote")
 	}
@@ -876,7 +876,7 @@ func TestInitNotGitRepo(t *testing.T) {
 	}
 	d := openTestDB(t, p)
 
-	_, _, err := Init(context.Background(), d, p, notGit)
+	_, _, err := Init(t.Context(), d, p, notGit)
 	if err == nil {
 		t.Fatal("expected error for non-git directory")
 	}
@@ -924,7 +924,7 @@ func TestInitDetectsDefaultBranchFromRemote(t *testing.T) {
 	}
 	d := openTestDB(t, p)
 
-	repo, _, err := Init(context.Background(), d, p, work)
+	repo, _, err := Init(t.Context(), d, p, work)
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -943,7 +943,7 @@ func TestEject(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -984,7 +984,7 @@ func TestEjectCleansUpWorktrees(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -1021,7 +1021,7 @@ func TestEjectCleansUpWorktreesInConfiguredRoot(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -1090,7 +1090,7 @@ func TestEjectNotInitialized(t *testing.T) {
 	}
 	d := openTestDB(t, p)
 
-	_, err := Eject(context.Background(), d, p, work)
+	_, err := Eject(t.Context(), d, p, work)
 	if err == nil {
 		t.Fatal("expected error when not initialized")
 	}
@@ -1117,7 +1117,7 @@ func TestInit_PostReceiveSurvivesHooksPathPoisoning(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -1181,7 +1181,7 @@ func TestInitRedactsCredentialURL(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {

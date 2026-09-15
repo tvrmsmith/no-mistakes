@@ -48,7 +48,7 @@ func TestAgentPath_DefaultBinaries(t *testing.T) {
 
 func TestResolveAgentExplicitGrok(t *testing.T) {
 	cfg := &Config{Agent: types.AgentGrok}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin != "grok" {
 			t.Fatalf("lookPath(%q), want grok", bin)
 		}
@@ -65,7 +65,7 @@ func TestResolveAgentExplicitGrok(t *testing.T) {
 func TestResolveAgentAutoFallsBackToGrok(t *testing.T) {
 	cfg := &Config{Agent: types.AgentAuto}
 	var probes []string
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		probes = append(probes, bin)
 		if bin == "grok" {
 			return "/usr/local/bin/grok", nil
@@ -132,7 +132,7 @@ func TestParseLogLevel(t *testing.T) {
 
 func TestResolveAgent_ExplicitAgent(t *testing.T) {
 	cfg := &Config{Agent: types.AgentCodex}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin != "codex" {
 			t.Fatalf("lookPath(%q), want codex", bin)
 		}
@@ -148,7 +148,7 @@ func TestResolveAgent_ExplicitAgent(t *testing.T) {
 
 func TestResolveAgent_ExplicitAgentMustBeRunnable(t *testing.T) {
 	cfg := &Config{Agent: types.AgentCodex}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		return "", &exec.Error{Name: bin, Err: exec.ErrNotFound}
 	})
 	if err == nil {
@@ -163,7 +163,7 @@ func TestResolveAgent_ExplicitAgentMustBeRunnable(t *testing.T) {
 
 func TestResolveAgent_ExplicitACPAgent(t *testing.T) {
 	cfg := &Config{Agent: "acp:gemini"}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin != "acpx" {
 			t.Fatalf("lookPath(%q), want acpx", bin)
 		}
@@ -179,7 +179,7 @@ func TestResolveAgent_ExplicitACPAgent(t *testing.T) {
 
 func TestResolveAgent_ExplicitACPAgentMustHaveACPX(t *testing.T) {
 	cfg := &Config{Agent: "acp:gemini"}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		return "", &exec.Error{Name: bin, Err: exec.ErrNotFound}
 	})
 	if err == nil {
@@ -221,7 +221,7 @@ acp_registry_overrides:
 func TestResolveAgent_AutoPicksFirstAvailable(t *testing.T) {
 	cfg := &Config{Agent: types.AgentAuto}
 	// Simulate: claude not found, codex found
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin == "codex" {
 			return "/usr/bin/codex", nil
 		}
@@ -238,7 +238,7 @@ func TestResolveAgent_AutoPicksFirstAvailable(t *testing.T) {
 func TestResolveAgent_ListPicksFirstAvailableAndKeepsFallbacks(t *testing.T) {
 	cfg := &Config{Agents: []types.AgentName{types.AgentClaude, types.AgentCodex, types.AgentPi}}
 
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "codex", "pi":
 			return "/usr/bin/" + bin, nil
@@ -277,7 +277,7 @@ func TestResolveAgent_ListDeduplicatesEquivalentACPTargets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{Agents: tt.candidates}
-			err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+			err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 				switch bin {
 				case "cursor-agent", "acpx":
 					return "/usr/bin/" + bin, nil
@@ -301,7 +301,7 @@ func TestResolveAgent_ListDeduplicatesEquivalentACPTargets(t *testing.T) {
 func TestResolveAgent_ListSkipsUnavailableAuto(t *testing.T) {
 	cfg := &Config{Agents: []types.AgentName{types.AgentAuto, "acp:gemini"}}
 
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin == "acpx" {
 			return "/usr/bin/acpx", nil
 		}
@@ -320,7 +320,7 @@ func TestResolveAgent_ListSkipsUnavailableAuto(t *testing.T) {
 
 func TestResolveAgent_AutoPicksClaude(t *testing.T) {
 	cfg := &Config{Agent: types.AgentAuto}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin == "claude" {
 			return "/usr/bin/claude", nil
 		}
@@ -340,7 +340,7 @@ func TestResolveAgent_AutoRespectsPathOverride(t *testing.T) {
 		AgentPathOverride: map[string]string{"opencode": "/custom/opencode"},
 	}
 	// Only opencode override path exists
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin == "/custom/opencode" {
 			return "/custom/opencode", nil
 		}
@@ -360,7 +360,7 @@ func TestResolveAgent_AutoSkipsMissingOverrideAndFallsBack(t *testing.T) {
 		AgentPathOverride: map[string]string{"claude": "/custom/claude"},
 	}
 
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "/custom/claude":
 			return "", &exec.Error{Name: bin, Err: fs.ErrNotExist}
@@ -392,7 +392,7 @@ func TestResolveAgent_AutoSkipsRovoDevWithoutSubcommand(t *testing.T) {
 		probeRovoDevSupport = originalProbe
 	})
 
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "claude", "codex", "grok", "opencode", "pi", "copilot", "agy", "cursor-agent", "acpx":
 			return "", &exec.Error{Name: bin, Err: exec.ErrNotFound}
@@ -424,7 +424,7 @@ func TestResolveAgent_AutoReturnsRovoDevProbeExitError(t *testing.T) {
 		t.Fatalf("write probe script: %v", err)
 	}
 
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "claude", "codex", "grok", "opencode", "pi":
 			return "", &exec.Error{Name: bin, Err: exec.ErrNotFound}
@@ -452,7 +452,7 @@ func TestResolveAgent_AutoReturnsOverrideProbeError(t *testing.T) {
 	}
 	wantErr := &exec.Error{Name: "/custom/claude", Err: fs.ErrPermission}
 
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin == "/custom/claude" {
 			return "", wantErr
 		}
@@ -469,7 +469,7 @@ func TestResolveAgent_AutoReturnsOverrideProbeError(t *testing.T) {
 
 func TestResolveAgent_AutoNoneAvailable(t *testing.T) {
 	cfg := &Config{Agent: types.AgentAuto}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		return "", &exec.Error{Name: bin, Err: exec.ErrNotFound}
 	})
 	if err == nil {
@@ -493,7 +493,7 @@ func TestResolveAgent_AutoNoneAvailableIncludesOverridePaths(t *testing.T) {
 		},
 	}
 
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		return "", &exec.Error{Name: bin, Err: exec.ErrNotFound}
 	})
 
@@ -511,7 +511,7 @@ func TestResolveAgent_AutoSkipsACPAliasWithoutAcpx(t *testing.T) {
 	// cursor is an ACP alias. Its underlying command is on PATH, but the acpx
 	// shim it runs through is not, so auto must not select it.
 	cfg := &Config{Agent: types.AgentAuto}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		if bin == "cursor-agent" {
 			return "/usr/bin/cursor-agent", nil
 		}
@@ -530,7 +530,7 @@ func TestResolveAgent_AutoSkipsACPAliasWithoutAcpx(t *testing.T) {
 
 func TestResolveAgent_AutoPicksACPAliasWhenBinariesPresent(t *testing.T) {
 	cfg := &Config{Agent: types.AgentAuto}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "cursor-agent":
 			return "/usr/bin/cursor-agent", nil
@@ -550,7 +550,7 @@ func TestResolveAgent_AutoPicksACPAliasWhenBinariesPresent(t *testing.T) {
 
 func TestResolveAgent_ListSkipsACPAliasMissingCommandBinary(t *testing.T) {
 	cfg := &Config{Agents: []types.AgentName{types.AgentCursor, types.AgentClaude}}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "acpx", "claude":
 			return "/usr/bin/" + bin, nil
@@ -571,7 +571,7 @@ func TestResolveAgent_ListSkipsACPAliasMissingCommandBinary(t *testing.T) {
 
 func TestResolveAgent_ListPicksACPAliasWhenBinariesPresent(t *testing.T) {
 	cfg := &Config{Agents: []types.AgentName{types.AgentCursor}}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "acpx", "cursor-agent":
 			return "/usr/bin/" + bin, nil
@@ -592,7 +592,7 @@ func TestResolveAgent_ListSkipsACPTargetMissingCommandBinary(t *testing.T) {
 	// resolution must skip it when cursor-agent is missing even though acpx
 	// is present.
 	cfg := &Config{Agents: []types.AgentName{"acp:cursor", types.AgentClaude}}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "acpx", "claude":
 			return "/usr/bin/" + bin, nil
@@ -613,7 +613,7 @@ func TestResolveAgent_ListSkipsACPTargetMissingCommandBinary(t *testing.T) {
 
 func TestResolveAgent_ListKeepsACPTargetWhenBinariesPresent(t *testing.T) {
 	cfg := &Config{Agents: []types.AgentName{"acp:cursor", types.AgentClaude}}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "acpx", "cursor-agent", "claude":
 			return "/usr/bin/" + bin, nil
@@ -636,7 +636,7 @@ func TestResolveAgent_ACPTargetRegistryOverrideBinaryProbed(t *testing.T) {
 		Agents:               []types.AgentName{"acp:gemini", types.AgentClaude},
 		ACPRegistryOverrides: map[string]string{"gemini": "gemini-cli acp"},
 	}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "acpx", "claude":
 			return "/usr/bin/" + bin, nil
@@ -657,7 +657,7 @@ func TestResolveAgent_ACPAliasRegistryOverrideBinaryProbed(t *testing.T) {
 		Agents:               []types.AgentName{types.AgentCursor},
 		ACPRegistryOverrides: map[string]string{"cursor": "/opt/cursor/cursor-agent acp --profile work"},
 	}
-	err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+	err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 		switch bin {
 		case "acpx", "/opt/cursor/cursor-agent":
 			return bin, nil
@@ -696,7 +696,7 @@ func TestResolveAgent_ACPAliasCommandAvailability(t *testing.T) {
 				cfg.ACPRegistryOverrides = map[string]string{"cursor": tt.override}
 			}
 			var probes []string
-			err := cfg.ResolveAgent(context.Background(), func(bin string) (string, error) {
+			err := cfg.ResolveAgent(t.Context(), func(bin string) (string, error) {
 				probes = append(probes, bin)
 				if bin == "acpx" {
 					return "/usr/bin/acpx", nil
@@ -749,7 +749,7 @@ func TestACPCommandBinaryForProbeForOS(t *testing.T) {
 func TestResolveAgent_AutoPassesContextToRovoDevProbe(t *testing.T) {
 	cfg := &Config{Agent: types.AgentAuto}
 	originalProbe := probeRovoDevSupport
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	probeRovoDevSupport = func(ctx context.Context, bin string) (bool, error) {
 		if bin != "/usr/bin/acli" {

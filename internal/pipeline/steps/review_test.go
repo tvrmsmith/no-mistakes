@@ -127,7 +127,7 @@ func TestReviewStep_HangingAgentFailsRunAfterTimeout(t *testing.T) {
 	sctx.Config.ReviewAgentTimeout = 20 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected hanging review agent to fail the run")
 	}
 
@@ -176,7 +176,7 @@ func TestReviewStep_WallClockTimeoutPreservesTheAgentReport(t *testing.T) {
 	sctx.Config.ReviewAgentTimeout = 20 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected the review invocation limit to fail the run")
 	}
 
@@ -247,7 +247,7 @@ func TestReviewStep_EachAgentInvocationGetsItsOwnBudget(t *testing.T) {
 
 	step := &ReviewStep{now: func() time.Time { return fakeNow }}
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{step}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err != nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -390,7 +390,7 @@ func TestReviewStep_ProgressWithoutTerminalCompletionCannotPublish(t *testing.T)
 	sctx.Config.ReviewAgentTimeout = 40 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected progress-only review to hit its absolute limit")
 	}
 	run, err := sctx.DB.GetRun(sctx.Run.ID)

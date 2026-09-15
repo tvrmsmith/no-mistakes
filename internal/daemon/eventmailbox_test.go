@@ -41,7 +41,7 @@ func subscribeDrained(t *testing.T, m *RunManager, runID string) *Subscription {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	first, ok := sub.Next(ctx)
 	if !ok || first.Type != ipc.EventStreamGap {
@@ -54,7 +54,7 @@ func subscribeDrained(t *testing.T, m *RunManager, runID string) *Subscription {
 // empty mailbox.
 func drainReady(t *testing.T, sub *Subscription) []ipc.Event {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	var out []ipc.Event
 	for {
@@ -96,7 +96,7 @@ func TestMailbox_SubscriptionOpensWithGap(t *testing.T) {
 	}
 	defer sub.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	e, ok := sub.Next(ctx)
 	if !ok || e.Type != ipc.EventStreamGap {
@@ -178,7 +178,7 @@ func TestMailbox_TerminalCompletionCannotBeHidden(t *testing.T) {
 	terminalRev := m.StateRev("run-1")
 	m.closeSubscribers("run-1")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	var covered bool
 	for {
@@ -305,7 +305,7 @@ func TestMailbox_GapDrainsAheadOfQueuedPayload(t *testing.T) {
 	}
 	m.broadcast(ipc.Event{Type: ipc.EventRunCompleted, RunID: "run-1"})
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	first, ok := sub.Next(ctx)
 	if !ok || first.Type != ipc.EventStreamGap {
@@ -403,7 +403,7 @@ func TestMailbox_UnsubscribeReleasesEverything(t *testing.T) {
 	if queued != 0 || bytes != 0 {
 		t.Fatalf("payload retained after Close: queued=%d bytes=%d", queued, bytes)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if _, ok := sub.Next(ctx); ok {
 		t.Fatal("Next after Close should report the stream finished")
@@ -429,7 +429,7 @@ func TestMailbox_ReconnectConvergesAtCurrentRevision(t *testing.T) {
 	}
 	defer second.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	e, ok := second.Next(ctx)
 	if !ok || e.Type != ipc.EventStreamGap {
@@ -446,7 +446,7 @@ func TestMailbox_CancellationUnblocksWaitingReader(t *testing.T) {
 	sub := subscribeDrained(t, m, "run-1")
 	defer sub.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan bool, 1)
 	go func() {
 		_, ok := sub.Next(ctx)
@@ -467,7 +467,7 @@ func TestMailbox_CancellationUnblocksWaitingReader(t *testing.T) {
 // A13: publish, drain, subscribe, and unsubscribe are race-free under churn.
 func TestMailbox_ConcurrentChurnIsRaceFree(t *testing.T) {
 	m := NewRunManager(nil, nil, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -528,7 +528,7 @@ func TestMailbox_ManySimultaneousTransitionsCollapseToOneGap(t *testing.T) {
 	wg.Wait()
 	finalRev := m.StateRev("run-1")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	first, ok := sub.Next(ctx)
 	if !ok || first.Type != ipc.EventStreamGap {

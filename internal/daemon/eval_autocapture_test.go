@@ -20,7 +20,7 @@ import (
 // corpus with nobody running a command. Without this the eval sets stay empty
 // forever no matter how many reviews the machine performs.
 func TestAutoCaptureEvalCaseCollectsAFinishedRun(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, database, runID := setupFinishedReviewRun(t, ctx)
 	m := NewRunManager(database, p, nil)
 
@@ -45,7 +45,7 @@ func TestAutoCaptureEvalCaseHonorsTheOperatorsSwitches(t *testing.T) {
 		{"no config", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			p, database, runID := setupFinishedReviewRun(t, ctx)
 			m := NewRunManager(database, p, nil)
 
@@ -63,7 +63,7 @@ func TestAutoCaptureEvalCaseHonorsTheOperatorsSwitches(t *testing.T) {
 // still has to return quietly rather than propagate out of the run goroutine,
 // where the enclosing recover would mark a finished run as failed.
 func TestAutoCaptureEvalCaseSurvivesAnUncapturableRun(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, database, _ := setupFinishedReviewRun(t, ctx)
 	m := NewRunManager(database, p, nil)
 

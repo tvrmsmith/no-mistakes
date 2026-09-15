@@ -41,7 +41,7 @@ func TestExecutor_FixEmitsFixReviewStatusWithoutStreamingTheDiff(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	// First: step reaches awaiting_approval (not fix_review)
@@ -108,7 +108,7 @@ func TestExecutor_FixEmitsFixingStatusImmediately(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -188,7 +188,7 @@ func TestExecutor_FixingEventIncludesFindingStats(t *testing.T) {
 	events := collectEvents(exec)
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -240,7 +240,7 @@ func TestExecutor_FixReviewNoChanges(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -288,7 +288,7 @@ func TestExecutor_FixSetsPreviousFindings(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -334,7 +334,7 @@ func TestExecutor_AssignsFindingIDsBeforePersistingAndEmitting(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -398,7 +398,7 @@ func TestExecutor_FixAppliesUserInstructionsAndAddedFindings(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -493,7 +493,7 @@ func TestExecutor_FixUsesSelectedFindingIDsOnly(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -542,7 +542,7 @@ func TestExecutor_FixClearsStoredFindingsAfterSuccessfulReRun(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -591,7 +591,7 @@ func TestExecutor_FixPersistsFollowUpRoundAsAutoFix(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -656,7 +656,7 @@ func TestExecutor_FixSelectedFindingsRewritesSummary(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -711,7 +711,7 @@ func TestExecutor_UserFixRecordsSelectedFindingIDsAndFixSummary(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -780,7 +780,7 @@ func TestExecutor_AutoFixRecordsSelectedFindingIDs(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -834,7 +834,7 @@ func TestExecutor_StepResultIDIsExposedToSteps(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -864,7 +864,7 @@ func TestExecutor_PreviousFindingsEmptyOnFirstExecution(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}

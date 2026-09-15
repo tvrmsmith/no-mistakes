@@ -28,7 +28,7 @@ import (
 // are actually distinguishable: with a per-case bundle the second case roughly
 // doubles the corpus, and with a shared object pool it adds almost nothing.
 func TestCaptureDoesNotCopyRepositoryHistoryPerCase(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, repo, firstRound := setupCapturedRunWithHistory(t, ctx, 24)
 	defer closers.Quiet(sourceDB)
 
@@ -69,7 +69,7 @@ func TestCaptureDoesNotCopyRepositoryHistoryPerCase(t *testing.T) {
 // deep Windows temp directories. Git for Windows otherwise uses the legacy
 // path limit and fails while locking an otherwise valid ref.
 func TestObjectPoolEnablesLongPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestObjectPoolEnablesLongPaths(t *testing.T) {
 // contract: automatic collection must not grow without bound, and it must never
 // reclaim a case a candidate comparison already depends on.
 func TestPruneBoundsTheCorpusOldestFirstAndKeepsEvaluatedCases(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestPruneBoundsTheCorpusOldestFirstAndKeepsEvaluatedCases(t *testing.T) {
 // zero cap, which is the escape hatch for someone building a large corpus on
 // purpose.
 func TestPruneKeepsCasesReservedByAReplaySession(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestPruneKeepsCasesReservedByAReplaySession(t *testing.T) {
 }
 
 func TestPruneReleasesAbandonedReplayReservations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +196,7 @@ func TestPruneReleasesAbandonedReplayReservations(t *testing.T) {
 }
 
 func TestPruneKeepsEveryCaseWhenTheCapIsDisabled(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +222,7 @@ func TestPruneKeepsEveryCaseWhenTheCapIsDisabled(t *testing.T) {
 // objects: one case leaving the corpus must not strip the pins another case
 // still replays from.
 func TestConcurrentCaptureKeepsThePublishedCaseRestorable(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 
@@ -282,7 +282,7 @@ func TestConcurrentCaptureKeepsThePublishedCaseRestorable(t *testing.T) {
 }
 
 func TestCaptureReconcilesPendingDeletionBeforeRecapturing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	store, err := Open(p.EvalDir())
@@ -337,7 +337,7 @@ func TestCaptureReconcilesPendingDeletionBeforeRecapturing(t *testing.T) {
 }
 
 func TestDropCaseObjectsRemovesPoolAfterLastCase(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	store, err := Open(p.EvalDir())
@@ -360,7 +360,7 @@ func TestDropCaseObjectsRemovesPoolAfterLastCase(t *testing.T) {
 }
 
 func TestDropCaseObjectsReleasesOnlyItsOwnPins(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, repo, firstRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	store, err := Open(p.EvalDir())

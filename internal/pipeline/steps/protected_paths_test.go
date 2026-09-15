@@ -94,7 +94,7 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 				gitCmd(t, f.dir, "update-ref", "HEAD", "main")
 			}
 			f.sctx.Config.Commands.Test = "git cat-file -e HEAD:fix.go"
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			green := append(fakeCIGH(t, "OPEN", `[{"name":"test","state":"SUCCESS","bucket":"pass"}]`),
 				// attestHeadBeforePush discovers the PR via FindPR before every

@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -35,7 +34,7 @@ func newForcePushFixture(t *testing.T) (dir string, gitRun gitRunner, remote, fe
 	featureSHA = gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	gitRun = func(args ...string) (string, error) { return git.Run(ctx, dir, args...) }
 	return dir, gitRun, remote, featureSHA
 }

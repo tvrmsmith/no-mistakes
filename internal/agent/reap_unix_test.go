@@ -24,7 +24,7 @@ func TestNativeAgentCommand_WaitDelayClosesEscapedPipeHolder(t *testing.T) {
 	dir := t.TempDir()
 	readyFile := filepath.Join(dir, "ready")
 	pidFile := filepath.Join(dir, "escaped.pid")
-	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestNativeAgentEscapedPipeHelper$")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestNativeAgentEscapedPipeHelper$")
 	cmd.Env = append(os.Environ(),
 		nativeAgentEscapedPipeHelperEnv+"=leader",
 		"NM_AGENT_NATIVE_PIPE_READY="+readyFile,
@@ -136,7 +136,7 @@ exit 0
 `, "")
 
 	ca := &codexAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{Prompt: "run the tests", CWD: t.TempDir()})
+	result, err := ca.Run(t.Context(), RunOpts{Prompt: "run the tests", CWD: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Run returned error (the daemon would fail the step, not crash): %v", err)
 	}
@@ -166,7 +166,7 @@ echo $! > "`+pidFile+`"
 sleep 120
 `, "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		_, err := (&codexAgent{bin: bin}).Run(ctx, RunOpts{Prompt: "review", CWD: dir})
@@ -198,7 +198,7 @@ func TestClaudeAgent_LargeStdinReapsGrandchildHoldingPipesOnLeaderExit(t *testin
 	t.Setenv("NM_CLAUDE_STDIN_PID", pidFile)
 
 	a := newClaudeStdinHelperAgent(t)
-	result, err := a.runOnce(context.Background(), RunOpts{
+	result, err := a.runOnce(t.Context(), RunOpts{
 		Prompt: strings.Repeat("p", 2*1024*1024),
 		CWD:    dir,
 	})
@@ -227,7 +227,7 @@ func TestCodexAgent_Run_ReapsGrandchildHoldingStdoutPipeOnLeaderExit(t *testing.
 	`, "")
 
 	ca := &codexAgent{bin: bin}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	type runResult struct {

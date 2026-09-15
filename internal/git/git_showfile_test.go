@@ -1,14 +1,13 @@
 package git
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestRefExists(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initTestRepo(t)
 
 	ok, err := RefExists(ctx, repo, "HEAD")
@@ -29,7 +28,7 @@ func TestRefExists(t *testing.T) {
 }
 
 func TestShowFile_AtHEAD(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initTestRepo(t)
 
 	content, err := ShowFile(ctx, repo, "HEAD", "README.md")
@@ -42,7 +41,7 @@ func TestShowFile_AtHEAD(t *testing.T) {
 }
 
 func TestResolveRef(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initTestRepo(t)
 	want := run(t, repo, "git", "rev-parse", "HEAD")
 
@@ -56,7 +55,7 @@ func TestResolveRef(t *testing.T) {
 }
 
 func TestResolveRef_MissingRef(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initTestRepo(t)
 
 	if _, err := ResolveRef(ctx, repo, "origin/does-not-exist"); err == nil {
@@ -65,7 +64,7 @@ func TestResolveRef_MissingRef(t *testing.T) {
 }
 
 func TestShowFile_AtBranchRef(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "bare.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -99,7 +98,7 @@ func TestShowFile_AtBranchRef(t *testing.T) {
 }
 
 func TestShowFile_AbsentPath(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initTestRepo(t)
 
 	_, err := ShowFile(ctx, repo, "HEAD", "does-not-exist.yaml")

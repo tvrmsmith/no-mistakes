@@ -166,7 +166,7 @@ func TestReviewLoop_IndependentReviewTurnsOneFixerSession(t *testing.T) {
 	}
 
 	exec, database, run, repo, workDir := reviewSessionHarness(t, mock, []pipeline.Step{&ReviewStep{}})
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -250,7 +250,7 @@ func TestReviewLoop_SkillMandateRetryDropsALegacyReviewerIdentity(t *testing.T) 
 		t.Fatalf("seed reviewer session: %v", err)
 	}
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -300,7 +300,7 @@ func TestReviewLoop_RereviewNeverResumesTheSessionThatPrescribedItsFixes(t *test
 	}
 
 	exec, _, run, repo, workDir := reviewSessionHarness(t, mock, []pipeline.Step{&ReviewStep{}})
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -338,7 +338,7 @@ func TestReviewLoop_ParkRespondFixKeepsRoleSessions(t *testing.T) {
 	exec, database, run, repo, workDir := reviewSessionHarness(t, mock, []pipeline.Step{&ReviewStep{}})
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForReviewStatus(t, database, run.ID, types.StepStatusAwaitingApproval)
@@ -419,7 +419,7 @@ func TestReviewLoop_OtherStepsStaySessionIsolated(t *testing.T) {
 
 	steps := []pipeline.Step{&ReviewStep{}, &DocumentStep{}, &LintStep{}}
 	exec, _, run, repo, workDir := reviewSessionHarness(t, mock, steps)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 

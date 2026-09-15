@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +16,7 @@ func TestExtract_EndToEndWithClaudeFixture(t *testing.T) {
 
 	fa := &fakeAgent{output: `{"summary": "user wanted Bar() helper in internal/foo.go"}`}
 
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		HomeDir:    home,
 		OriginCWD:  repoCWD,
 		DiffFiles:  []string{"internal/foo.go"},
@@ -46,7 +45,7 @@ func TestExtract_EndToEndWithPiFixture(t *testing.T) {
 
 	fa := &fakeAgent{output: `{"summary": "user wanted foo helper changes in internal/foo.go"}`}
 
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		HomeDir:    home,
 		OriginCWD:  repoCWD,
 		DiffFiles:  []string{"internal/foo.go"},

@@ -19,7 +19,7 @@ func TestChecksPreserveProviderStateAndTargetLink(t *testing.T) {
 	statuses := fmt.Sprintf(`[{"context":"CI / test (pull_request)","state":"failure","description":"boom","target_url":%q,"created_at":null,"updated_at":null}]`, target)
 	host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: checksJSON("failure", "not_required", false, statuses, `[]`)}}})
 
-	checks, err := host.GetChecks(context.Background(), testPR())
+	checks, err := host.GetChecks(t.Context(), testPR())
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -41,11 +41,11 @@ func TestFetchFailedCheckLogsUsesCanonicalTargetAndExactIdentities(t *testing.T)
 		})},
 	}}
 	host := newTestHost(recorder)
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
 
-	logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckLogs() error = %v", err)
 	}
@@ -79,11 +79,11 @@ func TestFetchFailedCheckLogsDeduplicatesAndSortsRunAndJobIDs(t *testing.T) {
 		})},
 	}}
 	host := newTestHost(recorder)
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
 
-	logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{
+	logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{
 		"CI / first (pull_request)", "CI / second (pull_request)", "Lint / lint (pull_request)",
 	})
 	if err != nil {
@@ -132,10 +132,10 @@ func TestFetchFailedCheckLogsRejectsRunHeadAndJobMismatches(t *testing.T) {
 				{stdout: tt.view},
 			}}
 			host := newTestHost(recorder)
-			if err := host.Available(context.Background()); err != nil {
+			if err := host.Available(t.Context()); err != nil {
 				t.Fatalf("Available() error = %v", err)
 			}
-			logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
+			logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
 			if logs != "" || err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("FetchFailedCheckLogs() = (%q, %v), want error containing %q", logs, err, tt.want)
 			}
@@ -153,10 +153,10 @@ func TestFetchFailedCheckLogsUsesLiveCheckHeadForRunLookup(t *testing.T) {
 		{stdout: failedLogRunViewJSON(91, 7, testHeadSHA, []string{`{"id":501,"run_id":91,"name":"test","status":"failure","log":"failed"}`})},
 	}}
 	host := newTestHost(recorder)
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
-	logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", strings.Repeat("b", 40), []string{"CI / test (pull_request)"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", strings.Repeat("b", 40), []string{"CI / test (pull_request)"})
 	if err != nil || !strings.Contains(logs, "failed") || len(recorder.calls) != 4 {
 		t.Fatalf("FetchFailedCheckLogs() = (%q, %v) with %d calls, want live-head log lookup", logs, err, len(recorder.calls))
 	}
@@ -184,10 +184,10 @@ func TestFetchFailedCheckLogsRejectsUnprovenRunResolution(t *testing.T) {
 				{stdout: tt.list},
 			}}
 			host := newTestHost(recorder)
-			if err := host.Available(context.Background()); err != nil {
+			if err := host.Available(t.Context()); err != nil {
 				t.Fatalf("Available() error = %v", err)
 			}
-			logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
+			logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
 			if logs != "" || err == nil || !strings.Contains(err.Error(), tt.want) || len(recorder.calls) != 3 {
 				t.Fatalf("FetchFailedCheckLogs() = (%q, %v) with %d calls, want error containing %q", logs, err, len(recorder.calls), tt.want)
 			}
@@ -204,10 +204,10 @@ func TestFetchFailedCheckLogsRejectsInvalidFreshChecksBeforeRunLookup(t *testing
 		{stdout: checks},
 	}}
 	host := newTestHost(recorder)
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
-	logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
 	if logs != "" || err == nil || !strings.Contains(err.Error(), "checks without a head SHA") || len(recorder.calls) != 2 {
 		t.Fatalf("FetchFailedCheckLogs() = (%q, %v) with %d calls, want fresh-check validation error", logs, err, len(recorder.calls))
 	}
@@ -224,10 +224,10 @@ func TestFetchFailedCheckLogsBoundsOutputAndHonorsCancellation(t *testing.T) {
 			{stdoutBytes: maxForgejoOutputBytes + 128*1024},
 		}}
 		host := newTestHost(recorder)
-		if err := host.Available(context.Background()); err != nil {
+		if err := host.Available(t.Context()); err != nil {
 			t.Fatalf("Available() error = %v", err)
 		}
-		logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
+		logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
 		if logs != "" || err == nil || !strings.Contains(err.Error(), "exceeded 1048576 bytes") {
 			t.Fatalf("FetchFailedCheckLogs() = (%q, %v), want bounded-output error", logs, err)
 		}
@@ -254,10 +254,10 @@ func TestFetchFailedCheckLogsBoundsOutputAndHonorsCancellation(t *testing.T) {
 			responseFile("run-92.json", failedLogRunViewJSON(92, 92, testHeadSHA, []string{fmt.Sprintf(`{"id":502,"run_id":92,"name":"second","status":"failure","log":%q}`, largeLog)})),
 		}}
 		host := newTestHost(recorder)
-		if err := host.Available(context.Background()); err != nil {
+		if err := host.Available(t.Context()); err != nil {
 			t.Fatalf("Available() error = %v", err)
 		}
-		logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{
+		logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{
 			"CI / first (pull_request)", "CI / second (pull_request)",
 		})
 		if logs != "" || err == nil || !strings.Contains(err.Error(), "failed check logs exceeded 1048576 bytes") {
@@ -272,10 +272,10 @@ func TestFetchFailedCheckLogsBoundsOutputAndHonorsCancellation(t *testing.T) {
 			{sleep: 2 * time.Second},
 		}}
 		host := newTestHost(recorder)
-		if err := host.Available(context.Background()); err != nil {
+		if err := host.Available(t.Context()); err != nil {
 			t.Fatalf("Available() error = %v", err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 		defer cancel()
 		_, err := host.FetchFailedCheckLogs(ctx, testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
 		if !errors.Is(err, context.DeadlineExceeded) {
@@ -293,10 +293,10 @@ func TestFetchFailedCheckLogsRedactsCommandErrors(t *testing.T) {
 		{stdout: `{"error":"log failed with secret-token","code":"LOG_ERROR","details":{"url":"https://user:pass@forge.example/log?token=secret-token"}}`, code: 1},
 	}}
 	host := newTestHost(recorder)
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
-	_, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
+	_, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
 	if err == nil || !strings.Contains(err.Error(), "LOG_ERROR") || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "user:pass") {
 		t.Fatalf("FetchFailedCheckLogs() error = %v, want code with secrets redacted", err)
 	}
@@ -341,10 +341,10 @@ func TestFetchFailedCheckLogsRejectsNonCanonicalTargetsWithoutGuessing(t *testin
 				{stdout: checksJSON("failure", "not_required", false, string(statuses), `[]`)},
 			}}
 			host := newTestHost(recorder)
-			if err := host.Available(context.Background()); err != nil {
+			if err := host.Available(t.Context()); err != nil {
 				t.Fatalf("Available() error = %v", err)
 			}
-			logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
+			logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{"CI / test (pull_request)"})
 			if err != nil || logs != "" {
 				t.Fatalf("FetchFailedCheckLogs() = (%q, %v), want unavailable without error", logs, err)
 			}

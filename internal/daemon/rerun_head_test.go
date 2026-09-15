@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +46,7 @@ func TestRerunChecksCallerHeadAgainstSelectedHead(t *testing.T) {
 					gitCmd(t, repo.WorkingPath, "commit", "--allow-empty", "--amend", "-m", "corrected local head")
 				}
 				callerHead := gitOutput(t, repo.WorkingPath, "rev-parse", "HEAD")
-				if dirty, err := git.HasUncommittedChanges(context.Background(), repo.WorkingPath); err != nil || dirty {
+				if dirty, err := git.HasUncommittedChanges(t.Context(), repo.WorkingPath); err != nil || dirty {
 					t.Fatalf("caller worktree is dirty: %v, err=%v", dirty, err)
 				}
 				client, err := ipc.Dial(p.Socket())

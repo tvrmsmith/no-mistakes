@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"strings"
 	"testing"
 
@@ -31,7 +30,7 @@ func TestAxiOutcomeProviderUnavailableSkips(t *testing.T) {
 	dir, p, database, repo := setupAxiQueryRepo(t)
 	run(t, dir, "git", "checkout", "-b", "feature/skips")
 	repo.UpstreamURL = "https://gitlab.com/test/repo.git"
-	head, err := git.HeadSHA(context.Background(), dir)
+	head, err := git.HeadSHA(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +43,7 @@ func TestAxiOutcomeProviderUnavailableSkips(t *testing.T) {
 		unavailableProviderStep{&steps.PRStep{}, missingCLI},
 		unavailableProviderStep{&steps.CIStep{}, missingCLI},
 	}, nil)
-	if err := executor.Execute(context.Background(), r, repo, dir); err != nil {
+	if err := executor.Execute(t.Context(), r, repo, dir); err != nil {
 		t.Fatal(err)
 	}
 	r, err = database.GetRun(r.ID)
@@ -93,7 +92,7 @@ func TestAxiOutcomeProviderUnavailableSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 	executor.SetSkippedSteps([]types.StepName{types.StepPR, types.StepCI})
-	if err := executor.Execute(context.Background(), explicit, repo, dir); err != nil {
+	if err := executor.Execute(t.Context(), explicit, repo, dir); err != nil {
 		t.Fatal(err)
 	}
 	explicitResults, err := database.GetStepsByRun(explicit.ID)
@@ -122,7 +121,7 @@ func TestAxiDriveAutomaticSkips(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
 			cmd := &cobra.Command{}
-			cmd.SetContext(context.Background())
+			cmd.SetContext(t.Context())
 			cmd.SetOut(&out)
 			r := &ipc.RunInfo{ID: "skip-run", Status: tc.status, HeadSHA: strings.Repeat("a", 40), CIOverrideReason: tc.override,
 				Steps: []ipc.StepResultInfo{{StepName: types.StepCI, Status: tc.stepStatus, SkipReason: tc.reason}}}

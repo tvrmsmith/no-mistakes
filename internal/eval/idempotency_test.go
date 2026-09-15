@@ -1,7 +1,6 @@
 package eval
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,7 +14,7 @@ import (
 // relabels the frozen case in place and leaves every corpus artifact exactly
 // as the first pass wrote it.
 func TestCaptureTwiceLeavesIdenticalCorpusState(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 
@@ -65,7 +64,7 @@ func TestCaptureTwiceLeavesIdenticalCorpusState(t *testing.T) {
 // every recapture or relabel appended another copy (the mergeGold empty-ID
 // duplication).
 func TestCaptureTwiceDoesNotDuplicateUserAddedGoldWithoutID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
@@ -93,7 +92,7 @@ func TestCaptureTwiceDoesNotDuplicateUserAddedGoldWithoutID(t *testing.T) {
 }
 
 func TestCaptureRepairsDuplicateUserAddedGoldWithoutID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
@@ -132,7 +131,7 @@ func TestCaptureRepairsDuplicateUserAddedGoldWithoutID(t *testing.T) {
 }
 
 func TestRelabelRunTwiceLeavesIdenticalLabels(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	if err := sourceDB.UpdateRunPRState(run.ID, "merged"); err != nil {
@@ -211,7 +210,7 @@ func TestRefreshDiversifiedTwiceKeepsTheSamePins(t *testing.T) {
 // land in the same cohort, the scores are deterministic, and the frozen corpus
 // itself is untouched.
 func TestReplayTwiceKeepsCorpusUntouchedAndCohortStable(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	installFakeReviewAgent(t, p, `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`)

@@ -109,7 +109,7 @@ func newIntentIntegrationContext(t *testing.T, repoDir, base, head string, cfg *
 		t.Fatal(err)
 	}
 	return &pipeline.StepContext{
-		Ctx:      context.Background(),
+		Ctx:      t.Context(),
 		Run:      run,
 		Repo:     repo,
 		WorkDir:  repoDir,
@@ -405,7 +405,7 @@ func TestIntentStep_Integration_RespectsTimeout(t *testing.T) {
 	cfg := &config.Config{Intent: config.Intent{Enabled: true, Threshold: 0.1, SlackDays: 3}}
 	sctx := newIntentIntegrationContext(t, repoDir, base, head, cfg)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	sctx.Ctx = ctx
 

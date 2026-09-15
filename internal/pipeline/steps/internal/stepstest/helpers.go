@@ -273,7 +273,7 @@ func NewTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA stri
 	t.Cleanup(func() { closers.Quiet(database) })
 
 	return &pipeline.StepContext{
-		Ctx:  context.Background(),
+		Ctx:  t.Context(),
 		Run:  &db.Run{ID: "run-1", RepoID: "repo-1", Branch: "refs/heads/feature", HeadSHA: headSHA, BaseSHA: baseSHA},
 		Repo: &db.Repo{ID: "repo-1", WorkingPath: workDir, UpstreamURL: "https://github.com/test/repo", DefaultBranch: "main"},
 		// The executor resolves this from the app root in production. Tests get

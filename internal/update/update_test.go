@@ -2,7 +2,6 @@ package update
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -71,7 +70,7 @@ func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
 				now:            func() time.Time { return time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC) },
 			}
 
-			plan, err := u.checkLatest(context.Background())
+			plan, err := u.checkLatest(t.Context())
 			if err != nil {
 				t.Fatalf("checkLatest error = %v", err)
 			}
@@ -88,7 +87,7 @@ func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
 				t.Fatalf("Archive.Name = %q, want %q", plan.Archive.Name, tt.archiveName)
 			}
 
-			if err := u.refreshCache(context.Background()); err != nil {
+			if err := u.refreshCache(t.Context()); err != nil {
 				t.Fatalf("refreshCache error = %v", err)
 			}
 			cache := readCache(cachePath)
@@ -149,7 +148,7 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 		now:            func() time.Time { return time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC) },
 	}
 
-	if err := u.run(context.Background()); err != nil {
+	if err := u.run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	content, err := os.ReadFile(execPath)
@@ -214,7 +213,7 @@ func TestUpdaterRunResetsDaemonAfterUpdate(t *testing.T) {
 		},
 	}
 
-	if err := u.run(context.Background()); err != nil {
+	if err := u.run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	if !resetCalled {
@@ -305,7 +304,7 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 		paths: p,
 	}
 
-	err = u.run(context.Background())
+	err = u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when active run warning is rejected")
 	}
@@ -553,7 +552,7 @@ func TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts(t *testing.T) {
 
 	failedStderr := new(bytes.Buffer)
 	failedRestart := false
-	if err := newUpdater(failedStderr, &failedRestart).run(context.Background()); err == nil {
+	if err := newUpdater(failedStderr, &failedRestart).run(t.Context()); err == nil {
 		t.Fatal("run should fail when the archive download fails")
 	}
 	if failedRestart {
@@ -566,7 +565,7 @@ func TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts(t *testing.T) {
 	archiveBroken = false
 	okStderr := new(bytes.Buffer)
 	okRestart := false
-	if err := newUpdater(okStderr, &okRestart).run(context.Background()); err != nil {
+	if err := newUpdater(okStderr, &okRestart).run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	if !okRestart {
@@ -666,7 +665,7 @@ func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
 			return nil
 		},
 	}
-	if err := u.run(context.Background()); err != nil {
+	if err := u.run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	if !restarted {
@@ -729,7 +728,7 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 		},
 	}
 
-	err := u.run(context.Background())
+	err := u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when daemon reset fails")
 	}
@@ -801,7 +800,7 @@ func TestUpdaterRunFailsWhenDaemonResetLeavesDaemonOffline(t *testing.T) {
 		},
 	}
 
-	err := u.run(context.Background())
+	err := u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when daemon reset leaves daemon offline")
 	}
@@ -892,7 +891,7 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 		paths: paths.WithRoot(t.TempDir()),
 	}
 
-	err := u.run(context.Background())
+	err := u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when daemon uses a different executable")
 	}
@@ -1002,7 +1001,7 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 				assumeYes: tt.assumeYes,
 			}
 
-			if err := u.run(context.Background()); err != nil {
+			if err := u.run(t.Context()); err != nil {
 				t.Fatalf("run error = %v", err)
 			}
 			if !resetCalled {
@@ -1097,7 +1096,7 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 		paths: paths.WithRoot(t.TempDir()),
 	}
 
-	err := u.run(context.Background())
+	err := u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when daemon executable cannot be resolved")
 	}
@@ -1160,7 +1159,7 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 		paths:          paths.WithRoot(t.TempDir()),
 	}
 
-	if err := u.run(context.Background()); err != nil {
+	if err := u.run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	if checks != 0 {
@@ -1260,7 +1259,7 @@ func TestUpdaterCheckLatestBetaUsesManifest(t *testing.T) {
 		includePrereleases: true,
 	}
 
-	plan, err := u.checkLatest(context.Background())
+	plan, err := u.checkLatest(t.Context())
 	if err != nil {
 		t.Fatalf("checkLatest error = %v", err)
 	}

@@ -1,7 +1,6 @@
 package custody
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +10,7 @@ import (
 
 func TestPreserveRecoveryHeadCreatesAnchorAndAcceptsSameCommit(t *testing.T) {
 	repo, head := recoveryTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := PreserveRecoveryHead(ctx, repo, "run-1", head); err != nil {
 		t.Fatalf("create recovery anchor: %v", err)
@@ -30,7 +29,7 @@ func TestPreserveRecoveryHeadRejectsConflictingAnchorWithoutOverwriting(t *testi
 	other := gitOutput(t, repo, "rev-parse", "HEAD")
 	gitRun(t, repo, "update-ref", RecoveryRef("run-1"), other)
 
-	err := PreserveRecoveryHead(context.Background(), repo, "run-1", head)
+	err := PreserveRecoveryHead(t.Context(), repo, "run-1", head)
 	if err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("conflicting anchor error = %v", err)
 	}
@@ -48,7 +47,7 @@ func TestPreserveRecoveryHeadRejectsNonCommitAnchorWithoutOverwriting(t *testing
 	blob := gitOutput(t, repo, "hash-object", "-w", blobPath)
 	gitRun(t, repo, "update-ref", RecoveryRef("run-1"), blob)
 
-	if err := PreserveRecoveryHead(context.Background(), repo, "run-1", head); err == nil {
+	if err := PreserveRecoveryHead(t.Context(), repo, "run-1", head); err == nil {
 		t.Fatal("non-commit recovery anchor was accepted")
 	}
 	if got := gitOutput(t, repo, "rev-parse", RecoveryRef("run-1")); got != blob {
@@ -62,7 +61,7 @@ func TestPreserveRecoveryAnchorRejectsDanglingSymbolicRefWithoutCreatingTarget(t
 	target := "refs/no-mistakes/evidence/run-1"
 	gitRun(t, repo, "symbolic-ref", ref, target)
 
-	if err := PreserveRecoveryAnchor(context.Background(), repo, ref, head); err == nil {
+	if err := PreserveRecoveryAnchor(t.Context(), repo, ref, head); err == nil {
 		t.Fatal("dangling symbolic recovery anchor was accepted")
 	}
 	if got := gitOutput(t, repo, "symbolic-ref", ref); got != target {
@@ -85,7 +84,7 @@ func TestPreserveRecoveryAnchorRejectsMatchingSymbolicRef(t *testing.T) {
 	gitRun(t, repo, "update-ref", "refs/heads/main", head)
 	gitRun(t, repo, "symbolic-ref", ref, target)
 
-	if err := PreserveRecoveryAnchor(context.Background(), repo, ref, head); err == nil {
+	if err := PreserveRecoveryAnchor(t.Context(), repo, ref, head); err == nil {
 		t.Fatal("matching symbolic recovery anchor was accepted")
 	}
 	if got := gitOutput(t, repo, "symbolic-ref", ref); got != target {

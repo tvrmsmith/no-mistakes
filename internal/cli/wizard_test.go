@@ -102,7 +102,7 @@ func TestWizardAgentSuggester_IsLazy(t *testing.T) {
 		t.Fatalf("expected no agent resolution during setup, got %d", lookups)
 	}
 
-	if _, err := suggester.suggestBranch(context.Background()); err == nil {
+	if _, err := suggester.suggestBranch(t.Context()); err == nil {
 		t.Fatal("expected suggestion to fail when no agent is available")
 	}
 	if lookups != 1 {
@@ -138,7 +138,7 @@ func TestWizardAgentSuggester_ForwardsAgentArgsOverride(t *testing.T) {
 	)
 	defer closers.Quiet(suggester)
 
-	if err := suggester.ensure(context.Background()); err != nil {
+	if err := suggester.ensure(t.Context()); err != nil {
 		t.Fatalf("ensure failed: %v", err)
 	}
 	if gotName != types.AgentClaude {
@@ -171,7 +171,7 @@ func TestWizardAgentSuggester_ForwardsACPRegistryOverrides(t *testing.T) {
 	)
 	defer closers.Quiet(suggester)
 
-	if err := suggester.ensure(context.Background()); err != nil {
+	if err := suggester.ensure(t.Context()); err != nil {
 		t.Fatalf("ensure failed: %v", err)
 	}
 	if got := gotOpts.ACPRegistryOverrides["local-gemini"]; got != "node /tmp/mock-acp.mjs" {
@@ -259,7 +259,7 @@ func TestWizardAgentSuggester_CachesCommitFromBranchCall(t *testing.T) {
 	s := newFakeSuggester(t, ag)
 	defer closers.Quiet(s)
 
-	branch, err := s.suggestBranch(context.Background())
+	branch, err := s.suggestBranch(t.Context())
 	if err != nil {
 		t.Fatalf("suggestBranch failed: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestWizardAgentSuggester_CachesCommitFromBranchCall(t *testing.T) {
 		t.Fatalf("unexpected branch: %q", branch)
 	}
 
-	commit, err := s.suggestCommit(context.Background())
+	commit, err := s.suggestCommit(t.Context())
 	if err != nil {
 		t.Fatalf("suggestCommit failed: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestWizardAgentSuggester_FallsBackToCommitCall(t *testing.T) {
 	s := newFakeSuggester(t, ag)
 	defer closers.Quiet(s)
 
-	commit, err := s.suggestCommit(context.Background())
+	commit, err := s.suggestCommit(t.Context())
 	if err != nil {
 		t.Fatalf("suggestCommit failed: %v", err)
 	}
@@ -308,13 +308,13 @@ func TestWizardAgentSuggester_CacheConsumedOnce(t *testing.T) {
 	s := newFakeSuggester(t, ag)
 	defer closers.Quiet(s)
 
-	if _, err := s.suggestBranch(context.Background()); err != nil {
+	if _, err := s.suggestBranch(t.Context()); err != nil {
 		t.Fatalf("suggestBranch failed: %v", err)
 	}
-	if _, err := s.suggestCommit(context.Background()); err != nil {
+	if _, err := s.suggestCommit(t.Context()); err != nil {
 		t.Fatalf("first suggestCommit failed: %v", err)
 	}
-	if _, err := s.suggestCommit(context.Background()); err != nil {
+	if _, err := s.suggestCommit(t.Context()); err != nil {
 		t.Fatalf("second suggestCommit failed: %v", err)
 	}
 	if got := ag.callCount(); got != 2 {
@@ -327,11 +327,11 @@ func TestWizardAgentSuggester_CanceledContextSkipsCachedCommit(t *testing.T) {
 	s := newFakeSuggester(t, ag)
 	defer closers.Quiet(s)
 
-	if _, err := s.suggestBranch(context.Background()); err != nil {
+	if _, err := s.suggestBranch(t.Context()); err != nil {
 		t.Fatalf("suggestBranch failed: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	commit, err := s.suggestCommit(ctx)
@@ -346,7 +346,7 @@ func TestWizardAgentSuggester_CanceledContextSkipsCachedCommit(t *testing.T) {
 		t.Fatalf("expected no extra agent call, got %d calls", got)
 	}
 
-	commit, err = s.suggestCommit(context.Background())
+	commit, err = s.suggestCommit(t.Context())
 	if err != nil {
 		t.Fatalf("subsequent suggestCommit failed: %v", err)
 	}
@@ -375,14 +375,14 @@ func TestWizardAgentSuggester_EmptyRetryClearsCachedCommit(t *testing.T) {
 	)
 	defer closers.Quiet(s)
 
-	if _, err := s.suggestBranch(context.Background()); err != nil {
+	if _, err := s.suggestBranch(t.Context()); err != nil {
 		t.Fatalf("first suggestBranch failed: %v", err)
 	}
-	if _, err := s.suggestBranch(context.Background()); err != nil {
+	if _, err := s.suggestBranch(t.Context()); err != nil {
 		t.Fatalf("second suggestBranch failed: %v", err)
 	}
 
-	commit, err := s.suggestCommit(context.Background())
+	commit, err := s.suggestCommit(t.Context())
 	if err != nil {
 		t.Fatalf("suggestCommit failed: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestRunWizardTracksPageview(t *testing.T) {
 		dirty:         true,
 	}
 
-	if _, err := runWizard(context.Background(), p, state, nil); err != nil {
+	if _, err := runWizard(t.Context(), p, state, nil); err != nil {
 		t.Fatalf("runWizard() error = %v", err)
 	}
 
@@ -489,7 +489,7 @@ func TestRunWizardReturnsTerminalWizardError(t *testing.T) {
 		dirty:         true,
 	}
 
-	_, err := runWizard(context.Background(), p, state, nil)
+	_, err := runWizard(t.Context(), p, state, nil)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("runWizard() error = %v, want %v", err, wantErr)
 	}
@@ -535,7 +535,7 @@ func TestRunWizard_ConfiguresServerPIDsDir(t *testing.T) {
 		dirty:         true,
 	}
 
-	if _, err := runWizard(context.Background(), p, state, nil); err != nil {
+	if _, err := runWizard(t.Context(), p, state, nil); err != nil {
 		t.Fatalf("runWizard() error = %v", err)
 	}
 
@@ -583,7 +583,7 @@ func TestAwaitDaemonRunRegistration_ErrorsWhenNoRunAppears(t *testing.T) {
 
 	// Use a short timeout - no run will ever register because nothing
 	// triggers one.
-	err = awaitDaemonRunRegistration(context.Background(), client, "no-such-repo", "feat/missing", 200*time.Millisecond)
+	err = awaitDaemonRunRegistration(t.Context(), client, "no-such-repo", "feat/missing", 200*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected error when no run registers within the timeout")
 	}
@@ -615,7 +615,7 @@ func TestAwaitDaemonRunRegistration_UsesNMHomeInTimeoutError(t *testing.T) {
 	}
 	defer closers.Quiet(client)
 
-	err = awaitDaemonRunRegistration(context.Background(), client, "repo123", "feat/missing", 200*time.Millisecond)
+	err = awaitDaemonRunRegistration(t.Context(), client, "repo123", "feat/missing", 200*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}

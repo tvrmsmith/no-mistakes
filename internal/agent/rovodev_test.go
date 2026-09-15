@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -348,7 +347,7 @@ func TestDoJSON_Success(t *testing.T) {
 
 	headers := map[string]string{"x-custom": "value"}
 	body := map[string]string{"key": "val"}
-	resp, err := doJSON(context.Background(), http.MethodPost, server.URL+"/test", headers, body)
+	resp, err := doJSON(t.Context(), http.MethodPost, server.URL+"/test", headers, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,7 +363,7 @@ func TestDoJSON_ErrorStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := doJSON(context.Background(), http.MethodGet, server.URL+"/test", nil, nil)
+	_, err := doJSON(t.Context(), http.MethodGet, server.URL+"/test", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for 400 status")
 	}
@@ -383,7 +382,7 @@ func TestDoJSON_NilBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := doJSON(context.Background(), http.MethodGet, server.URL+"/test", nil, nil)
+	resp, err := doJSON(t.Context(), http.MethodGet, server.URL+"/test", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -477,7 +476,7 @@ func TestRovodevAgent_FullFlow(t *testing.T) {
 	}
 
 	var chunks []string
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review this code",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),
@@ -542,7 +541,7 @@ func TestRovodevAgent_NoSchema(t *testing.T) {
 		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt: "hello",
 		CWD:    t.TempDir(),
 		// No JSONSchema

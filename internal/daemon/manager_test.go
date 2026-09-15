@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -692,7 +691,7 @@ func TestPushReceivedConcurrentDifferentBranchRunsAvoidSharedConfigLock(t *testi
 	// Mirror a real gate: enable the per-worktree config isolation that
 	// `no-mistakes init` installs, which is what lets identity writes avoid the
 	// shared config.lock.
-	if err := git.IsolateHooksPath(context.Background(), p.RepoDir(repoID)); err != nil {
+	if err := git.IsolateHooksPath(t.Context(), p.RepoDir(repoID)); err != nil {
 		t.Fatalf("isolate hooks path: %v", err)
 	}
 
@@ -1043,7 +1042,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 	run.TerminalHeadVerifiedAt = &now
 	gitCmd(t, work, "push", gate, preserved+":refs/no-mistakes/recover/"+run.ID)
 
-	head, err := resolveRerunHead(context.Background(), gate, run.Branch, run)
+	head, err := resolveRerunHead(t.Context(), gate, run.Branch, run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1055,7 +1054,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 	}
 
 	gitCmd(t, gate, "update-ref", custody.RecoveryRef(run.ID), submitted)
-	if _, err := resolveRerunHead(context.Background(), gate, run.Branch, run); err == nil {
+	if _, err := resolveRerunHead(t.Context(), gate, run.Branch, run); err == nil {
 		t.Fatal("rerun accepted a mismatched recovery ref")
 	}
 	if got := gitOutput(t, gate, "rev-parse", custody.RecoveryRef(run.ID)); got != submitted {
@@ -1064,7 +1063,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 
 	blob := gitOutput(t, gate, "hash-object", "-w", filepath.Join(work, "file.txt"))
 	gitCmd(t, gate, "update-ref", custody.RecoveryRef(run.ID), blob)
-	if _, err := resolveRerunHead(context.Background(), gate, run.Branch, run); err == nil {
+	if _, err := resolveRerunHead(t.Context(), gate, run.Branch, run); err == nil {
 		t.Fatal("rerun accepted an unpeelable recovery ref")
 	}
 	if got := gitOutput(t, gate, "rev-parse", custody.RecoveryRef(run.ID)); got != blob {
@@ -1097,14 +1096,14 @@ func TestResolveRerunHeadUsesAdvancedGateWhenSubmittedHeadWasTerminal(t *testing
 	now := int64(1)
 	run := &db.Run{ID: "run-1", Branch: "feature/recover", Status: types.RunFailed, HeadSHA: submitted, SubmittedHeadSHA: &submitted, TerminalHeadVerifiedAt: &now}
 
-	head, err := resolveRerunHead(context.Background(), gate, run.Branch, run)
+	head, err := resolveRerunHead(t.Context(), gate, run.Branch, run)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if head != advanced {
 		t.Fatalf("rerun head = %s, want advanced gate head %s", head, advanced)
 	}
-	if _, err := git.Run(context.Background(), gate, "rev-parse", "--verify", custody.RecoveryRef(run.ID)); err == nil {
+	if _, err := git.Run(t.Context(), gate, "rev-parse", "--verify", custody.RecoveryRef(run.ID)); err == nil {
 		t.Fatal("rerun created a recovery ref for the already-published submitted head")
 	}
 }

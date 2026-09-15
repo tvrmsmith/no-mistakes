@@ -56,7 +56,7 @@ func TestAcpxAgent_Run_CursorSpawnsDefaultCommandWithoutOverrides(t *testing.T) 
 			if err != nil {
 				t.Fatalf("New(%q): %v", tc.agent, err)
 			}
-			res, err := a.Run(context.Background(), RunOpts{Prompt: "review this change", CWD: dir})
+			res, err := a.Run(t.Context(), RunOpts{Prompt: "review this change", CWD: dir})
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -107,7 +107,7 @@ func TestAcpxAgent_Run_SendsLargePromptOnlyOnStdin(t *testing.T) {
 				t.Setenv("NM_TEST_ACPX_EVENT", `{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","text":"{\"ok\":true}"}}}`)
 			}
 			a := &acpxAgent{bin: writeStubAcpx(t, dir), target: "gemini"}
-			if _, err := a.Run(context.Background(), RunOpts{Prompt: prompt, CWD: dir, JSONSchema: tc.schema}); err != nil {
+			if _, err := a.Run(t.Context(), RunOpts{Prompt: prompt, CWD: dir, JSONSchema: tc.schema}); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
 
@@ -147,7 +147,7 @@ printf 'acpx: unknown option --file\n' >&2
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	a := &acpxAgent{bin: stub, target: "gemini"}
 	_, err := a.Run(ctx, RunOpts{Prompt: strings.Repeat("x", 2*1024*1024), CWD: dir})

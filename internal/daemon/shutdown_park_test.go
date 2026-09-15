@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -644,7 +643,7 @@ func TestStartRunAbortsWhenItCannotPersistTheSkipSet(t *testing.T) {
 		return errors.New("database is locked")
 	}
 
-	runID, err := manager.startRun(context.Background(), repo, "main", head, refreshTestZeroSHA, "test",
+	runID, err := manager.startRun(t.Context(), repo, "main", head, refreshTestZeroSHA, "test",
 		[]types.StepName{types.StepPush, types.StepPR}, "", "")
 	if err == nil {
 		t.Fatal("start run should fail when the requested skip set cannot be persisted")

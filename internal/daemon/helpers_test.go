@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -337,7 +336,7 @@ func setupTestGitRepo(t *testing.T, p *paths.Paths, d *db.DB, repoID string) (*d
 // setting the default branch owns rather than one a run argument carries.
 func setupTestGitRepoWithConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, extraConfig string) (*db.Repo, string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a work repo with an initial commit.
 	workDir := filepath.Join(t.TempDir(), "work")

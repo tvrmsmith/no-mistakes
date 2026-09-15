@@ -105,7 +105,7 @@ func newCIRepairFixture(t *testing.T, revalidate bool, agentAction func(t *testi
 // run drives the monitor until it returns or the poll budget is spent.
 func (f *ciRepairFixture) run(t *testing.T) (*pipeline.StepOutcome, error) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	f.sctx.Ctx = ctx
 	polls := 0

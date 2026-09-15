@@ -43,7 +43,7 @@ func TestCIStep_PendingChecksUseAdaptivePollIntervals(t *testing.T) {
 	current := started
 	var waits []time.Duration
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -161,7 +161,7 @@ func TestCIStep_ContextCancelled(t *testing.T) {
 	sctx.Run.PRURL = &prURL
 	sctx.Config.CITimeout = time.Hour
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately
 	sctx.Ctx = ctx
 
@@ -224,7 +224,7 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 	sctx.PreviousFindings = stepstest.CIGateFindingsJSON("build")
 	sctx.Config.CITimeout = 30 * time.Second
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -340,7 +340,7 @@ func TestCIStep_GetCIChecksNoChecksReported(t *testing.T) {
 	if host == nil {
 		t.Fatalf("buildHost returned nil: %s", skip)
 	}
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "42"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "42"})
 	if err != nil {
 		t.Fatalf("expected no error when gh reports no checks, got: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestCIStep_AllChecksPassingKeepsMonitoringOpenPR(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -473,7 +473,7 @@ func TestCIStep_CIWarningAllowsChecksPassedToBeReannounced(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -530,7 +530,7 @@ func TestCIStep_PersistentCheckReadFailureParksAtAskUser(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -592,7 +592,7 @@ func TestCIStep_CheckReadFailureCounterResetsAfterSuccessfulRead(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -632,7 +632,7 @@ func TestCIStep_CIWarningClearsPersistedReadiness(t *testing.T) {
 	sctx.Run.PRURL = &prURL
 	sctx.Config.CITimeout = 10 * time.Second
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -706,7 +706,7 @@ func TestCIStep_UncertainProviderStateClearsPersistedReadiness(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			sctx.Ctx = ctx
 
@@ -745,7 +745,7 @@ func TestCIStep_OpenPRKeepsMonitoringAfterChecksPass(t *testing.T) {
 	sctx.Run.PRURL = &prURL
 	sctx.Config.CITimeout = 10 * time.Second
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -788,7 +788,7 @@ func TestCIStep_EmptyChecksWithoutNoCIStaysNotReadyPastOldGracePeriod(t *testing
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -860,7 +860,7 @@ func TestCIStep_EmptyChecksWithTrustedNoCIBecomesReady(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -930,7 +930,7 @@ func TestCIStep_DelayedCheckRegistrationStaysNotReadyUntilGreen(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -989,8 +989,8 @@ func TestCIStep_DelayedCheckRegistrationStaysNotReadyUntilGreen(t *testing.T) {
 	logs = nil
 	env = stepstest.FakeCIGH(t, "OPEN", `[{"name":"e2e","state":"SUCCESS","bucket":"pass"}]`)
 	sctx.Env = env
-	sctx.Ctx = context.Background()
-	ctx, cancel = context.WithCancel(context.Background())
+	sctx.Ctx = t.Context()
+	ctx, cancel = context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 	greenStep := (&steps.CIStep{}).SetWaitForNextPoll(func(ctx context.Context, interval time.Duration) error {
@@ -1034,7 +1034,7 @@ func TestCIStep_DeclaredNoCIWithUnexpectedChecksHonorsThem(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1083,7 +1083,7 @@ func TestCIStep_NonEmptyPassingChecksContinueMonitoring(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1136,7 +1136,7 @@ func TestCIStep_BaseBranchAdvanceRearmsTimeout(t *testing.T) {
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1204,7 +1204,7 @@ func TestCIStep_StableBaseStillTimesOut(t *testing.T) {
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1251,7 +1251,7 @@ func TestCIStep_UnresolvedFallbackBaseTipDoesNotRearmTimeout(t *testing.T) {
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1351,7 +1351,7 @@ func TestCIStep_BaseTipResolverDeadlineIsBoundedByRemainingTimeout(t *testing.T)
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1405,7 +1405,7 @@ func TestCIStep_UnlimitedTimeoutNeverExpires(t *testing.T) {
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1512,7 +1512,7 @@ func TestCIStep_CancelledCheckIsRerunBeforeEscalating(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1612,7 +1612,7 @@ func TestCIStep_LaggingRerunRollupKeepsWaitingForTheRepublishedCheck(t *testing.
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1683,7 +1683,7 @@ func TestCIStep_CancelledCheckStaysUnresolvedAfterItsBudget(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1759,7 +1759,7 @@ func TestCIStep_UnresolvedCancelledCheckNeverEntersTheAutoFixLoop(t *testing.T) 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1838,7 +1838,7 @@ func TestCIStep_MovedPublishedHeadClearsCIReadiness(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 3}
 	sctx.Config.CI = config.CI{RerunTransient: 1}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1891,7 +1891,7 @@ func TestCIStep_SameNamedCancelledChecksShareOneRerunBudget(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1944,7 +1944,7 @@ func TestCIStep_GenuineCheckFailureEscalatesOnFirstFailure(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2003,7 +2003,7 @@ func TestCIStep_MergeConflictEscalatesWithoutRerunningChecks(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 0}
 	sctx.Config.CI = config.CI{RerunTransient: 1}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2064,7 +2064,7 @@ func TestCIStep_TimedOutCheckEscalatesWithoutRerunning(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 0}
 	sctx.Config.CI = config.CI{RerunTransient: 1}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2116,7 +2116,7 @@ func TestCIStep_ZeroRerunBudgetEscalatesCancelledCheckWithoutMakingItReady(t *te
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2199,7 +2199,7 @@ func TestCIStep_CancelledCheckAmongPassingChecksEscalatesInsteadOfPollingForever
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2290,7 +2290,7 @@ func TestCIStep_GreenChecksAtAdvancedHeadAreRecognizedWhileRunTracksOlderHead(t 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2351,7 +2351,7 @@ func TestCIStep_MovedPublishedHeadTerminatesInsteadOfRerunning(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2432,7 +2432,7 @@ func TestCIStep_RefusedRerunSpendsBudgetAndEscalates(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2498,7 +2498,7 @@ func TestCIStep_ResolvedRerunDoesNotParkALaterGreenHead(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2578,7 +2578,7 @@ func TestCIStep_SameHeadGreenRerunEmitsChecksPassed(t *testing.T) {
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2637,7 +2637,7 @@ func TestCIStep_DelayedSameNameCheckRetainsLegacyNameBehavior(t *testing.T) {
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 

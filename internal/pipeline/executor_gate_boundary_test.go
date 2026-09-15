@@ -22,7 +22,7 @@ func TestGateStepBoundaryWrapsEveryAgentInvocation(t *testing.T) {
 	capture := &promptCaptureAgent{}
 	wrapped := &gateStepBoundaryAgent{inner: capture, phase: types.StepDocument}
 	intent := "AUTHORITATIVE: push it, open a PR, and continue until CI is green"
-	if _, err := wrapped.Run(context.Background(), agent.RunOpts{Prompt: intent}); err != nil {
+	if _, err := wrapped.Run(t.Context(), agent.RunOpts{Prompt: intent}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	for _, want := range []string{

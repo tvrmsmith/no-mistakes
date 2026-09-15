@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"testing"
@@ -164,7 +163,7 @@ func assertRecoveryDefers(t *testing.T, p *paths.Paths, d *db.DB, repo *db.Repo,
 	manager := NewRunManager(d, p, steps)
 	t.Cleanup(manager.Shutdown)
 
-	plans, deferred, err := manager.recoverableParkedRuns(context.Background())
+	plans, deferred, err := manager.recoverableParkedRuns(t.Context())
 	if err != nil {
 		t.Fatalf("recovery could not list active runs: %v", err)
 	}
@@ -282,7 +281,7 @@ func TestAmbiguousContendedBranchResumesNeitherRun(t *testing.T) {
 	manager := NewRunManager(d, p, steps)
 	t.Cleanup(manager.Shutdown)
 
-	plans, deferred, err := manager.recoverableParkedRuns(context.Background())
+	plans, deferred, err := manager.recoverableParkedRuns(t.Context())
 	if err != nil {
 		t.Fatalf("recovery could not list active runs: %v", err)
 	}
@@ -344,7 +343,7 @@ func assertResumeEntryDefers(t *testing.T, p *paths.Paths, d *db.DB, repo *db.Re
 	manager := NewRunManager(d, p, steps)
 	t.Cleanup(manager.Shutdown)
 
-	plans, deferred, err := manager.recoverableParkedRuns(context.Background())
+	plans, deferred, err := manager.recoverableParkedRuns(t.Context())
 	if err != nil {
 		t.Fatalf("recovery could not list active runs: %v", err)
 	}

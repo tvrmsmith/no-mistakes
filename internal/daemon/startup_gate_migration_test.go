@@ -34,7 +34,7 @@ func TestMigrateGateConfigsRejectsInvalidDirectoriesAndSkipsCurrentGates(t *test
 	}
 	defer closers.Quiet(database)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	registeredID := "registered"
 	legacyID := "strict-legacy"
 	for _, id := range []string{registeredID, legacyID} {
@@ -147,7 +147,7 @@ func TestMigrateGateConfigsDoesNotStampUnsupportedIsolation(t *testing.T) {
 	}
 	defer closers.Quiet(database)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	id := "unsupported"
 	if err := git.InitBare(ctx, p.RepoDir(id)); err != nil {
 		t.Fatal(err)

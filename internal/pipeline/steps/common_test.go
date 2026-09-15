@@ -53,7 +53,7 @@ func TestCopyDirContents_PreservesGitRepo(t *testing.T) {
 func TestResolveBaseSHA_NonZero(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	got := resolveBaseSHA(context.Background(), dir, "abc123", "main")
+	got := resolveBaseSHA(t.Context(), dir, "abc123", "main")
 	if got != "abc123" {
 		t.Errorf("resolveBaseSHA non-zero = %q, want abc123", got)
 	}
@@ -78,7 +78,7 @@ func TestResolveBaseSHA_ZeroWithMergeBase(t *testing.T) {
 	gitCmd(t, dir, "commit", "-m", "feature commit")
 
 	zeroSHA := "0000000000000000000000000000000000000000"
-	got := resolveBaseSHA(context.Background(), dir, zeroSHA, "main")
+	got := resolveBaseSHA(t.Context(), dir, zeroSHA, "main")
 	if got != mainSHA {
 		t.Errorf("resolveBaseSHA zero with merge-base = %q, want %q", got, mainSHA)
 	}
@@ -97,7 +97,7 @@ func TestResolveBaseSHA_ZeroNoDefaultBranch(t *testing.T) {
 	gitCmd(t, dir, "commit", "-m", "initial")
 
 	zeroSHA := "0000000000000000000000000000000000000000"
-	got := resolveBaseSHA(context.Background(), dir, zeroSHA, "main")
+	got := resolveBaseSHA(t.Context(), dir, zeroSHA, "main")
 	if got != git.EmptyTreeSHA {
 		t.Errorf("resolveBaseSHA zero no default = %q, want %q", got, git.EmptyTreeSHA)
 	}
@@ -144,14 +144,14 @@ func TestResolveDefaultBranchTipSHA_FetchesRemoteTip(t *testing.T) {
 		t.Fatal("expected origin/main to be stale before resolveDefaultBranchTipSHA")
 	}
 
-	tip, resolved := resolveDefaultBranchTip(context.Background(), workDir, upstream, staleOriginTip, "main")
+	tip, resolved := resolveDefaultBranchTip(t.Context(), workDir, upstream, staleOriginTip, "main")
 	if !resolved {
 		t.Fatal("resolveDefaultBranchTip reported unresolved after fetching remote tip")
 	}
 	if tip != remoteTip {
 		t.Fatalf("resolveDefaultBranchTip = %q, want remote tip %q", tip, remoteTip)
 	}
-	got := resolveDefaultBranchTipSHA(context.Background(), workDir, upstream, staleOriginTip, "main")
+	got := resolveDefaultBranchTipSHA(t.Context(), workDir, upstream, staleOriginTip, "main")
 	if got != remoteTip {
 		t.Fatalf("resolveDefaultBranchTipSHA = %q, want remote tip %q", got, remoteTip)
 	}
@@ -204,7 +204,7 @@ func TestResolveDefaultBranchTipSHA_UsesMatchingRemoteName(t *testing.T) {
 		t.Fatal("expected upstream/main to be stale before resolveDefaultBranchTipSHA")
 	}
 
-	got := resolveDefaultBranchTipSHA(context.Background(), workDir, upstream, staleRemoteTip, "main")
+	got := resolveDefaultBranchTipSHA(t.Context(), workDir, upstream, staleRemoteTip, "main")
 	if got != remoteTip {
 		t.Fatalf("resolveDefaultBranchTipSHA = %q, want remote tip %q", got, remoteTip)
 	}
@@ -245,14 +245,14 @@ func TestResolveDefaultBranchTipSHA_FetchFailureAvoidsStaleOriginRef(t *testing.
 	gitCmd(t, workDir, "remote", "set-url", "origin", filepath.Join(upstream, "missing"))
 
 	fallbackBaseSHA := "abc123"
-	tip, resolved := resolveDefaultBranchTip(context.Background(), workDir, upstream, fallbackBaseSHA, "main")
+	tip, resolved := resolveDefaultBranchTip(t.Context(), workDir, upstream, fallbackBaseSHA, "main")
 	if resolved {
 		t.Fatal("resolveDefaultBranchTip reported resolved after fetch failure")
 	}
 	if tip != fallbackBaseSHA {
 		t.Fatalf("resolveDefaultBranchTip = %q, want fallback base %q when fetch fails", tip, fallbackBaseSHA)
 	}
-	got := resolveDefaultBranchTipSHA(context.Background(), workDir, upstream, fallbackBaseSHA, "main")
+	got := resolveDefaultBranchTipSHA(t.Context(), workDir, upstream, fallbackBaseSHA, "main")
 	if got != fallbackBaseSHA {
 		t.Fatalf("resolveDefaultBranchTipSHA = %q, want fallback base %q when fetch fails", got, fallbackBaseSHA)
 	}
@@ -304,14 +304,14 @@ func TestResolveDefaultBranchTipSHA_FetchFailureAvoidsStaleLocalBranch(t *testin
 	gitCmd(t, workDir, "remote", "set-url", "origin", filepath.Join(upstream, "missing"))
 
 	fallbackBaseSHA := "abc123"
-	tip, resolved := resolveDefaultBranchTip(context.Background(), workDir, upstream, fallbackBaseSHA, "main")
+	tip, resolved := resolveDefaultBranchTip(t.Context(), workDir, upstream, fallbackBaseSHA, "main")
 	if resolved {
 		t.Fatal("resolveDefaultBranchTip reported resolved after fetch failure")
 	}
 	if tip != fallbackBaseSHA {
 		t.Fatalf("resolveDefaultBranchTip = %q, want fallback base %q when fetch fails", tip, fallbackBaseSHA)
 	}
-	got := resolveDefaultBranchTipSHA(context.Background(), workDir, upstream, fallbackBaseSHA, "main")
+	got := resolveDefaultBranchTipSHA(t.Context(), workDir, upstream, fallbackBaseSHA, "main")
 	if got != fallbackBaseSHA {
 		t.Fatalf("resolveDefaultBranchTipSHA = %q, want fallback base %q when fetch fails", got, fallbackBaseSHA)
 	}
@@ -326,7 +326,7 @@ func TestRunShellCommand(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		t.Parallel()
-		out, code, err := runShellCommand(context.Background(), dir, "echo hello")
+		out, code, err := runShellCommand(t.Context(), dir, "echo hello")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -340,7 +340,7 @@ func TestRunShellCommand(t *testing.T) {
 
 	t.Run("nonzero exit", func(t *testing.T) {
 		t.Parallel()
-		_, code, err := runShellCommand(context.Background(), dir, "exit 42")
+		_, code, err := runShellCommand(t.Context(), dir, "exit 42")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -358,7 +358,7 @@ func TestStepCLIAvailable_ResolvesExecutableSuffixFromCustomPath(t *testing.T) {
 	linkTestBinary(t, binDir, "gh")
 
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: t.TempDir(),
 		Env: fakeCLIEnv(binDir, map[string]string{
 			"FAKE_CLI_MODE": "gh",
@@ -393,7 +393,7 @@ func TestStepExecutableAvailable_ResolvesRelativePathFromWorkDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	sctx := &pipeline.StepContext{Ctx: context.Background(), WorkDir: workDir}
+	sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir}
 	if !stepExecutableAvailable(sctx, name) {
 		t.Fatalf("expected configured executable %q to resolve from the step worktree", name)
 	}
@@ -409,7 +409,7 @@ func TestStepCLIAvailable_IgnoresNonExecutableFromCustomPath(t *testing.T) {
 	}
 
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: t.TempDir(),
 		Env:     []string{"PATH=" + binDir},
 	}
@@ -503,7 +503,7 @@ func TestStepCmd_ResolvesRelativeCustomPathFromWorkDir(t *testing.T) {
 	linkTestBinary(t, binDir, "gh")
 
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: workDir,
 		Env: []string{
 			"PATH=bin",
@@ -535,7 +535,7 @@ func TestStepCmd_DoesNotFallbackToHostPathWhenCustomPathOmitsBinary(t *testing.T
 
 	customPath := t.TempDir()
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: t.TempDir(),
 		Env:     []string{"PATH=" + customPath},
 	}
@@ -554,7 +554,7 @@ func TestStepCmd_DoesNotFallbackToHostPathWhenCustomPathIsEmpty(t *testing.T) {
 	t.Parallel()
 
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: t.TempDir(),
 		Env:     []string{"PATH="},
 	}
@@ -573,7 +573,7 @@ func TestStepCmd_OverridesPathWithoutDuplicateEntries(t *testing.T) {
 
 	customPath := t.TempDir()
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: t.TempDir(),
 		Env: []string{
 			"PATH=" + customPath,
@@ -684,7 +684,7 @@ func TestCommitPipelineCorrection_ReportsCleanupFailureWithoutMaskingCommit(t *t
 	var cleanedPath, warning string
 	var removeErr error
 	err := commitPipelineCorrectionWithCleanup(
-		context.Background(),
+		t.Context(),
 		dir,
 		"no-mistakes(test): apply correction",
 		func(line string) { warning = line },
@@ -783,10 +783,10 @@ func TestCommitAgentFixes_BypassesLegacyHuskyPrepareCommitMsgHook(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(dir, "excluded.txt"), []byte("excluded\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := git.Run(context.Background(), dir, "add", "excluded.txt"); err != nil {
+	if _, err := git.Run(t.Context(), dir, "add", "excluded.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := git.Run(context.Background(), dir, "commit", "-m", "excluded path commit"); err == nil {
+	if out, err := git.Run(t.Context(), dir, "commit", "-m", "excluded path commit"); err == nil {
 		t.Fatalf("expected the generic git runner to stay hook-verified, got success:\n%s", out)
 	}
 }
@@ -832,10 +832,10 @@ func TestCommitAgentFixes_BypassesCompleteCommitHookFamilyOnlyForCorrection(t *t
 	if err := os.WriteFile(filepath.Join(dir, "user-change.txt"), []byte("user change\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := git.Run(context.Background(), dir, "add", "user-change.txt"); err != nil {
+	if _, err := git.Run(t.Context(), dir, "add", "user-change.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := git.Run(context.Background(), dir, "commit", "-m", "user-authored commit"); err != nil {
+	if out, err := git.Run(t.Context(), dir, "commit", "-m", "user-authored commit"); err != nil {
 		t.Fatalf("hook-verified commit failed: %v\n%s", err, out)
 	}
 	gotHookLog, err := os.ReadFile(hookLog)
@@ -896,7 +896,7 @@ func TestCommitAgentFixes_DocumentDoesNotPersistUncertifiedRange(t *testing.T) {
 
 func TestStepCmd_AppliesRunForgeEnvironmentAfterInjectedEnvironment(t *testing.T) {
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: t.TempDir(),
 		Env: []string{
 			"GH_TOKEN=injected",
@@ -935,7 +935,7 @@ func TestStepCmdPreservesAmbientMultiAccountSelectionWithoutProfiles(t *testing.
 		t.Fatal(err)
 	}
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: t.TempDir(),
 		Env: []string{
 			"GH_CONFIG_DIR=" + profileDir,

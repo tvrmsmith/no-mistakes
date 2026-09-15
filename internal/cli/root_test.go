@@ -29,7 +29,7 @@ func TestRootYesRunsWizardNonInteractively(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	if _, _, err := gate.Init(context.Background(), d, p, "."); err != nil {
+	if _, _, err := gate.Init(t.Context(), d, p, "."); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,7 +84,7 @@ func TestRootSkipPassesStepsToWizard(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	if _, _, err := gate.Init(context.Background(), d, p, "."); err != nil {
+	if _, _, err := gate.Init(t.Context(), d, p, "."); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,7 +135,7 @@ func TestRootYesUsesVisibleWizardWhenInteractive(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	if _, _, err := gate.Init(context.Background(), d, p, "."); err != nil {
+	if _, _, err := gate.Init(t.Context(), d, p, "."); err != nil {
 		t.Fatal(err)
 	}
 
@@ -206,7 +206,7 @@ func TestRootYesFailsWhenWizardPushProducesNoRun(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	if _, _, err := gate.Init(context.Background(), d, p, "."); err != nil {
+	if _, _, err := gate.Init(t.Context(), d, p, "."); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,13 +239,13 @@ func TestRootYesPassesCommandContextToWizard(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	if _, _, err := gate.Init(context.Background(), d, p, "."); err != nil {
+	if _, _, err := gate.Init(t.Context(), d, p, "."); err != nil {
 		t.Fatal(err)
 	}
 
 	startTestDaemon(t, p, d)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	prevAuto := runWizardAuto
@@ -278,13 +278,13 @@ func TestRootYesStopsWaitingForRunWhenContextCanceled(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	if _, _, err := gate.Init(context.Background(), d, p, "."); err != nil {
+	if _, _, err := gate.Init(t.Context(), d, p, "."); err != nil {
 		t.Fatal(err)
 	}
 
 	startTestDaemon(t, p, d)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	prevAuto := runWizardAuto

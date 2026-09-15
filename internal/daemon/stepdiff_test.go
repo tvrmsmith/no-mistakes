@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,7 +72,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 func TestStepDiff_ReturnsTheWorktreeDiffOnDemand(t *testing.T) {
 	m, runID := stepDiffFixture(t, "agent fix\n")
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +91,7 @@ func TestStepDiff_BoundsAnOversizedDiff(t *testing.T) {
 	huge := strings.Repeat("a very long changed line that repeats\n", 60_000)
 	m, runID := stepDiffFixture(t, huge)
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +108,7 @@ func TestStepDiff_BoundsAnOversizedDiff(t *testing.T) {
 
 func TestStepDiff_UnknownRunFailsClosed(t *testing.T) {
 	m, _ := stepDiffFixture(t, "agent fix\n")
-	if _, _, err := m.StepDiff(context.Background(), "01NOSUCHRUN"); err == nil {
+	if _, _, err := m.StepDiff(t.Context(), "01NOSUCHRUN"); err == nil {
 		t.Fatal("expected an error for an unknown run")
 	}
 }
@@ -125,7 +124,7 @@ func TestStepDiff_ServesTheDiffWhileTheGlobalConfigIsUnreadable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("step diff with an unreadable global config: %v", err)
 	}

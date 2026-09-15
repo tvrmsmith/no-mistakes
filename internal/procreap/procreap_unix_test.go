@@ -3,7 +3,6 @@
 package procreap
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,7 +182,7 @@ func newFakeWorktree(t *testing.T) (root, worktree string) {
 func startEscapeeUnderLeader(t *testing.T, worktree string) int {
 	t.Helper()
 	ready := filepath.Join(t.TempDir(), "escaped.ready")
-	leader := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestProcReapHelper$")
+	leader := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestProcReapHelper$")
 	leader.Dir = worktree
 	leader.Env = append(os.Environ(),
 		"NM_PROCREAP_HELPER=leader",

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -26,7 +25,7 @@ func TestStartServerWithPort_DetectsEarlyExit(t *testing.T) {
 	}
 
 	start := time.Now()
-	srv, err := startServerWithPort(context.Background(), "test", bin, nil, t.TempDir(), "/healthcheck", 1, runenv.Overlay{})
+	srv, err := startServerWithPort(t.Context(), "test", bin, nil, t.TempDir(), "/healthcheck", 1, runenv.Overlay{})
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -59,7 +58,7 @@ func TestStartServerWithPortAppliesForgeEnvironment(t *testing.T) {
 	}
 	t.Setenv("GITLAB_TOKEN", "ambient-must-not-leak")
 
-	_, err := startServerWithPort(context.Background(), "test", bin, nil, dir, "/healthcheck", 1, runenv.Overlay{
+	_, err := startServerWithPort(t.Context(), "test", bin, nil, dir, "/healthcheck", 1, runenv.Overlay{
 		Set: map[string]string{
 			"CAPTURE_FILE":    capture,
 			"GLAB_CONFIG_DIR": "/profiles/work",
@@ -111,7 +110,7 @@ func TestWaitForHealth_TimesOut(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err = srv.waitForHealth(context.Background(), "/healthcheck")
+	err = srv.waitForHealth(t.Context(), "/healthcheck")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -172,7 +171,7 @@ func TestManagedServerOutputIsSeparatedFromLifecycleFailureSummary(t *testing.T)
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
 	_, err = startServerWithPort(
-		context.Background(),
+		t.Context(),
 		"opencode",
 		sh,
 		[]string{"-c", "echo verbose-managed-output; echo managed-failure 1>&2; exit 17"},
@@ -224,7 +223,7 @@ func TestStartServerWithPort_RemovesPIDFileOnEarlyExit(t *testing.T) {
 	SetServerPIDsDir(pidsDir)
 	t.Cleanup(func() { SetServerPIDsDir("") })
 
-	srv, err := startServerWithPort(context.Background(), "test", bin, nil, t.TempDir(), "/healthcheck", 1, runenv.Overlay{})
+	srv, err := startServerWithPort(t.Context(), "test", bin, nil, t.TempDir(), "/healthcheck", 1, runenv.Overlay{})
 	if err == nil {
 		srv.shutdown()
 		t.Fatal("expected error when server exits before becoming healthy")

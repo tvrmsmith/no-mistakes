@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -58,7 +57,7 @@ func TestClaudeReader_DiscoversAndLoadsRealMessages(t *testing.T) {
 	})
 
 	r := NewClaudeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-24 * time.Hour),
@@ -78,7 +77,7 @@ func TestClaudeReader_DiscoversAndLoadsRealMessages(t *testing.T) {
 		t.Errorf("CWD = %q, want %q", s.CWD, repoCWD)
 	}
 
-	if err := r.Load(context.Background(), s); err != nil {
+	if err := r.Load(t.Context(), s); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(s.Messages) != 3 {
@@ -126,7 +125,7 @@ func TestClaudeReader_FiltersByCWD(t *testing.T) {
 	})
 
 	r := NewClaudeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoB,
 		WindowStart: time.Now().Add(-24 * time.Hour),
@@ -148,7 +147,7 @@ func TestClaudeReader_TimeWindow(t *testing.T) {
 
 	r := NewClaudeReader()
 	// Window in the distant past should exclude the (just-written) fixture.
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -164,7 +163,7 @@ func TestClaudeReader_TimeWindow(t *testing.T) {
 
 func TestClaudeReader_NoHomeNoCrash(t *testing.T) {
 	r := NewClaudeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:   t.TempDir(), // exists but no .claude/projects/
 		OriginCWD: "/somewhere",
 	})

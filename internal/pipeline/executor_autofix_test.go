@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,7 +43,7 @@ func TestExecutor_AutoFixTriggersWithoutApproval(t *testing.T) {
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -87,7 +86,7 @@ func TestExecutor_AutoFixCarriesUnselectedFindingsSeparately(t *testing.T) {
 	}}
 
 	exec := NewExecutor(database, p, &config.Config{AutoFix: config.AutoFix{CI: 1}}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 }
@@ -105,7 +104,7 @@ func TestExecutor_PersistsEffectiveAutoFixLimit(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -248,7 +247,7 @@ func TestExecutor_AutoFixEmitsEvents(t *testing.T) {
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 	events := collectEvents(exec)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -322,7 +321,7 @@ func TestExecutor_AutoFixInfoFindings(t *testing.T) {
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -510,7 +509,7 @@ func TestExecutor_DefaultMinSeverityKeepsInfoFindingsOutOfAutoFix(t *testing.T) 
 	}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -551,7 +550,7 @@ func TestExecutor_MinSeverityFloorStillAutoFixesQualifyingFindings(t *testing.T)
 	}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	if callCount != 2 {

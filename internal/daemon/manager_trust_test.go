@@ -50,7 +50,7 @@ func TestLoadRecoveredConfig_BoundsFetchAndFailsClosed(t *testing.T) {
 	// disable_project_settings security boundary a trusted-config fetch failure
 	// must ABORT (not silently proceed as "not opted out"), so this now returns
 	// an error rather than a config with empty commands.
-	cfg, err := mgr.loadRecoveredConfig(context.Background(), &db.Run{ID: "run"}, &db.Repo{DefaultBranch: "main"}, workDir)
+	cfg, err := mgr.loadRecoveredConfig(t.Context(), &db.Run{ID: "run"}, &db.Repo{DefaultBranch: "main"}, workDir)
 	if err == nil {
 		t.Fatal("expected loadRecoveredConfig to abort on trusted-config fetch failure")
 	}
@@ -82,7 +82,7 @@ func TestLoadRecoveredConfig_BoundsFetchAndFailsClosed(t *testing.T) {
 // the live default branch has already removed. EffectiveRepoConfig then forces
 // empty commands, so the stale command does not run.
 func TestLoadTrustedRepoConfig_FailClosedOnFetchFailure(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Source repo whose default branch carries a "stale" lint command — the
 	// kind of command a maintainer has since removed but a stale ref would
@@ -159,7 +159,7 @@ func TestLoadTrustedRepoConfig_FailClosedOnFetchFailure(t *testing.T) {
 // stale ref value. Advancing the default branch and re-fetching must yield the
 // new command, not the old one.
 func TestLoadTrustedRepoConfig_PinnedSHAReadsFreshDefaultBranch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := filepath.Join(t.TempDir(), "src")
 	if err := os.MkdirAll(src, 0o755); err != nil {

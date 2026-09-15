@@ -1,7 +1,6 @@
 package eval
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -13,7 +12,7 @@ import (
 )
 
 func TestCaptureSkipsIncompleteReviewRoundAndKeepsCompletedSibling(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
@@ -39,7 +38,7 @@ func TestCaptureSkipsIncompleteReviewRoundAndKeepsCompletedSibling(t *testing.T)
 }
 
 func TestIngestPostPRMissWritesFalseNegativeGoldOnGreenReview(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
@@ -120,7 +119,7 @@ func TestIngestPostPRMissWritesFalseNegativeGoldOnGreenReview(t *testing.T) {
 }
 
 func TestIngestPostPRMissRefusesBlockingReview(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
@@ -146,7 +145,7 @@ func TestIngestPostPRMissRefusesBlockingReview(t *testing.T) {
 }
 
 func TestIngestPostPRMissRefusesWhenLaterPassIsBlocking(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, firstRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)

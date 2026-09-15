@@ -1,7 +1,6 @@
 package eval
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -202,7 +201,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 	})
 
 	t.Run("capture labels shipped-unfixed as FP and leaves an undecided round unlabeled", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 		defer closers.Quiet(sourceDB)
 		if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {

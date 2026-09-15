@@ -1,7 +1,6 @@
 package gatecontext_test
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"os/exec"
@@ -51,7 +50,7 @@ func TestInspectorCanonicalManagedGitIdentityMatrix(t *testing.T) {
 		{name: "ordinary branch", cwd: f.work, marker: false, nested: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: tc.cwd, MarkerPresent: tc.marker})
+			got, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: tc.cwd, MarkerPresent: tc.marker})
 			if err != nil {
 				t.Fatalf("inspect: %v", err)
 			}
@@ -94,7 +93,7 @@ func TestInspectorRejectsRelocatedAndSymlinkedManagedRoots(t *testing.T) {
 		t.Fatalf("symlink root: %v", err)
 	}
 	inspector := gatecontext.Inspector{DB: f.d, Paths: paths.WithRoot(link)}
-	got, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: f.managed})
+	got, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: f.managed})
 	if err != nil {
 		t.Fatalf("inspect symlinked root: %v", err)
 	}
@@ -131,7 +130,7 @@ func TestInspectorUsesAuthenticatedProcessAncestryAfterCWDChange(t *testing.T) {
 			return parents[pid], nil
 		},
 	}
-	got, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: f.work, PeerPID: 4300})
+	got, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: f.work, PeerPID: 4300})
 	if err != nil {
 		t.Fatalf("inspect descendant: %v", err)
 	}
@@ -139,7 +138,7 @@ func TestInspectorUsesAuthenticatedProcessAncestryAfterCWDChange(t *testing.T) {
 		t.Fatalf("descendant classification = %+v", got)
 	}
 
-	ordinary, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: f.work, PeerPID: 9000, MarkerPresent: true})
+	ordinary, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: f.work, PeerPID: 9000, MarkerPresent: true})
 	if err != nil {
 		t.Fatalf("inspect ordinary: %v", err)
 	}
@@ -153,7 +152,7 @@ func TestInspectorUsesAuthenticatedProcessAncestryAfterCWDChange(t *testing.T) {
 		}
 		return 1, nil
 	}
-	daemonChild, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: f.work, PeerPID: 9300, DaemonPID: 5000})
+	daemonChild, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: f.work, PeerPID: 9300, DaemonPID: 5000})
 	if err != nil {
 		t.Fatalf("inspect daemon child: %v", err)
 	}
@@ -198,7 +197,7 @@ func TestInspectorAttributesRunInConfiguredWorktreeRoot(t *testing.T) {
 	}
 
 	inspector := gatecontext.Inspector{DB: f.d, Paths: f.p}
-	got, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: managed})
+	got, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: managed})
 	if err != nil {
 		t.Fatalf("inspect configured worktree: %v", err)
 	}
@@ -220,7 +219,7 @@ func TestInspectorConcurrentClassificationIsDeterministic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: f.managed})
+			got, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: f.managed})
 			if err != nil {
 				errs <- err
 				return
@@ -243,7 +242,7 @@ func (e *classificationError) Error() string { return "non-deterministic classif
 
 func assertAllowed(t *testing.T, inspector gatecontext.Inspector, cwd, label string) {
 	t.Helper()
-	got, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: cwd})
+	got, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: cwd})
 	if err != nil {
 		t.Fatalf("inspect %s: %v", label, err)
 	}
@@ -294,7 +293,7 @@ func TestInspectorClassifiesAgainstADatabaseOlderThanTheBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	inspector := gatecontext.Inspector{DB: readOnly, Paths: p}
-	if _, err := inspector.Inspect(context.Background(), gatecontext.Request{CWD: t.TempDir(), PeerPID: os.Getpid()}); err != nil {
+	if _, err := inspector.Inspect(t.Context(), gatecontext.Request{CWD: t.TempDir(), PeerPID: os.Getpid()}); err != nil {
 		t.Fatalf("classification failed against a schema older than this binary, which would block every pipeline-control command: %v", err)
 	}
 }
@@ -315,7 +314,7 @@ func newTopologyFixture(t *testing.T) *topologyFixture {
 	run(t, "", "git", "init", "--bare", "--initial-branch=main", origin)
 	work := filepath.Join(t.TempDir(), "work")
 	initOrdinaryRepo(t, work, origin)
-	repo, _, err := gate.Init(context.Background(), database, p, work)
+	repo, _, err := gate.Init(t.Context(), database, p, work)
 	if err != nil {
 		t.Fatalf("init gate: %v", err)
 	}

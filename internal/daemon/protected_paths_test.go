@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -188,7 +187,7 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			workDir := p.WorktreeDir(repo.ID, run.ID)
-			if err := git.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), workDir, head); err != nil {
+			if err := git.WorktreeAdd(t.Context(), p.RepoDir(repo.ID), workDir, head); err != nil {
 				t.Fatal(err)
 			}
 			if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
@@ -206,7 +205,7 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 			if err := database.StartStep(sr.ID); err != nil {
 				t.Fatal(err)
 			}
-			sctx := &pipeline.StepContext{Ctx: context.Background(), WorkDir: workDir, Run: run, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
+			sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir, Run: run, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
 			_, refusal := (protectedPathCommitStep{step: &steps.PushStep{}}).Execute(sctx)
 			outcome := pipeline.ProtectedPathOutcome(refusal)
 			if outcome == nil {
@@ -229,7 +228,7 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := mgr.prepareRecoveredRun(context.Background(), run); err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
+			if _, err := mgr.prepareRecoveredRun(t.Context(), run); err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
 				t.Fatalf("recovery must fail closed at trusted config: %v", err)
 			}
 			layout, err := validatedWorktreeLayout(database, p, config.DefaultGlobalConfig())
@@ -350,7 +349,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		_, publicationErr := git.Run(context.Background(), publicationDir, "show-ref", "--verify", "refs/heads/feature")
+		_, publicationErr := git.Run(t.Context(), publicationDir, "show-ref", "--verify", "refs/heads/feature")
 		_, worktreeErr := os.Stat(workDir)
 		t.Fatalf("approval bypassed refused Push: run=%s published=%v worktree_exists=%v", run.Status, publicationErr == nil, worktreeErr == nil)
 	}
@@ -364,7 +363,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	if got, err := os.ReadFile(filepath.Join(workDir, "test.txt")); err != nil || string(got) != "unstaged edit\n" {
 		t.Fatalf("approval changed working files: %q, %v", got, err)
 	}
-	if _, err := git.Run(context.Background(), publicationDir, "show-ref", "--verify", "refs/heads/feature"); err == nil {
+	if _, err := git.Run(t.Context(), publicationDir, "show-ref", "--verify", "refs/heads/feature"); err == nil {
 		t.Fatal("unresolved protected edit was published")
 	}
 	assertProtectedWorktreePreserved(t, workDir, headSHA)

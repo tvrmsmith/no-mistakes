@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +39,7 @@ func TestCopilotReader_DiscoversAndLoadsRealMessages(t *testing.T) {
 	})
 
 	r := NewCopilotReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-24 * time.Hour),
@@ -60,7 +59,7 @@ func TestCopilotReader_DiscoversAndLoadsRealMessages(t *testing.T) {
 		t.Errorf("CWD = %q, want %q", s.CWD, repoCWD)
 	}
 
-	if err := r.Load(context.Background(), s); err != nil {
+	if err := r.Load(t.Context(), s); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(s.Messages) != 2 {
@@ -102,7 +101,7 @@ func TestCopilotReader_FiltersByCWD(t *testing.T) {
 	})
 
 	r := NewCopilotReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoB,
 		WindowStart: time.Now().Add(-24 * time.Hour),
@@ -124,7 +123,7 @@ func TestCopilotReader_TimeWindow(t *testing.T) {
 	})
 
 	r := NewCopilotReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -142,7 +141,7 @@ func TestCopilotReader_TimeWindow(t *testing.T) {
 
 func TestCopilotReader_NoHomeNoCrash(t *testing.T) {
 	r := NewCopilotReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:   t.TempDir(), // exists but no .copilot/session-state/
 		OriginCWD: "/somewhere",
 	})
@@ -161,7 +160,7 @@ func TestCopilotReader_SkipsSessionWithoutStartEvent(t *testing.T) {
 	})
 
 	r := NewCopilotReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-24 * time.Hour),

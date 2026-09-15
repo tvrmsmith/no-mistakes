@@ -103,7 +103,7 @@ func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if MatchesDaemonRoot(pid, nmHome) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			status := exec.CommandContext(ctx, bin, "daemon", "status")
 			status.Env = append(os.Environ(),
 				"NM_HOME="+nmHome,

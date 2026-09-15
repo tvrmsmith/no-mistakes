@@ -79,7 +79,7 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 3}
 	sctx.Config.CI.RevalidateRepairs = true
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -662,7 +662,7 @@ func TestCIStep_DoesNotRetryOnUnrelatedPendingCheck(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -819,7 +819,7 @@ func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 	sctx.Fixing = true
 	sctx.PreviousFindings = string(findingsJSON)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1146,7 +1146,7 @@ func TestCIStep_AutoFixPromptIncludesMustFixInstruction(t *testing.T) {
 	sctx.Config.CITimeout = 30 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 3}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 	sctx.Log = func(s string) {}

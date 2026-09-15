@@ -137,7 +137,7 @@ func TestAvailableUsesConfiguredExecutableAndRuntimeCapabilities(t *testing.T) {
 	recorder := &fakeRecorder{responses: []fakeResponse{{stdout: status}}}
 	host := newTestHost(recorder)
 
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
 	wantArgs := []string{"status", "--base-url", testBaseURL, "--token-env", "FORGEJO_TEST_TOKEN", "--json"}
@@ -157,7 +157,7 @@ func TestAvailableGatesMergedProofFromRuntimeCapability(t *testing.T) {
 		t.Fatal("fixture does not contain expected-head merge capability")
 	}
 	host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: status}}})
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
 	caps := host.Capabilities()
@@ -176,7 +176,7 @@ func TestAvailableGatesMergeabilityIndependentlyFromCommitStatuses(t *testing.T)
 		t.Fatal("fixture does not contain commit-status capability")
 	}
 	host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: status}}})
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
 	caps := host.Capabilities()
@@ -195,7 +195,7 @@ func TestAvailableAcceptsHostScopedTokenSource(t *testing.T) {
 		BaseURL:        testBaseURL,
 		Repository:     testRepo,
 	})
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
 	wantArgs := []string{"status", "--base-url", testBaseURL, "--json"}
@@ -222,7 +222,7 @@ func TestAvailableRejectsIncompleteStatusIdentity(t *testing.T) {
 				t.Fatalf("fixture does not contain %q", tt.old)
 			}
 			host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: response}}})
-			err := host.Available(context.Background())
+			err := host.Available(t.Context())
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Available() error = %v, want %q", err, tt.want)
 			}
@@ -239,7 +239,7 @@ func TestAvailableRejectsUnprovenCapabilitySources(t *testing.T) {
 				t.Fatal("fixture does not contain the Swagger capability probe")
 			}
 			host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: response}}})
-			err := host.Available(context.Background())
+			err := host.Available(t.Context())
 			if err == nil || !strings.Contains(err.Error(), "capability probe") {
 				t.Fatalf("Available() error = %v, want rejected capability probe", err)
 			}
@@ -258,14 +258,14 @@ func TestForgejo15KeepsStatusGatingWithoutActionLogs(t *testing.T) {
 		}]`, `[]`)},
 	}}
 	host := newTestHost(recorder)
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
 	caps := host.Capabilities()
 	if !caps.MergeableState || !caps.MergedProof || caps.FailedCheckLogs {
 		t.Fatalf("Capabilities() = %+v, want mergeability and merged proof with independently unsupported logs", caps)
 	}
-	checks, err := host.GetChecks(context.Background(), testPR())
+	checks, err := host.GetChecks(t.Context(), testPR())
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -273,7 +273,7 @@ func TestForgejo15KeepsStatusGatingWithoutActionLogs(t *testing.T) {
 		t.Fatalf("GetChecks() = %+v, want passing commit status", checks)
 	}
 	callsBeforeLogs := len(recorder.calls)
-	logs, err := host.FetchFailedCheckLogs(context.Background(), testPR(), "feature/forgejo", testHeadSHA, []string{"test/linux"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), testPR(), "feature/forgejo", testHeadSHA, []string{"test/linux"})
 	if logs != "" || !errors.Is(err, scm.ErrUnsupported) {
 		t.Fatalf("FetchFailedCheckLogs() = (%q, %v), want independently unsupported", logs, err)
 	}
@@ -292,18 +292,18 @@ func TestPRLifecycleCommandsAndIdempotentCreate(t *testing.T) {
 	}}
 	host := newTestHost(recorder)
 
-	found, err := host.FindPR(context.Background(), "feature/forgejo", "main")
+	found, err := host.FindPR(t.Context(), "feature/forgejo", "main")
 	if err != nil || found == nil || found.Number != "42" || found.URL != testPRURL || found.HeadSHA != testHeadSHA {
 		t.Fatalf("FindPR() = (%+v, %v)", found, err)
 	}
-	created, err := host.CreatePR(context.Background(), "feature/forgejo", "main", scm.PRContent{Title: "Title", Body: "line one\nline two"})
+	created, err := host.CreatePR(t.Context(), "feature/forgejo", "main", scm.PRContent{Title: "Title", Body: "line one\nline two"})
 	if err != nil || created == nil || created.Number != "42" {
 		t.Fatalf("CreatePR() = (%+v, %v)", created, err)
 	}
-	if _, err := host.UpdatePR(context.Background(), created, scm.PRContent{Title: "New title", Body: "new body"}); err != nil {
+	if _, err := host.UpdatePR(t.Context(), created, scm.PRContent{Title: "New title", Body: "new body"}); err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
-	state, err := host.GetPRState(context.Background(), created)
+	state, err := host.GetPRState(t.Context(), created)
 	if err != nil || state != scm.PRStateOpen {
 		t.Fatalf("GetPRState() = (%q, %v)", state, err)
 	}
@@ -326,7 +326,7 @@ func TestFindPRNoMatchIsExplicit(t *testing.T) {
 		"found":false,"pull_request":null,
 		"search_info":{"complete":true,"pages":1,"fetched":3,"total":3}
 	}`}}})
-	pr, err := host.FindPR(context.Background(), "missing", "main")
+	pr, err := host.FindPR(t.Context(), "missing", "main")
 	if err != nil || pr != nil {
 		t.Fatalf("FindPR() = (%+v, %v), want (nil, nil)", pr, err)
 	}
@@ -372,7 +372,7 @@ func TestChecksFailClosedAcrossStates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: checksJSON(tt.overall, tt.requiredState, tt.passes, tt.statuses, tt.required)}}})
-			got, err := host.GetChecks(context.Background(), testPR())
+			got, err := host.GetChecks(t.Context(), testPR())
 			if err != nil {
 				t.Fatalf("GetChecks() error = %v", err)
 			}
@@ -400,7 +400,7 @@ func TestChecksRejectMissingProtectionOutput(t *testing.T) {
 		t.Fatal("checks fixture did not contain protection output")
 	}
 	host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: withoutProtection}}})
-	_, err := host.GetChecks(context.Background(), testPR())
+	_, err := host.GetChecks(t.Context(), testPR())
 	if err == nil || !strings.Contains(err.Error(), "protection") {
 		t.Fatalf("GetChecks() error = %v, want missing protection error", err)
 	}
@@ -414,7 +414,7 @@ func TestChecksRejectRequiredMatchesAbsentFromStatuses(t *testing.T) {
 		`[{"context":"test/linux","state":"success","updated_at":null}]`,
 		`[{"context":"required/*","state":"success","matched":["required/linux"]}]`,
 	)}}})
-	_, err := host.GetChecks(context.Background(), testPR())
+	_, err := host.GetChecks(t.Context(), testPR())
 	if err == nil || !strings.Contains(err.Error(), "required/linux") {
 		t.Fatalf("GetChecks() error = %v, want unknown matched context error", err)
 	}
@@ -447,7 +447,7 @@ func TestChecksRejectInconsistentRequiredSummary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: checksJSON("success", tt.requiredState, true, statuses, tt.required)}}})
-			_, err := host.GetChecks(context.Background(), testPR())
+			_, err := host.GetChecks(t.Context(), testPR())
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("GetChecks() error = %v, want %q", err, tt.want)
 			}
@@ -460,7 +460,7 @@ func TestChecksAcceptsAdvancedHead(t *testing.T) {
 	host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: strings.ReplaceAll(
 		checksJSON("success", "not_required", true, statuses, `[]`), testHeadSHA, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}})
-	checks, err := host.GetChecks(context.Background(), testPR())
+	checks, err := host.GetChecks(t.Context(), testPR())
 	if err != nil || len(checks) != 1 || checks[0].Bucket != scm.CheckBucketPass {
 		t.Fatalf("GetChecks() = (%+v, %v), want passing advanced head", checks, err)
 	}
@@ -472,10 +472,10 @@ func TestMergeabilityCommandDecoding(t *testing.T) {
 		{stdout: `{"mergeability":{"number":42,"url":"` + testPRURL + `","head_sha":"` + testHeadSHA + `","forgejo_mergeable":false,"checks_pass":false,"mergeable":false,"reasons":["forgejo_not_mergeable"]}}`},
 	}}
 	host := newTestHost(recorder)
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
-	got, err := host.GetMergeableState(context.Background(), testPR())
+	got, err := host.GetMergeableState(t.Context(), testPR())
 	if err != nil || got != scm.MergeableConflict {
 		t.Fatalf("GetMergeableState() = (%q, %v), want conflict", got, err)
 	}
@@ -491,10 +491,10 @@ func TestMergeabilityAcceptsAdvancedHead(t *testing.T) {
 		{stdout: `{"mergeability":{"number":42,"url":"` + testPRURL + `","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","forgejo_mergeable":true,"checks_pass":true,"mergeable":true,"reasons":[]}}`},
 	}}
 	host := newTestHost(recorder)
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v", err)
 	}
-	got, err := host.GetMergeableState(context.Background(), testPR())
+	got, err := host.GetMergeableState(t.Context(), testPR())
 	if err != nil || got != scm.MergeableOK {
 		t.Fatalf("GetMergeableState() = (%q, %v), want mergeable advanced head", got, err)
 	}
@@ -504,7 +504,7 @@ func TestMergedProofRequiresExpectedHeadAndCanonicalIdentity(t *testing.T) {
 	proof := `{"merged":true,"number":42,"url":"` + testPRURL + `","head_sha":"` + testHeadSHA + `","merge_commit_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","merged_at":"2025-01-02T00:00:00Z","merged_by":"alice"}`
 	recorder := &fakeRecorder{responses: []fakeResponse{{stdout: `{"proof":` + proof + `}`}}}
 	host := newTestHost(recorder)
-	got, err := host.GetMergedProof(context.Background(), testPR(), testHeadSHA)
+	got, err := host.GetMergedProof(t.Context(), testPR(), testHeadSHA)
 	if err != nil || !got.Merged || got.HeadSHA != testHeadSHA || got.MergeCommitSHA == "" {
 		t.Fatalf("GetMergedProof() = (%+v, %v)", got, err)
 	}
@@ -517,7 +517,7 @@ func TestMergedProofRequiresExpectedHeadAndCanonicalIdentity(t *testing.T) {
 func TestMergedProofRejectsEmptyExpectedHead(t *testing.T) {
 	proof := `{"merged":true,"number":42,"url":"` + testPRURL + `","head_sha":"` + testHeadSHA + `","merge_commit_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","merged_at":"2025-01-02T00:00:00Z","merged_by":"alice"}`
 	host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: `{"proof":` + proof + `}`}}})
-	_, err := host.GetMergedProof(context.Background(), testPR(), "")
+	_, err := host.GetMergedProof(t.Context(), testPR(), "")
 	if err == nil || !strings.Contains(err.Error(), "expected head") {
 		t.Fatalf("GetMergedProof() error = %v, want missing expected head", err)
 	}
@@ -526,7 +526,7 @@ func TestMergedProofRejectsEmptyExpectedHead(t *testing.T) {
 func TestMergedProofRejectsAlreadyMergedHeadRace(t *testing.T) {
 	proof := `{"merged":true,"number":42,"url":"` + testPRURL + `","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","merge_commit_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","merged_at":"2025-01-02T00:00:00Z","merged_by":"alice"}`
 	host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: `{"proof":` + proof + `}`}}})
-	_, err := host.GetMergedProof(context.Background(), testPR(), testHeadSHA)
+	_, err := host.GetMergedProof(t.Context(), testPR(), testHeadSHA)
 	if !errors.Is(err, scm.ErrHeadChanged) {
 		t.Fatalf("GetMergedProof() error = %v, want ErrHeadChanged", err)
 	}
@@ -535,7 +535,7 @@ func TestMergedProofRejectsAlreadyMergedHeadRace(t *testing.T) {
 func TestRejectsMismatchedPRIdentityAndIncompleteSearch(t *testing.T) {
 	t.Run("input URL", func(t *testing.T) {
 		host := newTestHost(&fakeRecorder{})
-		_, err := host.GetPRState(context.Background(), &scm.PR{Number: "42", URL: "https://evil.example/octo/widgets/pulls/42"})
+		_, err := host.GetPRState(t.Context(), &scm.PR{Number: "42", URL: "https://evil.example/octo/widgets/pulls/42"})
 		if err == nil || !strings.Contains(err.Error(), "identity") {
 			t.Fatalf("GetPRState() error = %v, want identity error", err)
 		}
@@ -543,7 +543,7 @@ func TestRejectsMismatchedPRIdentityAndIncompleteSearch(t *testing.T) {
 	t.Run("output URL", func(t *testing.T) {
 		bad := strings.ReplaceAll(pullJSON("open", false, testHeadSHA), testPRURL, "https://evil.example/octo/widgets/pulls/42")
 		host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: `{"found":true,"pull_request":` + bad + `,"search_info":{"complete":true,"pages":1,"fetched":1,"total":1}}`}}})
-		_, err := host.FindPR(context.Background(), "feature/forgejo", "main")
+		_, err := host.FindPR(t.Context(), "feature/forgejo", "main")
 		if err == nil || !strings.Contains(err.Error(), "identity") {
 			t.Fatalf("FindPR() error = %v, want identity error", err)
 		}
@@ -552,7 +552,7 @@ func TestRejectsMismatchedPRIdentityAndIncompleteSearch(t *testing.T) {
 		bad := strings.ReplaceAll(pullJSON("open", false, testHeadSHA), `"number":42`, `"number":43`)
 		bad = strings.ReplaceAll(bad, "/pulls/42", "/pulls/43")
 		host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: `{"pull_request":` + bad + `}`}}})
-		_, err := host.GetPRState(context.Background(), &scm.PR{Number: "42", URL: testPRURL})
+		_, err := host.GetPRState(t.Context(), &scm.PR{Number: "42", URL: testPRURL})
 		if err == nil || !strings.Contains(err.Error(), "number") {
 			t.Fatalf("GetPRState() error = %v, want number identity error", err)
 		}
@@ -561,7 +561,7 @@ func TestRejectsMismatchedPRIdentityAndIncompleteSearch(t *testing.T) {
 		bad := strings.ReplaceAll(pullJSON("open", false, testHeadSHA), `"number":42`, `"number":43`)
 		bad = strings.ReplaceAll(bad, "/pulls/42", "/pulls/43")
 		host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: `{"updated":true,"pull_request":` + bad + `}`}}})
-		_, err := host.UpdatePR(context.Background(), testPR(), scm.PRContent{Title: "title", Body: "body"})
+		_, err := host.UpdatePR(t.Context(), testPR(), scm.PRContent{Title: "title", Body: "body"})
 		if err == nil || !strings.Contains(err.Error(), "number") {
 			t.Fatalf("UpdatePR() error = %v, want number identity error", err)
 		}
@@ -572,10 +572,10 @@ func TestRejectsMismatchedPRIdentityAndIncompleteSearch(t *testing.T) {
 			{stdout: `{"mergeability":{"number":43,"url":"` + testBaseURL + `/octo/widgets/pulls/43","head_sha":"` + testHeadSHA + `","forgejo_mergeable":true,"checks_pass":true,"mergeable":true,"reasons":[]}}`},
 		}}
 		host := newTestHost(recorder)
-		if err := host.Available(context.Background()); err != nil {
+		if err := host.Available(t.Context()); err != nil {
 			t.Fatalf("Available() error = %v", err)
 		}
-		_, err := host.GetMergeableState(context.Background(), testPR())
+		_, err := host.GetMergeableState(t.Context(), testPR())
 		if err == nil || !strings.Contains(err.Error(), "number") {
 			t.Fatalf("GetMergeableState() error = %v, want number identity error", err)
 		}
@@ -583,14 +583,14 @@ func TestRejectsMismatchedPRIdentityAndIncompleteSearch(t *testing.T) {
 	t.Run("merged proof output number", func(t *testing.T) {
 		proof := `{"merged":true,"number":43,"url":"` + testBaseURL + `/octo/widgets/pulls/43","head_sha":"` + testHeadSHA + `","merge_commit_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","merged_at":"2025-01-02T00:00:00Z","merged_by":"alice"}`
 		host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: `{"proof":` + proof + `}`}}})
-		_, err := host.GetMergedProof(context.Background(), testPR(), testHeadSHA)
+		_, err := host.GetMergedProof(t.Context(), testPR(), testHeadSHA)
 		if err == nil || !strings.Contains(err.Error(), "number") {
 			t.Fatalf("GetMergedProof() error = %v, want number identity error", err)
 		}
 	})
 	t.Run("incomplete search", func(t *testing.T) {
 		host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: `{"found":false,"pull_request":null,"search_info":{"complete":false,"pages":10,"fetched":0,"total":null}}`}}})
-		_, err := host.FindPR(context.Background(), "feature/forgejo", "main")
+		_, err := host.FindPR(t.Context(), "feature/forgejo", "main")
 		if err == nil || !strings.Contains(err.Error(), "incomplete") {
 			t.Fatalf("FindPR() error = %v, want incomplete search error", err)
 		}
@@ -600,7 +600,7 @@ func TestRejectsMismatchedPRIdentityAndIncompleteSearch(t *testing.T) {
 func TestCommandFailuresAreActionableAndRedacted(t *testing.T) {
 	t.Run("executable not found", func(t *testing.T) {
 		host := newTestHostWithOptions(&fakeRecorder{}, func(string) bool { return false })
-		err := host.Available(context.Background())
+		err := host.Available(t.Context())
 		if err == nil || !strings.Contains(err.Error(), "forgejo_axi_path") || !strings.Contains(err.Error(), "not found") {
 			t.Fatalf("Available() error = %v, want actionable missing executable", err)
 		}
@@ -611,21 +611,21 @@ func TestCommandFailuresAreActionableAndRedacted(t *testing.T) {
 			code:   1,
 		}}}
 		host := newTestHost(recorder)
-		_, err := host.FindPR(context.Background(), "feature/forgejo", "main")
+		_, err := host.FindPR(t.Context(), "feature/forgejo", "main")
 		if err == nil || !strings.Contains(err.Error(), "HTTP_ERROR") || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "-token") || strings.Contains(err.Error(), "user:pass") {
 			t.Fatalf("FindPR() error = %v, want code with secrets redacted", err)
 		}
 	})
 	t.Run("malformed output", func(t *testing.T) {
 		host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdout: `{not-json`}}})
-		_, err := host.FindPR(context.Background(), "feature/forgejo", "main")
+		_, err := host.FindPR(t.Context(), "feature/forgejo", "main")
 		if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
 			t.Fatalf("FindPR() error = %v, want invalid JSON", err)
 		}
 	})
 	t.Run("oversized JSON output", func(t *testing.T) {
 		host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stdoutBytes: maxForgejoOutputBytes + 1}}})
-		_, err := host.FindPR(context.Background(), "feature/forgejo", "main")
+		_, err := host.FindPR(t.Context(), "feature/forgejo", "main")
 		if err == nil || !strings.Contains(err.Error(), "output exceeded 1048576 bytes") {
 			t.Fatalf("FindPR() error = %v, want bounded-output error", err)
 		}
@@ -639,7 +639,7 @@ func TestCommandFailuresAreActionableAndRedacted(t *testing.T) {
 			t.Fatal(err)
 		}
 		host := newTestHost(&fakeRecorder{responses: []fakeResponse{{stderrFile: stderrFile, code: 1}}})
-		_, err := host.FindPR(context.Background(), "feature/forgejo", "main")
+		_, err := host.FindPR(t.Context(), "feature/forgejo", "main")
 		if err == nil {
 			t.Fatal("FindPR() error = nil, want bounded stderr prefix")
 		}
@@ -658,7 +658,7 @@ func TestCommandHonorsCancellationAndTimeout(t *testing.T) {
 		{
 			name: "cancel",
 			context: func() (context.Context, context.CancelFunc) {
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithCancel(t.Context())
 				cancel()
 				return ctx, cancel
 			},
@@ -667,7 +667,7 @@ func TestCommandHonorsCancellationAndTimeout(t *testing.T) {
 		{
 			name: "deadline",
 			context: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 20*time.Millisecond)
+				return context.WithTimeout(t.Context(), 20*time.Millisecond)
 			},
 			want: context.DeadlineExceeded,
 		},

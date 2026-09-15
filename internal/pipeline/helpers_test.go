@@ -224,7 +224,7 @@ func waitForStepStatus(t *testing.T, database *db.DB, runID string, stepName typ
 // failed wait was the lint.log leak in TestExecutor_AutoFixRespectsMaxAttempts.
 func startExecutor(t *testing.T, exec *Executor, run *db.Run, repo *db.Repo, workDir string) (<-chan error, context.CancelFunc) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	var finished atomic.Bool
 	t.Cleanup(func() {

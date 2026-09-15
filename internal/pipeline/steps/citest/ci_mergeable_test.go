@@ -76,7 +76,7 @@ func TestCIStep_UnknownMergeableStateDoesNotExitCleanly(t *testing.T) {
 	sctx.Run.PRURL = &prURL
 	sctx.Config.CITimeout = 10 * time.Second
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -118,7 +118,7 @@ func TestCIStep_MergeableLookupErrorDoesNotReportReadyWhenChecksPass(t *testing.
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -164,7 +164,7 @@ func TestCIStep_PRStateLookupErrorDoesNotReportReadyWhenChecksPass(t *testing.T)
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -392,7 +392,7 @@ func TestCIStep_WaitsForPendingChecksBeforeFixing(t *testing.T) {
 	sctx.Config.CITimeout = 30 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 3}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 

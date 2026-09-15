@@ -239,7 +239,7 @@ func TestPostReceiveHookScriptDoesNotEvaluatePushOptions(t *testing.T) {
 }
 
 func TestInstallPostReceiveHook(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -277,7 +277,7 @@ func TestInstallPostReceiveHook(t *testing.T) {
 }
 
 func TestRefreshManagedPostReceiveHookPreservesCustomHook(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -305,7 +305,7 @@ func TestRefreshManagedPostReceiveHookPreservesCustomHook(t *testing.T) {
 }
 
 func TestRefreshManagedPostReceiveHookInstallsMissingHook(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -343,7 +343,7 @@ func TestPostReceiveHook_ResolvesAbsoluteGateDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("post-receive hook is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	base := t.TempDir()
 	bare := filepath.Join(base, "test.git")
@@ -409,7 +409,7 @@ func TestPostReceiveHook_FallsBackToHookLocationForGateDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("post-receive hook is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	base := t.TempDir()
 	bare := filepath.Join(base, "test.git")
@@ -501,7 +501,7 @@ func TestPostReceiveHook_SurfacesNotifyFailures(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("post-receive hook is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	base := t.TempDir()
 	bare := filepath.Join(base, "test.git")
@@ -562,7 +562,7 @@ func TestPostReceiveHook_SurfacesNotifyFailures(t *testing.T) {
 }
 
 func TestIsolateHooksPath_OverridesPoisonedSharedConfig(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -612,7 +612,7 @@ func TestIsolateHooksPath_LinkedWorktreeCanRebase(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("worktree + shell pipeline is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -667,7 +667,7 @@ func TestIsolateHooksPath_PushToGateStillWorks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("post-receive hook is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -744,7 +744,7 @@ func TestIsolateHooksPath_MigratesFromPreFixState(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("worktree + shell pipeline is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -779,7 +779,7 @@ func TestIsolateHooksPath_MigratesFromPreFixState(t *testing.T) {
 }
 
 func TestIsolateHooksPath_Idempotent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -793,7 +793,7 @@ func TestIsolateHooksPath_Idempotent(t *testing.T) {
 }
 
 func TestIsolateHooksPath_SkipsIsolationWhenWorktreeConfigUnsupported(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -837,7 +837,7 @@ func TestIsolateHooksPath_SkipsIsolationWhenWorktreeConfigUnsupported(t *testing
 // poll and the CI step hangs until ci_timeout. No real gh or network is
 // needed; the failure is purely in git's repo resolution, which gh depends on.
 func TestIsolateHooksPath_LinkedWorktreeResolvesRepoForCLI(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -898,7 +898,7 @@ func TestIsolateHooksPath_LinkedWorktreeResolvesRepoForCLI(t *testing.T) {
 // worktree is the CI step's cwd. The old-git path is simulated deterministically
 // via the runGit stub so this reproduces the reporter's config state on any git.
 func TestLinkedWorktreeLeaksCoreBareWithoutRelocation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {

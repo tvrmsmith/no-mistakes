@@ -1,7 +1,6 @@
 package update
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -136,7 +135,7 @@ func TestFetchLatestRelease_ManifestPathDoesNotCallGitHubRESTAPI(t *testing.T) {
 		httpClient:     server.Client(),
 	}
 
-	stable, err := u.fetchLatestRelease(context.Background())
+	stable, err := u.fetchLatestRelease(t.Context())
 	if err != nil {
 		t.Fatalf("stable fetchLatestRelease error = %v", err)
 	}
@@ -145,7 +144,7 @@ func TestFetchLatestRelease_ManifestPathDoesNotCallGitHubRESTAPI(t *testing.T) {
 	}
 
 	u.includePrereleases = true
-	beta, err := u.fetchLatestRelease(context.Background())
+	beta, err := u.fetchLatestRelease(t.Context())
 	if err != nil {
 		t.Fatalf("beta fetchLatestRelease error = %v", err)
 	}
@@ -174,7 +173,7 @@ func TestFetchLatestRelease_ManifestSucceedsWhenRESTAPIReturns403(t *testing.T) 
 		manifestURL: server.URL + "/releases/download/channels/channels.json",
 		httpClient:  server.Client(),
 	}
-	release, err := u.fetchLatestRelease(context.Background())
+	release, err := u.fetchLatestRelease(t.Context())
 	if err != nil {
 		t.Fatalf("fetchLatestRelease should ignore REST 403 when the manifest is reachable, error = %v", err)
 	}
@@ -202,7 +201,7 @@ func TestFetchLatestRelease_DoesNotUseRESTWhenManifestMissing(t *testing.T) {
 		manifestURL: server.URL + "/releases/download/channels/channels.json",
 		httpClient:  server.Client(),
 	}
-	if _, err := u.fetchLatestRelease(context.Background()); err == nil || !strings.Contains(err.Error(), "channel manifest") {
+	if _, err := u.fetchLatestRelease(t.Context()); err == nil || !strings.Contains(err.Error(), "channel manifest") {
 		t.Fatalf("fetchLatestRelease error = %v, want channel manifest failure", err)
 	}
 	if apiHits != 0 {
@@ -273,7 +272,7 @@ func TestCheckLatest_ManifestStableAndBetaSelectDifferentHeads(t *testing.T) {
 		httpClient:     server.Client(),
 	}
 
-	stablePlan, err := base.checkLatest(context.Background())
+	stablePlan, err := base.checkLatest(t.Context())
 	if err != nil {
 		t.Fatalf("stable checkLatest error = %v", err)
 	}
@@ -285,7 +284,7 @@ func TestCheckLatest_ManifestStableAndBetaSelectDifferentHeads(t *testing.T) {
 	}
 
 	base.includePrereleases = true
-	betaPlan, err := base.checkLatest(context.Background())
+	betaPlan, err := base.checkLatest(t.Context())
 	if err != nil {
 		t.Fatalf("beta checkLatest error = %v", err)
 	}

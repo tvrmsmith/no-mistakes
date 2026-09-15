@@ -220,7 +220,7 @@ func runInstallScript(t *testing.T, home, fakeBin string, extraEnv map[string]st
 func runInstallScriptCommand(t *testing.T, home, fakeBin string, extraEnv map[string]string) ([]byte, error) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "docs/install.sh")
 	pathValue := strings.Join([]string{fakeBin, filepath.Join(home, ".local", "bin"), os.Getenv("PATH")}, string(os.PathListSeparator))

@@ -257,7 +257,7 @@ func TestAxiAbortCancelledWaitRefusesSuccess(t *testing.T) {
 		{name: "explicit run", args: []string{"axi", "abort", "--run", "run-quiesce"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			newAbortQuiescenceFixture(t, runningRunForever, cancel)
 			out, err := executeCmdWithContext(ctx, tc.args...)
 			t.Logf("%s cancelled-wait CLI output:\n%s", tc.name, out)

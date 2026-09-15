@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -50,7 +49,7 @@ func TestPreserveStaleRunHeadsAnchorsCrashWorkBeforeTerminalization(t *testing.T
 	gitCmd(t, "", "init", "--bare", gate)
 	gitCmd(t, source, "push", gate, "HEAD:refs/heads/feature/crash")
 	managed := p.WorktreeDir(repo.ID, run.ID)
-	if err := gitpkg.WorktreeAdd(context.Background(), gate, managed, submitted); err != nil {
+	if err := gitpkg.WorktreeAdd(t.Context(), gate, managed, submitted); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, managed, "config", "user.email", "test@test.com")

@@ -31,7 +31,7 @@ type syncFixture struct {
 
 func newSyncFixture(t *testing.T) *syncFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -882,7 +882,7 @@ func TestRefreshSlowSuccessfulLsRemoteDoesNotStealFetchBudget(t *testing.T) {
 		// deadline-isolation test depend on platform-specific subprocess
 		// startup time. On Windows, starting the process can legitimately
 		// consume this deliberately tiny test budget even when it is fresh.
-		return gitpkg.FetchRemoteBranchToPrivateRef(context.Background(), dir, remote, branch, localRef)
+		return gitpkg.FetchRemoteBranchToPrivateRef(t.Context(), dir, remote, branch, localRef)
 	}
 
 	state := f.service.Refresh(f.ctx)
@@ -1027,7 +1027,7 @@ func TestRefreshParentCancellationStopsFetchAfterLsRemoteSucceeds(t *testing.T) 
 	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.old {
 		t.Fatal("HEAD changed despite a cancelled parent context")
 	}
-	if _, err := gitpkg.Run(context.Background(), f.local, "show-ref", "--verify", "refs/no-mistakes/sync/"+f.run.ID); err == nil {
+	if _, err := gitpkg.Run(t.Context(), f.local, "show-ref", "--verify", "refs/no-mistakes/sync/"+f.run.ID); err == nil {
 		t.Fatal("cancelled refresh created a private fetch ref")
 	}
 }
@@ -1055,7 +1055,7 @@ func configureIdentity(t *testing.T, dir string) {
 
 func mustRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := gitpkg.Run(context.Background(), dir, args...)
+	out, err := gitpkg.Run(t.Context(), dir, args...)
 	if err != nil {
 		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
 	}

@@ -116,7 +116,7 @@ func TestParseClaudeEvents_AssistantMessage(t *testing.T) {
 	var usage TokenUsage
 
 	err := parseClaudeEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -154,7 +154,7 @@ func TestParseClaudeEvents_ResultEvent(t *testing.T) {
 	var result *claudeResult
 
 	err := parseClaudeEvents(
-		context.Background(),
+		t.Context(),
 		bytes.NewReader(append(line, '\n')),
 		nil,
 		&usage,
@@ -197,7 +197,7 @@ func TestParseClaudeEvents_LargeAssistantEvent(t *testing.T) {
 	var usage TokenUsage
 
 	err = parseClaudeEvents(
-		context.Background(),
+		t.Context(),
 		bytes.NewReader(append(line, '\n')),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -227,7 +227,7 @@ func TestParseClaudeEvents_MultipleEvents(t *testing.T) {
 	var result *claudeResult
 
 	err := parseClaudeEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -264,7 +264,7 @@ func TestParseClaudeEvents_NoSeparatorForFirstMessage(t *testing.T) {
 	var usage TokenUsage
 
 	err := parseClaudeEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -291,7 +291,7 @@ func TestParseClaudeEvents_NoSeparatorAfterToolOnlyEvent(t *testing.T) {
 	var usage TokenUsage
 
 	err := parseClaudeEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -316,7 +316,7 @@ func TestParseClaudeEvents_DoesNotSeparateSplitAssistantReply(t *testing.T) {
 	var usage TokenUsage
 
 	err := parseClaudeEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -340,7 +340,7 @@ func TestParseClaudeEvents_SkipsMalformedLines(t *testing.T) {
 	var usage TokenUsage
 
 	err := parseClaudeEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -358,7 +358,7 @@ func TestParseClaudeEvents_CacheTokens(t *testing.T) {
 	events := `{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":30,"cache_creation_input_tokens":10},"content":[]}}
 `
 	var usage TokenUsage
-	err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, nil)
+	err := parseClaudeEvents(t.Context(), strings.NewReader(events), nil, &usage, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestParseClaudeEvents_CacheTokens(t *testing.T) {
 }
 
 func TestParseClaudeEvents_ContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately
 
 	// Create a reader that would block — but context cancellation should stop parsing
@@ -409,7 +409,7 @@ func TestParseClaudeEvents_CapturesSkillInvocations(t *testing.T) {
 `
 			var usage TokenUsage
 			var result *claudeResult
-			if err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result); err != nil {
+			if err := parseClaudeEvents(t.Context(), strings.NewReader(events), nil, &usage, &result); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if result == nil {
@@ -431,7 +431,7 @@ func TestParseClaudeEvents_ErrorResult(t *testing.T) {
 	var usage TokenUsage
 	var result *claudeResult
 
-	err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result)
+	err := parseClaudeEvents(t.Context(), strings.NewReader(events), nil, &usage, &result)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestParseClaudeEvents_ResultCapturesRawEvent(t *testing.T) {
 	var usage TokenUsage
 	var result *claudeResult
 
-	err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result)
+	err := parseClaudeEvents(t.Context(), strings.NewReader(events), nil, &usage, &result)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -631,7 +631,7 @@ func TestClaudeAgent_LargePromptUsesExactStdinForColdAndResumedRuns(t *testing.T
 				opts.Session = &SessionRef{ID: tc.sessionID}
 			}
 
-			result, err := a.runOnce(context.Background(), opts)
+			result, err := a.runOnce(t.Context(), opts)
 			if err != nil {
 				t.Fatalf("runOnce with 2 MiB prompt: %v", err)
 			}
@@ -684,7 +684,7 @@ func TestClaudeAgent_EarlyExitWithoutReadingLargeStdinDoesNotLeakGoroutines(t *t
 
 	for i := 0; i < 8; i++ {
 		started := time.Now()
-		_, err := a.runOnce(context.Background(), RunOpts{Prompt: prompt, CWD: t.TempDir()})
+		_, err := a.runOnce(t.Context(), RunOpts{Prompt: prompt, CWD: t.TempDir()})
 		if err == nil {
 			t.Fatal("early helper exit unexpectedly succeeded")
 		}
@@ -711,7 +711,7 @@ func TestClaudeAgent_CancellationWithBlockedStdinAndInheritedPipesIsBounded(t *t
 			t.Setenv("NM_CLAUDE_STDIN_READY", ready)
 			t.Setenv("NM_CLAUDE_STDIN_PID", filepath.Join(t.TempDir(), "grandchild.pid"))
 			a := newClaudeStdinHelperAgent(t)
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
@@ -741,7 +741,7 @@ func TestClaudeAgent_RunOnceReportsSkillsUsedFromTheStream(t *testing.T) {
 	t.Setenv("NM_CLAUDE_STDIN_HELPER", "skill")
 	a := newClaudeStdinHelperAgent(t)
 
-	res, err := a.runOnce(context.Background(), RunOpts{Prompt: "review the change", CWD: t.TempDir()})
+	res, err := a.runOnce(t.Context(), RunOpts{Prompt: "review the change", CWD: t.TempDir()})
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
@@ -1096,7 +1096,7 @@ func TestClaudeAgent_StreamStallIsReportedAndRetried(t *testing.T) {
 	t.Setenv("NM_CLAUDE_STDIN_ATTEMPTS", countPath)
 	a := newClaudeStdinHelperAgent(t)
 
-	result, err := a.Run(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+	result, err := a.Run(t.Context(), RunOpts{Prompt: "review", CWD: t.TempDir()})
 	if err != nil {
 		t.Fatalf("run through a recoverable stream stall: %v", err)
 	}
@@ -1120,7 +1120,7 @@ func TestClaudeAgent_ResultSubtypeStallIsRetriedThroughRun(t *testing.T) {
 	t.Setenv("NM_CLAUDE_STDIN_ATTEMPTS", countPath)
 	a := newClaudeStdinHelperAgent(t)
 
-	result, err := a.Run(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+	result, err := a.Run(t.Context(), RunOpts{Prompt: "review", CWD: t.TempDir()})
 	if err != nil {
 		t.Fatalf("run through a recoverable non-success result subtype: %v", err)
 	}
@@ -1138,7 +1138,7 @@ func TestClaudeAgent_ExhaustedStreamStallNamesTheCause(t *testing.T) {
 	t.Setenv("NM_CLAUDE_STDIN_ATTEMPTS", filepath.Join(t.TempDir(), "attempts"))
 	a := newClaudeStdinHelperAgent(t)
 
-	_, err := a.Run(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+	_, err := a.Run(t.Context(), RunOpts{Prompt: "review", CWD: t.TempDir()})
 	if err == nil {
 		t.Fatal("expected the exhausted stall to fail")
 	}
@@ -1156,7 +1156,7 @@ func TestClaudeAgent_NoResultEventCarriesTheStreamDiagnostic(t *testing.T) {
 	t.Setenv("NM_CLAUDE_STDIN_HELPER", "no-result")
 	a := newClaudeStdinHelperAgent(t)
 
-	_, err := a.runOnce(context.Background(), RunOpts{Prompt: "review", CWD: t.TempDir()})
+	_, err := a.runOnce(t.Context(), RunOpts{Prompt: "review", CWD: t.TempDir()})
 	if err == nil {
 		t.Fatal("expected a run with no result event to fail")
 	}
@@ -1182,7 +1182,7 @@ func TestClaudeAgent_StreamReadFailureCarriesBothChannels(t *testing.T) {
 	t.Setenv("NM_CLAUDE_STDIN_HELPER", "stall-then-hang")
 	a := newClaudeStdinHelperAgent(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	opts := RunOpts{Prompt: "review", CWD: t.TempDir()}
 	opts.OnChunk = func(chunk string) {
@@ -1216,7 +1216,7 @@ func TestClaudeAgent_StreamReadFailureCarriesBothChannels(t *testing.T) {
 // than a successful parse, which would surface the failure as the kill signal
 // from wait instead of the parse-error path that carries the diagnostics.
 func TestParseClaudeEvents_CancelledStreamEndingInEOFReportsCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var usage TokenUsage
@@ -1232,7 +1232,7 @@ func TestParseClaudeEvents_CancelledStreamEndingInEOFReportsCancellation(t *test
 // complete, so a context cancelled on the way out must not turn a finished run
 // into a failure.
 func TestParseClaudeEvents_CompleteStreamSurvivesLateCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var usage TokenUsage

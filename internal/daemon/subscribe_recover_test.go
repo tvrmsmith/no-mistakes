@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -525,7 +524,7 @@ func TestRecoverOnStartup_ResumesParkedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	worktree := p.WorktreeDir(repo.ID, run.ID)
-	if err := gitpkg.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), worktree, headSHA); err != nil {
+	if err := gitpkg.WorktreeAdd(t.Context(), p.RepoDir(repo.ID), worktree, headSHA); err != nil {
 		t.Fatal(err)
 	}
 	step, err := d.InsertStepResult(run.ID, types.StepReview)
@@ -673,7 +672,7 @@ func TestRecoverOnStartup_ReconcilesHistoricalCIGateFromCurrentPRState(t *testin
 			prURL := "https://github.com/test/repo/pull/42"
 			run.PRURL = &prURL
 			worktree := p.WorktreeDir(repo.ID, run.ID)
-			if err := gitpkg.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), worktree, headSHA); err != nil {
+			if err := gitpkg.WorktreeAdd(t.Context(), p.RepoDir(repo.ID), worktree, headSHA); err != nil {
 				t.Fatal(err)
 			}
 			step, err := d.InsertStepResult(run.ID, types.StepCI)
@@ -827,7 +826,7 @@ func TestSkipWorktreeCleanup_CIMonitorInterrupted(t *testing.T) {
 	t.Cleanup(func() { closers.Quiet(d) })
 
 	repo, headSHA := setupTestGitRepo(t, p, d, "ci-skip-repo")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	newInterruptedWorktree := func(t *testing.T, recordedHead string) (string, string) {
 		t.Helper()
@@ -905,7 +904,7 @@ func TestRecoverIsolatesGateRepoHooksPath(t *testing.T) {
 	// (without IsolateHooksPath) whose shared local config has been
 	// poisoned by husky during a prior pipeline run.
 	bareDir := p.RepoDir("legacy-repo")
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := gitpkg.InitBare(ctx, bareDir); err != nil {
 		t.Fatal(err)
 	}
@@ -949,7 +948,7 @@ func TestRecoverRefreshesLegacyManagedGateHook(t *testing.T) {
 	}
 
 	bareDir := p.RepoDir("legacy-repo")
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := gitpkg.InitBare(ctx, bareDir); err != nil {
 		t.Fatal(err)
 	}

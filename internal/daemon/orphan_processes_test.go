@@ -3,7 +3,6 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,7 +53,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err := database.SetRunWorktreeDir(run.ID, workDir); err != nil {
 				t.Fatal(err)
 			}
-			if err := git.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), workDir, head); err != nil {
+			if err := git.WorktreeAdd(t.Context(), p.RepoDir(repo.ID), workDir, head); err != nil {
 				t.Fatal(err)
 			}
 			if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
@@ -67,7 +66,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err := database.StartStep(sr.ID); err != nil {
 				t.Fatal(err)
 			}
-			sctx := &pipeline.StepContext{Ctx: context.Background(), WorkDir: workDir, Run: run, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
+			sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir, Run: run, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
 			_, refusal := (protectedPathCommitStep{step: &steps.PushStep{}}).Execute(sctx)
 			outcome := pipeline.ProtectedPathOutcome(refusal)
 			if outcome == nil {
@@ -97,7 +96,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := mgr.prepareRecoveredRun(context.Background(), run); err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
+			if _, err := mgr.prepareRecoveredRun(t.Context(), run); err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
 				t.Fatalf("recovery must fail closed at trusted config: %v", err)
 			}
 			layout, err := validatedWorktreeLayout(database, p, config.DefaultGlobalConfig())

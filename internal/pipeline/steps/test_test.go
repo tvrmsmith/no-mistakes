@@ -30,7 +30,7 @@ func TestTestStep_HangingEvidenceAgentFailsRunAfterTimeout(t *testing.T) {
 	sctx.Config.TestAgentTimeout = 20 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&TestStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected hanging evidence agent to fail the run")
 	}
 

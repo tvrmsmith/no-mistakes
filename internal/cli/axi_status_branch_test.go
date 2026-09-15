@@ -44,7 +44,7 @@ func axiStatusOutput(t *testing.T, runID string) string {
 	t.Helper()
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiStatus(cmd, runID); err != nil {
 		t.Fatalf("axi status: %v\n%s", err, out.String())
@@ -313,7 +313,7 @@ func TestAxiStatusExplicitRunWithUnknownCallerBranchCannotOfferMutationCommands(
 		t.Fatalf("set other-branch findings: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
@@ -388,7 +388,7 @@ func TestAxiLogsDoesNotReadAnotherBranchesRunLogs(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiLogs(cmd, "review", "", false); err == nil {
 		t.Fatalf("axi logs resolved another branch's run:\n%s", out.String())
@@ -424,7 +424,7 @@ func TestAxiLogsExplicitRunTailHelpKeepsRunID(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiLogs(cmd, "review", other.ID, false); err != nil {
 		t.Fatalf("axi logs explicit run: %v\n%s", err, out.String())
@@ -450,7 +450,7 @@ func TestAxiLogsUnknownExplicitRunIDReportsNotFound(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiLogs(cmd, "review", "missing-run", false); err == nil {
 		t.Fatalf("axi logs unexpectedly found missing explicit run:\n%s", out.String())
@@ -504,7 +504,7 @@ func TestAxiStatusBranchLookupFailureIsNotDetachedHEAD(t *testing.T) {
 	repoDir, _, _, _ := setupAxiQueryRepo(t)
 	chdir(t, repoDir)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
@@ -542,7 +542,7 @@ func TestAxiDetachedHEADHelpOffersOnlyValidActions(t *testing.T) {
 	t.Run("logs", func(t *testing.T) {
 		var out bytes.Buffer
 		cmd := &cobra.Command{}
-		cmd.SetContext(context.Background())
+		cmd.SetContext(t.Context())
 		cmd.SetOut(&out)
 		if err := runAxiLogs(cmd, "review", "", false); err == nil {
 			t.Fatalf("detached logs unexpectedly found a run:\n%s", out.String())

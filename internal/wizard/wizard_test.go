@@ -176,7 +176,7 @@ func TestNewModel_DetachedHEADForcesBranchStep(t *testing.T) {
 }
 
 func TestNewModel_UsesConfigContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cfg := baseConfig(&recorder{})
 	cfg.Context = ctx
 
@@ -477,7 +477,7 @@ func TestRunAuto_SuggestionErrorReturnsFailure(t *testing.T) {
 func TestRunAuto_UsesCallerContext(t *testing.T) {
 	r := &recorder{}
 	cfg := baseConfig(r)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	cfg.Context = ctx
 	cfg.SuggestBranch = func(ctx context.Context) (string, error) {
@@ -503,7 +503,7 @@ func TestRunAuto_UsesCallerContext(t *testing.T) {
 func TestRunAuto_WrapsUnderlyingContextError(t *testing.T) {
 	r := &recorder{}
 	cfg := baseConfig(r)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	cfg.Context = ctx
 	cfg.SuggestBranch = func(ctx context.Context) (string, error) {
@@ -525,7 +525,7 @@ func TestRun_UsesCallerContext(t *testing.T) {
 	cfg.CurrentBranch = "feat/existing"
 	cfg.NeedsBranch = false
 	cfg.IsDirty = false
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	cfg.Context = ctx
 
@@ -547,7 +547,7 @@ func TestRun_ContextCancelResetsTerminalTitle(t *testing.T) {
 	cfg.DisableInput = true
 	cfg.Output = &out
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cfg.Context = ctx
 	go func() {
 		time.Sleep(50 * time.Millisecond)

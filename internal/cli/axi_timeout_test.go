@@ -65,7 +65,7 @@ func TestDriveRun_SlowGetRunRetriesAfterHealthProbe(t *testing.T) {
 	defer closers.Quiet(client)
 
 	started := time.Now()
-	run, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
+	run, _, err := driveRun(t.Context(), io.Discard, client, socketPath, "run-1", false)
 	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("slow live daemon treated as failure: %v", err)
@@ -103,7 +103,7 @@ func TestDriveRun_GetRunRPCErrorIsNotRetried(t *testing.T) {
 	client := dialReady(t, socketPath)
 	defer closers.Quiet(client)
 
-	_, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
+	_, _, err := driveRun(t.Context(), io.Discard, client, socketPath, "run-1", false)
 	if err == nil || !strings.Contains(err.Error(), "database unavailable") {
 		t.Fatalf("error = %v, want genuine RPC failure", err)
 	}
@@ -132,7 +132,7 @@ func TestDriveRun_SlowGetRunWithFailedHealthIsDead(t *testing.T) {
 	client := dialReady(t, socketPath)
 	defer closers.Quiet(client)
 
-	_, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
+	_, _, err := driveRun(t.Context(), io.Discard, client, socketPath, "run-1", false)
 	if err == nil || !strings.Contains(err.Error(), "health probe failed") {
 		t.Fatalf("error = %v, want health-probe failure after slow get_run", err)
 	}

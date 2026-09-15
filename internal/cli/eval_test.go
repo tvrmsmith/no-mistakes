@@ -45,7 +45,7 @@ func TestEvalSetsIsLocalOnlyAndEmitsNoTelemetry(t *testing.T) {
 }
 
 func TestEvalCaptureAndSetsSpeakInFindingGoldTerms(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -89,7 +89,7 @@ func TestEvalCaptureAndSetsSpeakInFindingGoldTerms(t *testing.T) {
 }
 
 func TestEvalMissIngestLabelsFalseNegativeGold(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -144,7 +144,7 @@ func TestEvalMissIngestLabelsFalseNegativeGold(t *testing.T) {
 // additive by design and is covered separately; eval miss ingest's duplicate
 // no-op is covered above.)
 func TestEvalCaptureSetsReportAndRelabelAreIdempotentAtTheCLI(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -186,7 +186,7 @@ func TestEvalCaptureSetsReportAndRelabelAreIdempotentAtTheCLI(t *testing.T) {
 }
 
 func TestEvalRunRendersProgressAndScoreDashboard(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -353,7 +353,7 @@ func mustCLIGit(t *testing.T, ctx context.Context, dir string, args ...string) s
 // resolved from the locally registered repositories, since a case stores only
 // the fingerprint of its upstream URL.
 func TestEvalSetsNamesTheRepositoryAndTablesTheConfusionMatrix(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -550,7 +550,7 @@ func TestEvalDisplayCommandsDoNotCreateThePipelineDatabase(t *testing.T) {
 // A pre-existing pipeline database still resolves repository names: opening it
 // read-only removes the side effect, not the feature.
 func TestEvalSetsStillNamesRepositoriesFromAnExistingDatabase(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())

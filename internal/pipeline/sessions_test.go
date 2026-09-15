@@ -100,7 +100,7 @@ func TestRunSessions_RoleReusesOneSession(t *testing.T) {
 	rs := NewRunSessions(d, run.ID, fake, true)
 
 	for i := 0; i < 4; i++ {
-		if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: fmt.Sprintf("review round %d", i+1)}, nil); err != nil {
+		if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: fmt.Sprintf("review round %d", i+1)}, nil); err != nil {
 			t.Fatalf("round %d: %v", i+1, err)
 		}
 	}
@@ -132,7 +132,7 @@ func TestRunSessions_RolesKeepDistinctSessions(t *testing.T) {
 	// review -> fix -> rereview -> fix -> rereview
 	turns := []SessionRole{SessionRoleReviewer, SessionRoleFixer, SessionRoleReviewer, SessionRoleFixer, SessionRoleReviewer}
 	for i, role := range turns {
-		if _, err := rs.Run(context.Background(), fake, role, agent.RunOpts{Prompt: fmt.Sprintf("turn %d", i)}, nil); err != nil {
+		if _, err := rs.Run(t.Context(), fake, role, agent.RunOpts{Prompt: fmt.Sprintf("turn %d", i)}, nil); err != nil {
 			t.Fatalf("turn %d: %v", i, err)
 		}
 	}
@@ -176,12 +176,12 @@ func TestRunSessions_ResumeFailureFallsBackToFreshSameRoleSession(t *testing.T) 
 	fake := newFakeSessionAgent()
 	rs := NewRunSessions(d, run.ID, fake, true)
 
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "initial review"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "initial review"}, nil); err != nil {
 		t.Fatalf("initial: %v", err)
 	}
 	fake.failResumes["sess-1"] = errors.New("session not found")
 
-	result, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "rereview"}, nil)
+	result, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "rereview"}, nil)
 	if err != nil {
 		t.Fatalf("rereview must fall back, got error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestRunSessions_ResumeFailureFallsBackToFreshSameRoleSession(t *testing.T) 
 	}
 
 	// The next turn resumes the replacement session, not the dead one.
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "third"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "third"}, nil); err != nil {
 		t.Fatalf("third: %v", err)
 	}
 	third := fake.calls[len(fake.calls)-1]
@@ -215,7 +215,7 @@ func TestRunSessions_FreshSessionFailurePropagates(t *testing.T) {
 	fake.failNext = errors.New("provider down")
 	rs := NewRunSessions(d, run.ID, fake, true)
 
-	_, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil)
+	_, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil)
 	if err == nil || err.Error() != "provider down" {
 		t.Fatalf("fresh-session failure must propagate, got %v", err)
 	}
@@ -231,11 +231,11 @@ func TestRunSessions_CancelledContextDoesNotRetry(t *testing.T) {
 	fake := newFakeSessionAgent()
 	rs := NewRunSessions(d, run.ID, fake, true)
 
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "initial"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "initial"}, nil); err != nil {
 		t.Fatalf("initial: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	fake.failResumes["sess-1"] = context.Canceled
 
@@ -256,7 +256,7 @@ func TestRunSessions_ColdWhenAgentLacksSessions(t *testing.T) {
 	fake.supportsFlag = false
 	rs := NewRunSessions(d, run.ID, fake, true)
 
-	result, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil)
+	result, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil)
 	if err != nil {
 		t.Fatalf("cold run: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestRunSessions_DisabledRunsCold(t *testing.T) {
 	fake := newFakeSessionAgent()
 	rs := NewRunSessions(d, run.ID, fake, false)
 
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if fake.calls[0].session != nil {
@@ -289,7 +289,7 @@ func TestRunSessions_NilManagerRunsCold(t *testing.T) {
 	fake := newFakeSessionAgent()
 	var rs *RunSessions
 
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if fake.calls[0].session != nil {
@@ -304,13 +304,13 @@ func TestRunSessions_PersistsAcrossManagers(t *testing.T) {
 	d, run := sessionTestDB(t)
 	fake := newFakeSessionAgent()
 	rs := NewRunSessions(d, run.ID, fake, true)
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
 		t.Fatalf("initial: %v", err)
 	}
 
 	// Same run, fresh manager (e.g. daemon restart): resumes the identity.
 	rs2 := NewRunSessions(d, run.ID, fake, true)
-	if _, err := rs2.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "rereview"}, nil); err != nil {
+	if _, err := rs2.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "rereview"}, nil); err != nil {
 		t.Fatalf("rereview: %v", err)
 	}
 	second := fake.calls[len(fake.calls)-1]
@@ -328,7 +328,7 @@ func TestRunSessions_PersistsAcrossManagers(t *testing.T) {
 		t.Fatalf("insert other run: %v", err)
 	}
 	rs3 := NewRunSessions(d, otherRun.ID, fake, true)
-	if _, err := rs3.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "other review"}, nil); err != nil {
+	if _, err := rs3.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "other review"}, nil); err != nil {
 		t.Fatalf("other run: %v", err)
 	}
 	third := fake.calls[len(fake.calls)-1]
@@ -347,7 +347,7 @@ func TestRunSessions_FallbackResumesWithItsActualProvider(t *testing.T) {
 	fallback := agent.NewFallback([]agent.Agent{codex, claude})
 
 	rs := NewRunSessions(d, run.ID, fallback, true)
-	if _, err := rs.Run(context.Background(), fallback, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fallback, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
 		t.Fatalf("initial: %v", err)
 	}
 	stored, err := d.GetRunAgentSessions(run.ID)
@@ -359,7 +359,7 @@ func TestRunSessions_FallbackResumesWithItsActualProvider(t *testing.T) {
 	}
 
 	rs = NewRunSessions(d, run.ID, fallback, true)
-	if _, err := rs.Run(context.Background(), fallback, SessionRoleReviewer, agent.RunOpts{Prompt: "rereview"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fallback, SessionRoleReviewer, agent.RunOpts{Prompt: "rereview"}, nil); err != nil {
 		t.Fatalf("rereview: %v", err)
 	}
 	if len(codex.calls) != 1 {
@@ -381,7 +381,7 @@ func TestRunSessions_AgentChangeDiscardsStoredSession(t *testing.T) {
 
 	fake := newFakeSessionAgent() // Name() == "fake", not "codex"
 	rs := NewRunSessions(d, run.ID, fake, true)
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if call := fake.calls[0]; call.session == nil || call.session.ID != "" {
@@ -398,10 +398,10 @@ func TestRunSessions_ResetDropsStoredIdentity(t *testing.T) {
 	fake := newFakeSessionAgent()
 	rs := NewRunSessions(d, run.ID, fake, true)
 
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "review"}, nil); err != nil {
 		t.Fatalf("review: %v", err)
 	}
-	if _, err := rs.Run(context.Background(), fake, SessionRoleFixer, agent.RunOpts{Prompt: "fix"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleFixer, agent.RunOpts{Prompt: "fix"}, nil); err != nil {
 		t.Fatalf("fix: %v", err)
 	}
 
@@ -417,7 +417,7 @@ func TestRunSessions_ResetDropsStoredIdentity(t *testing.T) {
 		}
 	}
 
-	if _, err := rs.Run(context.Background(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "retry review"}, nil); err != nil {
+	if _, err := rs.Run(t.Context(), fake, SessionRoleReviewer, agent.RunOpts{Prompt: "retry review"}, nil); err != nil {
 		t.Fatalf("retry review: %v", err)
 	}
 	retry := fake.calls[len(fake.calls)-1]
@@ -428,7 +428,7 @@ func TestRunSessions_ResetDropsStoredIdentity(t *testing.T) {
 	// The fixer keeps its own session, and a fresh manager sees exactly the
 	// post-Reset state rather than the discarded reviewer identity.
 	rs2 := NewRunSessions(d, run.ID, fake, true)
-	if _, err := rs2.Run(context.Background(), fake, SessionRoleFixer, agent.RunOpts{Prompt: "fix again"}, nil); err != nil {
+	if _, err := rs2.Run(t.Context(), fake, SessionRoleFixer, agent.RunOpts{Prompt: "fix again"}, nil); err != nil {
 		t.Fatalf("fix again: %v", err)
 	}
 	fixCall := fake.calls[len(fake.calls)-1]

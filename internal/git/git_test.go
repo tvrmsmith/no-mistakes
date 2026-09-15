@@ -1,7 +1,6 @@
 package git
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,7 +67,7 @@ func writeFile(t *testing.T, path, content string) {
 
 func TestRun(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	out, err := Run(ctx, dir, "status", "--porcelain")
 	if err != nil {
@@ -83,7 +82,7 @@ func TestRunAppliesContextEnvironmentToGitSubprocesses(t *testing.T) {
 	dir := initTestRepo(t)
 	run(t, dir, "git", "config", "alias.show-forge", "!printf 'config:%s token:%s' \"$GH_CONFIG_DIR\" \"${GH_TOKEN:+set}\"")
 	t.Setenv("GH_TOKEN", "ambient-must-not-leak")
-	ctx := WithEnvironment(context.Background(), runenv.Overlay{
+	ctx := WithEnvironment(t.Context(), runenv.Overlay{
 		Set:   map[string]string{"GH_CONFIG_DIR": "/profiles/personal"},
 		Unset: []string{"GH_TOKEN"},
 	})
@@ -98,7 +97,7 @@ func TestRunAppliesContextEnvironmentToGitSubprocesses(t *testing.T) {
 }
 
 func TestRunError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := Run(ctx, t.TempDir(), "log")
 	if err == nil {
 		t.Fatal("expected error for git log in non-repo")
@@ -110,7 +109,7 @@ func TestRunError(t *testing.T) {
 }
 
 func TestInitBare(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "test.git")
 
 	if err := InitBare(ctx, dir); err != nil {
@@ -129,7 +128,7 @@ func TestInitBare(t *testing.T) {
 
 func TestAddRemoteAndGetURL(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := AddRemote(ctx, dir, "upstream", "https://github.com/test/repo.git"); err != nil {
 		t.Fatalf("AddRemote failed: %v", err)
@@ -146,7 +145,7 @@ func TestAddRemoteAndGetURL(t *testing.T) {
 
 func TestRemoveRemote(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_ = AddRemote(ctx, dir, "upstream", "https://github.com/test/repo.git")
 	if err := RemoveRemote(ctx, dir, "upstream"); err != nil {
@@ -160,7 +159,7 @@ func TestRemoveRemote(t *testing.T) {
 }
 
 func TestCopyLocalUserIdentity(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	dst := initTestRepo(t)
 
@@ -181,7 +180,7 @@ func TestCopyLocalUserIdentity(t *testing.T) {
 
 func TestGetRemoteURLNotFound(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := GetRemoteURL(ctx, dir, "nonexistent")
 	if err == nil {
@@ -228,7 +227,7 @@ func TestFindGitRootNotFound(t *testing.T) {
 
 func TestHasUncommittedChangesClean(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	dirty, err := HasUncommittedChanges(ctx, dir)
 	if err != nil {
@@ -241,7 +240,7 @@ func TestHasUncommittedChangesClean(t *testing.T) {
 
 func TestHasUncommittedChangesModifiedFile(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	writeFile(t, filepath.Join(dir, "README.md"), "# changed\n")
 
@@ -256,7 +255,7 @@ func TestHasUncommittedChangesModifiedFile(t *testing.T) {
 
 func TestHasUncommittedChangesUntrackedFile(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	writeFile(t, filepath.Join(dir, "new.txt"), "new\n")
 
@@ -271,7 +270,7 @@ func TestHasUncommittedChangesUntrackedFile(t *testing.T) {
 
 func TestUntrackedFilesPreservesRawPaths(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	names := []string{"café.txt", "name with space.txt"}
 	if runtime.GOOS != "windows" {
@@ -298,7 +297,7 @@ func TestUntrackedFilesPreservesRawPaths(t *testing.T) {
 
 func TestHasUncommittedChangesStagedOnly(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	writeFile(t, filepath.Join(dir, "staged.txt"), "staged\n")
 	run(t, dir, "git", "add", "staged.txt")
@@ -314,7 +313,7 @@ func TestHasUncommittedChangesStagedOnly(t *testing.T) {
 
 func TestCreateBranch(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := CreateBranch(ctx, dir, "feature/new"); err != nil {
 		t.Fatalf("CreateBranch failed: %v", err)
@@ -331,7 +330,7 @@ func TestCreateBranch(t *testing.T) {
 
 func TestCreateBranchDuplicate(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := CreateBranch(ctx, dir, "dup"); err != nil {
 		t.Fatalf("first CreateBranch failed: %v", err)
@@ -346,7 +345,7 @@ func TestCreateBranchDuplicate(t *testing.T) {
 
 func TestCommitAll(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
 	writeFile(t, filepath.Join(dir, "b.txt"), "b\n")
@@ -371,7 +370,7 @@ func TestCommitAll(t *testing.T) {
 
 func TestCommitAllNoChanges(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := CommitAll(ctx, dir, "nothing"); err == nil {
 		t.Fatal("expected error committing with no changes")
@@ -380,7 +379,7 @@ func TestCommitAllNoChanges(t *testing.T) {
 
 func TestIsDetachedHEADOnBranch(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	detached, err := IsDetachedHEAD(ctx, dir)
 	if err != nil {
@@ -393,7 +392,7 @@ func TestIsDetachedHEADOnBranch(t *testing.T) {
 
 func TestIsDetachedHEADWhenDetached(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Make a second commit so we have a specific SHA to detach onto.
 	writeFile(t, filepath.Join(dir, "two.txt"), "two\n")
@@ -424,7 +423,7 @@ func setSafeBareRepositoryExplicit(t *testing.T) {
 
 func TestRunOnBareRepoUnderSafeBareRepositoryExplicit(t *testing.T) {
 	setSafeBareRepositoryExplicit(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	bare := filepath.Join(t.TempDir(), "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -451,7 +450,7 @@ func TestRunOnBareRepoUnderSafeBareRepositoryExplicit(t *testing.T) {
 
 func TestWorktreeAddRemoveOnBareRepoUnderSafeBareRepositoryExplicit(t *testing.T) {
 	setSafeBareRepositoryExplicit(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	work := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "gate.git")

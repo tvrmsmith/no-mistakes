@@ -1,7 +1,6 @@
 package evidence
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -101,7 +100,7 @@ func TestPublish_LandsEvidenceOnOrphanBranchAndLeavesCodeBranchesUntouched(t *te
 	mainBefore := runGit(t, remote, "rev-parse", "refs/heads/main")
 	headBefore := runGit(t, work, "rev-parse", "HEAD")
 
-	result, err := Publish(context.Background(), baseRequest(remote, work, source))
+	result, err := Publish(t.Context(), baseRequest(remote, work, source))
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -159,7 +158,7 @@ func TestPublish_UsesConfiguredBranchName(t *testing.T) {
 
 	req := baseRequest(remote, work, source)
 	req.Branch = "team/ci/evidence"
-	result, err := Publish(context.Background(), req)
+	result, err := Publish(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -178,7 +177,7 @@ func TestPublish_RejectsInvalidBranchName(t *testing.T) {
 
 	req := baseRequest(remote, work, source)
 	req.Branch = "evidence branch"
-	if _, err := Publish(context.Background(), req); err == nil {
+	if _, err := Publish(t.Context(), req); err == nil {
 		t.Fatal("Publish accepted an invalid branch name")
 	} else if !strings.Contains(err.Error(), "invalid evidence branch name") {
 		t.Errorf("error %q does not explain the invalid name", err)
@@ -192,13 +191,13 @@ func TestPublish_AppendsWithoutRewritingEarlierEvidence(t *testing.T) {
 	remote, work := newRepoWithRemote(t)
 	first := writeEvidence(t, t.TempDir(), map[string]string{"round-1.txt": "first\n"})
 
-	one, err := Publish(context.Background(), baseRequest(remote, work, first))
+	one, err := Publish(t.Context(), baseRequest(remote, work, first))
 	if err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 
 	second := writeEvidence(t, t.TempDir(), map[string]string{"round-2.txt": "second\n"})
-	two, err := Publish(context.Background(), baseRequest(remote, work, second))
+	two, err := Publish(t.Context(), baseRequest(remote, work, second))
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
@@ -219,11 +218,11 @@ func TestPublish_UnchangedEvidenceReusesTheExistingCommit(t *testing.T) {
 	remote, work := newRepoWithRemote(t)
 	source := writeEvidence(t, t.TempDir(), map[string]string{"proof.txt": "ok\n"})
 
-	one, err := Publish(context.Background(), baseRequest(remote, work, source))
+	one, err := Publish(t.Context(), baseRequest(remote, work, source))
 	if err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
-	two, err := Publish(context.Background(), baseRequest(remote, work, source))
+	two, err := Publish(t.Context(), baseRequest(remote, work, source))
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
@@ -239,7 +238,7 @@ func TestPublish_RefusesExistingBranchThatIsNotAnEvidenceBranch(t *testing.T) {
 	runGit(t, work, "push", "origin", "main:refs/heads/no-mistakes/evidence")
 	before := runGit(t, remote, "rev-parse", "refs/heads/"+DefaultBranch)
 
-	if _, err := Publish(context.Background(), baseRequest(remote, work, source)); err == nil {
+	if _, err := Publish(t.Context(), baseRequest(remote, work, source)); err == nil {
 		t.Fatal("Publish appended to a branch that is not an evidence branch")
 	} else if !strings.Contains(err.Error(), MarkerPath) {
 		t.Errorf("error %q does not explain the missing marker", err)
@@ -260,7 +259,7 @@ func TestPublish_RefusesExistingBranchWithWrongMarkerContent(t *testing.T) {
 	runGit(t, work, "push", "origin", "HEAD:refs/heads/"+DefaultBranch)
 	before := runGit(t, remote, "rev-parse", "refs/heads/"+DefaultBranch)
 
-	if _, err := Publish(context.Background(), baseRequest(remote, work, source)); err == nil {
+	if _, err := Publish(t.Context(), baseRequest(remote, work, source)); err == nil {
 		t.Fatal("Publish appended to a branch with the wrong marker content")
 	} else if !strings.Contains(err.Error(), "invalid "+MarkerPath+" marker") {
 		t.Errorf("error %q does not explain the invalid marker", err)
@@ -277,7 +276,7 @@ func TestPublish_RefusesABranchThatIsAlsoACodeBranch(t *testing.T) {
 	req := baseRequest(remote, work, source)
 	req.Branch = "main"
 	req.ForbiddenBranches = []string{"fm/add-login", "main"}
-	if _, err := Publish(context.Background(), req); err == nil {
+	if _, err := Publish(t.Context(), req); err == nil {
 		t.Fatal("Publish accepted the repository default branch as the evidence branch")
 	}
 	if refs := runGit(t, remote, "for-each-ref", "--format=%(refname)"); refs != "refs/heads/main" {
@@ -293,7 +292,7 @@ func TestPublish_FailsClosedWhenTheRemoteRefusesThePush(t *testing.T) {
 		t.Fatalf("write hook: %v", err)
 	}
 
-	if _, err := Publish(context.Background(), baseRequest(remote, work, source)); err == nil {
+	if _, err := Publish(t.Context(), baseRequest(remote, work, source)); err == nil {
 		t.Fatal("Publish reported success although the remote refused the push")
 	}
 	runGitFails(t, remote, "rev-parse", "--verify", "refs/heads/"+DefaultBranch)
@@ -304,7 +303,7 @@ func TestPublish_FailsClosedWhenTheRemoteIsUnreadable(t *testing.T) {
 	source := writeEvidence(t, t.TempDir(), map[string]string{"proof.txt": "ok\n"})
 
 	req := baseRequest(filepath.Join(t.TempDir(), "missing.git"), work, source)
-	if _, err := Publish(context.Background(), req); err == nil {
+	if _, err := Publish(t.Context(), req); err == nil {
 		t.Fatal("Publish reported success against an unreachable remote")
 	}
 }
@@ -329,7 +328,7 @@ func TestPublish_WorksFromADetachedShallowClone(t *testing.T) {
 	}
 
 	source := writeEvidence(t, t.TempDir(), map[string]string{"proof.txt": "ok\n"})
-	result, err := Publish(context.Background(), baseRequest(remote, shallow, source))
+	result, err := Publish(t.Context(), baseRequest(remote, shallow, source))
 	if err != nil {
 		t.Fatalf("Publish from a detached shallow clone: %v", err)
 	}
@@ -344,7 +343,7 @@ func TestPublish_WorksFromADetachedShallowClone(t *testing.T) {
 func TestPublish_WithoutFilesPublishesNothing(t *testing.T) {
 	remote, work := newRepoWithRemote(t)
 
-	result, err := Publish(context.Background(), baseRequest(remote, work, t.TempDir()))
+	result, err := Publish(t.Context(), baseRequest(remote, work, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -363,7 +362,7 @@ func TestPublish_ReportsPublishedFilesRelativeToTheSourceDirectory(t *testing.T)
 		"sub/b.txt": "b\n",
 	})
 
-	result, err := Publish(context.Background(), baseRequest(remote, work, source))
+	result, err := Publish(t.Context(), baseRequest(remote, work, source))
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}

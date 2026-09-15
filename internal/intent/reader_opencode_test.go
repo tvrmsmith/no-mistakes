@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"os/exec"
@@ -96,7 +95,7 @@ func TestOpenCodeReader_DiscoverAndLoad(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 
 	r := NewOpenCodeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -110,7 +109,7 @@ func TestOpenCodeReader_DiscoverAndLoad(t *testing.T) {
 	}
 	s := sessions[0]
 
-	if err := r.Load(context.Background(), s); err != nil {
+	if err := r.Load(t.Context(), s); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(s.Messages) != 2 {
@@ -153,7 +152,7 @@ func TestOpenCodeReader_DiscoverAcceptsSameRemoteDifferentCheckout(t *testing.T)
 	t.Setenv("XDG_DATA_HOME", "")
 
 	r := NewOpenCodeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   originCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -172,7 +171,7 @@ func TestOpenCodeReader_DiscoverAcceptsSameRemoteDifferentCheckout(t *testing.T)
 
 func TestOpenCodeReader_NoDB(t *testing.T) {
 	r := NewOpenCodeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: t.TempDir()})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -60,7 +59,7 @@ func TestOpencodeAgent_FullFlow(t *testing.T) {
 	}
 
 	var chunks []string
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review this code",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),
@@ -143,7 +142,7 @@ func TestOpencodeAgent_BackfillsAssistantTextWhenStreamCannotClassifyOrphans(t *
 	}
 
 	var chunks []string
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review this code",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),
@@ -197,7 +196,7 @@ func TestOpencodeAgent_BackfillsAllAssistantResponseParts(t *testing.T) {
 	}
 
 	var chunks []string
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:  "hello",
 		CWD:     t.TempDir(),
 		OnChunk: func(text string) { chunks = append(chunks, text) },
@@ -243,7 +242,7 @@ func TestOpencodeAgent_BackfillsMissingResponseSuffixAfterStreaming(t *testing.T
 	}
 
 	var chunks []string
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:  "hello",
 		CWD:     t.TempDir(),
 		OnChunk: func(text string) { chunks = append(chunks, text) },
@@ -293,7 +292,7 @@ func TestOpencodeAgent_BackfillsMissingResponseSuffixAfterToolStep(t *testing.T)
 	}
 
 	var chunks []string
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:  "hello",
 		CWD:     t.TempDir(),
 		OnChunk: func(text string) { chunks = append(chunks, text) },
@@ -343,7 +342,7 @@ func TestOpencodeAgent_DoesNotSeparateBackfillWhenToolStepPrecedesFirstText(t *t
 	}
 
 	var chunks []string
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:  "hello",
 		CWD:     t.TempDir(),
 		OnChunk: func(text string) { chunks = append(chunks, text) },
@@ -391,7 +390,7 @@ func TestOpencodeAgent_NoSchema(t *testing.T) {
 		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt: "hello",
 		CWD:    t.TempDir(),
 		// No JSONSchema
@@ -441,7 +440,7 @@ func TestOpencodeAgent_FinalAnswerPreferred(t *testing.T) {
 		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt: "what is 6*7",
 		CWD:    t.TempDir(),
 	})
@@ -498,7 +497,7 @@ func TestOpencodeAgent_StructuredOutputError(t *testing.T) {
 		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "fix the failing tests",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
@@ -592,7 +591,7 @@ func TestOpencodeAgent_ThinkingToolChoiceConflictFallsBackToValidatedText(t *tes
 	}
 	var chunks []string
 	var fallbackEvents int
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review the changes",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}`),
@@ -659,7 +658,7 @@ func TestOpencodeAgent_ThinkingToolChoiceFallbackRejectsSchemaViolation(t *testi
 		bin:    "opencode",
 		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review the changes",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}`),
@@ -707,7 +706,7 @@ func TestOpencodeAgent_ThinkingToolChoiceConflictFromSSEFallsBackOnce(t *testing
 	defer server.Close()
 
 	a := &opencodeAgent{bin: "opencode", server: &managedServer{port: mustParsePort(t, server.URL)}}
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review the changes",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}`),
@@ -748,7 +747,7 @@ func TestOpencodeAgent_UnrelatedThinkingLimitationDoesNotFallback(t *testing.T) 
 		bin:    "opencode",
 		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
-	_, err := a.Run(context.Background(), RunOpts{
+	_, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review the changes",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),

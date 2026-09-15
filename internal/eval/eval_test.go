@@ -21,7 +21,7 @@ import (
 )
 
 func TestCaptureCreatesPortableReviewCaseWithoutRecordingRemoteURL(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, repo, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 
@@ -85,7 +85,7 @@ func TestCaptureCreatesPortableReviewCaseWithoutRecordingRemoteURL(t *testing.T)
 }
 
 func TestCaptureRejectsReviewRoundBeforeGateDecision(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
@@ -117,7 +117,7 @@ func TestCaptureRejectsReviewRoundBeforeGateDecision(t *testing.T) {
 }
 
 func TestCaptureExplainsMissingConfigurationProvenance(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
@@ -144,7 +144,7 @@ func TestCaptureExplainsMissingConfigurationProvenance(t *testing.T) {
 }
 
 func TestCapturePinsConfigurationFromSourceReview(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	gateDir := p.RepoDir(run.RepoID)
@@ -177,7 +177,7 @@ func TestCapturePinsConfigurationFromSourceReview(t *testing.T) {
 }
 
 func TestCapturePreservesFixRoundStartingHead(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, repo, firstRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	if err := os.WriteFile(filepath.Join(repo.WorkingPath, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o644); err != nil {
@@ -211,7 +211,7 @@ func TestCapturePreservesFixRoundStartingHead(t *testing.T) {
 }
 
 func TestReplayRestoresCaseIntoAnIsolatedWorktree(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 
@@ -275,7 +275,7 @@ func TestReplayRestoresCaseIntoAnIsolatedWorktree(t *testing.T) {
 // the harness through the same agentcfg mapping the pipeline uses, so an
 // effort-aware comparison actually runs at the effort it reports.
 func TestReplayPinsCandidateModelAndEffortOnTheHarness(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 
@@ -621,7 +621,7 @@ func TestCaptureDoesNotLabelSkipOrApproveAsPass(t *testing.T) {
 		{name: "skip", status: types.StepStatusSkipped},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 			defer closers.Quiet(sourceDB)
 			if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
@@ -655,7 +655,7 @@ func TestCaptureDoesNotLabelSkipOrApproveAsPass(t *testing.T) {
 }
 
 func TestCaptureWritesFalseNegativeGoldForUserAddedFinding(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"},{"id":"user-1","severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
@@ -692,7 +692,7 @@ func TestCaptureWritesFalseNegativeGoldForUserAddedFinding(t *testing.T) {
 }
 
 func TestCaptureWritesUserAddedGoldWithoutSelectionSource(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"id":"user-1","severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
@@ -721,7 +721,7 @@ func TestCaptureWritesUserAddedGoldWithoutSelectionSource(t *testing.T) {
 }
 
 func TestCaptureLeavesUnknownSelectedFindingUnlabeled(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	selected := `["user-added-write-was-lost"]`
@@ -744,7 +744,7 @@ func TestCaptureLeavesUnknownSelectedFindingUnlabeled(t *testing.T) {
 }
 
 func TestCaptureAndReportScoresMatchingCandidateAsTruePositive(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	installFakeReviewAgent(t, p, `{"findings":[{"id":"other","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`)
@@ -776,7 +776,7 @@ func TestCaptureAndReportScoresMatchingCandidateAsTruePositive(t *testing.T) {
 }
 
 func TestCaptureAndReportLeavesUnmatchedCandidateFindingsPending(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {

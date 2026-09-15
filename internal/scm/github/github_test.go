@@ -109,7 +109,7 @@ func TestGetChecksPassesRepoFlag(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -131,7 +131,7 @@ func TestGetChecksSurfacesGHErrorStderr(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	_, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	_, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err == nil {
 		t.Fatal("GetChecks() expected the gh failure to propagate")
 	}
@@ -158,7 +158,7 @@ func TestGetChecksIncludesFailedWorkflowRunMissingFromPRRollup(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -191,7 +191,7 @@ func TestGetChecksIncludesFailedWorkflowRunWhenPRHasNoChecks(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -217,7 +217,7 @@ func TestGetChecksUsesLivePRHeadForWorkflowDiscovery(t *testing.T) {
 	}), nil, "", "test/repo")
 
 	pr := &scm.PR{Number: "123", HeadSHA: "stale-head"}
-	checks, err := host.GetChecks(context.Background(), pr)
+	checks, err := host.GetChecks(t.Context(), pr)
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -245,7 +245,7 @@ func TestGetChecksBindsRollupAcrossABAHeadMovement(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "stale"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "stale"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -269,7 +269,7 @@ func TestGetChecksWorkflowCancellationKeepsRerunIdentity(t *testing.T) {
 	}), nil, "", "test/repo")
 
 	pr := &scm.PR{Number: "123", HeadSHA: "deadbeef"}
-	checks, err := host.GetChecks(context.Background(), pr)
+	checks, err := host.GetChecks(t.Context(), pr)
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -280,7 +280,7 @@ func TestGetChecksWorkflowCancellationKeepsRerunIdentity(t *testing.T) {
 	if check.Bucket != scm.CheckBucketCancel || check.State != "CANCELLED" || check.Link != "https://github.com/test/repo/actions/runs/101" {
 		t.Fatalf("workflow check = %+v, want rerunnable cancelled run", check)
 	}
-	if err := host.RerunCheck(context.Background(), pr, check); err != nil {
+	if err := host.RerunCheck(t.Context(), pr, check); err != nil {
 		t.Fatalf("RerunCheck() error = %v", err)
 	}
 }
@@ -301,7 +301,7 @@ func TestGetChecksDoesNotDuplicateWorkflowRunsRepresentedByRollup(t *testing.T) 
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -339,7 +339,7 @@ func TestGetChecksCollapsesSupersededSameNameCheckToLatestAtOneHead(t *testing.T
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "stale"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "stale"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -384,7 +384,7 @@ func TestGetChecksCollapseOrderingDoesNotLetWorkflowRunUnionResurrectSupersededC
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -414,7 +414,7 @@ func TestGetChecksPreservesIndependentSameNameWorkflows(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -448,7 +448,7 @@ func TestGetChecksPreservesSameNameJobsWithinOneWorkflowRun(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -480,7 +480,7 @@ func TestGetChecksPreservesIndependentSameNameExternalCheckRuns(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -516,7 +516,7 @@ func TestGetChecksCollapseComparesNewestRunWithEverySameNameCandidate(t *testing
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -550,7 +550,7 @@ func TestGetChecksPreservesSameNameStatusContextAndCheckRun(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -584,7 +584,7 @@ func TestGetChecksKeepsQueuedReplacementWithEqualStartTime(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -618,7 +618,7 @@ func TestGetChecksPreservesUnorderedExternalPendingReplacement(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -662,7 +662,7 @@ func TestGetChecksUsesWorkflowRunStartTimeWhenCollapsingSameNameChecks(t *testin
 				},
 			}), nil, "", "test/repo")
 
-			checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+			checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 			if err != nil {
 				t.Fatalf("GetChecks() error = %v", err)
 			}
@@ -700,7 +700,7 @@ func TestGetChecksDoesNotTrustUnrelatedWorkflowRunLinks(t *testing.T) {
 				},
 			}), nil, "", "test/repo")
 
-			checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+			checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 			if err != nil {
 				t.Fatalf("GetChecks() error = %v", err)
 			}
@@ -727,7 +727,7 @@ func TestGetChecksIncludesWorkflowRunsFromEveryPage(t *testing.T) {
 		},
 	}), nil, "ghe.example.com", "ghe.example.com/test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -776,7 +776,7 @@ func TestGetChecksRejectsIncompleteWorkflowPagination(t *testing.T) {
 				},
 			}), nil, "", "test/repo")
 
-			_, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+			_, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErrSub) {
 				t.Fatalf("GetChecks() error = %v, want containing %q", err, tc.wantErrSub)
 			}
@@ -796,7 +796,7 @@ func TestGetPRContentReadsTitleAndBody(t *testing.T) {
 		"gh pr view 42 --repo test/repo --json title,body": {stdout: string(encoded) + "\n"},
 	}), nil, "", "test/repo")
 
-	got, err := host.GetPRContent(context.Background(), &scm.PR{Number: "42"})
+	got, err := host.GetPRContent(t.Context(), &scm.PR{Number: "42"})
 	if err != nil {
 		t.Fatalf("GetPRContent() error = %v", err)
 	}
@@ -808,7 +808,7 @@ func TestGetPRContentReadsTitleAndBody(t *testing.T) {
 func TestGetPRContentFailsClosedWithoutIdentity(t *testing.T) {
 	t.Parallel()
 	host := New(githubTestCmdFactory(nil), nil, "", "test/repo")
-	if _, err := host.GetPRContent(context.Background(), &scm.PR{}); err == nil {
+	if _, err := host.GetPRContent(t.Context(), &scm.PR{}); err == nil {
 		t.Fatal("GetPRContent() with no PR identity: expected error, got nil")
 	}
 }
@@ -822,7 +822,7 @@ func TestGetPRStatePassesRepoFlag(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	state, err := host.GetPRState(context.Background(), &scm.PR{Number: "123"})
+	state, err := host.GetPRState(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetPRState() error = %v", err)
 	}
@@ -842,7 +842,7 @@ func TestCreatePRStreamsBodyThroughStdin(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	pr, err := host.CreatePR(context.Background(), "feature/body-cap", "main", scm.PRContent{
+	pr, err := host.CreatePR(t.Context(), "feature/body-cap", "main", scm.PRContent{
 		Title: "fix: cap body",
 		Body:  body,
 	})
@@ -865,7 +865,7 @@ func TestCreatePRAddsDraftFlagWhenConfigured(t *testing.T) {
 		},
 	}), nil, "", "test/repo", "", true)
 
-	pr, err := host.CreatePR(context.Background(), "feature/draft", "main", scm.PRContent{
+	pr, err := host.CreatePR(t.Context(), "feature/draft", "main", scm.PRContent{
 		Title: "fix: draft",
 		Body:  body,
 	})
@@ -888,7 +888,7 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	}), nil, "", "test/repo")
 
 	pr := &scm.PR{Number: "42", URL: "https://github.com/test/repo/pull/42"}
-	updated, err := host.UpdatePR(context.Background(), pr, scm.PRContent{
+	updated, err := host.UpdatePR(t.Context(), pr, scm.PRContent{
 		Title: "fix: cap body",
 		Body:  body,
 	})
@@ -905,7 +905,7 @@ func TestUpdatePROmitsTitleWhenEmpty(t *testing.T) {
 
 	var recorded [][]string
 	host := New(recordingCmdFactory("", &recorded), nil, "", "test/repo")
-	if _, err := host.UpdatePR(context.Background(), &scm.PR{Number: "42"}, scm.PRContent{
+	if _, err := host.UpdatePR(t.Context(), &scm.PR{Number: "42"}, scm.PRContent{
 		Body: "marker only",
 	}); err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
@@ -933,7 +933,7 @@ func TestUpdatePRTargetsKnownPRByURLWhenNumberMissing(t *testing.T) {
 	host := New(recordingCmdFactory("", &recorded), nil, "", "test/repo")
 
 	prURL := "https://github.com/test/repo/pull/123"
-	if _, err := host.UpdatePR(context.Background(), &scm.PR{URL: prURL}, scm.PRContent{
+	if _, err := host.UpdatePR(t.Context(), &scm.PR{URL: prURL}, scm.PRContent{
 		Title: "fix: cap body",
 		Body:  "body",
 	}); err != nil {
@@ -960,7 +960,7 @@ func TestUpdatePRFailsClosedWithoutIdentity(t *testing.T) {
 
 	host := New(failIfInvokedCmdFactory(t), nil, "", "test/repo")
 
-	if _, err := host.UpdatePR(context.Background(), &scm.PR{}, scm.PRContent{Title: "t", Body: "b"}); err == nil {
+	if _, err := host.UpdatePR(t.Context(), &scm.PR{}, scm.PRContent{Title: "t", Body: "b"}); err == nil {
 		t.Fatal("UpdatePR() with no PR identity: expected error, got nil")
 	}
 }
@@ -972,7 +972,7 @@ func TestSetPRBaseBranchTargetsKnownPRByURLWhenNumberMissing(t *testing.T) {
 	host := New(recordingCmdFactory("", &recorded), nil, "", "test/repo")
 
 	prURL := "https://github.com/test/repo/pull/123"
-	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{URL: prURL}, "epic/feature"); err != nil {
+	if err := host.SetPRBaseBranch(t.Context(), &scm.PR{URL: prURL}, "epic/feature"); err != nil {
 		t.Fatalf("SetPRBaseBranch() error = %v", err)
 	}
 	if len(recorded) != 1 {
@@ -994,7 +994,7 @@ func TestSetPRBaseBranchFailsClosedWithoutIdentity(t *testing.T) {
 	t.Parallel()
 
 	host := New(failIfInvokedCmdFactory(t), nil, "", "test/repo")
-	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{}, "epic/feature"); err == nil {
+	if err := host.SetPRBaseBranch(t.Context(), &scm.PR{}, "epic/feature"); err == nil {
 		t.Fatal("SetPRBaseBranch() with no PR identity: expected error, got nil")
 	}
 }
@@ -1017,7 +1017,7 @@ func TestGetChecksFallsBackToStateWhenBucketMissing(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -1079,7 +1079,7 @@ func TestGetChecksTargetsKnownPRByURLWhenNumberMissing(t *testing.T) {
 	host := New(recordingCmdFactory("[]\n", &recorded), nil, "", "test/repo")
 
 	prURL := "https://github.com/test/repo/pull/123"
-	if _, err := host.GetChecks(context.Background(), &scm.PR{URL: prURL}); err != nil {
+	if _, err := host.GetChecks(t.Context(), &scm.PR{URL: prURL}); err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
 	if len(recorded) != 1 {
@@ -1104,7 +1104,7 @@ func TestGetChecksTargetsKnownPRByNumber(t *testing.T) {
 	var recorded [][]string
 	host := New(recordingCmdFactory("[]\n", &recorded), nil, "", "test/repo")
 
-	if _, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", URL: "https://github.com/test/repo/pull/123"}); err != nil {
+	if _, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", URL: "https://github.com/test/repo/pull/123"}); err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
 	if len(recorded) != 1 || len(recorded[0]) < 4 {
@@ -1124,13 +1124,13 @@ func TestPRTargetingReadsFailClosedWithoutIdentity(t *testing.T) {
 	host := New(failIfInvokedCmdFactory(t), nil, "", "test/repo")
 	pr := &scm.PR{}
 
-	if _, err := host.GetChecks(context.Background(), pr); err == nil {
+	if _, err := host.GetChecks(t.Context(), pr); err == nil {
 		t.Fatal("GetChecks() with no PR identity: expected error, got nil")
 	}
-	if _, err := host.GetPRState(context.Background(), pr); err == nil {
+	if _, err := host.GetPRState(t.Context(), pr); err == nil {
 		t.Fatal("GetPRState() with no PR identity: expected error, got nil")
 	}
-	if _, err := host.GetMergeableState(context.Background(), pr); err == nil {
+	if _, err := host.GetMergeableState(t.Context(), pr); err == nil {
 		t.Fatal("GetMergeableState() with no PR identity: expected error, got nil")
 	}
 }
@@ -1144,7 +1144,7 @@ func TestPRStateAndMergeableTargetKnownPRByURL(t *testing.T) {
 
 	var stateArgs [][]string
 	stateHost := New(recordingCmdFactory("OPEN\n", &stateArgs), nil, "", "test/repo")
-	if _, err := stateHost.GetPRState(context.Background(), &scm.PR{URL: prURL}); err != nil {
+	if _, err := stateHost.GetPRState(t.Context(), &scm.PR{URL: prURL}); err != nil {
 		t.Fatalf("GetPRState() error = %v", err)
 	}
 	if len(stateArgs) != 1 || len(stateArgs[0]) < 4 || stateArgs[0][3] != prURL {
@@ -1153,7 +1153,7 @@ func TestPRStateAndMergeableTargetKnownPRByURL(t *testing.T) {
 
 	var mergeArgs [][]string
 	mergeHost := New(recordingCmdFactory("MERGEABLE\n", &mergeArgs), nil, "", "test/repo")
-	if _, err := mergeHost.GetMergeableState(context.Background(), &scm.PR{URL: prURL}); err != nil {
+	if _, err := mergeHost.GetMergeableState(t.Context(), &scm.PR{URL: prURL}); err != nil {
 		t.Fatalf("GetMergeableState() error = %v", err)
 	}
 	if len(mergeArgs) != 1 || len(mergeArgs[0]) < 4 || mergeArgs[0][3] != prURL {
@@ -1170,7 +1170,7 @@ func TestGetChecksParsesCompletedAt(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -1197,7 +1197,7 @@ func TestGetChecksParsesStateAndLink(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -1241,7 +1241,7 @@ func TestRerunCheckTargetsJobFromCheckLink(t *testing.T) {
 				State:  "CANCELLED",
 				Link:   link,
 			}
-			if err := host.RerunCheck(context.Background(), &scm.PR{Number: "123"}, check); err != nil {
+			if err := host.RerunCheck(t.Context(), &scm.PR{Number: "123"}, check); err != nil {
 				t.Fatalf("RerunCheck() error = %v", err)
 			}
 			if len(recorded) != 1 {
@@ -1274,7 +1274,7 @@ func TestRerunCheckTargetsWholeCancelledRun(t *testing.T) {
 				State:  "CANCELLED",
 				Link:   link,
 			}
-			if err := host.RerunCheck(context.Background(), &scm.PR{Number: "123"}, check); err != nil {
+			if err := host.RerunCheck(t.Context(), &scm.PR{Number: "123"}, check); err != nil {
 				t.Fatalf("RerunCheck() error = %v", err)
 			}
 			if len(recorded) != 1 {
@@ -1314,7 +1314,7 @@ func TestRerunCheckFailsClosedWithoutAnActionsJob(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			host := New(failIfInvokedCmdFactory(t), nil, "", "test/repo")
-			err := host.RerunCheck(context.Background(), &scm.PR{Number: "123"}, scm.Check{Name: "build", Bucket: scm.CheckBucketFail, State: "TIMED_OUT", Link: link})
+			err := host.RerunCheck(t.Context(), &scm.PR{Number: "123"}, scm.Check{Name: "build", Bucket: scm.CheckBucketFail, State: "TIMED_OUT", Link: link})
 			if err == nil {
 				t.Fatal("RerunCheck() expected an error for a check with no Actions job")
 			}
@@ -1335,7 +1335,7 @@ func TestRerunCheckPropagatesProviderError(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	err := host.RerunCheck(context.Background(), &scm.PR{Number: "123"}, scm.Check{
+	err := host.RerunCheck(t.Context(), &scm.PR{Number: "123"}, scm.Check{
 		Name:   "build",
 		Bucket: scm.CheckBucketFail,
 		State:  "TIMED_OUT",
@@ -1367,7 +1367,7 @@ func TestFetchFailedCheckLogsSelectsMatchingRunForHeadSHA(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckLogs(context.Background(), &scm.PR{Number: "123"}, "feature", "abc123", []string{"lint"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), &scm.PR{Number: "123"}, "feature", "abc123", []string{"lint"})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckLogs() error = %v", err)
 	}
@@ -1387,7 +1387,7 @@ func TestFetchFailedCheckTargetLogsSelectsProviderIdentityOverName(t *testing.T)
 		"gh run view 102 --job 202 --log": {stdout: "selected build failed\n"},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{Name: "build", ProviderID: "github-check-run:202"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{Name: "build", ProviderID: "github-check-run:202"}})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckTargetLogs() error = %v", err)
 	}
@@ -1406,7 +1406,7 @@ func TestFetchFailedCheckTargetLogsReturnsPartialLogsWithRetrievalError(t *testi
 		"gh run view 102 --job 202 --log": {stderr: "expired", code: 1},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{ProviderID: "github-check-run:201"}, {ProviderID: "github-check-run:202"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{ProviderID: "github-check-run:201"}, {ProviderID: "github-check-run:202"}})
 	if err != nil || len(logs) != 2 || logs[0].Output != "build failed" || logs[1].Err == nil || !strings.Contains(logs[1].Err.Error(), "job 202") {
 		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want retained partial logs and job 202 error", logs, err)
 	}
@@ -1420,7 +1420,7 @@ func TestFetchFailedCheckTargetLogsReportsMissingSelectedJob(t *testing.T) {
 		"gh run view 102 --json jobs": {stdout: `{"jobs":[{"databaseId":201,"name":"build","conclusion":"failure"}]}` + "\n"},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{ProviderID: "github-check-run:999"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "123"}, "feature", "abc123", []scm.CheckTarget{{ProviderID: "github-check-run:999"}})
 	if err != nil || len(logs) != 1 || logs[0].Err == nil || !strings.Contains(logs[0].Err.Error(), "github-check-run:999") {
 		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want explicit missing-target error", logs, err)
 	}
@@ -1443,7 +1443,7 @@ func TestPreRunFailures_FlagsSetupFailureNotGenuine(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	infra, err := host.PreRunFailures(context.Background(), []scm.Check{
+	infra, err := host.PreRunFailures(t.Context(), []scm.Check{
 		{Name: "build", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/test/repo/actions/runs/1/job/2"},
 		{Name: "unit", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/test/repo/actions/runs/1/job/3"},
 	})
@@ -1470,7 +1470,7 @@ func TestPreRunFailures_FailsClosedOnUnreadableRun(t *testing.T) {
 		"gh run view 9 --repo test/repo --json jobs": {stderr: "HTTP 404\n", code: 1},
 	}), nil, "", "test/repo")
 
-	infra, err := host.PreRunFailures(context.Background(), []scm.Check{
+	infra, err := host.PreRunFailures(t.Context(), []scm.Check{
 		{Name: "build", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/test/repo/actions/runs/9/job/2"},
 	})
 	if err != nil {
@@ -1490,7 +1490,7 @@ func TestFindPRFiltersByBaseBranch(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	pr, err := host.FindPR(context.Background(), "feature/refactor", "release/1.0")
+	pr, err := host.FindPR(t.Context(), "feature/refactor", "release/1.0")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -1522,7 +1522,7 @@ func TestFindPRForkUsesBareHeadAndFiltersOwner(t *testing.T) {
 		},
 	}), nil, "", "parent/repo", "fork-owner/repo", false)
 
-	pr, err := host.FindPR(context.Background(), branch, "main")
+	pr, err := host.FindPR(t.Context(), branch, "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -1547,7 +1547,7 @@ func TestFindPRReturnsCLIError(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+	pr, err := host.FindPR(t.Context(), "feature/refactor", "main")
 	if err == nil {
 		t.Fatal("FindPR() error = nil, want CLI error")
 	}
@@ -1568,7 +1568,7 @@ func TestFindPRRejectsURLForDifferentRepository(t *testing.T) {
 		},
 	}), nil, "github.com", "parent/repo")
 
-	pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+	pr, err := host.FindPR(t.Context(), "feature/refactor", "main")
 	if err == nil {
 		t.Fatal("FindPR() error = nil, want repository mismatch error")
 	}
@@ -1604,7 +1604,7 @@ func TestFindPRReturnsJSONError(t *testing.T) {
 			},
 		}), nil, "", "")
 
-		pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+		pr, err := host.FindPR(t.Context(), "feature/refactor", "main")
 		if err == nil {
 			t.Fatal("FindPR() error = nil, want JSON error")
 		}
@@ -1643,7 +1643,7 @@ func TestFindPRForkRejectsMissingHeadIdentity(t *testing.T) {
 				},
 			}), nil, "", "parent/repo", "fork-owner/repo", false)
 
-			pr, err := host.FindPR(context.Background(), branch, "main")
+			pr, err := host.FindPR(t.Context(), branch, "main")
 			if err == nil {
 				t.Fatal("FindPR() error = nil, want head identity error")
 			}
@@ -1670,7 +1670,7 @@ func TestAvailableScopesAuthToConfiguredHost(t *testing.T) {
 		"gh auth status": {stderr: "github.com: token invalid\n", code: 1},
 	}), func() bool { return true }, "ghe.example.com", "")
 
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v, want nil (scoped auth should pass)", err)
 	}
 }
@@ -1683,7 +1683,7 @@ func TestAvailableFallsBackToUnscopedAuthWhenHostUnknown(t *testing.T) {
 		"gh auth status": {},
 	}), func() bool { return true }, "", "")
 
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v, want nil", err)
 	}
 }
@@ -1691,7 +1691,7 @@ func TestAvailableFallsBackToUnscopedAuthWhenHostUnknown(t *testing.T) {
 func TestAvailableReportsDeadlineExceededInsteadOfAuthFailure(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
@@ -1716,7 +1716,7 @@ func TestAvailableReportsDeadlineExceededInsteadOfAuthFailure(t *testing.T) {
 func TestAvailableReportsCancellationInsteadOfAuthFailure(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
@@ -1748,7 +1748,7 @@ func TestAvailableReportsMissingBinaryInsteadOfAuthFailure(t *testing.T) {
 		return exec.CommandContext(ctx, "no-mistakes-missing-gh-binary")
 	}, func() bool { return true }, "", "")
 
-	err := host.Available(context.Background())
+	err := host.Available(t.Context())
 	if err == nil {
 		t.Fatal("Available() error = nil, want missing-binary error")
 	}
@@ -1773,7 +1773,7 @@ func TestAvailableReportsCommandFactoryMissingBinaryInsteadOfAuthFailure(t *test
 		return cmd
 	}, func() bool { return true }, "", "")
 
-	err := host.Available(context.Background())
+	err := host.Available(t.Context())
 	if err == nil {
 		t.Fatal("Available() error = nil, want missing-binary error")
 	}
@@ -1795,7 +1795,7 @@ func TestAvailableWrapsAuthFailureWithStderr(t *testing.T) {
 		"gh auth status": {stderr: "github.com\n  X Failed to log in\n", code: 1},
 	}), func() bool { return true }, "", "")
 
-	err := host.Available(context.Background())
+	err := host.Available(t.Context())
 	if err == nil {
 		t.Fatal("Available() error = nil, want auth failure")
 	}
@@ -1966,7 +1966,7 @@ func TestHost_GetReviewComments(t *testing.T) {
 		command("cursor-1"): {stdout: secondPage},
 	}), nil, "ghe.example.com", "ghe.example.com/org/repo")
 
-	comments, err := host.GetReviewComments(context.Background(), &scm.PR{URL: "https://ghe.example.com/org/repo/pull/7"})
+	comments, err := host.GetReviewComments(t.Context(), &scm.PR{URL: "https://ghe.example.com/org/repo/pull/7"})
 	if err != nil {
 		t.Fatalf("GetReviewComments failed: %v", err)
 	}

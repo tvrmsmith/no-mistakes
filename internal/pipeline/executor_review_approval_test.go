@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -16,7 +15,7 @@ func TestExecutor_RecordsCompletedReviewApprovedHead(t *testing.T) {
 	step := &mockStep{name: types.StepReview, outcome: &StepOutcome{ReviewApprovedHeadSHA: reviewedHead}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
 
-	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := database.GetRun(run.ID)
@@ -48,7 +47,7 @@ func TestExecutor_FullRereviewReplacesApprovalWithoutAuthorizingParkedRound(t *t
 	workDir := t.TempDir()
 
 	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+	go func() { done <- exec.Execute(t.Context(), run, repo, workDir) }()
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 
 	parked, err := database.GetRun(run.ID)
@@ -96,7 +95,7 @@ func TestExecutor_ParkedOrFailedReviewDoesNotAdvanceExistingApproval(t *testing.
 		exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
 		workDir := t.TempDir()
 		done := make(chan error, 1)
-		go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+		go func() { done <- exec.Execute(t.Context(), run, repo, workDir) }()
 		waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 		got, _ := database.GetRun(run.ID)
 		if got.ReviewApprovedHeadSHA == nil || *got.ReviewApprovedHeadSHA != existingHead {
@@ -119,7 +118,7 @@ func TestExecutor_ParkedOrFailedReviewDoesNotAdvanceExistingApproval(t *testing.
 		}
 		step := newFailStep(types.StepReview, errors.New("review agent failed"))
 		exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-		if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err == nil {
+		if err := exec.Execute(t.Context(), run, repo, t.TempDir()); err == nil {
 			t.Fatal("expected failed review")
 		}
 		got, _ := database.GetRun(run.ID)

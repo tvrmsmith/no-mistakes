@@ -1,7 +1,6 @@
 package eval
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,7 +22,7 @@ const piServedMuseReply = `{"type":"message_end","message":{"role":"assistant","
 `
 
 func TestReplayPiModelIdentityComparison(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 
@@ -80,7 +79,7 @@ func TestReplayPiModelIdentityComparison(t *testing.T) {
 }
 
 func TestReplayPiAcceptsRequestedModelWithDifferentProviderSidecar(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 

@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -332,7 +331,7 @@ func TestIsForcePush_IgnoresMergeBaseLookupErrors(t *testing.T) {
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 
-	if isForcePush(context.Background(), dir, "", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef") {
+	if isForcePush(t.Context(), dir, "", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef") {
 		t.Fatal("expected missing base SHA lookup error to not be treated as force push")
 	}
 }
@@ -372,7 +371,7 @@ func TestIsForcePush_RerunAfterNormalRebaseIsNotForcePush(t *testing.T) {
 	gitCmd(t, dir, "rebase", "origin/main")
 	gitCmd(t, dir, "push", "origin", "feature", "--force-with-lease")
 
-	if isForcePush(context.Background(), dir, "feature", baseSHA) {
+	if isForcePush(t.Context(), dir, "feature", baseSHA) {
 		t.Fatal("expected rerun after normal rebase to not be treated as force push")
 	}
 }
@@ -421,7 +420,7 @@ func TestIsForcePush_RerunWithoutLocalRemoteRefIsNotForcePush(t *testing.T) {
 	gitCmd(t, worktree, "checkout", "--detach", "refs/tmp/feature")
 	gitCmd(t, worktree, "update-ref", "-d", "refs/tmp/feature")
 
-	if isForcePush(context.Background(), worktree, "feature", baseSHA) {
+	if isForcePush(t.Context(), worktree, "feature", baseSHA) {
 		t.Fatal("expected rerun without local origin/feature ref to not be treated as force push")
 	}
 }
@@ -471,7 +470,7 @@ func TestIsForcePush_StaleLocalRemoteRefUsesAuthoritativeRemoteTip(t *testing.T)
 	gitCmd(t, worktree, "add", "-A")
 	gitCmd(t, worktree, "commit", "-m", "rewritten tip")
 
-	if !isForcePush(context.Background(), worktree, "feature", baseSHA) {
+	if !isForcePush(t.Context(), worktree, "feature", baseSHA) {
 		t.Fatal("expected stale local origin/feature ref to defer to authoritative remote tip")
 	}
 }
@@ -495,7 +494,7 @@ func TestIsForcePush_LsRemoteFailureIsNotForcePush(t *testing.T) {
 	gitCmd(t, dir, "commit", "-m", "rewritten commit")
 	gitCmd(t, dir, "reset", "--hard", "HEAD~1")
 
-	if isForcePush(context.Background(), dir, "main", baseSHA) {
+	if isForcePush(t.Context(), dir, "main", baseSHA) {
 		t.Fatal("expected ls-remote failure to not be treated as force push")
 	}
 }
@@ -537,7 +536,7 @@ func TestIsForcePush_MissingRemoteObjectIsNotForcePush(t *testing.T) {
 	baseSHA := gitCmd(t, worktree, "rev-parse", "HEAD")
 	gitCmd(t, worktree, "checkout", "--detach", "origin/main")
 
-	if isForcePush(context.Background(), worktree, "feature", baseSHA) {
+	if isForcePush(t.Context(), worktree, "feature", baseSHA) {
 		t.Fatal("expected missing remote tip object to not be treated as force push")
 	}
 }

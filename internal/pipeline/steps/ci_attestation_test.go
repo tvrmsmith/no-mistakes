@@ -225,7 +225,7 @@ func TestRestampPRAttestation_RebindsExistingAndSkipsMissing(t *testing.T) {
 	t.Run("existing_attestation_is_rebound", func(t *testing.T) {
 		t.Parallel()
 		host := &attestationTestHost{title: "fix: ci", body: compliantPipelineBody(t, originalHead)}
-		if err := restampPRAttestation(context.Background(), host, pr, repairHead, nil); err != nil {
+		if err := restampPRAttestation(t.Context(), host, pr, repairHead, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.updates != 1 {
@@ -239,7 +239,7 @@ func TestRestampPRAttestation_RebindsExistingAndSkipsMissing(t *testing.T) {
 		}
 
 		secondHead := strings.Repeat("ef", 20)
-		if err := restampPRAttestation(context.Background(), host, pr, secondHead, nil); err != nil {
+		if err := restampPRAttestation(t.Context(), host, pr, secondHead, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.updates != 2 {
@@ -260,7 +260,7 @@ func TestRestampPRAttestation_RebindsExistingAndSkipsMissing(t *testing.T) {
 		t.Parallel()
 		const foreign = "a regular pull request with no pipeline section"
 		host := &attestationTestHost{title: "feat: hand rolled", body: foreign}
-		if err := restampPRAttestation(context.Background(), host, pr, repairHead, nil); err != nil {
+		if err := restampPRAttestation(t.Context(), host, pr, repairHead, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.updates != 0 {
@@ -287,7 +287,7 @@ func TestRestampPRAttestation_PreservesContentEditedWhilePreparingRewrite(t *tes
 		bodyAfterFirstRead: concurrentBody,
 	}
 
-	if err := restampPRAttestation(context.Background(), host, &scm.PR{Number: "42"}, repairHead, nil); err != nil {
+	if err := restampPRAttestation(t.Context(), host, &scm.PR{Number: "42"}, repairHead, nil); err != nil {
 		t.Fatal(err)
 	}
 	if host.reads < 4 {
@@ -322,7 +322,7 @@ func TestRestampPRAttestation_RetriesAndRequiresSettlement(t *testing.T) {
 			body:        compliantPipelineBody(t, testPipelineHeadSHA),
 			failUpdates: 2,
 		}
-		if err := restampPRAttestation(context.Background(), host, pr, repairHead, nil); err != nil {
+		if err := restampPRAttestation(t.Context(), host, pr, repairHead, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.updates != 3 {
@@ -340,7 +340,7 @@ func TestRestampPRAttestation_RetriesAndRequiresSettlement(t *testing.T) {
 			body:        compliantPipelineBody(t, testPipelineHeadSHA),
 			failUpdates: 3,
 		}
-		err := restampPRAttestation(context.Background(), host, pr, repairHead, nil)
+		err := restampPRAttestation(t.Context(), host, pr, repairHead, nil)
 		if err == nil || !strings.Contains(err.Error(), "failed after 3 attempts") {
 			t.Fatalf("restamp error = %v, want exhausted settlement error", err)
 		}
@@ -359,7 +359,7 @@ func TestRestampPRAttestation_MissingReaderIsSkipped(t *testing.T) {
 	t.Parallel()
 	pr := &scm.PR{Number: "42", URL: "https://bitbucket.org/test/repo/pull-requests/42"}
 	var logs []string
-	err := restampPRAttestation(context.Background(), &readerlessHost{}, pr, strings.Repeat("ab", 20), func(s string) {
+	err := restampPRAttestation(t.Context(), &readerlessHost{}, pr, strings.Repeat("ab", 20), func(s string) {
 		logs = append(logs, s)
 	})
 	if err != nil {
@@ -387,7 +387,7 @@ func TestCIStep_PublishRepairRebindsAttestationAcrossRepairPushes(t *testing.T) 
 		"FAKE_CLI_LOG="+logFile,
 	)
 	f.sctx.Env = env
-	f.sctx.Ctx = context.Background()
+	f.sctx.Ctx = t.Context()
 	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
@@ -459,7 +459,7 @@ func TestCIStep_PublishRepairFailsWhenAttestationCannotSettle(t *testing.T) {
 		"FAKE_CLI_PR_TITLE=fix: ci",
 		"FAKE_CLI_PR_EDIT_ERR=provider unavailable",
 	)
-	f.sctx.Ctx = context.Background()
+	f.sctx.Ctx = t.Context()
 	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
@@ -525,7 +525,7 @@ func TestCIStep_PublishRepairDoesNotMintAttestation(t *testing.T) {
 		"FAKE_CLI_LOG="+logFile,
 	)
 	f.sctx.Env = env
-	f.sctx.Ctx = context.Background()
+	f.sctx.Ctx = t.Context()
 	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")

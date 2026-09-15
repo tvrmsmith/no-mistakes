@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -117,7 +116,7 @@ func runAxiHomeForTest(t *testing.T) string {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiHome(cmd); err != nil {
 		t.Fatalf("axi home: %v\n%s", err, out.String())

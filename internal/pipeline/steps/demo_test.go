@@ -97,7 +97,7 @@ func TestDemoStepExecute(t *testing.T) {
 }
 
 func TestDemoStepExecuteReturnsContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	prev := demoWait
@@ -234,7 +234,7 @@ func TestDemoStepPRURL(t *testing.T) {
 }
 
 func TestStreamDemoLogStopsAfterCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	prev := demoWait
@@ -266,7 +266,7 @@ func TestStreamDemoLogStopsAfterCancellation(t *testing.T) {
 }
 
 func TestDemoCIStepStopsAfterCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	prev := demoWait

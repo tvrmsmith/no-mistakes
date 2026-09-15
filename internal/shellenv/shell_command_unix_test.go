@@ -30,7 +30,7 @@ func TestTerminateShellCommandGroup_ReapsGrandchildAfterCleanExit(t *testing.T) 
 	// The leader backgrounds a long-lived grandchild (stdio detached so it does
 	// not hold the inherited pipes open), records its pid, and exits 0.
 	script := "( sleep 120 >/dev/null 2>&1 ) & echo $! > " + pidFile + "; exit 0"
-	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", script)
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", script)
 	ConfigureShellCommand(cmd)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("leader Run: %v", err)
@@ -67,7 +67,7 @@ func TestTerminateShellCommandGroup_AsksBeforeKilling(t *testing.T) {
 	termFile := filepath.Join(dir, "grandchild.term")
 	readyFile := filepath.Join(dir, "grandchild.ready")
 
-	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestTerminateShellCommandGroupTermHelper$")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestTerminateShellCommandGroupTermHelper$")
 	cmd.Env = append(os.Environ(),
 		"NM_SHELLENV_TERM_HELPER=leader",
 		"NM_SHELLENV_TERM_PID="+pidFile,
@@ -135,7 +135,7 @@ func TestTerminateShellCommandGroup_EscalatesWhenSIGTERMIsIgnored(t *testing.T) 
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 
 	script := "( trap '' TERM; while :; do sleep 0.1; done ) >/dev/null 2>&1 & echo $! > " + pidFile + "; exit 0"
-	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", script)
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", script)
 	ConfigureShellCommand(cmd)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("leader Run: %v", err)
@@ -157,7 +157,7 @@ func TestTerminateShellCommandGroup_EscalatesWhenSIGTERMIsIgnored(t *testing.T) 
 // SIGTERM.
 func TestConfigureShellCommand_CancelEscalatesWithoutBlockingWait(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	script := "( trap '' TERM; while :; do sleep 0.1; done ) >/dev/null 2>&1 & echo $! > " + pidFile + "; " +
@@ -188,7 +188,7 @@ func TestTerminateShellCommandGroup_NoopOnNilOrUnstarted(t *testing.T) {
 }
 
 func TestCombinedOutputShellCommand_ReturnsCleanExitWithInheritedPipeGrandchild(t *testing.T) {
-	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", "printf 'leader done\\n'; sleep 30 & exit 0")
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "printf 'leader done\\n'; sleep 30 & exit 0")
 	ConfigureShellCommand(cmd)
 	cmd.WaitDelay = 100 * time.Millisecond
 
@@ -203,7 +203,7 @@ func TestCombinedOutputShellCommand_ReturnsCleanExitWithInheritedPipeGrandchild(
 
 func TestCombinedOutputShellCommand_WaitDelayBoundsEscapedPipeHolder(t *testing.T) {
 	readyFile := filepath.Join(t.TempDir(), "ready")
-	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestShellOutputPipeHelper$")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestShellOutputPipeHelper$")
 	cmd.Env = append(os.Environ(),
 		"NM_SHELLENV_PIPE_HELPER=leader",
 		"NM_SHELLENV_PIPE_READY="+readyFile,

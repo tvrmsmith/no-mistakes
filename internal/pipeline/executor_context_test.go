@@ -25,7 +25,7 @@ func TestExecutor_ContextCancellation(t *testing.T) {
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Execute(ctx, run, repo, workDir)
@@ -68,7 +68,7 @@ func TestExecutor_ContextCancelCause(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{step1, step2}, nil)
 
 	cancelReason := fmt.Errorf("cancelled: superseded by new push")
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Execute(ctx, run, repo, workDir)
@@ -123,7 +123,7 @@ func TestExecutor_ContextCancelCauseBetweenSteps(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{step1, step2}, nil)
 
 	cancelReason := fmt.Errorf("cancelled: superseded by new push")
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Execute(ctx, run, repo, workDir)

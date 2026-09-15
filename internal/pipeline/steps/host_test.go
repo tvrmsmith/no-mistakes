@@ -27,7 +27,7 @@ func TestSCMCLIFactoryPassesThroughWhenUnconfigured(t *testing.T) {
 	var got []string
 	sctx := &pipeline.StepContext{Config: &config.Config{}, Repo: &db.Repo{WorkingPath: "/repo"}}
 
-	scmCLIFactory(sctx, baseFactory(&got))(context.Background(), "gh", "pr", "create")
+	scmCLIFactory(sctx, baseFactory(&got))(t.Context(), "gh", "pr", "create")
 
 	if want := []string{"gh", "pr", "create"}; strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("unwrapped invocation = %v, want %v", got, want)
@@ -44,7 +44,7 @@ func TestSCMCLIFactoryWrapsAndScopesToRepo(t *testing.T) {
 		Repo: &db.Repo{WorkingPath: "/repo"},
 	}
 
-	cmd := scmCLIFactory(sctx, baseFactory(&got))(context.Background(), "gh", "pr", "create")
+	cmd := scmCLIFactory(sctx, baseFactory(&got))(t.Context(), "gh", "pr", "create")
 
 	want := "op plugin run -- gh pr create"
 	if strings.Join(got, " ") != want {
@@ -73,7 +73,7 @@ func TestSCMCLIFactoryConfigDirWithoutWrapper(t *testing.T) {
 		Repo:   &db.Repo{WorkingPath: "/repo"},
 	}
 
-	cmd := scmCLIFactory(sctx, baseFactory(&got))(context.Background(), "gh", "auth", "status")
+	cmd := scmCLIFactory(sctx, baseFactory(&got))(t.Context(), "gh", "auth", "status")
 
 	if want := "gh auth status"; strings.Join(got, " ") != want {
 		t.Fatalf("invocation = %q, want %q", strings.Join(got, " "), want)
@@ -96,7 +96,7 @@ func TestSCMCLIFactoryWithoutConfigReturnsBase(t *testing.T) {
 	var got []string
 	sctx := &pipeline.StepContext{Repo: &db.Repo{WorkingPath: "/repo"}}
 
-	cmd := scmCLIFactory(sctx, baseFactory(&got))(context.Background(), "gh", "pr", "view")
+	cmd := scmCLIFactory(sctx, baseFactory(&got))(t.Context(), "gh", "pr", "view")
 
 	if want := "gh pr view"; strings.Join(got, " ") != want {
 		t.Fatalf("invocation = %q, want %q", strings.Join(got, " "), want)
@@ -114,7 +114,7 @@ func TestSCMCLIFactoryWithoutConfigReturnsBase(t *testing.T) {
 // a wrapper is configured. buildHost has to refuse instead.
 func TestBuildHostFailsClosedWithoutAGitHubSlug(t *testing.T) {
 	sctx := &pipeline.StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Config: &config.Config{},
 		Repo:   &db.Repo{UpstreamURL: "https://github.com/", WorkingPath: "/repo"},
 		Run:    &db.Run{},
@@ -141,7 +141,7 @@ func TestBuildHostResolvesGitHubSlugFromThePRURL(t *testing.T) {
 	prURL := "https://github.com/test/repo/pull/7"
 	env, logFile := fakeGH(t, prURL)
 	sctx := &pipeline.StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Config: &config.Config{},
 		Repo:   &db.Repo{UpstreamURL: "https://github.com/", WorkingPath: "/repo"},
 		Run:    &db.Run{PRURL: &prURL},
@@ -153,7 +153,7 @@ func TestBuildHostResolvesGitHubSlugFromThePRURL(t *testing.T) {
 		t.Fatalf("buildHost refused a run whose PR URL names the repository: %s", skip)
 	}
 
-	if _, err := host.FindPR(context.Background(), "feature/x", "main"); err != nil {
+	if _, err := host.FindPR(t.Context(), "feature/x", "main"); err != nil {
 		t.Fatalf("FindPR: %v", err)
 	}
 	logged, err := os.ReadFile(logFile)

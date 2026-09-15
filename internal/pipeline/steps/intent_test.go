@@ -48,7 +48,7 @@ func newIntentStepContext(t *testing.T) *pipeline.StepContext {
 	}
 
 	return &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		Run:     run,
 		Repo:    repo,
 		WorkDir: repo.WorkingPath,

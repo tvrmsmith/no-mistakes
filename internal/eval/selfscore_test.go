@@ -1,7 +1,6 @@
 package eval
 
 import (
-	"context"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/closers"
@@ -67,7 +66,7 @@ func TestSelfScoreRecordedReviewsLeavesUnlabeledCasesPending(t *testing.T) {
 // Replay surfaces its plan and per-result progress synchronously so an
 // interactive caller can stream the session as it happens.
 func TestReplayReportsPlanAndPerResultProgress(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 	defer closers.Quiet(sourceDB)
 	installFakeReviewAgent(t, p, `{"findings":[],"risk_level":"low","risk_rationale":"clean","risk_scope":"source-or-external"}`)

@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +13,7 @@ func TestPiReader_DiscoverAndLoad(t *testing.T) {
 	home := writePiFixture(t, repoCWD)
 
 	r := readerByName(t, AllReaders(nil), "pi")
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -37,7 +36,7 @@ func TestPiReader_DiscoverAndLoad(t *testing.T) {
 		t.Errorf("CWD = %q, want %q", s.CWD, repoCWD)
 	}
 
-	if err := r.Load(context.Background(), s); err != nil {
+	if err := r.Load(t.Context(), s); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(s.Messages) != 4 {
@@ -107,14 +106,14 @@ func TestPiReader_LoadsPiEventStreamRecords(t *testing.T) {
 	}
 
 	r := NewPiReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
-	if err := r.Load(context.Background(), sessions[0]); err != nil {
+	if err := r.Load(t.Context(), sessions[0]); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -161,14 +160,14 @@ func TestPiReader_IgnoresStreamingMessageUpdates(t *testing.T) {
 	}
 
 	r := NewPiReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
-	if err := r.Load(context.Background(), sessions[0]); err != nil {
+	if err := r.Load(t.Context(), sessions[0]); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -204,14 +203,14 @@ func TestPiReader_DeduplicatesCompletedEventsByResponseID(t *testing.T) {
 	}
 
 	r := NewPiReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
-	if err := r.Load(context.Background(), sessions[0]); err != nil {
+	if err := r.Load(t.Context(), sessions[0]); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -250,14 +249,14 @@ func TestPiReader_DeduplicatesCompletedEventsByMessageID(t *testing.T) {
 	}
 
 	r := NewPiReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
-	if err := r.Load(context.Background(), sessions[0]); err != nil {
+	if err := r.Load(t.Context(), sessions[0]); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -295,14 +294,14 @@ func TestPiReader_DeduplicatesAgentEndMessages(t *testing.T) {
 	}
 
 	r := NewPiReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
-	if err := r.Load(context.Background(), sessions[0]); err != nil {
+	if err := r.Load(t.Context(), sessions[0]); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -338,14 +337,14 @@ func TestPiReader_PreservesRepeatedLiveMessages(t *testing.T) {
 	}
 
 	r := NewPiReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
-	if err := r.Load(context.Background(), sessions[0]); err != nil {
+	if err := r.Load(t.Context(), sessions[0]); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -390,14 +389,14 @@ func TestPiReader_LoadsOversizedAgentEndRecord(t *testing.T) {
 	}
 
 	r := NewPiReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: home, OriginCWD: repoCWD})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
-	if err := r.Load(context.Background(), sessions[0]); err != nil {
+	if err := r.Load(t.Context(), sessions[0]); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 

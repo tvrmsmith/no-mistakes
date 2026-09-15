@@ -34,7 +34,7 @@ func TestCIStep_GitLabPassesWhenJobsPass(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -221,7 +221,7 @@ func TestCIStep_GitLabAutoFixIncludesJobTrace(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 1}
 	sctx.Config.CI.RevalidateRepairs = true
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -261,7 +261,7 @@ func TestCIStep_GitLabPendingChecksKeepMonitoringWhenDone(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 

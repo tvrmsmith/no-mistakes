@@ -2,7 +2,6 @@ package eval
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -31,7 +30,7 @@ const piHOMEProbeReply = `{"type":"agent_end","messages":[{"role":"assistant","c
 // (so Pi's ordinary ~/.pi/agent auth discovery works without an injected API
 // key) while NM_HOME stays a nested sandbox that cannot see production state.
 func TestReplayUsesCallerHOMEAndKeepsIsolatedNMHOME(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	hideHarnessDirOverrides(t)
 	unsetEnv(t, "XAI_API_KEY")
 
@@ -158,19 +157,20 @@ func unsetEnv(t *testing.T, keys ...string) {
 	t.Helper()
 	for _, key := range keys {
 		key := key
-		orig, ok := os.LookupEnv(key)
+		if orig, ok := os.LookupEnv(key); ok {
+			// Setting the value it already has is how the restore gets
+			// registered before the unset below takes it away.
+			t.Setenv(key, orig)
+		} else {
+			t.Cleanup(func() {
+				if err := os.Unsetenv(key); err != nil {
+					t.Errorf("unset %s: %v", key, err)
+				}
+			})
+		}
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatalf("unset %s: %v", key, err)
 		}
-		t.Cleanup(func() {
-			if ok {
-				if err := os.Setenv(key, orig); err != nil {
-					t.Errorf("restore %s: %v", key, err)
-				}
-			} else if err := os.Unsetenv(key); err != nil {
-				t.Errorf("unset %s: %v", key, err)
-			}
-		})
 	}
 }
 

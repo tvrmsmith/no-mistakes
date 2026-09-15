@@ -3,7 +3,6 @@
 package gate
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,7 +29,7 @@ func TestEjectSweepsRecordedWorktreesBeforeRemovingThem(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {

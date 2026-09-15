@@ -84,7 +84,7 @@ func main() {
 	}
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+path)
-	head, err := rerunCallerHead(context.Background())
+	head, err := rerunCallerHead(t.Context())
 	t.Setenv("PATH", path)
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestRerunCallerHeadGitStates(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			head, err := rerunCallerHead(context.Background())
+			head, err := rerunCallerHead(t.Context())
 			wantError := state == "unborn" || state == "not_repo"
 			if (err != nil) != wantError || head != want {
 				t.Fatalf("caller head = %q, err = %v; want %q, error = %v", head, err, want, wantError)
@@ -251,7 +251,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 				}
 				defer closers.Quiet(client)
 				env := &axiEnv{p: p, d: d, repo: repo, cfg: config.DefaultGlobalConfig(), client: client}
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 				defer cancel()
 				runID, err := triggerRun(ctx, env, "main", wantHead, nil, "keep the caller's changes", "")
 				if err != nil || runID != "rerun-1" {
@@ -272,7 +272,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 						} else {
 							cliGit(t, dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "commit before push")
 						}
-						ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+						ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 						defer cancel()
 						if _, err := triggerRun(ctx, env, "main", wantHead, nil, "keep the caller's changes", ""); err != nil {
 							t.Fatal(err)

@@ -382,7 +382,7 @@ func TestDocumentStep_HangingAgentFailsRunAfterTimeout(t *testing.T) {
 	sctx.Config.AgentTimeout = 20 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&DocumentStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected hanging document agent to fail the run")
 	}
 

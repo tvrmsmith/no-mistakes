@@ -104,7 +104,7 @@ func (f *ciDecisionPromptFixture) capture(t *testing.T) string {
 	// before the step runs; mirror that so the fixture matches production.
 	pipeline.BindBranchDecisions(f.sctx)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	f.sctx.Ctx = ctx
 	step := &CIStep{waitForNextPoll: func(ctx context.Context, _ time.Duration) error {

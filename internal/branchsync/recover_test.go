@@ -86,7 +86,7 @@ type recoverFixture struct {
 // with head_sha at the preserved head and no push provenance.
 func newRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -156,7 +156,7 @@ func newRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 
 func newDivergentArchiveRecoverFixture(t *testing.T) (*recoverFixture, string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -1033,7 +1033,7 @@ func TestRecoverRefusesWhenNothingIsStranded(t *testing.T) {
 // ambiguity and never recoverable pipeline custody.
 func newUnmovedRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -1108,7 +1108,7 @@ func TestCancellationReconcilesCommittedWorktreeHeadBeforeReleaseClassification(
 	}
 	step := &cancellationRaceStep{committed: make(chan string, 1)}
 	executor := pipelinepkg.NewExecutor(f.db, p, nil, nil, []pipelinepkg.Step{step}, nil)
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- executor.Execute(ctx, f.run, f.repo, managed)
@@ -1682,7 +1682,7 @@ func TestCancellationReleaseRequiresVerifiedManagedHead(t *testing.T) {
 				t.Fatal(err)
 			}
 			executor := pipelinepkg.NewExecutor(f.db, p, nil, nil, []pipelinepkg.Step{&unreachedCancellationStep{}}, nil)
-			ctx, cancel := context.WithCancelCause(context.Background())
+			ctx, cancel := context.WithCancelCause(t.Context())
 			cancel(errors.New(types.RunCancelReasonAbortedByUser))
 			if err := executor.Execute(ctx, f.run, f.repo, workDir); err == nil {
 				t.Fatal("cancelled executor returned nil")
@@ -1728,7 +1728,7 @@ func TestSuccessfulSkippedDeliveryReleasesVerifiedUnmovedHead(t *testing.T) {
 	}
 	executor := pipelinepkg.NewExecutor(f.db, p, nil, nil, steps, nil)
 	executor.SetSkippedSteps([]types.StepName{types.StepPush, types.StepPR, types.StepCI})
-	if err := executor.Execute(context.Background(), f.run, f.repo, managed); err != nil {
+	if err := executor.Execute(t.Context(), f.run, f.repo, managed); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2164,7 +2164,7 @@ func newRebasedRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixt
 // modelling the fix rounds a cancelled run may have produced.
 func newRebasedRecoverFixtureWithPipelineWork(t *testing.T, status types.RunStatus, pipelineWork func(t *testing.T, pipelineDir string)) *recoverFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)

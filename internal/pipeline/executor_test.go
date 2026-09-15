@@ -21,7 +21,7 @@ func TestExecutorAutomaticSkipReasonRedactsCredentials(t *testing.T) {
 		name:    types.StepCI,
 		outcome: &StepOutcome{Skipped: true, SkipReason: "unavailable https://operator:secret@forge.example/repo"},
 	}}, nil)
-	if err := executor.Execute(context.Background(), r, repo, t.TempDir()); err != nil {
+	if err := executor.Execute(t.Context(), r, repo, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	results, err := database.GetStepsByRun(r.ID)
@@ -53,7 +53,7 @@ func TestExecutor_StepLifecycleEvents(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
 	events := collectEvents(exec)
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestExecutor_SuccessfulStepsDoNotEmitTelemetry(t *testing.T) {
 		newPassStep(types.StepTest),
 	}, nil)
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
@@ -134,7 +134,7 @@ func TestExecutor_RestartsValidationFromRequestedStep(t *testing.T) {
 	steps = append(steps, ci)
 	exec := NewExecutor(database, p, &config.Config{AutoFix: config.AutoFix{CI: 1}}, nil, steps, nil)
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if ciCalls != 3 {
@@ -221,7 +221,7 @@ func TestExecutor_RevalidationGateRemainsRecoverable(t *testing.T) {
 	if err := database.SetRunSkippedSteps(run.ID, []types.StepName{types.StepPush}); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(ctx, run, repo, workDir) }()
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -268,7 +268,7 @@ func TestExecutor_RecoveredRevalidationPreservesSkippedStep(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
 	exec.initializeRunScopes(run.ID)
 
-	if err := exec.executeRecoveredRemainder(context.Background(), run, repo, t.TempDir(), t.TempDir(), 0, true); err != nil {
+	if err := exec.executeRecoveredRemainder(t.Context(), run, repo, t.TempDir(), t.TempDir(), 0, true); err != nil {
 		t.Fatalf("executeRecoveredRemainder() error = %v", err)
 	}
 	if got := review.callCount(); got != 1 {
@@ -311,7 +311,7 @@ func TestExecutor_SkippedStepsDoNotEmitTelemetry(t *testing.T) {
 		newPassStep(types.StepReview),
 	}, nil)
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
@@ -327,7 +327,7 @@ func TestExecutor_RunEventStatusCorrectOnSuccess(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{newPassStep(types.StepReview)}, nil)
 	events := collectEvents(exec)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestExecutor_RunEventStatusCorrectOnFailure(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{newFailStep(types.StepReview, fmt.Errorf("boom"))}, nil)
 	events := collectEvents(exec)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -397,7 +397,7 @@ func TestExecutor_StepError_FailsRun(t *testing.T) {
 
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -430,7 +430,7 @@ func TestExecutor_FailedStepEmitsTelemetry(t *testing.T) {
 		newFailStep(types.StepReview, fmt.Errorf("review crashed")),
 	}, nil)
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err == nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err == nil {
 		t.Fatal("expected error, got nil")
 	}
 
@@ -453,7 +453,7 @@ func TestExecutor_FailedStepRecordsDuration(t *testing.T) {
 
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -471,7 +471,7 @@ func TestExecutor_EmptySteps(t *testing.T) {
 
 	exec := NewExecutor(database, p, nil, nil, nil, nil)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error for empty steps, got: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestExecutor_StepResultUsesDurationOverride(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute run: %v", err)
 	}
 
@@ -525,7 +525,7 @@ func TestExecutor_StepOutcomePRURL_EmitsRunUpdated(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
 	events := collectEvents(exec)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestExecutor_SkippedOutcome_EmitsSkippedEvent(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	events := collectEvents(exec)
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
@@ -591,7 +591,7 @@ func TestExecutor_ConfiguredSkippedStepDoesNotExecuteAndContinues(t *testing.T) 
 	exec.SetSkippedSteps([]types.StepName{types.StepReview})
 	events := collectEvents(exec)
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if got := review.callCount(); got != 0 {
@@ -627,7 +627,7 @@ func TestExecutor_CIStepFailingForOtherReasonStillFails(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	ciStep := &adaptiveCallStep{
 		name: types.StepCI,
 		fn: func(sctx *StepContext) (*StepOutcome, error) {

@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,7 +41,7 @@ func TestCIGateReconciliationClearsActiveRunAfterPRBecomesTerminal(t *testing.T)
 			exec.SetGateReconcileTimings(20*time.Millisecond, 5*time.Second)
 
 			done := make(chan error, 1)
-			go func() { done <- exec.Execute(context.Background(), run, repo, dir) }()
+			go func() { done <- exec.Execute(t.Context(), run, repo, dir) }()
 			waitForCIGate(t, database, run.ID)
 			if err := os.WriteFile(statePath, []byte(terminalState+"\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -82,7 +81,7 @@ func TestCIGateReconciliationPreservesOpenErrorAndUnknownStates(t *testing.T) {
 			exec.SetGateReconcileTimings(20*time.Millisecond, 5*time.Second)
 
 			done := make(chan error, 1)
-			go func() { done <- exec.Execute(context.Background(), run, repo, dir) }()
+			go func() { done <- exec.Execute(t.Context(), run, repo, dir) }()
 			waitForCIGate(t, database, run.ID)
 			if err := os.WriteFile(statePath, []byte(state+"\n"), 0o644); err != nil {
 				t.Fatal(err)

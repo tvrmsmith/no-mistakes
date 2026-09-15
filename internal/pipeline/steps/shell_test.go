@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,7 +21,7 @@ func TestRunShellCommandWithEnv_UsesShAndIgnoresUserShell(t *testing.T) {
 	t.Setenv("SHELL", shellPath)
 	t.Setenv("USER_SHELL_MARKER", marker)
 
-	output, exitCode, err := runShellCommandWithEnv(context.Background(), workDir, []string{"STEP_SPECIAL=from-step"}, "printf %s \"$STEP_SPECIAL\"")
+	output, exitCode, err := runShellCommandWithEnv(t.Context(), workDir, []string{"STEP_SPECIAL=from-step"}, "printf %s \"$STEP_SPECIAL\"")
 	if err != nil {
 		t.Fatal(err)
 	}

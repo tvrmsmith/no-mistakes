@@ -69,7 +69,7 @@ func TestClientTrackSendsUmamiEventPayload(t *testing.T) {
 		"status":  "success",
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := client.Close(ctx); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -156,7 +156,7 @@ func TestClientPageviewSendsUmamiPageviewPayload(t *testing.T) {
 
 	client.Pageview("/tui", Fields{"entrypoint": "attach"})
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := client.Close(ctx); err != nil {
 		t.Fatalf("Close() error = %v", err)

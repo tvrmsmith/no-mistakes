@@ -141,7 +141,7 @@ func TestUserAssetClientUploadFile(t *testing.T) {
 		RepositoryID: 1354199749,
 		acceptedHost: "github.com",
 	}
-	url, err := client.UploadFile(context.Background(), asset)
+	url, err := client.UploadFile(t.Context(), asset)
 	if err != nil {
 		t.Fatalf("UploadFile: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestUserAssetClientUploadFileRejectsReplacedFile(t *testing.T) {
 		RepositoryID: 1,
 		acceptedHost: "github.com",
 	}
-	if _, err := client.UploadFile(context.Background(), asset); err == nil || !strings.Contains(err.Error(), "changed after attachment validation") {
+	if _, err := client.UploadFile(t.Context(), asset); err == nil || !strings.Contains(err.Error(), "changed after attachment validation") {
 		t.Fatalf("error = %v, want replaced-file refusal", err)
 	}
 	if requests != 0 {
@@ -239,7 +239,7 @@ func TestUserAssetClientUploadFileRejectsUnexpectedURL(t *testing.T) {
 		RepositoryID: 1,
 		acceptedHost: "github.com",
 	}
-	if _, err := client.UploadFile(context.Background(), asset); err == nil {
+	if _, err := client.UploadFile(t.Context(), asset); err == nil {
 		t.Fatal("expected unexpected URL to fail closed")
 	}
 }
@@ -250,7 +250,7 @@ func TestHostUploadUserAssetSkipsGHES(t *testing.T) {
 		t.Fatalf("GHES must not call %s %s", name, strings.Join(args, " "))
 		return exec.CommandContext(ctx, "false")
 	}, func() bool { return true }, "ghe.example.com", "ghe.example.com/test/repo")
-	if _, err := host.UploadUserAsset(context.Background(), "dot.png"); err == nil || !strings.Contains(err.Error(), "Enterprise Server") {
+	if _, err := host.UploadUserAsset(t.Context(), "dot.png"); err == nil || !strings.Contains(err.Error(), "Enterprise Server") {
 		t.Fatalf("error = %v, want GHES refusal", err)
 	}
 }
@@ -265,7 +265,7 @@ func TestHostUploadUserAssetSkipsInstallationToken(t *testing.T) {
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
 		"gh auth token --hostname github.com": {stdout: "ghs_installation\n"},
 	}), func() bool { return true }, "github.com", "test/repo")
-	_, err := host.UploadUserAsset(context.Background(), png)
+	_, err := host.UploadUserAsset(t.Context(), png)
 	if err == nil || !strings.Contains(err.Error(), "installation") {
 		t.Fatalf("error = %v, want installation-token refusal", err)
 	}
@@ -302,7 +302,7 @@ func TestHostUploadUserAssetUploadsWithOAuthToken(t *testing.T) {
 	host.assetHTTP = server.Client()
 	host.assetUploadPrefix = server.URL + "/"
 
-	url, err := host.UploadUserAsset(context.Background(), png)
+	url, err := host.UploadUserAsset(t.Context(), png)
 	if err != nil {
 		t.Fatalf("UploadUserAsset: %v", err)
 	}

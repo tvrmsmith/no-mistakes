@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -35,7 +34,7 @@ func TestExecutor_ApprovalFix(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	// Wait for awaiting_approval
@@ -87,7 +86,7 @@ func TestExecutor_AwaitingAgentMarkerSetOnGateClearedOnRespond(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	// Entering the gate flips the pollable parked marker on.
@@ -215,7 +214,7 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	go func() {
-		done <- exec.Resume(context.Background(), run, repo, t.TempDir())
+		done <- exec.Resume(t.Context(), run, repo, t.TempDir())
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -319,7 +318,7 @@ func TestExecutor_ResumePromotesDurableReviewedCandidateOnApproval(t *testing.T)
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{newApprovalStep(types.StepReview, findings)}, nil)
 	workDir := t.TempDir()
 	done := make(chan error, 1)
-	go func() { done <- exec.Resume(context.Background(), run, repo, workDir) }()
+	go func() { done <- exec.Resume(t.Context(), run, repo, workDir) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err == nil {
@@ -366,7 +365,7 @@ func TestExecutor_TracksApprovalAndUserFixTelemetry(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
@@ -441,7 +440,7 @@ func TestExecutor_TracksAutoFixTelemetry(t *testing.T) {
 	cfg := &config.Config{Agent: types.AgentClaude, AutoFix: config.AutoFix{Review: 1}}
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 

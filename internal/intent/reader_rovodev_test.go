@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -48,7 +47,7 @@ func TestRovoDevReader_DiscoverAndLoad(t *testing.T) {
 	home := buildRovoDevSession(t, repoCWD)
 
 	r := NewRovoDevReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-24 * time.Hour),
@@ -65,7 +64,7 @@ func TestRovoDevReader_DiscoverAndLoad(t *testing.T) {
 		t.Errorf("SessionID = %q", s.SessionID)
 	}
 
-	if err := r.Load(context.Background(), s); err != nil {
+	if err := r.Load(t.Context(), s); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(s.Messages) != 2 {
@@ -81,7 +80,7 @@ func TestRovoDevReader_FiltersByWorkspace(t *testing.T) {
 	home := buildRovoDevSession(t, repoA)
 
 	r := NewRovoDevReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   t.TempDir(), // unrelated path
 		WindowStart: time.Now().Add(-24 * time.Hour),
@@ -97,7 +96,7 @@ func TestRovoDevReader_FiltersByWorkspace(t *testing.T) {
 
 func TestRovoDevReader_NoSessionsDir(t *testing.T) {
 	r := NewRovoDevReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: t.TempDir()})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}

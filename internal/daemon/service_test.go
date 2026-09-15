@@ -1392,26 +1392,12 @@ func TestServiceInstanceSuffixDistinguishesRelativeRootsAcrossWorkingDirs(t *tes
 		}
 	}
 
-	originalWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := os.Chdir(originalWD); err != nil {
-			t.Fatalf("restore working directory: %v", err)
-		}
-	}()
-
 	relativePaths := paths.WithRoot(filepath.Join(".", "nm-home"))
 
-	if err := os.Chdir(firstWD); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(firstWD)
 	first := serviceInstanceSuffix(relativePaths)
 
-	if err := os.Chdir(secondWD); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(secondWD)
 	second := serviceInstanceSuffix(relativePaths)
 
 	if first == second {

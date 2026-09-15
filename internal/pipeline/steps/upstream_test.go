@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +16,7 @@ import (
 func minimalStepContext(t *testing.T, workDir, upstreamURL string) *pipeline.StepContext {
 	t.Helper()
 	return &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: workDir,
 		Repo:    &db.Repo{UpstreamURL: upstreamURL},
 	}
@@ -113,7 +112,7 @@ func TestRunUpstreamFetchUsesRefreshedRegistration(t *testing.T) {
 	sctx := minimalStepContext(t, workDir, refreshedUpstream)
 	sctx.Repo.URLsVerified = true
 
-	tip, resolved := resolveRunDefaultBranchTip(context.Background(), sctx, "", "main")
+	tip, resolved := resolveRunDefaultBranchTip(t.Context(), sctx, "", "main")
 	if !resolved {
 		t.Fatal("resolveRunDefaultBranchTip reported unresolved")
 	}

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/kunchenguid/no-mistakes/internal/closers"
@@ -65,7 +64,7 @@ func runOpencodeAgainst(t *testing.T, server *httptest.Server) (*Result, error) 
 		bin:    "opencode",
 		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
-	return a.Run(context.Background(), RunOpts{
+	return a.Run(t.Context(), RunOpts{
 		Prompt:     "review this code",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
@@ -363,7 +362,7 @@ func TestOpencodeAgent_ThinkingConflictAfterToolActivityDoesNotFallBack(t *testi
 	defer server.Close()
 
 	a := &opencodeAgent{bin: "opencode", server: &managedServer{port: mustParsePort(t, server.URL)}}
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review the changes",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
