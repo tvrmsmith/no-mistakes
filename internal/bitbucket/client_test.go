@@ -2,7 +2,6 @@ package bitbucket
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -108,7 +107,7 @@ func TestListPRStatusesRejectsCrossOriginPagination(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"values":[{"name":"build","state":"SUCCESSFUL"}],"next":"https://evil.example/2.0/repositories/test/repo/pullrequests/42/statuses?page=2"}`)
+		writeStub(t, w, `{"values":[{"name":"build","state":"SUCCESSFUL"}],"next":"https://evil.example/2.0/repositories/test/repo/pullrequests/42/statuses?page=2"}`)
 	}))
 	defer server.Close()
 

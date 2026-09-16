@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
@@ -27,7 +28,7 @@ func TestTriggerRunRejectedPushRestoresReconciledGateRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	cliGit(t, dir, "init", "-b", "main")
 	cliGit(t, dir, "config", "user.name", "Test")
 	cliGit(t, dir, "config", "user.email", "test@example.com")
@@ -80,7 +81,7 @@ func TestTriggerRunRejectedPushRestoresReconciledGateRef(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	chdir(t, dir)
 	env := &axiEnv{p: p, d: d, repo: repo, cfg: config.DefaultGlobalConfig(), client: client}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

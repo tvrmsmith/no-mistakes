@@ -3,12 +3,24 @@ package bitbucket
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/scm"
 )
+
+// writeStub sends one stub HTTP response body. A short write means the client
+// hung up mid-request, which changes what the adapter under test sees, so it
+// is reported rather than dropped. It runs on the server's goroutine, where
+// t.Errorf is allowed and t.Fatalf is not.
+func writeStub(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("write stub response: %v", err)
+	}
+}
 
 func TestPRRawContentLifecyclePreservesTitleDraftAndMarkdown(t *testing.T) {
 	t.Parallel()
@@ -64,7 +76,7 @@ func TestPRRawContentRejectsUnprovenResponses(t *testing.T) {
 				if raw == "transport-error" {
 					w.WriteHeader(503)
 				}
-				fmt.Fprint(w, raw)
+				writeStub(t, w, raw)
 			}))
 			defer server.Close()
 			h := NewHost(&Client{baseURL: server.URL, httpClient: server.Client()}, RepoRef{Workspace: "owner", RepoSlug: "repo"}, false)

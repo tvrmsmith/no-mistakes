@@ -63,7 +63,7 @@ func TestRunToInfoKeepsCIOverrideReasonCISpecific(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	run := &db.Run{ID: "run-1", Status: types.RunCompleted}
 	testReason := "configured test command failed"

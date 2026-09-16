@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -57,7 +58,7 @@ func gatePinFixture(t *testing.T, defaultBranchYAML string, pinnedGates []config
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	repo, _ := setupTestGitRepo(t, p, d, "repo1")
 	headSHA := commitDefaultBranchConfig(t, repo.WorkingPath, defaultBranchYAML)

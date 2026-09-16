@@ -641,16 +641,16 @@ func TestOpencodeAgent_ThinkingToolChoiceFallbackSumsBothTurnsUsage(t *testing.T
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/session" && r.Method == http.MethodPost:
-			fmt.Fprintf(w, `{"id":"s%d"}`, sessions.Add(1))
+			writeStub(t, w, fmt.Sprintf(`{"id":"s%d"}`, sessions.Add(1)))
 
 		case r.URL.Path == "/global/event" && r.Method == http.MethodGet:
-			fmt.Fprint(w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
+			writeStub(t, w, "data: {\"payload\":{\"type\":\"session.idle\"}}\n\n")
 
 		case r.URL.Path == "/session/s1/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg1","role":"assistant","tokens":{"input":100,"output":10,"cache":{"read":5,"write":2}},"error":{"name":"APIError","data":{"message":"Provider returned error","responseBody":"Thinking may not be enabled when tool_choice forces tool use."}}}}`)
+			writeStub(t, w, `{"info":{"id":"msg1","role":"assistant","tokens":{"input":100,"output":10,"cache":{"read":5,"write":2}},"error":{"name":"APIError","data":{"message":"Provider returned error","responseBody":"Thinking may not be enabled when tool_choice forces tool use."}}}}`)
 
 		case r.URL.Path == "/session/s2/message" && r.Method == http.MethodPost:
-			fmt.Fprint(w, `{"info":{"id":"msg2","role":"assistant","tokens":{"input":200,"output":20,"cache":{"read":7,"write":3}}},"parts":[{"type":"text","text":"{\"summary\":\"all good\"}"}]}`)
+			writeStub(t, w, `{"info":{"id":"msg2","role":"assistant","tokens":{"input":200,"output":20,"cache":{"read":7,"write":3}}},"parts":[{"type":"text","text":"{\"summary\":\"all good\"}"}]}`)
 
 		default:
 			w.WriteHeader(http.StatusOK)

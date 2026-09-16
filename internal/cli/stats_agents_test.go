@@ -174,7 +174,7 @@ func TestStatsDistinguishesUnreportedTokensFromReportedZero(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	d.Close()
+	closers.Quiet(d)
 
 	perRun, err := executeCmd("stats", "--run", run.ID)
 	if err != nil {

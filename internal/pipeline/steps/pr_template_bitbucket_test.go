@@ -2,7 +2,6 @@ package steps
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,9 +40,9 @@ func TestPRTemplateBitbucketCreateReadbackUpdateAndPrePush(t *testing.T) {
 		switch {
 		case r.Method == "GET" && r.URL.Path == collection:
 			if exists {
-				fmt.Fprint(w, `{"values":[{"id":42}]}`)
+				writeStub(t, w, `{"values":[{"id":42}]}`)
 			} else {
-				fmt.Fprint(w, `{"values":[]}`)
+				writeStub(t, w, `{"values":[]}`)
 			}
 			return
 		case (r.Method == "POST" && r.URL.Path == collection) || (r.Method == "PUT" && r.URL.Path == collection+"/42"):

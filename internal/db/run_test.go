@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -1661,7 +1662,7 @@ func TestRunGatesArePinnedAndDefaultToNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen db: %v", err)
 	}
-	t.Cleanup(func() { reopened.Close() })
+	t.Cleanup(func() { closers.Quiet(reopened) })
 	pinned, err = reopened.GetRunGates(run.ID)
 	if err != nil {
 		t.Fatalf("get run gates after restart: %v", err)

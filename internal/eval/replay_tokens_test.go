@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -80,7 +81,7 @@ func TestReplayTokensCoverEveryReviewAttempt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-			defer sourceDB.Close()
+			defer closers.Quiet(sourceDB)
 
 			fakeDir := t.TempDir()
 			installFakePiSequence(t, fakeDir, piReviewReply(t, tc.first), piReviewReply(t, valid))
@@ -90,7 +91,7 @@ func TestReplayTokensCoverEveryReviewAttempt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 				t.Fatal(err)
 			}

@@ -1969,12 +1969,12 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// its resume at a step sequence it never executed.
 	pinnedGates, err := config.MarshalGates(cfg.Gates)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("record gates: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("record gates: %s", err))
 		trackStartFailure("record_gates")
 		return "", fmt.Errorf("record gates: %w", err)
 	}
 	if err := m.db.SetRunGates(run.ID, pinnedGates); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("record gates: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("record gates: %s", err))
 		trackStartFailure("record_gates")
 		return "", fmt.Errorf("record gates: %w", err)
 	}

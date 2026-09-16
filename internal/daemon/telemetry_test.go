@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -75,7 +76,7 @@ func TestTelemetryFailedStepNameRedactsCustomGateLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepo("/repo", "https://example.com/repo.git", "main")
 	if err != nil {
 		t.Fatal(err)
