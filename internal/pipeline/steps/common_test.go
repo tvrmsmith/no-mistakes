@@ -747,7 +747,7 @@ func TestCommitPipelineCorrection_RealCommitFailureStillFails(t *testing.T) {
 
 func TestCommitAgentFixes_EmptyIndexIsReportedAsNoOpNotAsACommit(t *testing.T) {
 	t.Parallel()
-	dir, baseSHA, headSHA := setupGitRepo(t)
+	dir, baseSHA, _ := setupGitRepo(t)
 
 	// A dirty worktree whose dirt `git add -A` cannot place in the superproject
 	// index: a submodule with untracked content of its own. Status is non-empty,
@@ -766,7 +766,7 @@ func TestCommitAgentFixes_EmptyIndexIsReportedAsNoOpNotAsACommit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sub", "untracked.txt"), []byte("agent scratch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	headSHA = gitCmd(t, dir, "rev-parse", "HEAD")
+	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
 	var logs []string
