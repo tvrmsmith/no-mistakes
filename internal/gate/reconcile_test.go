@@ -443,10 +443,8 @@ func TestReconcileStaleBranchDecision41AExactSubmittedHeadOnly(t *testing.T) {
 						t.Fatalf("missing at-risk commit %s: %v", commit, err)
 					}
 				}
-			} else {
-				if err != nil || !plan.Reconcile {
-					t.Fatalf("exact submitted-head exception refused: plan=%+v err=%v", plan, err)
-				}
+			} else if err != nil || !plan.Reconcile {
+				t.Fatalf("exact submitted-head exception refused: plan=%+v err=%v", plan, err)
 			}
 			if got := reconcileGit(t, gateDir, "rev-parse", "refs/heads/feature"); got != privateHead {
 				t.Fatalf("planning moved mirror to %s, want %s", got, privateHead)

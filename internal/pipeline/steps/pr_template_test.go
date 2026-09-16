@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -124,7 +125,7 @@ func TestPRTemplateCreateThroughFakeGitHubAndReadback(t *testing.T) {
 	sctx.UserIntent = "Complete reviewer context stays available."
 	env, _ := fakeGH(t, "")
 	bodyFile := filepath.Join(t.TempDir(), "body.md")
-	sctx.Env = append(env, "FAKE_CLI_PR_BODY_FILE="+bodyFile)
+	sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY_FILE="+bodyFile)
 	out, err := (&PRStep{}).Execute(sctx)
 	if err != nil || out == nil || out.PRURL == "" {
 		t.Fatalf("create: %+v, %v", out, err)
@@ -193,7 +194,7 @@ func TestPRTemplateUpdateAppliesConfiguredTitleFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-	sctx.Env = append(env, "FAKE_CLI_PR_BODY_FILE="+bodyFile, "FAKE_CLI_PR_TITLE=Author title")
+	sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY_FILE="+bodyFile, "FAKE_CLI_PR_TITLE=Author title")
 
 	if _, err := (&PRStep{}).Execute(sctx); err != nil {
 		t.Fatal(err)
@@ -229,7 +230,7 @@ func TestPRTemplateRegenerationPreservesAuthorsAndClosingReferences(t *testing.T
 		t.Fatal(err)
 	}
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-	sctx.Env = append(env, "FAKE_CLI_PR_BODY_FILE="+bodyFile)
+	sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY_FILE="+bodyFile)
 	step := &PRStep{}
 	if _, err := step.Execute(sctx); err != nil {
 		t.Fatal(err)
@@ -325,7 +326,7 @@ func TestPRTemplateUpdateErrorIsNotMaskedByLegacyWarning(t *testing.T) {
 	t.Parallel()
 	sctx, _, _ := templateTestContext(t)
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-	sctx.Env = append(env, "FAKE_CLI_PR_BODY=## Human description", "FAKE_CLI_PR_EDIT_ERR=permission denied")
+	sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY=## Human description", "FAKE_CLI_PR_EDIT_ERR=permission denied")
 	out, err := (&PRStep{}).Execute(sctx)
 	if err == nil || out != nil || !strings.Contains(err.Error(), "update templated PR") {
 		t.Fatalf("write failure became a clean success: %+v, %v", out, err)
@@ -379,7 +380,7 @@ func TestPRTemplateIncompleteGitHubReadsNeverOverwriteAuthor(t *testing.T) {
 					t.Fatal(err)
 				}
 				env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-				sctx.Env = append(env, "FAKE_CLI_PR_BODY_FILE="+bodyFile, "FAKE_CLI_PR_TITLE=Author title", "FAKE_CLI_PR_CONTENT_JSON="+payload)
+				sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY_FILE="+bodyFile, "FAKE_CLI_PR_TITLE=Author title", "FAKE_CLI_PR_CONTENT_JSON="+payload)
 				var err error
 				if phase == "initial" {
 					_, err = (&PRStep{}).Execute(sctx)
