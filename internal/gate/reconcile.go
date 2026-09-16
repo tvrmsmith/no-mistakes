@@ -271,12 +271,12 @@ func privateCommitsAbsentFromLive(ctx context.Context, repoDir, liveHead, privat
 	privateCommits := make([]privateCommit, 0, len(privateOnly))
 	paths := make(map[string]bool)
 	for _, commit := range privateOnly {
-		patches, comparable, err := perFilePatchIDs(ctx, repoDir, commit)
+		patches, comparablePatches, err := perFilePatchIDs(ctx, repoDir, commit)
 		if err != nil {
 			return nil, err
 		}
-		privateCommits = append(privateCommits, privateCommit{sha: commit, patches: patches, comparable: comparable})
-		if !comparable {
+		privateCommits = append(privateCommits, privateCommit{sha: commit, patches: patches, comparable: comparablePatches})
+		if !comparablePatches {
 			continue
 		}
 		for _, patch := range patches {
@@ -350,11 +350,11 @@ func liveSidePatchIDs(ctx context.Context, repoDir, liveHead, privateHead string
 		return nil, err
 	}
 	for _, commit := range liveOnly {
-		patches, comparable, err := perFilePatchIDs(ctx, repoDir, commit)
+		patches, comparablePatches, err := perFilePatchIDs(ctx, repoDir, commit)
 		if err != nil {
 			return nil, err
 		}
-		if !comparable {
+		if !comparablePatches {
 			continue
 		}
 		for _, patch := range patches {
