@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,7 +160,7 @@ func TestPrepareRecoveredRun_ResumesWithTheGatesTheRunPinned(t *testing.T) {
 	// parked. The run's own head, and its recorded steps, are untouched.
 	commitDefaultBranchConfig(t, repo.WorkingPath, twoGatesYAML)
 
-	plan, err := m.prepareRecoveredRun(context.Background(), run)
+	plan, err := m.prepareRecoveredRun(t.Context(), run)
 	if err != nil {
 		t.Fatalf("parked run must still recover after the default branch changed its gates: %v", err)
 	}
@@ -183,7 +182,7 @@ func TestPrepareRecoveredRun_UnpinnedRunRecoversAsTheCorePipeline(t *testing.T) 
 		t.Fatalf("fixture pinned %q (err %v), want the pre-upgrade empty pin", payload, err)
 	}
 
-	plan, err := m.prepareRecoveredRun(context.Background(), run)
+	plan, err := m.prepareRecoveredRun(t.Context(), run)
 	if err != nil {
 		t.Fatalf("unpinned parked run must recover: %v", err)
 	}
@@ -207,7 +206,7 @@ func TestPrepareRecoveredRun_UnusableGatePinFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := m.prepareRecoveredRun(context.Background(), run)
+	_, err := m.prepareRecoveredRun(t.Context(), run)
 	if err == nil {
 		t.Fatal("an unusable gate pin must not resume the run")
 	}

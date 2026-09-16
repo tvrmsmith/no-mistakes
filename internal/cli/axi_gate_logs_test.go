@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +37,7 @@ func TestAxiLogsReadsARepositoryGateStepLog(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiLogs(cmd, string(step), dbRun.ID, true); err != nil {
 		t.Fatalf("axi logs --step %s: %v\n%s", step, err, out.String())
@@ -73,7 +72,7 @@ func TestAxiLogsRefusesAGateStepNameThatWouldEscapeTheLogDirectory(t *testing.T)
 	for _, step := range []string{"gate.test.../../stolen", `gate.test...\..\stolen`, "gate.test.a/b"} {
 		var out bytes.Buffer
 		cmd := &cobra.Command{}
-		cmd.SetContext(context.Background())
+		cmd.SetContext(t.Context())
 		cmd.SetOut(&out)
 		if err := runAxiLogs(cmd, step, dbRun.ID, true); err == nil {
 			t.Errorf("axi logs --step %q was accepted, want refusal", step)
@@ -106,7 +105,7 @@ func TestAxiLogsRefusesGatesOnForbiddenAnchors(t *testing.T) {
 		}
 		var out bytes.Buffer
 		cmd := &cobra.Command{}
-		cmd.SetContext(context.Background())
+		cmd.SetContext(t.Context())
 		cmd.SetOut(&out)
 		if err := runAxiLogs(cmd, step, dbRun.ID, true); err == nil {
 			t.Errorf("axi logs --step %q was accepted, want refusal", step)

@@ -1990,7 +1990,7 @@ func TestGetPRContentRequiresExplicitStrings(t *testing.T) {
 			host := New(githubTestCmdFactory(map[string]githubTestResponse{
 				"gh pr view 42 --repo test/repo --json title,body": {stdout: payload},
 			}), nil, "", "test/repo")
-			got, err := host.GetPRContent(context.Background(), &scm.PR{Number: "42"})
+			got, err := host.GetPRContent(t.Context(), &scm.PR{Number: "42"})
 			if err == nil || got != (scm.PRContent{}) {
 				t.Fatalf("invalid response accepted: %+v, %v", got, err)
 			}
@@ -1999,7 +1999,7 @@ func TestGetPRContentRequiresExplicitStrings(t *testing.T) {
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
 		"gh pr view 42 --repo test/repo --json title,body": {stdout: `{"title":"Author title","body":""}`},
 	}), nil, "", "test/repo")
-	got, err := host.GetPRContent(context.Background(), &scm.PR{Number: "42"})
+	got, err := host.GetPRContent(t.Context(), &scm.PR{Number: "42"})
 	if err != nil || got.Title != "Author title" || got.Body != "" {
 		t.Fatalf("explicit empty body rejected: %+v, %v", got, err)
 	}

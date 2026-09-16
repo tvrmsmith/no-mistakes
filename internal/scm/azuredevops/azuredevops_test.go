@@ -162,7 +162,7 @@ func TestFindPRDiscoversExistingPRWithoutWebURL(t *testing.T) {
 				},
 			}), func() bool { return true }, org, testProject, testRepo)
 
-			pr, err := h.FindPR(context.Background(), "feature", "main")
+			pr, err := h.FindPR(t.Context(), "feature", "main")
 			if err != nil {
 				t.Fatalf("FindPR() error = %v", err)
 			}
@@ -207,7 +207,7 @@ func TestFindPRListsOnceWithoutShowLookup(t *testing.T) {
 			var rec []capturedCmd
 			h := newCapturingHost(&rec, azdoTestResponse{stdout: reportedListPRJSON + "\n"})
 
-			pr, err := h.FindPR(context.Background(), "feature", tc.base)
+			pr, err := h.FindPR(t.Context(), "feature", tc.base)
 			if err != nil {
 				t.Fatalf("FindPR() error = %v", err)
 			}

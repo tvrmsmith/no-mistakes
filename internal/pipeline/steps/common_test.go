@@ -715,7 +715,7 @@ func TestCommitPipelineCorrection_EmptyIndexIsSuccessfulNoOp(t *testing.T) {
 	t.Parallel()
 	dir, _, headSHA := setupGitRepo(t)
 
-	err := commitPipelineCorrection(context.Background(), dir, "no-mistakes: empty handoff", nil)
+	err := commitPipelineCorrection(t.Context(), dir, "no-mistakes: empty handoff", nil)
 	if err != nil {
 		t.Fatalf("empty-index correction must be a successful no-op: %v", err)
 	}
@@ -736,7 +736,7 @@ func TestCommitPipelineCorrection_RealCommitFailureStillFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := commitPipelineCorrection(context.Background(), dir, "no-mistakes: must fail", nil)
+	err := commitPipelineCorrection(t.Context(), dir, "no-mistakes: must fail", nil)
 	if err == nil {
 		t.Fatal("commit with a locked index unexpectedly succeeded")
 	}

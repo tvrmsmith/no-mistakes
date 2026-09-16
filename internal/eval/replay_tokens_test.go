@@ -79,7 +79,7 @@ func TestReplayTokensCoverEveryReviewAttempt(t *testing.T) {
 		{name: "two attempts that both report usage", first: blankRationale, wantReported: true, wantInput: 200, wantOutput: 40, wantFresh: 140},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
 			defer closers.Quiet(sourceDB)
 
@@ -173,7 +173,7 @@ func TestObservedAgentCountsEveryAdapterAttempt(t *testing.T) {
 		},
 		err: errors.New("claude structured output rejected"),
 	}}
-	if _, err := observed.Run(context.Background(), agent.RunOpts{}); err == nil {
+	if _, err := observed.Run(t.Context(), agent.RunOpts{}); err == nil {
 		t.Fatal("expected the exhausted turn's error to surface")
 	}
 	if observed.usageMissing {
@@ -193,7 +193,7 @@ func TestObservedAgentMarksUsageIncompleteWhenAnAttemptLacksIt(t *testing.T) {
 		attempts: []*agent.Result{reportedUsage(50_000, 100, 5_000), nil},
 		err:      errors.New("claude exited: status 1"),
 	}}
-	if _, err := observed.Run(context.Background(), agent.RunOpts{}); err == nil {
+	if _, err := observed.Run(t.Context(), agent.RunOpts{}); err == nil {
 		t.Fatal("expected the failed turn's error to surface")
 	}
 	if !observed.usageMissing {
@@ -205,7 +205,7 @@ func TestObservedAgentMarksUsageIncompleteWhenAnAttemptLacksIt(t *testing.T) {
 // no attempts at all, where the returned result is the whole turn.
 func TestObservedAgentSumsASucceedingTurnsUsage(t *testing.T) {
 	observed := &observedAgent{inner: &fixedResultAgent{result: reportedUsage(100, 20, 30)}}
-	if _, err := observed.Run(context.Background(), agent.RunOpts{}); err != nil {
+	if _, err := observed.Run(t.Context(), agent.RunOpts{}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if observed.usageMissing {

@@ -84,7 +84,7 @@ func TestTriggerRunRejectedPushRestoresReconciledGateRef(t *testing.T) {
 	defer closers.Quiet(client)
 	chdir(t, dir)
 	env := &axiEnv{p: p, d: d, repo: repo, cfg: config.DefaultGlobalConfig(), client: client}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	runID, err := triggerRun(ctx, env, "main", nil, "", "")
 	if err == nil || !strings.Contains(err.Error(), "submission-rejected") || runID != "" {

@@ -400,7 +400,7 @@ exit 1
 	}, "\r\n"))
 
 	ca := &codexAgent{bin: bin}
-	res, err := ca.Run(context.Background(), RunOpts{
+	res, err := ca.Run(t.Context(), RunOpts{
 		Prompt:  "review",
 		CWD:     t.TempDir(),
 		Session: &SessionRef{ID: "thread-1"},

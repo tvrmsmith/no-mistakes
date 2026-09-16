@@ -668,12 +668,12 @@ func TestCreatePRTitleLimitCountsCharacters(t *testing.T) {
 	host := New(gitlabTestCmdFactory(map[string]gitlabTestResponse{
 		"glab mr create --source-branch feature/x --target-branch main --title " + title + " --description body --yes": {},
 	}), nil, "", "")
-	if _, err := host.CreatePR(context.Background(), "feature/x", "main", scm.PRContent{Title: title, Body: "body"}); err != nil {
+	if _, err := host.CreatePR(t.Context(), "feature/x", "main", scm.PRContent{Title: title, Body: "body"}); err != nil {
 		t.Fatalf("255-character title rejected: %v", err)
 	}
 
 	host = New(gitlabTestCmdFactory(nil), nil, "", "")
-	_, err := host.CreatePR(context.Background(), "feature/x", "main", scm.PRContent{Title: strings.Repeat("😀", 256), Body: "body"})
+	_, err := host.CreatePR(t.Context(), "feature/x", "main", scm.PRContent{Title: strings.Repeat("😀", 256), Body: "body"})
 	if err == nil || !strings.Contains(err.Error(), "255 characters") {
 		t.Fatalf("256-character title error = %v", err)
 	}
@@ -689,7 +689,7 @@ func TestUpdatePRTitleLimitIncludesDraftMarker(t *testing.T) {
 		"glab mr update 9 --title Draft: " + allowed + " --description body": {},
 	}), nil, "", "")
 	pr := &scm.PR{Number: "9", URL: "https://gitlab.example.com/group/project/-/merge_requests/9"}
-	if _, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: allowed, Body: "body"}); err != nil {
+	if _, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: allowed, Body: "body"}); err != nil {
 		t.Fatalf("255-character draft title rejected: %v", err)
 	}
 
@@ -698,7 +698,7 @@ func TestUpdatePRTitleLimitIncludesDraftMarker(t *testing.T) {
 			stdout: `{"iid":9,"title":"Draft: old","web_url":"https://gitlab.example.com/group/project/-/merge_requests/9"}` + "\n",
 		},
 	}), nil, "", "")
-	_, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: strings.Repeat("x", 249), Body: "body"})
+	_, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: strings.Repeat("x", 249), Body: "body"})
 	if err == nil || !strings.Contains(err.Error(), "255 characters") {
 		t.Fatalf("256-character draft title error = %v", err)
 	}

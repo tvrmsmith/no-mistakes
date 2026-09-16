@@ -103,16 +103,16 @@ func TestPRTemplateRejectsUnsafePinnedFiles(t *testing.T) {
 		if name == "[literal].md" {
 			continue
 		}
-		if _, err := loadPRTemplate(context.Background(), dir, pin, name); err == nil {
+		if _, err := loadPRTemplate(t.Context(), dir, pin, name); err == nil {
 			t.Errorf("unsafe %s accepted", name)
 		}
 	}
 	for _, name := range []string{"module", "module/file.md", "link.md/child.md"} {
-		if _, err := loadPRTemplate(context.Background(), dir, pin, name); err == nil {
+		if _, err := loadPRTemplate(t.Context(), dir, pin, name); err == nil {
 			t.Errorf("unsafe %s accepted", name)
 		}
 	}
-	if got, err := loadPRTemplate(context.Background(), dir, pin, "[literal].md"); err != nil || got != "## Literal path\n" {
+	if got, err := loadPRTemplate(t.Context(), dir, pin, "[literal].md"); err != nil || got != "## Literal path\n" {
 		t.Fatalf("literal path treated as glob: %q, %v", got, err)
 	}
 }
@@ -350,7 +350,7 @@ func TestPRTemplateBarePinnedReadsUnderExplicitBarePolicy(t *testing.T) {
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "safe.bareRepository")
 	t.Setenv("GIT_CONFIG_VALUE_0", "explicit")
-	got, err := loadPRTemplate(context.Background(), bare, pin, sctx.Config.PR.Template)
+	got, err := loadPRTemplate(t.Context(), bare, pin, sctx.Config.PR.Template)
 	if err != nil || got != testPRTemplate {
 		t.Fatalf("bare pinned template = %q, %v", got, err)
 	}

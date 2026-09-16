@@ -185,7 +185,7 @@ exit 1
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := a.Run(context.Background(), RunOpts{Prompt: "review this change", CWD: dir})
+	res, err := a.Run(t.Context(), RunOpts{Prompt: "review this change", CWD: dir})
 	if err == nil {
 		t.Fatal("expected the non-zero exit to fail the turn")
 	}

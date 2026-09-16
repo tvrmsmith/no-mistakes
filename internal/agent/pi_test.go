@@ -392,7 +392,7 @@ printf '%s\n' '{"type":"agent_end","messages":[]}'
 		"echo {\"type\":\"agent_end\",\"messages\":[]}",
 	}, "\r\n"))
 
-	result, err := (&piAgent{bin: bin}).Run(context.Background(), RunOpts{
+	result, err := (&piAgent{bin: bin}).Run(t.Context(), RunOpts{
 		Prompt:     "review",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),
@@ -427,7 +427,7 @@ exit 1
 		"exit /b 1",
 	}, "\r\n"))
 
-	result, err := (&piAgent{bin: bin}).Run(context.Background(), RunOpts{
+	result, err := (&piAgent{bin: bin}).Run(t.Context(), RunOpts{
 		Prompt: "review",
 		CWD:    t.TempDir(),
 	})
@@ -806,7 +806,7 @@ exit 1
 		"exit /b 1",
 	}, "\r\n"))
 
-	result, err := (&piAgent{bin: bin}).Run(context.Background(), RunOpts{
+	result, err := (&piAgent{bin: bin}).Run(t.Context(), RunOpts{
 		Prompt:  "fix",
 		CWD:     t.TempDir(),
 		Session: &SessionRef{ID: requested},

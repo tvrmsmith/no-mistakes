@@ -192,7 +192,7 @@ func TestDefaultShellCommandOutput_InteractiveShellFromForegroundTerminal(t *tes
 	} else {
 		args = []string{"-q", "-c", child, "/dev/null"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, scriptBin, args...)
 	cmd.Env = append(os.Environ(), "NM_SHELLENV_PTY_CHILD=1", "SHELL="+zsh)
