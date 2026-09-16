@@ -24,10 +24,10 @@ func templateTestContext(t *testing.T) (*pipeline.StepContext, *mockAgent, strin
 	t.Helper()
 	dir, base, _ := setupGitRepo(t)
 	name := ".github/pull_request_template.md"
-	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(testPRTemplate), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(testPRTemplate), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", ".github")
@@ -35,7 +35,7 @@ func templateTestContext(t *testing.T) (*pipeline.StepContext, *mockAgent, strin
 	trusted := gitCmd(t, dir, "rev-parse", "HEAD")
 	// Neither the current file nor a later committed pushed version may supply
 	// the PR agent's template. This also models config recovery with a pin.
-	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte("## CONTRIBUTOR TEMPLATE MUST NOT WIN\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte("## CONTRIBUTOR TEMPLATE MUST NOT WIN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", ".github")
@@ -88,7 +88,7 @@ func TestPRTemplateRejectsUnsafePinnedFiles(t *testing.T) {
 		"[literal].md": []byte("## Literal path\n"),
 	}
 	for name, data := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -190,7 +190,7 @@ func TestPRTemplateUpdateAppliesConfiguredTitleFormat(t *testing.T) {
 	}
 	author := "## Overview\n\nHuman account.\n\nCloses https://github.com/test/repo/issues/7\n"
 	bodyFile := filepath.Join(t.TempDir(), "body.md")
-	if err := os.WriteFile(bodyFile, []byte(author), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(author), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
@@ -226,7 +226,7 @@ func TestPRTemplateRegenerationPreservesAuthorsAndClosingReferences(t *testing.T
 	// without a model rewrite. Reserved-looking headings are not ownership.
 	author := "## Overview\n\nHuman account.\n\n## Tests\n\n- [x] Maintainer approves rollout\n\nCloses https://github.com/test/repo/issues/7\n"
 	bodyFile := filepath.Join(t.TempDir(), "body.md")
-	if err := os.WriteFile(bodyFile, []byte(author), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(author), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
@@ -242,7 +242,7 @@ func TestPRTemplateRegenerationPreservesAuthorsAndClosingReferences(t *testing.T
 	// Template removal must not make an already owned PR destructive again.
 	sctx.Config.PR.Template = ""
 	later := strings.Replace(string(first), "Human account.", "Human edited account.", 1) + "\n\nFixes test/other#9\n"
-	if err := os.WriteFile(bodyFile, []byte(later), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(later), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := step.Execute(sctx); err != nil {
@@ -378,7 +378,7 @@ func TestPRTemplateIncompleteGitHubReadsNeverOverwriteAuthor(t *testing.T) {
 				sctx, ag, _ := templateTestContext(t)
 				author := "# Human description\n\n- [x] Approved\nCloses test/repo#7\n"
 				bodyFile := filepath.Join(t.TempDir(), "body.md")
-				if err := os.WriteFile(bodyFile, []byte(author), 0o644); err != nil {
+				if err := os.WriteFile(bodyFile, []byte(author), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")

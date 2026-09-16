@@ -177,7 +177,7 @@ printf '{"method":"session/update","params":{"update":{"sessionUpdate":"usage_up
 printf '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","text":"` + streamed + `"}}}\n'
 exit 1
 `
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 

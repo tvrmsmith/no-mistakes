@@ -76,7 +76,7 @@ while read old new ref; do
   fi
 done
 `
-			if err := os.WriteFile(filepath.Join(gateDir, "hooks", "reference-transaction"), []byte(hook), 0o755); err != nil {
+			if err := os.WriteFile(filepath.Join(gateDir, "hooks", "reference-transaction"), []byte(hook), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			result, err := ReconcileStaleBranch(ctx, gateDir, work, "feature", liveHead, privateHead)

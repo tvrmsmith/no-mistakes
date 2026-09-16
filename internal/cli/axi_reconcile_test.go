@@ -36,7 +36,7 @@ func TestTriggerRunRejectedPushRestoresReconciledGateRef(t *testing.T) {
 	base := cliGit(t, dir, "rev-parse", "HEAD")
 	write := func(name, content string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		cliGit(t, dir, "add", name)
@@ -56,7 +56,7 @@ func TestTriggerRunRejectedPushRestoresReconciledGateRef(t *testing.T) {
 	write("advanced.txt", "advanced\n")
 	write("feature.txt", "feature\n")
 	liveHead := cliGit(t, dir, "rev-parse", "HEAD")
-	if err := os.WriteFile(filepath.Join(gateDir, "hooks", "pre-receive"), []byte("#!/bin/sh\necho submission-rejected >&2\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(gateDir, "hooks", "pre-receive"), []byte("#!/bin/sh\necho submission-rejected >&2\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	srv := ipc.NewServer()

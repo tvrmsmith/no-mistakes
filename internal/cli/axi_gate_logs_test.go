@@ -29,10 +29,10 @@ func TestAxiLogsReadsARepositoryGateStepLog(t *testing.T) {
 	}
 	step := types.CustomGateStepName(types.StepTest, "mutation-budget")
 	logDir := p.RunLogDir(dbRun.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		t.Fatalf("mkdir log dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(logDir, string(step)+".log"), []byte("mutation score 41%\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(logDir, string(step)+".log"), []byte("mutation score 41%\n"), 0o600); err != nil {
 		t.Fatalf("write gate log: %v", err)
 	}
 
@@ -62,11 +62,11 @@ func TestAxiLogsRefusesAGateStepNameThatWouldEscapeTheLogDirectory(t *testing.T)
 		t.Fatalf("mark run running: %v", err)
 	}
 	logDir := p.RunLogDir(dbRun.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		t.Fatalf("mkdir log dir: %v", err)
 	}
 	secret := filepath.Join(filepath.Dir(filepath.Dir(logDir)), "stolen.log")
-	if err := os.WriteFile(secret, []byte("TOP-SECRET-CONTENTS\n"), 0o644); err != nil {
+	if err := os.WriteFile(secret, []byte("TOP-SECRET-CONTENTS\n"), 0o600); err != nil {
 		t.Fatalf("write out-of-tree file: %v", err)
 	}
 
@@ -96,12 +96,12 @@ func TestAxiLogsRefusesGatesOnForbiddenAnchors(t *testing.T) {
 		t.Fatalf("mark run running: %v", err)
 	}
 	logDir := p.RunLogDir(dbRun.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		t.Fatalf("mkdir log dir: %v", err)
 	}
 
 	for _, step := range []string{"gate.intent.fake", "gate.push.fake", "gate.pr.fake", "gate.ci.fake"} {
-		if err := os.WriteFile(filepath.Join(logDir, step+".log"), []byte("must not be readable\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(logDir, step+".log"), []byte("must not be readable\n"), 0o600); err != nil {
 			t.Fatalf("write forbidden gate log: %v", err)
 		}
 		var out bytes.Buffer

@@ -728,7 +728,7 @@ func TestCommitPipelineCorrection_EmptyIndexIsSuccessfulNoOp(t *testing.T) {
 func TestCommitPipelineCorrection_RealCommitFailureStillFails(t *testing.T) {
 	t.Parallel()
 	dir, _, _ := setupGitRepo(t)
-	if err := os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("staged\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("staged\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "staged.txt")
@@ -756,14 +756,14 @@ func TestCommitAgentFixes_EmptyIndexIsReportedAsNoOpNotAsACommit(t *testing.T) {
 	gitCmd(t, submodule, "init", ".")
 	gitCmd(t, submodule, "config", "user.email", "t@example.com")
 	gitCmd(t, submodule, "config", "user.name", "t")
-	if err := os.WriteFile(filepath.Join(submodule, "sub.txt"), []byte("sub\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(submodule, "sub.txt"), []byte("sub\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, submodule, "add", "-A")
 	gitCmd(t, submodule, "commit", "-m", "sub base")
 	gitCmd(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "sub")
 	gitCmd(t, dir, "commit", "-m", "add submodule")
-	if err := os.WriteFile(filepath.Join(dir, "sub", "untracked.txt"), []byte("agent scratch\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "sub", "untracked.txt"), []byte("agent scratch\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -799,14 +799,14 @@ func TestCommitAgentFixes_EmptyIndexRecordsAgentAdvancedHead(t *testing.T) {
 	gitCmd(t, submodule, "init", ".")
 	gitCmd(t, submodule, "config", "user.email", "t@example.com")
 	gitCmd(t, submodule, "config", "user.name", "t")
-	if err := os.WriteFile(filepath.Join(submodule, "sub.txt"), []byte("sub\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(submodule, "sub.txt"), []byte("sub\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, submodule, "add", "-A")
 	gitCmd(t, submodule, "commit", "-m", "sub base")
 	gitCmd(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "sub")
 	gitCmd(t, dir, "commit", "-m", "add submodule")
-	if err := os.WriteFile(filepath.Join(dir, "sub", "untracked.txt"), []byte("agent scratch\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "sub", "untracked.txt"), []byte("agent scratch\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -1221,7 +1221,7 @@ func TestCommitAgentFixes_UsesBranchIdentifier(t *testing.T) {
 		BranchPattern: `([A-Z]+-[0-9]+)`,
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "agent-change.txt"), []byte("change"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "agent-change.txt"), []byte("change"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := commitAgentFixes(sctx, types.StepReview, "repair widget", "fallback"); err != nil {
@@ -1242,7 +1242,7 @@ func TestCommitAgentFixes_MissingBranchIdentifierDoesNotStageChanges(t *testing.
 		BranchPattern: `([A-Z]+-[0-9]+)`,
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "agent-change.txt"), []byte("change"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "agent-change.txt"), []byte("change"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	err := commitAgentFixes(sctx, types.StepReview, "repair widget", "fallback")

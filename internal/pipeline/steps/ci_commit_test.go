@@ -199,7 +199,7 @@ func TestCIStep_CommitAndPush_RealCommitFailureStillFails(t *testing.T) {
 	}
 	binDir := fakeCLIBinDir(t)
 	linkTestBinary(t, binDir, "git")
-	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,7 +246,7 @@ func TestCIStep_CommitRepairUsesBranchIdentifier(t *testing.T) {
 		BranchReplacement: "PROJ-${1}",
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	repair, err := (&CIStep{}).commitRepair(sctx, "repair failing checks")

@@ -863,7 +863,7 @@ func TestPushStep_PublishesRebasedHeadWhosePatchDiffersFromSubmittedHead(t *test
 	}
 	gateDir := p.RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
-	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
@@ -873,12 +873,12 @@ func TestPushStep_PublishesRebasedHeadWhosePatchDiffersFromSubmittedHead(t *test
 	// gate still carries this run's exact submitted head, so publication must
 	// not require the rebased lineage to be patch-identical to it.
 	gitCmd(t, dir, "reset", "--hard", baseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "conflicted.txt"), []byte("upstream neighbour\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "conflicted.txt"), []byte("upstream neighbour\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base advanced under the feature")
-	if err := os.WriteFile(filepath.Join(dir, "conflicted.txt"), []byte("upstream neighbour\nresolved feature work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "conflicted.txt"), []byte("upstream neighbour\nresolved feature work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -926,7 +926,7 @@ func TestPushStep_RefusedUpstreamPushLeavesGateMirrorRefIntact(t *testing.T) {
 	}
 	gateDir := p.RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
-	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
@@ -934,7 +934,7 @@ func TestPushStep_RefusedUpstreamPushLeavesGateMirrorRefIntact(t *testing.T) {
 	// A stale private mirror head whose content the rebased head does carry, so
 	// reconciliation is genuinely planned rather than refused.
 	gitCmd(t, dir, "reset", "--hard", baseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "mirrored.txt"), []byte("mirrored work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "mirrored.txt"), []byte("mirrored work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -944,12 +944,12 @@ func TestPushStep_RefusedUpstreamPushLeavesGateMirrorRefIntact(t *testing.T) {
 
 	// The rebased head replays the same content on an advanced base.
 	gitCmd(t, dir, "reset", "--hard", baseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "advanced.txt"), []byte("base advanced\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "advanced.txt"), []byte("base advanced\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "advance base")
-	if err := os.WriteFile(filepath.Join(dir, "mirrored.txt"), []byte("mirrored work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "mirrored.txt"), []byte("mirrored work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -960,7 +960,7 @@ func TestPushStep_RefusedUpstreamPushLeavesGateMirrorRefIntact(t *testing.T) {
 	outOfBand := t.TempDir()
 	gitCmd(t, outOfBand, "clone", upstream, outOfBand)
 	gitCmd(t, outOfBand, "checkout", "feature")
-	if err := os.WriteFile(filepath.Join(outOfBand, "out-of-band.txt"), []byte("someone else's work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outOfBand, "out-of-band.txt"), []byte("someone else's work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, outOfBand, "add", "-A")
@@ -993,7 +993,7 @@ func TestPushStep_RefusesUniquePrivateMirrorCommitBeforeRemotePush(t *testing.T)
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "private-only.txt"), []byte("unique private work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "private-only.txt"), []byte("unique private work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "private-only.txt")
@@ -1001,7 +1001,7 @@ func TestPushStep_RefusesUniquePrivateMirrorCommitBeforeRemotePush(t *testing.T)
 	privateHead := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	gitCmd(t, dir, "reset", "--hard", submittedHead)
-	if err := os.WriteFile(filepath.Join(dir, "live-only.txt"), []byte("live branch work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "live-only.txt"), []byte("live branch work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "live-only.txt")
@@ -1020,7 +1020,7 @@ func TestPushStep_RefusesUniquePrivateMirrorCommitBeforeRemotePush(t *testing.T)
 	}
 	gateDir := p.RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
-	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
@@ -1266,7 +1266,7 @@ func TestPushStep_MirrorMovesAfterPlanning(t *testing.T) {
 			gitCmd(t, gateDir, "init", "--bare")
 			gitCmd(t, gateDir, "fetch", dir, submittedHead+":refs/heads/feature")
 			gitCmd(t, dir, "checkout", "--detach", baseSHA)
-			if err := os.WriteFile(filepath.Join(dir, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "reviewed.txt"), []byte("reviewed\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "add", "-A")
@@ -1320,14 +1320,14 @@ func TestPushStep_RefusesToOverwriteNewerInterveningPrivateCommit(t *testing.T) 
 	}
 	gateDir := p.RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
-	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
 
 	gitCmd(t, gateDir, "fetch", dir, "refs/heads/feature:refs/heads/feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -1335,7 +1335,7 @@ func TestPushStep_RefusesToOverwriteNewerInterveningPrivateCommit(t *testing.T) 
 	rebasedHead := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	gitCmd(t, dir, "reset", "--hard", submittedHead)
-	if err := os.WriteFile(filepath.Join(dir, "intervening.txt"), []byte("intervening\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "intervening.txt"), []byte("intervening\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -1370,7 +1370,7 @@ func TestPushStep_DetachedGateWorktreePreservesDescendantAfterEmptyIndex(t *test
 	gitCmd(t, source, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "sub")
 	gitCmd(t, source, "commit", "-m", "add submodule")
 	reviewedHead := gitCmd(t, source, "rev-parse", "HEAD")
-	if err := os.WriteFile(filepath.Join(source, "newer.txt"), []byte("newer private work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "newer.txt"), []byte("newer private work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, source, "add", "newer.txt")
@@ -1381,7 +1381,7 @@ func TestPushStep_DetachedGateWorktreePreservesDescendantAfterEmptyIndex(t *test
 	workDir := filepath.Join(t.TempDir(), "detached")
 	gitCmd(t, gateDir, "worktree", "add", "--detach", workDir, reviewedHead)
 	gitCmd(t, workDir, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
-	if err := os.WriteFile(filepath.Join(workDir, "sub", "scratch.txt"), []byte("scratch\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "sub", "scratch.txt"), []byte("scratch\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if status := gitStatusPorcelain(t, workDir); strings.TrimSpace(status) == "" {

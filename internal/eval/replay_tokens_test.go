@@ -33,7 +33,7 @@ func piReviewReply(t *testing.T, review string) string {
 func installFakePiSequence(t *testing.T, fakeDir string, replies ...string) {
 	t.Helper()
 	for i, reply := range replies {
-		if err := os.WriteFile(filepath.Join(fakeDir, fmt.Sprintf("reply-%d.jsonl", i+1)), []byte(reply), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(fakeDir, fmt.Sprintf("reply-%d.jsonl", i+1)), []byte(reply), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -45,7 +45,7 @@ n=$((n + 1))
 printf '%%s' "$n" > "$dir/calls"
 cat "$dir/reply-$n.jsonl"
 `, fakeDir)
-	if err := os.WriteFile(filepath.Join(fakeDir, "pi"), []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(fakeDir, "pi"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }
