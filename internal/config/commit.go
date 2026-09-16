@@ -89,7 +89,7 @@ func validateGlobalCommitRaw(raw GlobalCommitRaw) error {
 	if raw.BranchReplacement == nil {
 		return nil
 	}
-	if raw.CommitRaw.BranchPattern == nil {
+	if raw.BranchPattern == nil {
 		return fmt.Errorf("commit.branch_replacement requires commit.branch_pattern")
 	}
 	return validateBranchReplacement(*raw.BranchReplacement)
@@ -359,7 +359,7 @@ func fixMessagePlaceholderName(pipe *parse.PipeNode) (string, bool) {
 }
 
 func fixMessageTemplateUses(tmpl *template.Template, name string) bool {
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		if action, ok := node.(*parse.ActionNode); ok {
 			if placeholder, ok := fixMessagePlaceholderName(action.Pipe); ok && placeholder == name {
 				return true

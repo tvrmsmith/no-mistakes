@@ -74,11 +74,11 @@ func validatePRTitleFormat(format string) error {
 }
 
 func validatePRTitleTemplate(tmpl *template.Template) error {
-	if len(tmpl.Templates()) != 1 || tmpl.Tree == nil || tmpl.Tree.Root == nil {
+	if len(tmpl.Templates()) != 1 || tmpl.Tree == nil || tmpl.Root == nil {
 		return fmt.Errorf("pr.title_format supports only literal text and {{.Branch}} or {{.Title}} placeholders")
 	}
 	placeholders := 0
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		switch node := node.(type) {
 		case *parse.TextNode:
 		case *parse.ActionNode:
@@ -97,7 +97,7 @@ func validatePRTitleTemplate(tmpl *template.Template) error {
 }
 
 func prTitleTemplateUsesBranch(tmpl *template.Template) bool {
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		if action, ok := node.(*parse.ActionNode); ok && isPRTitleField(action.Pipe, "Branch") {
 			return true
 		}
