@@ -37,7 +37,7 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 			f := newCIRepairFixture(t, tc.revalidate, nil)
 			if tc.rebase {
 				gitCmd(t, f.dir, "checkout", "main")
-				if err := os.WriteFile(filepath.Join(f.dir, "feature.txt"), []byte("base change\n"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(f.dir, "feature.txt"), []byte("base change\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				gitCmd(t, f.dir, "add", "feature.txt")
@@ -51,18 +51,18 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 					if _, err := stepGitRun(f.sctx, "rebase", "main"); err == nil {
 						t.Error("fixture rebase must conflict")
 					}
-					if err := os.WriteFile(filepath.Join(f.dir, "feature.txt"), []byte("base change\nresolved feature\n"), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(f.dir, "feature.txt"), []byte("base change\nresolved feature\n"), 0o600); err != nil {
 						t.Fatal(err)
 					}
 					gitCmd(t, f.dir, "add", "feature.txt")
 					gitCmd(t, f.dir, "-c", "core.editor=true", "rebase", "--continue")
 				}
-				if err := os.WriteFile(filepath.Join(f.dir, "package.lock"), []byte("staged lock\n"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(f.dir, "package.lock"), []byte("staged lock\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				gitCmd(t, f.dir, "add", "package.lock")
 				for file, content := range map[string]string{"package.lock": "refused lock\n", "fix.go": "retained repair\n"} {
-					if err := os.WriteFile(filepath.Join(f.dir, file), []byte(content), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(f.dir, file), []byte(content), 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -94,7 +94,7 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 				gitCmd(t, f.dir, "update-ref", "HEAD", "main")
 			}
 			f.sctx.Config.Commands.Test = "git cat-file -e HEAD:fix.go"
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			green := append(fakeCIGH(t, "OPEN", `[{"name":"test","state":"SUCCESS","bucket":"pass"}]`),
 				// attestHeadBeforePush discovers the PR via FindPR before every
@@ -248,10 +248,11 @@ func TestCIStep_ProtectedPathRetryFinishesRetainedRepairWithGreenChecks(t *testi
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			calls := 0
-			f := newCIRepairFixture(t, revalidate, func(dir string) {
+			f := newCIRepairFixture(t, revalidate, func(t *testing.T, dir string) {
+				t.Helper()
 				calls++
 				for file, content := range map[string]string{"package.lock": "refused\n", "fix.go": "retained repair\n"} {
-					if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -304,9 +305,10 @@ func TestCIStep_ProtectedPathRetryFinishesRetainedRepairWithGreenChecks(t *testi
 
 func TestCIStep_ProtectedPathRetryPublicationFailureKeepsRefusal(t *testing.T) {
 	t.Parallel()
-	f := newCIRepairFixture(t, false, func(dir string) {
+	f := newCIRepairFixture(t, false, func(t *testing.T, dir string) {
+		t.Helper()
 		for file, content := range map[string]string{"package.lock": "refused\n", "fix.go": "retained repair\n"} {
-			if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -327,7 +329,7 @@ func TestCIStep_ProtectedPathRetryPublicationFailureKeepsRefusal(t *testing.T) {
 	hooks := t.TempDir()
 	gitCmd(t, f.upstream, "config", "core.hooksPath", hooks)
 	rejectPush := filepath.Join(hooks, "pre-receive")
-	if err := os.WriteFile(rejectPush, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(rejectPush, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	outcome, err = f.run(t)
@@ -378,13 +380,13 @@ func TestCIStep_ProtectedPathRefusalStopsAutomaticAndManualRepair(t *testing.T) 
 			var indexBefore string
 			ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
 				invocations++
-				if err := os.WriteFile(filepath.Join(dir, "package.lock"), []byte("staged lock\n"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "package.lock"), []byte("staged lock\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				gitCmd(t, dir, "add", "package.lock")
 				indexBefore = gitCmd(t, dir, "diff", "--cached")
 				for file, content := range map[string]string{"package.lock": "rejected edit\n", "fix.txt": "CI repair\n"} {
-					if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -451,7 +453,7 @@ func TestTestStep_FixMode_ProtectedPathDoesNotReachCommit(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, _ := setupGitRepo(t)
 	const ledger = "generated-ledger.json"
-	if err := os.WriteFile(filepath.Join(dir, ledger), []byte("original\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ledger), []byte("original\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", ledger)
@@ -459,7 +461,7 @@ func TestTestStep_FixMode_ProtectedPathDoesNotReachCommit(t *testing.T) {
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
 		for file, content := range map[string]string{ledger: "unrelated agent edit\n", "fix.txt": "test repair\n"} {
-			if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -515,7 +517,7 @@ func TestProtectedPaths_AllAutomaticCommitPathsRefuseWithoutMutation(t *testing.
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			sctx := newTestContextWithDBRecords(t, &mockAgent{}, dir, baseSHA, headSHA, config.Commands{})
 			sctx.Config.ProtectedPaths = []string{"feature.txt"}
-			if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("unrelated residue"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("unrelated residue"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "add", "feature.txt")
@@ -565,10 +567,10 @@ func TestProtectedPaths_Staging(t *testing.T) {
 			file := filepath.Join(dir, filepath.FromSlash(tc.file))
 			switch tc.edit {
 			case "write":
-				if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				if err := os.MkdirAll(filepath.Dir(file), 0o750); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(file, []byte("agent edit"), 0o644); err != nil {
+				if err := os.WriteFile(file, []byte("agent edit"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			case "delete":

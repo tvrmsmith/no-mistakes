@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -9,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	_ "modernc.org/sqlite"
 )
 
@@ -19,12 +19,12 @@ func buildCodexFixture(t *testing.T, cwd string) (homeDir, rolloutPath string) {
 	t.Helper()
 	homeDir = t.TempDir()
 	codexDir := filepath.Join(homeDir, ".codex")
-	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+	if err := os.MkdirAll(codexDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
 	rolloutPath = filepath.Join(codexDir, "sessions", "2026", "04", "rollout-thread-1.jsonl")
-	if err := os.MkdirAll(filepath.Dir(rolloutPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(rolloutPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	rollout := strings.Join([]string{
@@ -39,7 +39,7 @@ func buildCodexFixture(t *testing.T, cwd string) (homeDir, rolloutPath string) {
 		// Non-content envelope - should be skipped.
 		`{"type":"turn_context","payload":{}}`,
 	}, "\n")
-	if err := os.WriteFile(rolloutPath, []byte(rollout), 0o644); err != nil {
+	if err := os.WriteFile(rolloutPath, []byte(rollout), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,7 +48,7 @@ func buildCodexFixture(t *testing.T, cwd string) (homeDir, rolloutPath string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer closers.Quiet(db)
 	if _, err := db.Exec(`CREATE TABLE threads (
 		id TEXT PRIMARY KEY,
 		cwd TEXT NOT NULL,
@@ -73,7 +73,7 @@ func TestCodexReader_ParsesAllTurnsFromRollout(t *testing.T) {
 	home, _ := buildCodexFixture(t, repoCWD)
 
 	r := NewCodexReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -90,7 +90,7 @@ func TestCodexReader_ParsesAllTurnsFromRollout(t *testing.T) {
 		t.Errorf("Discover should not populate Messages, got %d", len(s.Messages))
 	}
 
-	if err := r.Load(context.Background(), s); err != nil {
+	if err := r.Load(t.Context(), s); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	// Expect: user(event_msg) + assistant(text) + assistant(tool_call paths only) + user(response_item)
@@ -128,7 +128,7 @@ func TestCodexReader_ParsesAllTurnsFromRollout(t *testing.T) {
 func TestCodexReader_FiltersByCWD(t *testing.T) {
 	home, _ := buildCodexFixture(t, "/some/other/path")
 	r := NewCodexReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   "/different",
 		WindowStart: time.Now().Add(-time.Hour),
@@ -144,7 +144,7 @@ func TestCodexReader_FiltersByCWD(t *testing.T) {
 
 func TestCodexReader_NoStateDB(t *testing.T) {
 	r := NewCodexReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: t.TempDir()})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestCodexReader_MissingRollout(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewCodexReader()
-	sessions, _ := r.Discover(context.Background(), DiscoverOpts{
+	sessions, _ := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -170,7 +170,7 @@ func TestCodexReader_MissingRollout(t *testing.T) {
 		t.Fatalf("got %d sessions, want 1", len(sessions))
 	}
 	// Load must error gracefully when the rollout is gone, not panic.
-	if err := r.Load(context.Background(), sessions[0]); err == nil {
+	if err := r.Load(t.Context(), sessions[0]); err == nil {
 		t.Error("expected error when rollout missing")
 	}
 }
@@ -178,7 +178,7 @@ func TestCodexReader_MissingRollout(t *testing.T) {
 func TestResolveCodexStateDB_PicksHighestVersion(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"state_4.sqlite", "state_5.sqlite", "state_6.sqlite", "unrelated.sqlite"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -197,7 +197,7 @@ func TestResolveCodexStateDB_PicksHighestVersion(t *testing.T) {
 func TestResolveCodexStateDB_NumericSortPastNine(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"state_9.sqlite", "state_10.sqlite", "state_11.sqlite", "state_5.sqlite"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -214,7 +214,7 @@ func TestResolveCodexStateDB_NumericSortPastNine(t *testing.T) {
 func TestResolveCodexStateDB_IgnoresNonNumericSuffix(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"state_5.sqlite", "state_backup.sqlite"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte{}, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
@@ -67,7 +68,7 @@ func (a *grokAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error) 
 		return nil, fmt.Errorf("grok prompt temp file: %w", err)
 	}
 	promptPath := promptFile.Name()
-	defer os.Remove(promptPath)
+	defer scratch.Remove(promptPath)
 	if _, err := promptFile.WriteString(opts.Prompt); err != nil {
 		_ = promptFile.Close()
 		return nil, fmt.Errorf("grok prompt temp file write: %w", err)

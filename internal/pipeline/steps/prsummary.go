@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -645,17 +646,18 @@ func renderTestingArtifact(artifact types.TestArtifact, opts testingSummaryOptio
 	}
 
 	var b strings.Builder
-	if target != "" && isImageArtifact(artifact.Kind, target) {
-		b.WriteString(fmt.Sprintf("**%s**\n\n![%s](%s)\n", html.EscapeString(label), markdownAltText(label), target))
-	} else if target != "" && isVideoArtifact(artifact.Kind, target) {
+	switch {
+	case target != "" && isImageArtifact(artifact.Kind, target):
+		fmt.Fprintf(&b, "**%s**\n\n![%s](%s)\n", html.EscapeString(label), markdownAltText(label), target)
+	case target != "" && isVideoArtifact(artifact.Kind, target):
 		if opts.flavor == prBodyMarkdown {
-			b.WriteString(fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target))
+			fmt.Fprintf(&b, "- Evidence: [%s](%s)\n", html.EscapeString(label), target)
 		} else {
-			b.WriteString(fmt.Sprintf("**%s**\n\n<video src=\"%s\" controls></video>\n", html.EscapeString(label), html.EscapeString(target)))
+			fmt.Fprintf(&b, "**%s**\n\n<video src=\"%s\" controls></video>\n", html.EscapeString(label), html.EscapeString(target))
 		}
-	} else if !hasFile {
+	case !hasFile:
 		if target != "" {
-			b.WriteString(fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target))
+			fmt.Fprintf(&b, "- Evidence: [%s](%s)\n", html.EscapeString(label), target)
 		} else if localPath != "" {
 			b.WriteString(renderLocalArtifactLine(label, localPath, opts.flavor))
 		}
@@ -671,7 +673,7 @@ func renderTestingArtifact(artifact types.TestArtifact, opts testingSummaryOptio
 		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n\n") {
 			b.WriteString("\n")
 		}
-		b.WriteString(fmt.Sprintf("**%s**\n\n```text\n%s\n```\n", html.EscapeString(label), escapeMarkdownFence(escapePipelineFoldMarkers(fenceBody))))
+		fmt.Fprintf(&b, "**%s**\n\n```text\n%s\n```\n", html.EscapeString(label), escapeMarkdownFence(escapePipelineFoldMarkers(fenceBody)))
 	}
 	return strings.TrimRight(b.String(), "\n") + "\n"
 }
@@ -697,7 +699,7 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 			var b strings.Builder
 			b.WriteString(renderAttachmentMarkdown(artifact, attachment, label))
 			if target != "" {
-				b.WriteString(fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target))
+				fmt.Fprintf(&b, "- Evidence: [%s](%s)\n", html.EscapeString(label), target)
 			}
 			return b.String()
 		}
@@ -714,7 +716,7 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 
 	var inner strings.Builder
 	if target != "" {
-		inner.WriteString(fmt.Sprintf("Source: [%s](%s)\n\n", html.EscapeString(label), target))
+		fmt.Fprintf(&inner, "Source: [%s](%s)\n\n", html.EscapeString(label), target)
 	} else if attachment == "" && !hasFile && localPath != "" {
 		inner.WriteString(renderLocalArtifactReference("Source", label, localPath, opts.flavor))
 		inner.WriteString("\n")
@@ -723,7 +725,7 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 		inner.WriteString(renderTestedDetailFor(descriptionLine, opts.flavor))
 		inner.WriteString("\n\n")
 	}
-	inner.WriteString(fmt.Sprintf("```text\n%s\n```\n", escapeMarkdownFence(escapePipelineFoldMarkers(fenceBody))))
+	fmt.Fprintf(&inner, "```text\n%s\n```\n", escapeMarkdownFence(escapePipelineFoldMarkers(fenceBody)))
 	folded := foldPRBlock("Evidence: "+html.EscapeString(label), inner.String(), opts.flavor)
 	if attachment == "" {
 		return folded
@@ -814,7 +816,7 @@ func readEmbeddedArtifactText(fsPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer closers.Quiet(file)
 
 	headSize := maxEmbeddedArtifactBytes / 2
 	tailSize := maxEmbeddedArtifactBytes - headSize
@@ -1412,7 +1414,7 @@ func buildStepDetails(summaryLine string, sr *db.StepResult, rounds []*db.StepRo
 		// A fix round that still has findings means the fix did not fully
 		// land; label what remained so the chain reads as fix -> still open.
 		if isFixRound {
-			inner.WriteString(fmt.Sprintf("%s still open:\n\n", countFindingsBySeverity(&findings)))
+			fmt.Fprintf(&inner, "%s still open:\n\n", countFindingsBySeverity(&findings))
 		}
 		writeFindingItems(&inner, sr, &findings, flavor)
 		inner.WriteString("\n")
@@ -1431,7 +1433,7 @@ func foldPRBlock(summaryLine, inner string, flavor prBodyFlavor) string {
 	}
 	var b strings.Builder
 	b.WriteString("<details>\n")
-	b.WriteString(fmt.Sprintf("<summary>%s</summary>\n\n", summaryLine))
+	fmt.Fprintf(&b, "<summary>%s</summary>\n\n", summaryLine)
 	if inner != "" {
 		b.WriteString(inner)
 		if !strings.HasSuffix(inner, "\n") {
@@ -1501,7 +1503,7 @@ func writeFindingItems(b *strings.Builder, sr *db.StepResult, findings *types.Fi
 			}
 			loc += "` - "
 		}
-		b.WriteString(fmt.Sprintf("- %s %s%s\n", emoji, loc, escapePRText(f.Description, flavor)))
+		fmt.Fprintf(b, "- %s %s%s\n", emoji, loc, escapePRText(f.Description, flavor))
 	}
 	writeTestedDetails(b, sr, findings, flavor)
 }
@@ -1533,7 +1535,7 @@ func writeTestedDetails(b *strings.Builder, sr *db.StepResult, findings *types.F
 		if rendered == "" {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("- %s\n", rendered))
+		fmt.Fprintf(b, "- %s\n", rendered)
 	}
 }
 

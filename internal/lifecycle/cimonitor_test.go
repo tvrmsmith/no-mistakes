@@ -147,7 +147,7 @@ func TestExemptFromGuard_ACIMonitorWithUncommittedWorkIsNotPreserved(t *testing.
 	p := paths.WithRoot(t.TempDir())
 	plan := lifecycletest.Plan(types.StepReview, types.StepPush, types.StepCI)
 	monitor := lifecycletest.SeedResumableCIMonitorRun(t, p, "/tmp/project", "feature", "https://github.com/o/r/pull/7", plan)
-	if err := os.WriteFile(filepath.Join(monitor.WorkDir, "half-written.go"), []byte("package broken\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(monitor.WorkDir, "half-written.go"), []byte("package broken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +170,7 @@ func TestExemptFromGuard_AGateParkedRunWithUncommittedWorkIsStillPreserved(t *te
 	p := paths.WithRoot(t.TempDir())
 	plan := lifecycletest.Plan(types.StepReview, types.StepTest)
 	parked := lifecycletest.SeedResumableParkedRun(t, p, "/tmp/project", "feature", plan)
-	if err := os.WriteFile(filepath.Join(parked.WorkDir, "pending.go"), []byte("package pending\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(parked.WorkDir, "pending.go"), []byte("package pending\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

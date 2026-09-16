@@ -17,7 +17,7 @@ import (
 func TestRun_TrimsOutputWithLifecycleAwareRunner(t *testing.T) {
 	installFakeGit(t, `printf '  normal output  \n'`)
 
-	out, err := Run(context.Background(), t.TempDir(), "status")
+	out, err := Run(t.Context(), t.TempDir(), "status")
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -29,7 +29,7 @@ func TestRun_TrimsOutputWithLifecycleAwareRunner(t *testing.T) {
 func TestRun_PreservesStderrWithLifecycleAwareRunner(t *testing.T) {
 	installFakeGit(t, `printf 'fetch failed\n' >&2; exit 2`)
 
-	_, err := Run(context.Background(), t.TempDir(), "fetch")
+	_, err := Run(t.Context(), t.TempDir(), "fetch")
 	if err == nil {
 		t.Fatal("Run() error = nil, want fake git failure")
 	}
@@ -56,7 +56,7 @@ printf 'ready\n' > "$NM_GIT_TEST_READY_FILE"
 wait "$descendant"
 `)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	result := make(chan error, 1)
 	go func() {
 		_, err := Run(ctx, dir, "fetch", "origin", "main")
@@ -89,7 +89,7 @@ func installFakeGit(t *testing.T, body string) {
 	binDir := t.TempDir()
 	gitPath := filepath.Join(binDir, "git")
 	script := "#!/bin/sh\n" + body + "\n"
-	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(gitPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

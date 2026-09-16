@@ -14,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 )
 
 // outputJSON runs cmd and returns its stdout alone, leaving stderr out of the
@@ -260,9 +262,9 @@ func (h *Host) runWithDescription(ctx context.Context, body string, buildArgs fu
 		return nil, fmt.Errorf("create PR description temp file: %w", err)
 	}
 	path := f.Name()
-	defer os.Remove(path)
+	defer scratch.Remove(path)
 	if _, err := f.WriteString(clampDescription(body)); err != nil {
-		f.Close()
+		closers.Quiet(f)
 		return nil, fmt.Errorf("write PR description temp file: %w", err)
 	}
 	if err := f.Close(); err != nil {

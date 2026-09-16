@@ -150,7 +150,8 @@ func TestPRStep_UsesResolvedForgeProviderForSelfHostedRemote(t *testing.T) {
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
-	sctx.Env = append(env, "GH_TOKEN="+credentialSentinel)
+	env = append(env, "GH_TOKEN="+credentialSentinel)
+	sctx.Env = env
 	sctx.Repo.UpstreamURL = "git@work-code:test/repo.git"
 	sctx.ForgeContext = &forgecontext.Context{
 		Provider: scm.ProviderGitHub,
@@ -257,10 +258,10 @@ func TestPRStep_BitbucketUpdatesExistingPRWithoutHTMLLink(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pullrequests":
 			api.listCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"values":[{"id":%d,"links":{"html":{"href":%q}}}]}`,
+			writeStub(t, w, fmt.Sprintf(`{"values":[{"id":%d,"links":{"html":{"href":%q}}}]}`,
 				api.existingPRID,
 				api.existingPRURL,
-			)
+			))
 		case r.Method == http.MethodPut && r.URL.Path == fmt.Sprintf("/2.0/repositories/test/repo/pullrequests/%d", api.existingPRID):
 			api.updateCalls++
 			body, err := io.ReadAll(r.Body)
@@ -269,9 +270,9 @@ func TestPRStep_BitbucketUpdatesExistingPRWithoutHTMLLink(t *testing.T) {
 			}
 			api.lastUpdateBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"id":%d}`,
+			writeStub(t, w, fmt.Sprintf(`{"id":%d}`,
 				api.existingPRID,
-			)
+			))
 		default:
 			t.Fatalf("unexpected Bitbucket PR API request: %s %s", r.Method, r.URL.String())
 		}
@@ -315,12 +316,12 @@ func TestPRStep_ZeroBaseSHA(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base"), 0o644)
+	writeFile(t, filepath.Join(dir, "base.txt"), "base")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "add feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -528,7 +529,7 @@ func TestPRStep_GitHubForkCreatesParentPRWithForkHead(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	profileDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    user: fork-user\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    user: fork-user\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -546,7 +547,7 @@ func TestPRStep_GitHubForkCreatesParentPRWithForkHead(t *testing.T) {
 	sctx.Repo.ForkURL = "https://github.com/fork-owner/no-mistakes.git"
 	sctx.Config.PR.BaseBranch = "develop"
 	sctx.Run.Branch = "refs/heads/feature"
-	forgeCtx, err := forgecontext.Resolve(context.Background(), config.ForgeProfiles{
+	forgeCtx, err := forgecontext.Resolve(t.Context(), config.ForgeProfiles{
 		"github.com": {GHConfigDir: profileDir},
 	}, sctx.Repo.UpstreamURL, sctx.Repo.ForkURL)
 	if err != nil {
@@ -669,7 +670,7 @@ func TestPRStep_BitbucketCreatesNewPRWithoutHTMLLink(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pullrequests":
 			api.listCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"values":[]}`)
+			writeStub(t, w, `{"values":[]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/2.0/repositories/test/repo/pullrequests":
 			api.createCalls++
 			body, err := io.ReadAll(r.Body)
@@ -679,7 +680,7 @@ func TestPRStep_BitbucketCreatesNewPRWithoutHTMLLink(t *testing.T) {
 			api.lastCreateBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprint(w, `{"id":99}`)
+			writeStub(t, w, `{"id":99}`)
 		default:
 			t.Fatalf("unexpected Bitbucket PR API request: %s %s", r.Method, r.URL.String())
 		}
@@ -939,6 +940,7 @@ func TestUnwrapNestedPRBody(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := unwrapNestedPRBody(tt.body)
 			if got != tt.want {
 				t.Errorf("unwrapNestedPRBody(%q) = %q, want %q", tt.body, got, tt.want)
@@ -2097,17 +2099,17 @@ func TestPRStep_ExistingBranchFallbackUsesMergeBaseFinalDiff(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "base.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "first.txt"), []byte("first\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "first.txt"), "first\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "first feature commit")
 	oldRemoteSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
-	os.WriteFile(filepath.Join(dir, "second.txt"), []byte("second\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "second.txt"), "second\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "second feature commit")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -44,16 +45,16 @@ func TestStreamHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	// First, verify we get the initial OK response via Call.
 	// Actually, Call reads exactly one line as response, so let's use
 	// the Subscribe pattern manually with a raw connection.
-	conn.Close()
+	closers.Quiet(conn)
 
 	// Use raw connection to test streaming.
 	rawConn := rawDial(t, sock)
-	defer rawConn.Close()
+	defer closers.Quiet(rawConn)
 
 	encoder := json.NewEncoder(rawConn)
 	scanner := bufio.NewScanner(rawConn)
@@ -103,7 +104,7 @@ func TestStreamAcknowledgesOnlyAfterPreparation(t *testing.T) {
 	})
 
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 	req, _ := ipc.NewRequest("stream_test", nil)
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		t.Fatal(err)
@@ -179,7 +180,7 @@ func TestStreamRequestsLogAtInfo(t *testing.T) {
 	defer slog.SetDefault(prev)
 
 	rawConn := rawDial(t, sock)
-	defer rawConn.Close()
+	defer closers.Quiet(rawConn)
 
 	encoder := json.NewEncoder(rawConn)
 	scanner := bufio.NewScanner(rawConn)
@@ -223,7 +224,7 @@ func TestStreamHandlerAndRegularCoexist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	var result map[string]string
 	if err := c.Call("echo", nil, &result); err != nil {

@@ -1,7 +1,6 @@
 package git
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,7 +8,7 @@ import (
 
 func TestDiff(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// get initial commit SHA
 	base := run(t, dir, "git", "rev-parse", "HEAD")
@@ -34,7 +33,7 @@ func TestDiff(t *testing.T) {
 
 func TestDiffNameOnly(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	base := run(t, dir, "git", "rev-parse", "HEAD")
 	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
@@ -60,7 +59,7 @@ func TestDiffNameOnly(t *testing.T) {
 
 func TestCommitTime(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	head := run(t, dir, "git", "rev-parse", "HEAD")
 
 	ts, err := CommitTime(ctx, dir, head)
@@ -74,7 +73,7 @@ func TestCommitTime(t *testing.T) {
 
 func TestCommitAuthorEmail(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	head := run(t, dir, "git", "rev-parse", "HEAD")
 
 	email, err := CommitAuthorEmail(ctx, dir, head)
@@ -88,7 +87,7 @@ func TestCommitAuthorEmail(t *testing.T) {
 
 func TestDiffEmpty(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	head := run(t, dir, "git", "rev-parse", "HEAD")
 
 	diff, err := Diff(ctx, dir, head, head)
@@ -102,7 +101,7 @@ func TestDiffEmpty(t *testing.T) {
 
 func TestDiffAgainstEmptyTree(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	head := run(t, dir, "git", "rev-parse", "HEAD")
 	const emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -120,7 +119,7 @@ func TestDiffAgainstEmptyTree(t *testing.T) {
 
 func TestDiffHead(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// No changes — should be empty
 	diff, err := DiffHead(ctx, dir)
@@ -150,7 +149,7 @@ func TestDiffHead(t *testing.T) {
 
 func TestDiffHead_StagedChanges(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Staged but uncommitted changes
 	writeFile(t, filepath.Join(dir, "staged.txt"), "staged content\n")
@@ -170,7 +169,7 @@ func TestDiffHead_StagedChanges(t *testing.T) {
 
 func TestLog(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	base := run(t, dir, "git", "rev-parse", "HEAD")
 
@@ -198,7 +197,7 @@ func TestLog(t *testing.T) {
 
 func TestLogAgainstEmptyTree(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	head := run(t, dir, "git", "rev-parse", "HEAD")
 	const emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -213,7 +212,7 @@ func TestLogAgainstEmptyTree(t *testing.T) {
 
 func TestHeadSHA(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	sha, err := HeadSHA(ctx, dir)
 	if err != nil {

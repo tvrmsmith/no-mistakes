@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -23,7 +24,7 @@ const testCIPRURL = "https://github.com/test/repo/pull/7"
 // headSHAOf reports the commit a test worktree is sitting on.
 func headSHAOf(t *testing.T, dir string) string {
 	t.Helper()
-	head, err := git.HeadSHA(context.Background(), dir)
+	head, err := git.HeadSHA(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +288,7 @@ func TestExecutor_ResumeOfAGateWithNoParkMarkerIsRejectedRatherThanPanicking(t *
 	}
 
 	exec := NewExecutor(database, p, nil, nil, plan, nil)
-	err := exec.Resume(context.Background(), recovered, repo, t.TempDir())
+	err := exec.Resume(t.Context(), recovered, repo, t.TempDir())
 	if err == nil {
 		t.Fatal("Resume() = nil error for a markerless gate, want an error")
 	}
@@ -392,7 +393,7 @@ func TestExecutor_ResumedCIMonitorCanRestartThePipeline(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, plan, nil)
-	if err := exec.Resume(context.Background(), mustGetRun(t, database, run.ID), repo, t.TempDir()); err != nil {
+	if err := exec.Resume(t.Context(), mustGetRun(t, database, run.ID), repo, t.TempDir()); err != nil {
 		t.Fatalf("Resume() error = %v, want nil", err)
 	}
 
@@ -422,7 +423,7 @@ func TestExecutor_ResumedCIMonitorThatEndsRedFailsTheRun(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, plan, nil)
-	if err := exec.Resume(context.Background(), mustGetRun(t, database, run.ID), repo, t.TempDir()); err == nil {
+	if err := exec.Resume(t.Context(), mustGetRun(t, database, run.ID), repo, t.TempDir()); err == nil {
 		t.Fatal("Resume() = nil error for a red CI monitor, want the failure")
 	}
 
@@ -499,7 +500,7 @@ func TestExecutor_ResumeReentersCIMonitoringForTheSamePR(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, plan, nil)
-	if err := exec.Resume(context.Background(), mustGetRun(t, database, run.ID), repo, workDir); err != nil {
+	if err := exec.Resume(t.Context(), mustGetRun(t, database, run.ID), repo, workDir); err != nil {
 		t.Fatalf("Resume() error = %v, want nil", err)
 	}
 
@@ -532,7 +533,7 @@ func TestExecutor_ResumeOfACIMonitorDoesNotDereferenceTheParkMarker(t *testing.T
 	}
 
 	exec := NewExecutor(database, p, nil, nil, plan, nil)
-	if err := exec.Resume(context.Background(), recovered, repo, workDir); err != nil {
+	if err := exec.Resume(t.Context(), recovered, repo, workDir); err != nil {
 		t.Fatalf("Resume() error = %v, want nil", err)
 	}
 }
@@ -547,7 +548,7 @@ func backdateStepStart(t *testing.T, p *paths.Paths, stepID string, elapsed time
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer raw.Close()
+	defer closers.Quiet(raw)
 	started := time.Now().Add(-elapsed).Unix()
 	if _, err := raw.Exec(`UPDATE step_results SET started_at = ? WHERE id = ?`, started, stepID); err != nil {
 		t.Fatal(err)
@@ -567,7 +568,7 @@ func TestExecutor_ResumedCIMonitorKeepsItsEarlierElapsedTime(t *testing.T) {
 	backdateStepStart(t, p, rows[1].ID, alreadyMonitored)
 
 	exec := NewExecutor(database, p, nil, nil, plan, nil)
-	if err := exec.Resume(context.Background(), mustGetRun(t, database, run.ID), repo, workDir); err != nil {
+	if err := exec.Resume(t.Context(), mustGetRun(t, database, run.ID), repo, workDir); err != nil {
 		t.Fatalf("Resume() error = %v, want nil", err)
 	}
 
@@ -617,7 +618,7 @@ func runCancelledCIStep(t *testing.T, cause error, before func(sctx *StepContext
 	}
 	exec := NewExecutor(database, p, nil, nil, []Step{ciStep}, nil)
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Execute(ctx, run, repo, workDir)
@@ -694,7 +695,7 @@ func TestExecutor_CleanShutdownDoesNotPreserveACIStepHoldingAnAgentPID(t *testin
 // git add -A commit those edits under a message describing a different repair.
 func TestExecutor_CleanShutdownDoesNotPreserveACIStepWithUncommittedRepairWork(t *testing.T) {
 	database, ciRow, err := runCancelledCIStep(t, ErrDaemonShutdown, func(sctx *StepContext) {
-		if wErr := os.WriteFile(filepath.Join(sctx.WorkDir, "half-written.go"), []byte("package broken\n"), 0o644); wErr != nil {
+		if wErr := os.WriteFile(filepath.Join(sctx.WorkDir, "half-written.go"), []byte("package broken\n"), 0o600); wErr != nil {
 			t.Error(wErr)
 		}
 	})
@@ -890,7 +891,7 @@ func deleteRunRow(t *testing.T, p *paths.Paths, runID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer raw.Close()
+	defer closers.Quiet(raw)
 	if _, err := raw.Exec(`DELETE FROM runs WHERE id = ?`, runID); err != nil {
 		t.Fatal(err)
 	}

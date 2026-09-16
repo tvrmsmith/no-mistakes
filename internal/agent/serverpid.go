@@ -89,7 +89,7 @@ func writeServerPIDFile(dir string, info ServerPIDInfo) string {
 	if dir == "" {
 		return ""
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		slog.Warn("create server pid dir", "dir", dir, "error", err)
 		return ""
 	}

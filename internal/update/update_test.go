@@ -2,7 +2,6 @@ package update
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -15,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/lifecycle/lifecycletest"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -53,9 +53,9 @@ func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
 				if r.URL.Path != "/releases/download/channels/channels.json" {
 					t.Fatalf("unexpected path %q", r.URL.Path)
 				}
-				fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}}`,
+				writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}}`,
 					tt.archiveName,
-				)
+				))
 			}))
 			defer server.Close()
 
@@ -70,7 +70,7 @@ func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
 				now:            func() time.Time { return time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC) },
 			}
 
-			plan, err := u.checkLatest(context.Background())
+			plan, err := u.checkLatest(t.Context())
 			if err != nil {
 				t.Fatalf("checkLatest error = %v", err)
 			}
@@ -87,7 +87,7 @@ func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
 				t.Fatalf("Archive.Name = %q, want %q", plan.Archive.Name, tt.archiveName)
 			}
 
-			if err := u.refreshCache(context.Background()); err != nil {
+			if err := u.refreshCache(t.Context()); err != nil {
 				t.Fatalf("refreshCache error = %v", err)
 			}
 			cache := readCache(cachePath)
@@ -113,15 +113,15 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/releases/download/channels/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			if strings.Contains(r.URL.Path, "/repos/") {
 				t.Fatalf("update download path must not call the GitHub REST API, got %q", r.URL.Path)
@@ -132,7 +132,7 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 	defer server.Close()
 
 	execPath := filepath.Join(t.TempDir(), "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -148,7 +148,7 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 		now:            func() time.Time { return time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC) },
 	}
 
-	if err := u.run(context.Background()); err != nil {
+	if err := u.run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	content, err := os.ReadFile(execPath)
@@ -178,15 +178,15 @@ func TestUpdaterRunResetsDaemonAfterUpdate(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -194,7 +194,7 @@ func TestUpdaterRunResetsDaemonAfterUpdate(t *testing.T) {
 	defer server.Close()
 
 	execPath := filepath.Join(t.TempDir(), "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -213,7 +213,7 @@ func TestUpdaterRunResetsDaemonAfterUpdate(t *testing.T) {
 		},
 	}
 
-	if err := u.run(context.Background()); err != nil {
+	if err := u.run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	if !resetCalled {
@@ -236,15 +236,15 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -279,7 +279,7 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 	}
 
 	execPath := filepath.Join(t.TempDir(), "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -304,7 +304,7 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 		paths: p,
 	}
 
-	err = u.run(context.Background())
+	err = u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when active run warning is rejected")
 	}
@@ -507,19 +507,19 @@ func TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
 			if archiveBroken {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -528,7 +528,7 @@ func TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts(t *testing.T) {
 
 	newUpdater := func(stderr *bytes.Buffer, restarted *bool) *updater {
 		execPath := filepath.Join(t.TempDir(), "no-mistakes")
-		if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+		if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return &updater{
@@ -552,7 +552,7 @@ func TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts(t *testing.T) {
 
 	failedStderr := new(bytes.Buffer)
 	failedRestart := false
-	if err := newUpdater(failedStderr, &failedRestart).run(context.Background()); err == nil {
+	if err := newUpdater(failedStderr, &failedRestart).run(t.Context()); err == nil {
 		t.Fatal("run should fail when the archive download fails")
 	}
 	if failedRestart {
@@ -565,7 +565,7 @@ func TestUpdaterPromisesPreservationOnlyAfterTheDaemonRestarts(t *testing.T) {
 	archiveBroken = false
 	okStderr := new(bytes.Buffer)
 	okRestart := false
-	if err := newUpdater(okStderr, &okRestart).run(context.Background()); err != nil {
+	if err := newUpdater(okStderr, &okRestart).run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	if !okRestart {
@@ -616,11 +616,11 @@ func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
 			// The operator answered the gate while the download ran, so the
 			// run is complete by the time the daemon is actually reset.
@@ -629,13 +629,13 @@ func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
 				t.Errorf("open db during download: %v", err)
 				return
 			}
-			defer live.Close()
+			defer closers.Quiet(live)
 			if err := live.UpdateRunStatus(parked.ID, types.RunCompleted); err != nil {
 				t.Errorf("complete run during download: %v", err)
 			}
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -643,7 +643,7 @@ func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
 	defer server.Close()
 
 	execPath := filepath.Join(t.TempDir(), "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	stderr := new(bytes.Buffer)
@@ -665,7 +665,7 @@ func TestUpdaterPreservationNoticeDescribesTheStateAtRestart(t *testing.T) {
 			return nil
 		},
 	}
-	if err := u.run(context.Background()); err != nil {
+	if err := u.run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	if !restarted {
@@ -691,15 +691,15 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -707,7 +707,7 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 	defer server.Close()
 
 	execPath := filepath.Join(t.TempDir(), "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -728,7 +728,7 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 		},
 	}
 
-	err := u.run(context.Background())
+	err := u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when daemon reset fails")
 	}
@@ -765,15 +765,15 @@ func TestUpdaterRunFailsWhenDaemonResetLeavesDaemonOffline(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -781,7 +781,7 @@ func TestUpdaterRunFailsWhenDaemonResetLeavesDaemonOffline(t *testing.T) {
 	defer server.Close()
 
 	execPath := filepath.Join(t.TempDir(), "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -800,7 +800,7 @@ func TestUpdaterRunFailsWhenDaemonResetLeavesDaemonOffline(t *testing.T) {
 		},
 	}
 
-	err := u.run(context.Background())
+	err := u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when daemon reset leaves daemon offline")
 	}
@@ -834,15 +834,15 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -851,11 +851,11 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 
 	execDir := t.TempDir()
 	execPath := filepath.Join(execDir, "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	otherExecPath := filepath.Join(execDir, "other-no-mistakes")
-	if err := os.WriteFile(otherExecPath, []byte("other-binary"), 0o755); err != nil {
+	if err := os.WriteFile(otherExecPath, []byte("other-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -891,7 +891,7 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 		paths: paths.WithRoot(t.TempDir()),
 	}
 
-	err := u.run(context.Background())
+	err := u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when daemon uses a different executable")
 	}
@@ -928,15 +928,15 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -964,11 +964,11 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			execDir := t.TempDir()
 			execPath := filepath.Join(execDir, "no-mistakes")
-			if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+			if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			otherExecPath := filepath.Join(execDir, "other-no-mistakes")
-			if err := os.WriteFile(otherExecPath, []byte("other-binary"), 0o755); err != nil {
+			if err := os.WriteFile(otherExecPath, []byte("other-binary"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1001,7 +1001,7 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 				assumeYes: tt.assumeYes,
 			}
 
-			if err := u.run(context.Background()); err != nil {
+			if err := u.run(t.Context()); err != nil {
 				t.Fatalf("run error = %v", err)
 			}
 			if !resetCalled {
@@ -1043,15 +1043,15 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
+			writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}}`,
 				archiveName,
 				server.URL+"/archive",
 				server.URL+"/checksums",
-			)
+			))
 		case "/archive":
-			w.Write(archive)
+			writeStub(t, w, string(archive))
 		case "/checksums":
-			fmt.Fprint(w, checksums)
+			writeStub(t, w, checksums)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -1060,7 +1060,7 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 
 	execDir := t.TempDir()
 	execPath := filepath.Join(execDir, "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1096,7 +1096,7 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 		paths: paths.WithRoot(t.TempDir()),
 	}
 
-	err := u.run(context.Background())
+	err := u.run(t.Context())
 	if err == nil {
 		t.Fatal("run should fail when daemon executable cannot be resolved")
 	}
@@ -1115,11 +1115,10 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels.json":
-			fmt.Fprint(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.2","assets":[]}}`)
+			writeStub(t, w, `{"schema_version":1,"stable":{"tag_name":"v1.2.2","assets":[]}}`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -1127,7 +1126,7 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 	defer server.Close()
 
 	execPath := filepath.Join(t.TempDir(), "no-mistakes")
-	if err := os.WriteFile(execPath, []byte("current-binary"), 0o755); err != nil {
+	if err := os.WriteFile(execPath, []byte("current-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1160,7 +1159,7 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 		paths:          paths.WithRoot(t.TempDir()),
 	}
 
-	if err := u.run(context.Background()); err != nil {
+	if err := u.run(t.Context()); err != nil {
 		t.Fatalf("run error = %v", err)
 	}
 	if checks != 0 {
@@ -1245,7 +1244,7 @@ func TestUpdaterCheckLatestBetaUsesManifest(t *testing.T) {
 			http.Error(w, "rate limited", http.StatusForbidden)
 			return
 		}
-		fmt.Fprintf(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[]},"beta":{"tag_name":"v1.3.0-beta.2","prerelease":true,"assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}}`, archiveName)
+		writeStub(t, w, fmt.Sprintf(`{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[]},"beta":{"tag_name":"v1.3.0-beta.2","prerelease":true,"assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}}`, archiveName))
 	}))
 	defer server.Close()
 
@@ -1260,7 +1259,7 @@ func TestUpdaterCheckLatestBetaUsesManifest(t *testing.T) {
 		includePrereleases: true,
 	}
 
-	plan, err := u.checkLatest(context.Background())
+	plan, err := u.checkLatest(t.Context())
 	if err != nil {
 		t.Fatalf("checkLatest error = %v", err)
 	}

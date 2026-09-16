@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 )
@@ -35,6 +36,17 @@ func TestMain(m *testing.M) {
 	_ = os.RemoveAll(root)
 	_ = os.RemoveAll(home)
 	os.Exit(code)
+}
+
+// writeStub sends one stub HTTP response body. A short write means the client
+// hung up, which would otherwise surface as an unexplained update error, so it
+// is reported. It runs on the server's goroutine, where t.Errorf is allowed
+// and t.Fatalf is not.
+func writeStub(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("write stub response: %v", err)
+	}
 }
 
 func stringsRepeat(s string, count int) string {

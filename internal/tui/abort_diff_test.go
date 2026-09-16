@@ -334,7 +334,7 @@ func TestRenderFindingsWithSelection_LongFilePathTruncated(t *testing.T) {
 
 	// Create a finding with a very long file path that would overflow an 80-width box.
 	longPath := "src/internal/very/deeply/nested/package/structure/" + strings.Repeat("x", 100) + "/handler.go"
-	raw := fmt.Sprintf(`{"items":[{"id":"f1","severity":"error","file":"%s","line":42,"description":"Missing error check"}]}`, longPath)
+	raw := fmt.Sprintf(`{"items":[{"id":"f1","severity":"error","file":%q,"line":42,"description":"Missing error check"}]}`, longPath)
 	selected := map[string]bool{"f1": true}
 
 	// Width is 76 (box content width = 80 - 4 for border/padding).
@@ -377,7 +377,7 @@ func TestRenderFindingsWithSelection_TruncatedGutterPreservesSeverityIcon(t *tes
 	lipgloss.SetColorProfile(termenv.Ascii)
 
 	longPath := strings.Repeat("z", 200) + "/handler.go"
-	raw := fmt.Sprintf(`{"items":[{"id":"f1","severity":"error","file":"%s","line":1,"description":"test"}]}`, longPath)
+	raw := fmt.Sprintf(`{"items":[{"id":"f1","severity":"error","file":%q,"line":1,"description":"test"}]}`, longPath)
 	selected := map[string]bool{"f1": true}
 
 	content, _ := renderFindingsWithSelection(raw, 76, 0, selected, 0)

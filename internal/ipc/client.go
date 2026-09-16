@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -179,17 +181,21 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 	if timeout <= 0 {
 		timeout = DefaultCallTimeout
 	}
-	c.conn.SetReadDeadline(time.Now().Add(timeout))
+	// Without this deadline the read below has nothing to stop it, so a
+	// daemon that accepts and never answers hangs the caller forever.
+	if err := c.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("arm call timeout: %w", err)
+	}
 	interruptDone := make(chan struct{})
 	stopInterrupt := context.AfterFunc(ctx, func() {
-		c.conn.SetReadDeadline(time.Now())
+		noteDeadline(c.conn.SetReadDeadline(time.Now()), "interrupt call")
 		close(interruptDone)
 	})
 	defer func() {
 		if !stopInterrupt() {
 			<-interruptDone
 		}
-		c.conn.SetReadDeadline(time.Time{})
+		noteDeadline(c.conn.SetReadDeadline(time.Time{}), "clear call deadline")
 	}()
 
 	if !c.scanner.Scan() {
@@ -256,28 +262,36 @@ func SubscribeContext(ctx context.Context, socketPath string, params *SubscribeP
 	// Send subscribe request.
 	req, err := NewRequest(MethodSubscribe, params)
 	if err != nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, nil, fmt.Errorf("marshal request: %w", err)
 	}
 	if err := encoder.Encode(req); err != nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, nil, fmt.Errorf("send request: %w", err)
 	}
 
 	// Read initial response.
 	interruptDone := make(chan struct{})
 	stopInterrupt := context.AfterFunc(ctx, func() {
-		conn.SetReadDeadline(time.Now())
+		noteDeadline(conn.SetReadDeadline(time.Now()), "interrupt subscribe")
 		close(interruptDone)
 	})
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetReadDeadline(deadline)
+		// The caller asked for a bound on the subscribe handshake. Failing to
+		// arm it would leave the read below waiting past that bound.
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			if !stopInterrupt() {
+				<-interruptDone
+			}
+			closers.Quiet(conn)
+			return nil, nil, fmt.Errorf("arm subscribe deadline: %w", err)
+		}
 	}
 	if !scanner.Scan() {
 		if !stopInterrupt() {
 			<-interruptDone
 		}
-		conn.Close()
+		closers.Quiet(conn)
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -289,14 +303,14 @@ func SubscribeContext(ctx context.Context, socketPath string, params *SubscribeP
 	if !stopInterrupt() {
 		<-interruptDone
 	}
-	conn.SetReadDeadline(time.Time{})
+	noteDeadline(conn.SetReadDeadline(time.Time{}), "clear subscribe deadline")
 	var resp Response
 	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, nil, fmt.Errorf("parse response: %w", err)
 	}
 	if resp.Error != nil {
-		conn.Close()
+		closers.Quiet(conn)
 		return nil, nil, resp.Error
 	}
 
@@ -307,7 +321,7 @@ func SubscribeContext(ctx context.Context, socketPath string, params *SubscribeP
 	cancel := func() {
 		once.Do(func() {
 			close(done)
-			conn.Close()
+			closers.Quiet(conn)
 		})
 	}
 
@@ -327,4 +341,14 @@ func SubscribeContext(ctx context.Context, socketPath string, params *SubscribeP
 	}()
 
 	return ch, cancel, nil
+}
+
+// noteDeadline reports a read deadline that could not be set or cleared. These
+// calls run on the way into a cancellation or on the way out of a completed
+// one, where there is no error return left to use and the connection is the
+// caller's only channel back. The next read on it surfaces the consequence.
+func noteDeadline(err error, op string) {
+	if err != nil {
+		slog.Warn("set ipc read deadline failed", "op", op, "error", err)
+	}
 }

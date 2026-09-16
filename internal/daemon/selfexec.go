@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -241,14 +242,14 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	stoppedForRefresh := false
 	restoreOnFailure := func(cause error) (bool, error) {
 		if err := writeFileAtomic(installPath, existing, restoreMode); err != nil {
-			return false, fmt.Errorf("%w; restore managed service definition: %v", cause, err)
+			return false, fmt.Errorf("%w; restore managed service definition: %w", cause, err)
 		}
 		if err := reloadManagedServiceDefinition(p); err != nil {
-			return false, fmt.Errorf("%w; reload restored managed service definition: %v", cause, err)
+			return false, fmt.Errorf("%w; reload restored managed service definition: %w", cause, err)
 		}
 		if stoppedForRefresh {
 			if _, err := restartManagedService(p); err != nil {
-				return false, fmt.Errorf("%w; restart restored managed service: %v", cause, err)
+				return false, fmt.Errorf("%w; restart restored managed service: %w", cause, err)
 			}
 		}
 		return false, cause
@@ -283,11 +284,11 @@ func stopCurrentDaemonBeforeManagedRestart(p *paths.Paths) error {
 		if waitErr := waitForDaemonStop(p, instance); waitErr != nil {
 			switch {
 			case err != nil && detachedErr != nil:
-				return fmt.Errorf("stop managed daemon before restart: %w; detached shutdown: %v; wait for exit: %v", err, detachedErr, waitErr)
+				return fmt.Errorf("stop managed daemon before restart: %w; detached shutdown: %w; wait for exit: %w", err, detachedErr, waitErr)
 			case err != nil:
-				return fmt.Errorf("stop managed daemon before restart: %w; wait for exit: %v", err, waitErr)
+				return fmt.Errorf("stop managed daemon before restart: %w; wait for exit: %w", err, waitErr)
 			case detachedErr != nil:
-				return fmt.Errorf("detached shutdown before managed restart: %w; wait for exit: %v", detachedErr, waitErr)
+				return fmt.Errorf("detached shutdown before managed restart: %w; wait for exit: %w", detachedErr, waitErr)
 			default:
 				return fmt.Errorf("wait for managed daemon exit before restart: %w", waitErr)
 			}
@@ -359,11 +360,11 @@ func startDetachedDaemon(p *paths.Paths) error {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 
-	logFile, err := os.OpenFile(p.DaemonBootstrapLog(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(p.DaemonBootstrapLog(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open daemon bootstrap log: %w", err)
 	}
-	defer logFile.Close()
+	defer closers.Quiet(logFile)
 
 	cmd := exec.Command(exe, "daemon", "run", "--root", p.Root())
 	cmd.Env = upsertEnv(os.Environ(), "NM_HOME", p.Root())
@@ -380,7 +381,7 @@ func startDetachedDaemon(p *paths.Paths) error {
 	startedAt, err := daemonProcessStartTime(pid)
 	if err != nil {
 		if cleanupErr := cleanupStartedDaemonProcess(cmd.Process); cleanupErr != nil {
-			return fmt.Errorf("inspect daemon process %d: %w; cleanup daemon child: %v", pid, err, cleanupErr)
+			return fmt.Errorf("inspect daemon process %d: %w; cleanup daemon child: %w", pid, err, cleanupErr)
 		}
 		return fmt.Errorf("inspect daemon process %d: %w", pid, err)
 	}
@@ -499,7 +500,7 @@ func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-ch
 
 	timeoutErr := fmt.Errorf("daemon launched but did not become ready within %v", timeout)
 	if lastHealthErr != nil {
-		timeoutErr = fmt.Errorf("%w: last health check: %v", timeoutErr, lastHealthErr)
+		timeoutErr = fmt.Errorf("%w: last health check: %w", timeoutErr, lastHealthErr)
 	}
 
 	return reapLaunchedDaemonChild(timeoutErr, proc, exitCh, pid, startedAt, timeout)
@@ -555,7 +556,7 @@ func reapLaunchedDaemonChild(baseErr error, proc *os.Process, exitCh <-chan erro
 			case <-exitCh:
 				return baseErr
 			default:
-				return fmt.Errorf("%w: cleanup daemon child %d: %v", baseErr, pid, err)
+				return fmt.Errorf("%w: cleanup daemon child %d: %w", baseErr, pid, err)
 			}
 		}
 		select {
@@ -570,7 +571,7 @@ func reapLaunchedDaemonChild(baseErr error, proc *os.Process, exitCh <-chan erro
 	// detached process but do not have an os.Process handle.
 	if pid > 0 {
 		if err := killTimedOutDaemonPID(pid, startedAt); err != nil {
-			return fmt.Errorf("%w: cleanup daemon child %d: %v", baseErr, pid, err)
+			return fmt.Errorf("%w: cleanup daemon child %d: %w", baseErr, pid, err)
 		}
 		if !startedAt.IsZero() {
 			waitForProcessExit(pid, cleanupWait)
@@ -654,7 +655,7 @@ func ReadDrainStatus(p *paths.Paths) (DrainStatus, error) {
 	if err != nil {
 		return DrainStatus{}, err
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.HealthResult
 	if err := client.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &result, ipc.DefaultDialTimeout); err != nil {
@@ -678,7 +679,7 @@ func daemonIsRunningViaIPC(p *paths.Paths) (bool, error) {
 		}
 		return false, fmt.Errorf("connect to daemon socket: %w", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.HealthResult
 	if err := client.CallWithTimeout(ipc.MethodHealth, &ipc.HealthParams{}, &result, ipc.DefaultDialTimeout); err != nil {
@@ -850,11 +851,15 @@ func requestDrain(p *paths.Paths, opts StopOptions) (StopOutcome, error) {
 func sendShutdownRequest(client *ipc.Client, opts StopOptions) (ipc.ShutdownResult, error) {
 	var result ipc.ShutdownResult
 	if !opts.Drain {
-		return result, client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &result)
+		// The call fills result through the pointer, so it has to complete
+		// before result is read for the return.
+		err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &result)
+		return result, err
 	}
 	timeout := drainTimeoutOrDefault(opts.DrainTimeout)
 	params := &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: timeout.Milliseconds(), DrainOnly: opts.DrainOnly}
-	return result, client.CallWithTimeout(ipc.MethodShutdown, params, &result, drainCallTimeout(opts.DrainTimeout))
+	err := client.CallWithTimeout(ipc.MethodShutdown, params, &result, drainCallTimeout(opts.DrainTimeout))
+	return result, err
 }
 
 func drainTimeoutOrDefault(d time.Duration) time.Duration {
@@ -907,7 +912,7 @@ func stopDetachedDaemonWithOptions(p *paths.Paths, opts StopOptions) (StopOutcom
 		// That is deliberately NOT NoDaemon: the operator asked for a drain,
 		// there was something to drain, and it did not happen.
 		if killErr := stopDetachedDaemonByPID(p); killErr != nil {
-			return StopOutcome{}, fmt.Errorf("dial daemon: %w; pid fallback: %v", err, killErr)
+			return StopOutcome{}, fmt.Errorf("dial daemon: %w; pid fallback: %w", err, killErr)
 		}
 		return StopOutcome{}, nil
 	}
@@ -1109,7 +1114,7 @@ func daemonSocketAcceptingConnections(path string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	defer conn.Close()
+	defer closers.Quiet(conn)
 	return true, nil
 }
 
@@ -1153,8 +1158,8 @@ func waitForDaemonStopBudget(p *paths.Paths, instance daemonInstance, timeout ti
 	// its own consistency validation; fall back to the captured instance for
 	// a daemon that already removed its PID file but is still running.
 	pid, err := ReadPID(p)
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		if err := validateDaemonPIDFallback(p, pid); err != nil {
 			return err
 		}

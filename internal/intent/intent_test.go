@@ -64,7 +64,7 @@ func TestExtract_HappyPath(t *testing.T) {
 		}},
 	}
 	sum := &fixedSummarizer{summary: "user edited foo"}
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:  "/tmp/repo",
 		DiffFiles:  []string{"foo.go"},
 		BaseTime:   time.Now().Add(-time.Hour),
@@ -95,7 +95,7 @@ func TestExtract_NoMatchBelowThreshold(t *testing.T) {
 			Messages:     []Message{{Role: RoleUser, Text: "hello"}},
 		}},
 	}
-	_, err := Extract(context.Background(), ExtractParams{
+	_, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:  "/tmp/repo",
 		DiffFiles:  []string{"foo.go"},
 		HeadTime:   time.Now(),
@@ -121,7 +121,7 @@ func TestExtract_PassesUnextendedHeadTimeToReaders(t *testing.T) {
 		}},
 	}
 
-	_, err := Extract(context.Background(), ExtractParams{
+	_, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:  "/tmp/repo",
 		DiffFiles:  []string{"foo.go"},
 		BaseTime:   baseTime,
@@ -154,7 +154,7 @@ func TestExtract_CacheHitSkipsSummarizer(t *testing.T) {
 	sess.AgentName = "claude"
 	cache.Put(cacheKeyFor(sess), "cached", "claude", "s1")
 
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:  "/tmp/repo",
 		DiffFiles:  []string{"foo.go"},
 		HeadTime:   time.Now(),
@@ -191,7 +191,7 @@ func TestExtract_DisambiguatesWhenMultipleAcceptedCandidatesAreNotDecisive(t *te
 	r := &staticReader{name: "claude", sessions: []*Session{first, second}}
 	d := &fixedDisambiguator{selectedAgentName: "claude", selectedSessionID: "s2"}
 
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:     "/tmp/repo",
 		DiffFiles:     []string{"foo.go", "bar.go", "baz.go", "qux.go"},
 		HeadTime:      time.Now(),
@@ -229,7 +229,7 @@ func TestExtract_DoesNotDisambiguateSingleDecisiveCandidate(t *testing.T) {
 	r := &staticReader{name: "claude", sessions: []*Session{partial, decisive}}
 	d := &fixedDisambiguator{selectedAgentName: "claude", selectedSessionID: "partial"}
 
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:     "/tmp/repo",
 		DiffFiles:     []string{"foo.go", "bar.go", "baz.go", "qux.go"},
 		HeadTime:      time.Now(),
@@ -264,7 +264,7 @@ func TestExtract_DisambiguatesWhenMultipleCandidatesAreDecisive(t *testing.T) {
 	r := &staticReader{name: "claude", sessions: []*Session{first, second}}
 	d := &fixedDisambiguator{selectedAgentName: "claude", selectedSessionID: "s2"}
 
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:     "/tmp/repo",
 		DiffFiles:     []string{"foo.go", "bar.go", "baz.go", "qux.go"},
 		HeadTime:      time.Now(),
@@ -299,7 +299,7 @@ func TestExtract_DisambiguatorSelectionUsesAgentNameAndSessionID(t *testing.T) {
 	}}}
 	d := &fixedDisambiguator{selectedAgentName: "opencode", selectedSessionID: "same"}
 
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:     "/tmp/repo",
 		DiffFiles:     []string{"foo.go", "bar.go"},
 		HeadTime:      headTime,
@@ -333,7 +333,7 @@ func TestExtract_ReturnsErrorWhenDisambiguatorCleanupFails(t *testing.T) {
 	}}
 	d := &fixedDisambiguator{err: ErrDisambiguatorCleanup}
 
-	_, err := Extract(context.Background(), ExtractParams{
+	_, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:     "/tmp/repo",
 		DiffFiles:     []string{"foo.go", "bar.go"},
 		HeadTime:      headTime,
@@ -369,7 +369,7 @@ func TestExtract_SingleDecisiveCandidateBeatsRecentPartialMatch(t *testing.T) {
 	r := &staticReader{name: "claude", sessions: []*Session{recentPartial, decisive}}
 	d := &fixedDisambiguator{selectedAgentName: "claude", selectedSessionID: "recent-partial"}
 
-	got, err := Extract(context.Background(), ExtractParams{
+	got, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:     "/tmp/repo",
 		DiffFiles:     diffFiles,
 		HeadTime:      headTime,
@@ -391,7 +391,7 @@ func TestExtract_SingleDecisiveCandidateBeatsRecentPartialMatch(t *testing.T) {
 }
 
 func TestExtract_NoReaders(t *testing.T) {
-	_, err := Extract(context.Background(), ExtractParams{
+	_, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:  "/tmp/repo",
 		DiffFiles:  []string{"foo.go"},
 		Summarizer: &fixedSummarizer{},
@@ -417,7 +417,7 @@ func TestExtract_LogsAcceptedCandidatesOnly(t *testing.T) {
 		}},
 	}
 	var logs []string
-	_, err := Extract(context.Background(), ExtractParams{
+	_, err := Extract(t.Context(), ExtractParams{
 		OriginCWD:  "/tmp/repo",
 		DiffFiles:  []string{"a.go", "b.go", "c.go"},
 		HeadTime:   time.Now(),
@@ -446,7 +446,7 @@ func TestExtract_LogsAcceptedCandidatesOnly(t *testing.T) {
 }
 
 func TestExtract_RequiresOriginCWD(t *testing.T) {
-	_, err := Extract(context.Background(), ExtractParams{
+	_, err := Extract(t.Context(), ExtractParams{
 		DiffFiles:  []string{"foo.go"},
 		Summarizer: &fixedSummarizer{},
 	})

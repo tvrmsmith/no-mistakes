@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 )
 
 const (
@@ -302,7 +303,7 @@ func (c *Client) send(ctx context.Context, payload []byte) {
 	if err != nil {
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { closers.Quiet(resp.Body) }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 

@@ -114,14 +114,14 @@ func TestEnsurePrepared_RemovesNestedRepositoryMutation(t *testing.T) {
 func TestEnsurePrepared_RestoresPendingTrackedAndUntrackedChanges(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ignoreTestDependencies(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending staged change\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending staged change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "base.txt")
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending unstaged change\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending unstaged change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "pending_test.go"), []byte("package pending\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "pending_test.go"), []byte("package pending\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	beforeStatus := gitStatusPorcelain(t, dir)
@@ -162,13 +162,13 @@ func TestEnsurePrepared_PreservesSharedStash(t *testing.T) {
 	other := filepath.Join(t.TempDir(), "other")
 	gitCmd(t, dir, "worktree", "add", other, "main")
 	t.Cleanup(func() { gitCmd(t, dir, "worktree", "remove", "--force", other) })
-	if err := os.WriteFile(filepath.Join(other, "unrelated.txt"), []byte("unrelated\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "unrelated.txt"), []byte("unrelated\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, other, "add", "unrelated.txt")
 	gitCmd(t, other, "stash", "push", "-m", "unrelated")
 	want := gitCmd(t, dir, "rev-parse", "refs/stash")
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending change\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sctx := newPreparationTestContext(t, nil, dir, baseSHA, headSHA, config.Commands{Prepare: preparationCommand()})
@@ -193,7 +193,7 @@ func TestEnsurePrepared_ResetsRegisteredSubmodule(t *testing.T) {
 	gitCmd(t, seed, "init", "-b", "main")
 	gitCmd(t, seed, "config", "user.name", "test")
 	gitCmd(t, seed, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, seed, "add", "module.txt")
@@ -227,7 +227,7 @@ func TestEnsurePrepared_RestoresDirtyInitializedSubmodule(t *testing.T) {
 	gitCmd(t, seed, "init", "-b", "main")
 	gitCmd(t, seed, "config", "user.name", "test")
 	gitCmd(t, seed, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, seed, "add", "module.txt")
@@ -239,7 +239,7 @@ func TestEnsurePrepared_RestoresDirtyInitializedSubmodule(t *testing.T) {
 	gitCmd(t, dir, "commit", "-m", "add module")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	moduleHead := gitCmd(t, filepath.Join(dir, "module"), "rev-parse", "HEAD")
-	if err := os.WriteFile(filepath.Join(dir, "module", "module.txt"), []byte("pending before prepare\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "module", "module.txt"), []byte("pending before prepare\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	beforeStatus := gitStatusPorcelain(t, dir)
@@ -268,7 +268,7 @@ func TestEnsurePrepared_DoesNotInitializeUnrelatedSubmodule(t *testing.T) {
 	gitCmd(t, seed, "init", "-b", "main")
 	gitCmd(t, seed, "config", "user.name", "test")
 	gitCmd(t, seed, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, seed, "add", "module.txt")
@@ -300,7 +300,7 @@ func TestEnsurePrepared_DeinitializesSubmoduleInitializedByPreparation(t *testin
 	gitCmd(t, seed, "init", "-b", "main")
 	gitCmd(t, seed, "config", "user.name", "test")
 	gitCmd(t, seed, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, seed, "add", "module.txt")
@@ -334,7 +334,7 @@ func TestEnsurePrepared_RestoresDeletedInitializedSubmodule(t *testing.T) {
 	gitCmd(t, seed, "init", "-b", "main")
 	gitCmd(t, seed, "config", "user.name", "test")
 	gitCmd(t, seed, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(seed, "module.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, seed, "add", "module.txt")
@@ -363,16 +363,16 @@ func TestEnsurePrepared_RestoresUntrackedModes(t *testing.T) {
 	}
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	path := filepath.Join(dir, "private", "tool")
-	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("tool\n"), 0o777); err != nil {
+	if err := os.WriteFile(path, []byte("tool\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(filepath.Dir(path), 0o777); err != nil {
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, 0o777); err != nil {
+	if err := os.Chmod(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	sctx := newPreparationTestContext(t, nil, dir, baseSHA, headSHA, config.Commands{Prepare: preparationCommand()})
@@ -385,8 +385,8 @@ func TestEnsurePrepared_RestoresUntrackedModes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := info.Mode().Perm(); got != 0o777 {
-			t.Fatalf("mode for %s = %#o, want %#o", target, got, 0o777)
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("mode for %s = %#o, want %#o", target, got, 0o700)
 		}
 	}
 }
@@ -407,7 +407,7 @@ func TestEnsurePrepared_LogsDurationAfterFailure(t *testing.T) {
 
 func TestEnsurePrepared_RestoresAfterCleanupTimeout(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending change\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before := gitStatusPorcelain(t, dir)
@@ -417,7 +417,7 @@ func TestEnsurePrepared_RestoresAfterCleanupTimeout(t *testing.T) {
 	previousCleanup := runPreparationCleanup
 	prepareCleanupTimeout = time.Millisecond
 	runPreparationCleanup = func(ctx context.Context, workDir, head string, submodules []preparationSubmodule) error {
-		if err := cleanupPreparationChanges(context.Background(), workDir, head, submodules); err != nil {
+		if err := cleanupPreparationChanges(t.Context(), workDir, head, submodules); err != nil {
 			return err
 		}
 		<-ctx.Done()
@@ -439,12 +439,12 @@ func TestEnsurePrepared_RestoresAfterCleanupTimeout(t *testing.T) {
 func TestEnsurePrepared_IgnoresWorktreeTempDirectory(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	tempDir := filepath.Join(dir, ".tmp")
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+	if err := os.MkdirAll(tempDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TMP", tempDir)
 	t.Setenv("TEMP", tempDir)
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending change\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("pending change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before := gitStatusPorcelain(t, dir)
@@ -534,7 +534,7 @@ func TestEnsurePrepared_DeinitializesNestedSubmoduleInitializedByPreparation(t *
 
 func TestEnsurePrepared_RestoresIntentToAdd(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
-	if err := os.WriteFile(filepath.Join(dir, "intent.go"), []byte("package intent\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "intent.go"), []byte("package intent\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "--intent-to-add", "intent.go")
@@ -565,7 +565,7 @@ func TestPreparationSnapshot_RetainsRecoveryData(t *testing.T) {
 	if err := os.Remove(snapshot.repositories[0].indexSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	err = snapshot.restore(context.Background())
+	err = snapshot.restore(t.Context())
 	if err == nil {
 		t.Fatal("restore unexpectedly succeeded with missing snapshot index")
 	}
@@ -604,7 +604,7 @@ func TestPushStep_PreparesFormatterWithPendingUntrackedChanges(t *testing.T) {
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "push", "origin", "feature")
-	if err := os.WriteFile(filepath.Join(dir, "pending_test.go"), []byte("package pending\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "pending_test.go"), []byte("package pending\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -632,7 +632,7 @@ func TestPushStep_PreparesFormatterWithPendingUntrackedChanges(t *testing.T) {
 func ignoreTestDependencies(t *testing.T, dir string) {
 	t.Helper()
 	exclude := filepath.Join(dir, ".git", "info", "exclude")
-	if err := os.WriteFile(exclude, []byte(".deps/\n"), 0o644); err != nil {
+	if err := os.WriteFile(exclude, []byte(".deps/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -748,7 +748,7 @@ func setupNestedSubmodules(t *testing.T) (string, string, string) {
 	gitCmd(t, inner, "init", "-b", "main")
 	gitCmd(t, inner, "config", "user.name", "test")
 	gitCmd(t, inner, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(inner, "inner.txt"), []byte("inner\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(inner, "inner.txt"), []byte("inner\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, inner, "add", "inner.txt")

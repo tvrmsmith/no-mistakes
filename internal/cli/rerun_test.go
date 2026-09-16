@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
@@ -28,7 +29,7 @@ func TestRerunCallerHeadDoesNotCombineDifferentGitStates(t *testing.T) {
 	cliGit(t, dir, "init", "-b", "main")
 	cliGit(t, dir, "config", "user.name", "Test")
 	cliGit(t, dir, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("original\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("original\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, dir, "add", "tracked.txt")
@@ -73,7 +74,7 @@ func main() {
 }
 `
 	file := filepath.Join(binDir, "main.go")
-	if err := os.WriteFile(file, []byte(source), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Build a native, non-race helper so the same test runs on Windows too.
@@ -83,7 +84,7 @@ func main() {
 	}
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+path)
-	head, err := rerunCallerHead(context.Background())
+	head, err := rerunCallerHead(t.Context())
 	t.Setenv("PATH", path)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +110,7 @@ func TestRerunCallerHeadGitStates(t *testing.T) {
 			}
 			want := ""
 			if state != "unborn" && state != "dirty_unborn" && state != "not_repo" {
-				if err := os.WriteFile("tracked.txt", []byte("original\n"), 0o644); err != nil {
+				if err := os.WriteFile("tracked.txt", []byte("original\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				cliGit(t, dir, "add", "tracked.txt")
@@ -122,7 +123,7 @@ func TestRerunCallerHeadGitStates(t *testing.T) {
 			case "detached":
 				cliGit(t, dir, "checkout", "--detach")
 			case "unstaged", "staged":
-				if err := os.WriteFile("tracked.txt", []byte("edited\n"), 0o644); err != nil {
+				if err := os.WriteFile("tracked.txt", []byte("edited\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				if state == "staged" {
@@ -131,11 +132,11 @@ func TestRerunCallerHeadGitStates(t *testing.T) {
 			case "renamed":
 				cliGit(t, dir, "mv", "tracked.txt", "# branch.oid misleading.txt")
 			case "untracked", "dirty_unborn":
-				if err := os.WriteFile("# branch.oid misleading.txt", []byte("untracked\n"), 0o644); err != nil {
+				if err := os.WriteFile("# branch.oid misleading.txt", []byte("untracked\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			head, err := rerunCallerHead(context.Background())
+			head, err := rerunCallerHead(t.Context())
 			wantError := state == "unborn" || state == "not_repo"
 			if (err != nil) != wantError || head != want {
 				t.Fatalf("caller head = %q, err = %v; want %q, error = %v", head, err, want, wantError)
@@ -161,7 +162,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer closers.Quiet(d)
 			cliGit(t, dir, "init", "-b", "main")
 			cliGit(t, dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
 			chdir(t, dir)
@@ -175,7 +176,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 			}
 			wantHead := cliGit(t, dir, "rev-parse", "HEAD")
 			if dirty {
-				if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("local edits"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("local edits"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				wantHead = ""
@@ -248,9 +249,9 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer client.Close()
+				defer closers.Quiet(client)
 				env := &axiEnv{p: p, d: d, repo: repo, cfg: config.DefaultGlobalConfig(), client: client}
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 				defer cancel()
 				runID, err := triggerRun(ctx, env, "main", wantHead, nil, "keep the caller's changes", "")
 				if err != nil || runID != "rerun-1" {
@@ -271,7 +272,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 						} else {
 							cliGit(t, dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "commit before push")
 						}
-						ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+						ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 						defer cancel()
 						if _, err := triggerRun(ctx, env, "main", wantHead, nil, "keep the caller's changes", ""); err != nil {
 							t.Fatal(err)
@@ -313,7 +314,7 @@ func TestRerunRefusesDifferentCleanHeadCLI(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { d.Close() })
+			t.Cleanup(func() { closers.Quiet(d) })
 			startTestDaemon(t, p, d)
 			cliGit(t, dir, "init", "-b", "main")
 			cliGit(t, dir, "config", "user.name", "Test")

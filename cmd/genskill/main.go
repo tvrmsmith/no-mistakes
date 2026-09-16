@@ -54,12 +54,12 @@ func main() {
 // than deleted: dir is a relative path resolved against the caller's cwd, and
 // nothing here is worth recursively removing an unexpected tree for.
 func writeDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	for _, f := range skill.Files() {
 		path := filepath.Join(dir, f.Name)
-		if err := os.WriteFile(path, []byte(f.Content), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(f.Content), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 	}

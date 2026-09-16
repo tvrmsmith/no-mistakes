@@ -1,10 +1,8 @@
 package update
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -71,7 +69,7 @@ func TestDownloadAsset_SendsAuthorizationHeaderFromEnvToken(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		fmt.Fprint(w, "asset-bytes")
+		writeStub(t, w, "asset-bytes")
 	}))
 	defer server.Close()
 
@@ -81,7 +79,7 @@ func TestDownloadAsset_SendsAuthorizationHeaderFromEnvToken(t *testing.T) {
 
 	t.Setenv("GITHUB_TOKEN", "download-token-value")
 	t.Setenv("GH_TOKEN", "")
-	if _, err := u.downloadAsset(context.Background(), server.URL, 1<<20); err != nil {
+	if _, err := u.downloadAsset(t.Context(), server.URL, 1<<20); err != nil {
 		t.Fatalf("downloadAsset error = %v", err)
 	}
 	if want := "Bearer download-token-value"; gotAuth != want {

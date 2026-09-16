@@ -487,7 +487,7 @@ func TestSweepNamedWorktreesReachOnlyWhatARunRecorded(t *testing.T) {
 func TestSweepReachesDeletedNamedWorktreeThroughSymlinkedRoot(t *testing.T) {
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "real-runs")
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	if err := os.MkdirAll(realRoot, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	linkedRoot := filepath.Join(base, "runs")

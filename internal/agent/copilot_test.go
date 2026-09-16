@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -148,7 +147,7 @@ func TestParseCopilotEvents_FinalMessageAndUsage(t *testing.T) {
 	exitCode := -1
 
 	err := parseCopilotEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -187,7 +186,7 @@ func TestParseCopilotEvents_CapturesErrorEvent(t *testing.T) {
 	var messages []string
 	var copilotErr string
 	exitCode := 0
-	err := parseCopilotEvents(context.Background(), strings.NewReader(events), nil, &usage, &messages, &copilotErr, &exitCode)
+	err := parseCopilotEvents(t.Context(), strings.NewReader(events), nil, &usage, &messages, &copilotErr, &exitCode)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -211,7 +210,7 @@ func TestParseCopilotEvents_SkipsMalformedAndSessionLines(t *testing.T) {
 	var messages []string
 	var copilotErr string
 	exitCode := 0
-	err := parseCopilotEvents(context.Background(), strings.NewReader(events), nil, &usage, &messages, &copilotErr, &exitCode)
+	err := parseCopilotEvents(t.Context(), strings.NewReader(events), nil, &usage, &messages, &copilotErr, &exitCode)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -251,7 +250,7 @@ func writeFakeCopilot(t *testing.T, dir string, jsonlLines []string, exitCode in
 		lines = append(lines, "exit "+itoa(exitCode))
 		script = strings.Join(lines, "\n") + "\n"
 	}
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake copilot: %v", err)
 	}
 	return bin
@@ -269,12 +268,12 @@ cat > stdin.txt
 printf '%s\n' '{"type":"assistant.message","data":{"content":"done","outputTokens":1}}'
 printf '%s\n' '{"type":"result","exitCode":0}'
 `
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	prompt := strings.Repeat("copilot-prompt-", 512)
 	ca := &copilotAgent{bin: bin}
-	if _, err := ca.Run(context.Background(), RunOpts{Prompt: prompt, CWD: dir}); err != nil {
+	if _, err := ca.Run(t.Context(), RunOpts{Prompt: prompt, CWD: dir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	argv, err := os.ReadFile(filepath.Join(dir, "argv.txt"))
@@ -328,7 +327,7 @@ func TestCopilotAgent_RunParsesJSONOutput(t *testing.T) {
 
 	var chunks []string
 	ca := &copilotAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{
+	result, err := ca.Run(t.Context(), RunOpts{
 		Prompt:     "do work",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),
@@ -360,7 +359,7 @@ func TestCopilotAgent_RunReportsErrorOnNonZeroExit(t *testing.T) {
 	}, 1)
 
 	ca := &copilotAgent{bin: bin}
-	_, err := ca.Run(context.Background(), RunOpts{
+	_, err := ca.Run(t.Context(), RunOpts{
 		Prompt: "do work",
 		CWD:    t.TempDir(),
 	})
@@ -392,7 +391,7 @@ func TestParseCopilotEvents_CollectsAllAssistantMessages(t *testing.T) {
 	var messages []string
 	var copilotErr string
 	exitCode := 0
-	if err := parseCopilotEvents(context.Background(), strings.NewReader(events), nil, &usage, &messages, &copilotErr, &exitCode); err != nil {
+	if err := parseCopilotEvents(t.Context(), strings.NewReader(events), nil, &usage, &messages, &copilotErr, &exitCode); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := []string{`{"ok":true}`, "Now I've applied the fix."}
@@ -495,7 +494,7 @@ func TestCopilotAgent_RunRecoversJSONWhenFinalMessageIsProse(t *testing.T) {
 	}, 0)
 
 	ca := &copilotAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{
+	result, err := ca.Run(t.Context(), RunOpts{
 		Prompt:     "fix it",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object","properties":{"findings":{"type":"array"},"summary":{"type":"string"}},"required":["findings","summary"]}`),

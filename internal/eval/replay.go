@@ -15,6 +15,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
@@ -23,6 +24,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -129,7 +131,7 @@ func (s *Store) prepareReplay(ctx context.Context, opts ReplayOptions) ([]Case, 
 	}
 	session.Cohort = cohortID(session.CaseIDs, session.Repeats)
 	sessionsDir := filepath.Join(s.root, "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	if err := os.MkdirAll(sessionsDir, 0o750); err != nil {
 		return nil, Session{}, fmt.Errorf("create eval sessions directory: %w", err)
 	}
 	sessionPath := filepath.Join(sessionsDir, session.ID+".json")
@@ -223,7 +225,7 @@ func replayOne(ctx context.Context, store *Store, c Case, session Session, candi
 		evaluation.CompletedAt = time.Now().Unix()
 		return evaluation
 	}
-	defer os.RemoveAll(root)
+	defer scratch.RemoveAll(root)
 
 	isolatedPaths := paths.WithRoot(filepath.Join(root, "nmhome"))
 	if err := isolatedPaths.EnsureDirs(); err != nil {
@@ -269,7 +271,7 @@ func replayOne(ctx context.Context, store *Store, c Case, session Session, candi
 		evaluation.CompletedAt = time.Now().Unix()
 		return evaluation
 	}
-	defer baseAgent.Close()
+	defer closers.Quiet(baseAgent)
 	observed := &observedAgent{inner: agent.WithSteering(baseAgent, isolatedPaths.EvidenceDir()), ownership: ownership}
 
 	replayDB, stepResultID, fixing, previousFindings, err := replayRoundContext(isolatedPaths, c, workDir)
@@ -278,7 +280,7 @@ func replayOne(ctx context.Context, store *Store, c Case, session Session, candi
 		evaluation.CompletedAt = time.Now().Unix()
 		return evaluation
 	}
-	defer replayDB.Close()
+	defer closers.Quiet(replayDB)
 
 	startingHeadSHA := c.StartingHeadSHA
 	if startingHeadSHA == "" {
@@ -383,7 +385,7 @@ func replayRoundContext(p *paths.Paths, c Case, workDir string) (*db.DB, string,
 		return nil, "", false, "", fmt.Errorf("open isolated replay database: %w", err)
 	}
 	fail := func(err error) (*db.DB, string, bool, string, error) {
-		database.Close()
+		closers.Quiet(database)
 		return nil, "", false, "", err
 	}
 	repo, err := database.InsertRepoWithID("eval-repo", workDir, "local://eval", c.DefaultBranch)
@@ -534,7 +536,7 @@ func (s *Store) persistEvaluation(c Case, evaluation Evaluation) error {
 	}
 	candidateDir := candidatePathPart(evaluation.Candidate)
 	resultDir := filepath.Join(c.Dir, "evals", evaluation.SessionID, candidateDir)
-	if err := os.MkdirAll(resultDir, 0o755); err != nil {
+	if err := os.MkdirAll(resultDir, 0o750); err != nil {
 		return fmt.Errorf("create eval result directory: %w", err)
 	}
 	path := filepath.Join(resultDir, fmt.Sprintf("repeat-%03d.json", evaluation.Repeat))

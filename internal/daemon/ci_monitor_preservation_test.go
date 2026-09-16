@@ -10,6 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -238,7 +239,7 @@ func blockTerminalRunWrites(t *testing.T, dbPath string) func() {
 		t.Fatal(err)
 	}
 	released := false
-	t.Cleanup(func() { raw.Close() })
+	t.Cleanup(func() { closers.Quiet(raw) })
 	return func() {
 		if released {
 			return
@@ -263,7 +264,7 @@ func TestALivePushIsRefusedWhenADeferredRunOnItsBranchCannotBeEnded(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "src"), "https://github.com/o/r", "main")
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +325,7 @@ func TestInterruptedCIMonitorKeepsItsWorktreeAtStopTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	repo, headSHA := setupTestGitRepo(t, p, d, "repo1")
 	run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
 	if err != nil {
@@ -357,7 +358,7 @@ func TestAFailedRunStillLosesItsWorktreeAtStopTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	repo, headSHA := setupTestGitRepo(t, p, d, "repo1")
 	run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
 	if err != nil {

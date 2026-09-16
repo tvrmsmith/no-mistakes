@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -33,7 +34,7 @@ func TestCallTimeoutClassifiesSlowReplySeparatelyFromConnectFailure(t *testing.T
 		t.Fatal(err)
 	}
 	err = slowClient.CallWithTimeout("slow", struct{}{}, nil, 40*time.Millisecond)
-	slowClient.Close()
+	closers.Quiet(slowClient)
 	if err == nil {
 		t.Fatal("expected a timeout from a slow live daemon")
 	}
@@ -48,7 +49,7 @@ func TestCallTimeoutClassifiesSlowReplySeparatelyFromConnectFailure(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer failClient.Close()
+	defer closers.Quiet(failClient)
 	err = failClient.CallWithTimeout("fail", struct{}{}, nil, time.Second)
 	if err == nil {
 		t.Fatal("expected RPC failure")

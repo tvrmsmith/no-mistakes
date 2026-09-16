@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -93,7 +94,7 @@ func (r *copilotReader) Load(_ context.Context, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("copilot open: %w", err)
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 64*1024*1024)
@@ -138,7 +139,7 @@ func copilotPeekMetadata(path string) (*copilotMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 64*1024*1024)

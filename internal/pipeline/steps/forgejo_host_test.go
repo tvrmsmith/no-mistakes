@@ -38,7 +38,7 @@ func TestForgejoTokenEnvForStep_PrefersHostScopedToken(t *testing.T) {
 
 func TestBuildHost_Forgejo(t *testing.T) {
 	sctx := &pipeline.StepContext{
-		Ctx: context.Background(),
+		Ctx: t.Context(),
 		Run: &db.Run{Branch: "feature/forgejo", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		Repo: &db.Repo{
 			UpstreamURL:   "https://forge.example:3443/git/octo/widgets.git",
@@ -66,7 +66,7 @@ func TestVerifyMergedProof_RequiresProofForExpectedHead(t *testing.T) {
 		HeadSHA: "unexpected",
 	}}
 
-	err := verifyMergedProof(context.Background(), host, pr, "expected")
+	err := verifyMergedProof(t.Context(), host, pr, "expected")
 	if !errors.Is(err, scm.ErrHeadChanged) {
 		t.Fatalf("verifyMergedProof() error = %v, want ErrHeadChanged", err)
 	}
@@ -75,14 +75,14 @@ func TestVerifyMergedProof_RequiresProofForExpectedHead(t *testing.T) {
 func TestVerifyMergedProof_RejectsIncompleteProof(t *testing.T) {
 	pr := &scm.PR{Number: "42", URL: "https://forge.example/octo/widgets/pulls/42"}
 	host := &mergedProofTestHost{proof: scm.MergedProof{Number: "42", URL: pr.URL, HeadSHA: "expected"}}
-	if err := verifyMergedProof(context.Background(), host, pr, "expected"); err == nil {
+	if err := verifyMergedProof(t.Context(), host, pr, "expected"); err == nil {
 		t.Fatal("verifyMergedProof() error = nil, want unmerged proof rejection")
 	}
 }
 
 func TestBuildHost_ForgejoRejectsForkRouting(t *testing.T) {
 	sctx := &pipeline.StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Run:    &db.Run{},
 		Repo:   &db.Repo{UpstreamURL: "https://codeberg.org/octo/widgets.git", ForkURL: "https://codeberg.org/alice/widgets.git"},
 		Config: &config.Config{ForgejoAXIPath: "forgejo-axi"},

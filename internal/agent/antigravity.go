@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
@@ -98,7 +99,7 @@ func (a *antigravityAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, 
 			_ = os.Remove(schemaPath)
 			return nil, fmt.Errorf("antigravity schema temp file close: %w", err)
 		}
-		defer os.Remove(schemaPath)
+		defer scratch.Remove(schemaPath)
 	}
 
 	bin := a.bin

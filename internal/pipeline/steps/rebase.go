@@ -154,11 +154,6 @@ func (s *RebaseStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 	return updateHeadSHA(ctx, sctx)
 }
 
-// rebaseTargets returns the ordered list of refs to rebase onto.
-func rebaseTargets(branch, defaultBranch string) []string {
-	return rebaseTargetsForBranch(branch, defaultBranch, "origin/"+branch)
-}
-
 func rebaseTargetsForBranch(branch, defaultBranch, branchTarget string) []string {
 	var targets []string
 	if branch != "" && branch != defaultBranch {
@@ -474,6 +469,11 @@ Instructions:
 // Returns true if targetRef doesn't exist, is already merged, or can be fast-forwarded.
 func shouldSkipRebase(ctx context.Context, sctx *pipeline.StepContext, targetRef string) (bool, error) {
 	if _, err := git.Run(ctx, sctx.WorkDir, "rev-parse", "--verify", targetRef); err != nil {
+		// An absent ref is what --verify is for and is the documented skip.
+		// Say why, as every other skip below does: a git that failed for some
+		// other reason also lands here, and skipping the rebase in silence is
+		// how that reaches the push unexplained.
+		sctx.Log(fmt.Sprintf("skipping rebase: cannot resolve %s (%v)", targetRef, err))
 		return true, nil
 	}
 	localSHA, err := git.HeadSHA(ctx, sctx.WorkDir)

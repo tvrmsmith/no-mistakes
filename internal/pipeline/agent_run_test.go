@@ -43,7 +43,7 @@ func TestRunAgent_HangingAgentFailsAfterTimeout(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 20 * time.Millisecond},
 	}
@@ -72,7 +72,7 @@ func TestRunAgent_LateSuccessAfterTimeoutIsRejected(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 20 * time.Millisecond},
 	}
@@ -102,7 +102,7 @@ func TestRunAgent_SuccessfulOutputUnchanged(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: time.Second},
 	}
@@ -121,7 +121,7 @@ func TestRunAgent_SuccessfulOutputUnchanged(t *testing.T) {
 
 func TestRunAgent_HonorsExistingSoonerDeadline(t *testing.T) {
 	t.Parallel()
-	parent, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	parent, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	ag := &hangingAgent{
 		name: "parent-deadline",
@@ -166,7 +166,7 @@ func TestExecutor_DirectAgentRunIsDeadlineBounded(t *testing.T) {
 	}
 	cfg := &config.Config{AgentTimeout: 20 * time.Millisecond}
 	exec := NewExecutor(database, p, cfg, ag, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err == nil {
+	if err := exec.Execute(t.Context(), run, repo, t.TempDir()); err == nil {
 		t.Fatal("expected hanging Agent.Run to fail the run")
 	}
 	got, err := database.GetRun(run.ID)
@@ -202,7 +202,7 @@ func TestRunAgent_TimeoutReportsMeasuredSilenceWhenTheAgentNeverEmits(t *testing
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 30 * time.Millisecond},
 	}
@@ -238,7 +238,7 @@ func TestRunAgent_TimeoutReportsRecentOutputWhenTheAgentWasStreaming(t *testing.
 	}
 	var logged strings.Builder
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 60 * time.Millisecond},
 	}
@@ -276,7 +276,7 @@ func TestRunAgent_TimeoutPreservesWhatTheAdapterReported(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 20 * time.Millisecond},
 	}
@@ -316,7 +316,7 @@ func TestRunAgent_NativeSubprocessLivenessCountsAsObservedOutput(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 60 * time.Millisecond},
 	}
@@ -349,7 +349,7 @@ func TestRunAgent_RetryMetadataIsNotObservedOutput(t *testing.T) {
 	}
 	var retries int
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 20 * time.Millisecond},
 	}
@@ -395,7 +395,7 @@ func TestRunAgent_FallbackResetsPriorAttemptActivity(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  agent.NewFallback([]agent.Agent{first, second}),
 		Config: &config.Config{AgentTimeout: 20 * time.Millisecond},
 	}
@@ -440,7 +440,7 @@ func TestRunAgent_PromptFormatFallbackResetsPriorAttemptActivity(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 20 * time.Millisecond},
 	}
@@ -480,7 +480,7 @@ func TestRunAgent_FallbackWithoutLaunchMeasuresSilenceFromAttempt(t *testing.T) 
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  agent.NewFallback([]agent.Agent{first, second}),
 		Config: &config.Config{AgentTimeout: 250 * time.Millisecond},
 	}
@@ -525,7 +525,7 @@ func TestRunAgent_SubprocessStartAloneIsNotObservedOutput(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 20 * time.Millisecond},
 	}
@@ -559,7 +559,7 @@ func TestRunAgent_LateSubprocessLaunchMeasuresSilenceFromLaunch(t *testing.T) {
 		},
 	}
 	sctx := &StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Agent:  ag,
 		Config: &config.Config{AgentTimeout: 250 * time.Millisecond},
 	}
@@ -595,7 +595,7 @@ func TestRunAgent_LateSubprocessLaunchMeasuresSilenceFromLaunch(t *testing.T) {
 
 func TestRunAgent_OperatorCancellationIsNotDressedUpAsAnAgentFault(t *testing.T) {
 	t.Parallel()
-	parent, cancel := context.WithCancel(context.Background())
+	parent, cancel := context.WithCancel(t.Context())
 	ag := &hangingAgent{
 		name: "cancelled",
 		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
@@ -649,7 +649,7 @@ func TestExecutor_DirectAgentRunUnderACallerDeadlineRefusesLateWork(t *testing.T
 	}
 	cfg := &config.Config{AgentTimeout: time.Hour}
 	exec := NewExecutor(database, p, cfg, ag, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err == nil {
+	if err := exec.Execute(t.Context(), run, repo, t.TempDir()); err == nil {
 		t.Fatal("expected the expired caller deadline to fail the run")
 	}
 }

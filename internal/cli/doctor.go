@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -35,25 +35,25 @@ func newDoctorCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return trackCommandStatus("doctor", func() (string, error) {
-				w := cmd.OutOrStdout()
+				w := newPrinter(cmd.OutOrStdout())
 				allOK := true
 
 				ok := func(label, detail string) {
-					fmt.Fprintf(w, "  %s %s  %s\n", sGreen.Render("✓"), sDim.Render(label), detail)
+					w.Printf("  %s %s  %s\n", sGreen.Render("✓"), sDim.Render(label), detail)
 				}
 				warn := func(label, detail string) {
-					fmt.Fprintf(w, "  %s %s  %s\n", sYellow.Render("–"), sDim.Render(label), detail)
+					w.Printf("  %s %s  %s\n", sYellow.Render("–"), sDim.Render(label), detail)
 				}
 				fail := func(label, detail string) {
-					fmt.Fprintf(w, "  %s %s  %s\n", sRed.Render("✗"), sDim.Render(label), detail)
+					w.Printf("  %s %s  %s\n", sRed.Render("✗"), sDim.Render(label), detail)
 				}
 				// note continues the row above it, for detail too long to sit in
 				// a checklist column whose other values are a word or two.
 				note := func(detail string) {
-					fmt.Fprintf(w, "      %s\n", sDim.Render(detail))
+					w.Printf("      %s\n", sDim.Render(detail))
 				}
 
-				fmt.Fprintf(w, "  %s\n", sCyan.Render("System"))
+				w.Printf("  %s\n", sCyan.Render("System"))
 
 				if _, err := exec.LookPath("git"); err != nil {
 					fail("git           ", "not found")
@@ -102,7 +102,7 @@ func newDoctorCmd() *cobra.Command {
 							fail("database      ", fmt.Sprintf("error (%v)", err))
 							allOK = false
 						} else {
-							d.Close()
+							closers.Quiet(d)
 							ok("database      ", "ok")
 						}
 					}
@@ -132,8 +132,8 @@ func newDoctorCmd() *cobra.Command {
 				}
 
 				agents := doctorAgentChecks()
-				fmt.Fprintln(w)
-				fmt.Fprintf(w, "  %s\n", sCyan.Render("Agents"))
+				w.Println()
+				w.Printf("  %s\n", sCyan.Render("Agents"))
 				for _, a := range agents {
 					label := fmt.Sprintf("%-14s", a.name)
 					var found, missing []string
@@ -177,12 +177,12 @@ func newDoctorCmd() *cobra.Command {
 				}
 
 				if !allOK {
-					fmt.Fprintln(w)
-					fmt.Fprintf(w, "  %s\n", sRed.Render("some checks failed"))
-					return "error", nil
+					w.Println()
+					w.Printf("  %s\n", sRed.Render("some checks failed"))
+					return "error", w.Err()
 				}
 
-				return "success", nil
+				return "success", w.Err()
 			})
 		},
 	}
@@ -190,7 +190,7 @@ func newDoctorCmd() *cobra.Command {
 
 func doctorForgeProfiles(
 	ctx context.Context,
-	w io.Writer,
+	w *printer,
 	profiles config.ForgeProfiles,
 	ok func(string, string),
 	fail func(string, string),
@@ -198,8 +198,8 @@ func doctorForgeProfiles(
 	if len(profiles) == 0 {
 		return true
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  %s\n", sCyan.Render("Forge profiles"))
+	w.Println()
+	w.Printf("  %s\n", sCyan.Render("Forge profiles"))
 	hosts := make([]string, 0, len(profiles))
 	for host := range profiles {
 		hosts = append(hosts, host)

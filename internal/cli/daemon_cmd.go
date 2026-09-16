@@ -2,13 +2,14 @@ package cli
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -68,7 +69,7 @@ func newDaemonAdmitPushCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("connect to daemon: %w", err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			var result ipc.AdmitPushResult
 			if err := client.Call(ipc.MethodAdmitPush, &ipc.AdmitPushParams{Gate: gatePath}, &result); err != nil {
 				return err
@@ -151,7 +152,7 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("connect to daemon: %w", err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 
 			var result ipc.PushReceivedResult
 			if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -381,6 +382,7 @@ func newDaemonStartCmd() *cobra.Command {
 		Use:   "start",
 		Short: "Install or refresh the managed daemon service and start it",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			out := newPrinter(cmd.OutOrStdout())
 			return trackCommand("daemon.start", func() error {
 				p, err := paths.New()
 				if err != nil {
@@ -392,8 +394,8 @@ func newDaemonStartCmd() *cobra.Command {
 				if err := daemonStartFn(p); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon started\n", sGreen.Render("✓"))
-				return nil
+				out.Printf("  %s daemon started\n", sGreen.Render("✓"))
+				return out.Err()
 			})
 		},
 	}
@@ -412,12 +414,14 @@ func newDaemonStopCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			out := newPrinter(cmd.OutOrStdout())
+			errOut := newPrinter(cmd.ErrOrStderr())
 			return trackCommand("daemon.stop", func() error {
 				p, err := paths.New()
 				if err != nil {
 					return err
 				}
-				parkedNotice, err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon stop", lifecycleGuardMode(force, drain))
+				parkedNotice, err := guardDestructiveDaemonLifecycle(p, errOut, "daemon stop", lifecycleGuardMode(force, drain))
 				if err != nil {
 					return err
 				}
@@ -428,23 +432,23 @@ func newDaemonStopCmd() *cobra.Command {
 					// it did before the error, or the operator never learns
 					// which run was interrupted or that a PR was left open.
 					if opts.Drain {
-						printDrainOutcome(cmd.OutOrStdout(), outcome)
+						printDrainOutcome(out, outcome)
 					}
 					return err
 				}
 				if !opts.Drain {
-					fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
-					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
-					return nil
+					errOut.Print(parkedNotice)
+					out.Printf("  %s daemon stopped\n", sGreen.Render("✓"))
+					return errors.Join(out.Err(), errOut.Err())
 				}
 				if !outcome.NoDaemon {
 					// With nothing running, printDrainOutcome's own line says
 					// so; claiming a daemon stopped as well contradicts it.
-					fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
-					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopped\n", sGreen.Render("✓"))
+					errOut.Print(parkedNotice)
+					out.Printf("  %s daemon stopped\n", sGreen.Render("✓"))
 				}
-				printDrainOutcome(cmd.OutOrStdout(), outcome)
-				return drainOutcomeError(outcome)
+				printDrainOutcome(out, outcome)
+				return errors.Join(drainOutcomeError(outcome), out.Err(), errOut.Err())
 			})
 		},
 	}
@@ -467,6 +471,8 @@ func newDaemonRestartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			out := newPrinter(cmd.OutOrStdout())
+			errOut := newPrinter(cmd.ErrOrStderr())
 			return trackCommand("daemon.restart", func() error {
 				p, err := paths.New()
 				if err != nil {
@@ -475,7 +481,7 @@ func newDaemonRestartCmd() *cobra.Command {
 				if err := p.EnsureDirs(); err != nil {
 					return err
 				}
-				parkedNotice, err := guardDestructiveDaemonLifecycle(p, cmd.ErrOrStderr(), "daemon restart", lifecycleGuardMode(force, drain))
+				parkedNotice, err := guardDestructiveDaemonLifecycle(p, errOut, "daemon restart", lifecycleGuardMode(force, drain))
 				if err != nil {
 					return err
 				}
@@ -484,22 +490,22 @@ func newDaemonRestartCmd() *cobra.Command {
 					// Same as stop: a populated outcome rides alongside the
 					// error, and discarding it hides what the drain did.
 					if opts.Drain {
-						printDrainOutcome(cmd.OutOrStdout(), outcome)
+						printDrainOutcome(out, outcome)
 					}
 					return fmt.Errorf("stop daemon: %w", err)
 				}
 				if opts.Drain {
-					printDrainOutcome(cmd.OutOrStdout(), outcome)
+					printDrainOutcome(out, outcome)
 				}
 				if err := daemonStartFn(p); err != nil {
 					return fmt.Errorf("start daemon: %w", err)
 				}
-				fmt.Fprint(cmd.ErrOrStderr(), parkedNotice)
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon restarted\n", sGreen.Render("✓"))
+				errOut.Print(parkedNotice)
+				out.Printf("  %s daemon restarted\n", sGreen.Render("✓"))
 				if !opts.Drain {
-					return nil
+					return errors.Join(out.Err(), errOut.Err())
 				}
-				return drainOutcomeError(outcome)
+				return errors.Join(drainOutcomeError(outcome), out.Err(), errOut.Err())
 			})
 		},
 	}
@@ -548,29 +554,29 @@ func drainStopOptions(drain bool, drainTimeout time.Duration, timeoutSet, force 
 // opposite of what happened, but they did not do the same thing to the runs
 // either, so the line says only that no drain was reported rather than
 // asserting a fate for work it cannot see.
-func printDrainOutcome(w io.Writer, outcome daemon.StopOutcome) {
+func printDrainOutcome(w *printer, outcome daemon.StopOutcome) {
 	if outcome.NoDaemon {
-		fmt.Fprintf(w, "  %s no daemon was running\n", sGreen.Render("✓"))
+		w.Printf("  %s no daemon was running\n", sGreen.Render("✓"))
 		return
 	}
 	if !outcome.Drained {
-		fmt.Fprintf(w, "  %s the daemon did not report a drain; in-flight runs may not have been allowed to finish\n", sYellow.Render("!"))
+		w.Printf("  %s the daemon did not report a drain; in-flight runs may not have been allowed to finish\n", sYellow.Render("!"))
 		return
 	}
-	fmt.Fprintf(w, "  %s %d run(s) finished before the daemon stopped\n", sGreen.Render("✓"), len(outcome.Finished))
+	w.Printf("  %s %d run(s) finished before the daemon stopped\n", sGreen.Render("✓"), len(outcome.Finished))
 	for _, run := range outcome.Interrupted {
 		switch run.Reason {
 		case ipc.DrainInterruptedCIMonitor:
 			// This daemon no longer produces this reason (a drain preserves a
 			// resumable CI monitor instead of cutting it); this arm renders the
 			// report of an older daemon binary that still does.
-			fmt.Fprintf(w, "  %s %s (%s): CI monitor cut by drain, PR remains open and CI is still running\n", sDim.Render("-"), run.RunID, run.Branch)
+			w.Printf("  %s %s (%s): CI monitor cut by drain, PR remains open and CI is still running\n", sDim.Render("-"), run.RunID, run.Branch)
 		case ipc.DrainInterruptedDeadline:
-			fmt.Fprintf(w, "  %s %s (%s): forcibly stopped at the drain deadline\n", sDim.Render("-"), run.RunID, run.Branch)
+			w.Printf("  %s %s (%s): forcibly stopped at the drain deadline\n", sDim.Render("-"), run.RunID, run.Branch)
 		case ipc.DrainInterruptedShutdown:
-			fmt.Fprintf(w, "  %s %s (%s): drain ended early by daemon shutdown, run stopped mid-flight\n", sDim.Render("-"), run.RunID, run.Branch)
+			w.Printf("  %s %s (%s): drain ended early by daemon shutdown, run stopped mid-flight\n", sDim.Render("-"), run.RunID, run.Branch)
 		default:
-			fmt.Fprintf(w, "  %s %s (%s): interrupted by drain (%s)\n", sDim.Render("-"), run.RunID, run.Branch, run.Reason)
+			w.Printf("  %s %s (%s): interrupted by drain (%s)\n", sDim.Render("-"), run.RunID, run.Branch, run.Reason)
 		}
 	}
 }
@@ -638,7 +644,7 @@ const (
 // returns the preservation promise for the parked runs it would preserve. The
 // caller prints that notice only after the daemon has actually stopped: a
 // refusal or a failed stop preserves nothing.
-func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr io.Writer, action string, mode daemonLifecycleGuardMode) (string, error) {
+func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr *printer, action string, mode daemonLifecycleGuardMode) (string, error) {
 	// This process is the one that starts the daemon back up, so its own step
 	// plan is the layout the preserved runs will resume under. The executable
 	// can have been replaced out of band since a parked run started, so the
@@ -655,16 +661,16 @@ func guardDestructiveDaemonLifecycle(p *paths.Paths, stderr io.Writer, action st
 	runWord, verb := lifecycle.RunCountWords(len(blocking))
 	switch mode {
 	case lifecycleGuardForce:
-		fmt.Fprintf(stderr, "FORCE: %s will stop/restart the daemon while %d active pipeline %s %s in progress\n", action, len(blocking), runWord, verb)
-		fmt.Fprint(stderr, lifecycle.RunList(blocking))
+		stderr.Printf("FORCE: %s will stop/restart the daemon while %d active pipeline %s %s in progress\n", action, len(blocking), runWord, verb)
+		stderr.Print(lifecycle.RunList(blocking))
 		return parkedNotice, nil
 	case lifecycleGuardDrain:
 		// Deliberately not "will wait on N runs": the drain does not wait on
 		// all of them. A run monitoring CI is cut rather than waited out, and
 		// a run parked at a gate is left to the shutdown's own preservation.
 		// This list is what is active, not a promise about each entry.
-		fmt.Fprintf(stderr, "%s will let in-flight work finish before stopping the daemon; %d active pipeline %s %s in progress (CI monitors are cut)\n", action, len(blocking), runWord, verb)
-		fmt.Fprint(stderr, lifecycle.RunList(blocking))
+		stderr.Printf("%s will let in-flight work finish before stopping the daemon; %d active pipeline %s %s in progress (CI monitors are cut)\n", action, len(blocking), runWord, verb)
+		stderr.Print(lifecycle.RunList(blocking))
 		return parkedNotice, nil
 	default:
 		return "", fmt.Errorf("refusing %s because %d active pipeline %s %s in progress; pass --drain to let them finish first, or --force to stop/restart the daemon anyway\n%s", action, len(blocking), runWord, verb, lifecycle.RunList(blocking))
@@ -676,6 +682,7 @@ func newDaemonStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Check if the daemon is running",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			out := newPrinter(cmd.OutOrStdout())
 			return trackCommand("daemon.status", func() error {
 				p, err := paths.New()
 				if err != nil {
@@ -701,20 +708,20 @@ func newDaemonStatusCmd() *cobra.Command {
 					drain, drainErr := daemonDrainStatusFn(p)
 					switch {
 					case drainErr != nil:
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running%s\n", sGreen.Render("●"), suffix)
-						fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", sDim.Render(fmt.Sprintf("could not read whether it is still accepting runs: %v", drainErr)))
+						out.Printf("  %s daemon running%s\n", sGreen.Render("●"), suffix)
+						out.Printf("    %s\n", sDim.Render(fmt.Sprintf("could not read whether it is still accepting runs: %v", drainErr)))
 					case drain.DrainedAlive:
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon drained, not accepting new runs%s\n", sYellow.Render("●"), suffix)
-						fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", sDim.Render("run `no-mistakes daemon restart` to accept runs again"))
+						out.Printf("  %s daemon drained, not accepting new runs%s\n", sYellow.Render("●"), suffix)
+						out.Printf("    %s\n", sDim.Render("run `no-mistakes daemon restart` to accept runs again"))
 					case drain.RefusingNewRuns:
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon stopping, not accepting new runs%s\n", sYellow.Render("●"), suffix)
+						out.Printf("  %s daemon stopping, not accepting new runs%s\n", sYellow.Render("●"), suffix)
 					default:
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon running%s\n", sGreen.Render("●"), suffix)
+						out.Printf("  %s daemon running%s\n", sGreen.Render("●"), suffix)
 					}
 				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "  %s daemon not running\n", sDim.Render("○"))
+					out.Printf("  %s daemon not running\n", sDim.Render("○"))
 				}
-				return nil
+				return out.Err()
 			})
 		},
 	}

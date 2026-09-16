@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -38,7 +39,7 @@ func (h *fakePreRunHost) PreRunFailures(_ context.Context, checks []scm.Check) (
 func markContext(t *testing.T, rerunBudget int) *pipeline.StepContext {
 	t.Helper()
 	return &pipeline.StepContext{
-		Ctx:    context.Background(),
+		Ctx:    t.Context(),
 		Config: &config.Config{CI: config.CI{RerunTransient: rerunBudget}},
 		Log:    func(string) {},
 	}
@@ -166,6 +167,7 @@ func TestClassifyCheckFailure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := classifyCheckFailure(tc.check); got != tc.want {
 				t.Fatalf("classifyCheckFailure(%+v) = %q, want %q", tc.check, got, tc.want)
 			}
@@ -383,6 +385,7 @@ func TestTransientRerunCandidates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			budget := checkRerunBudget{spent: tc.spent}
 			got := transientRerunCandidates(tc.checks, &budget, tc.limit)
 			if len(got) != len(tc.want) {
@@ -562,6 +565,7 @@ func TestCancelledChecksAfterRerun(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			budget := checkRerunBudget{spent: tc.spent}
 			unresolved, awaiting := budget.cancelledAfterRerun(tc.checks)
 			assertNames(t, "unresolved", unresolved, tc.wantUnresolved)
@@ -630,6 +634,7 @@ func TestMergeCheckNames(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assertNames(t, "merged", mergeCheckNames(tc.base, tc.extra), tc.want)
 		})
 	}
@@ -933,7 +938,7 @@ func TestRetireResolvedRerunsRetriesAfterPersistenceFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	sctx.DB = database
 	encoded, err := database.GetRunCIRerunState(run.ID)
 	if err != nil {

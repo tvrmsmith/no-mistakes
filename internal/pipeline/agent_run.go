@@ -290,9 +290,9 @@ func agentReportClause(err error) string {
 	if text == "" {
 		return ""
 	}
-	const max = 400
-	if len([]rune(text)) > max {
-		text = string([]rune(text)[:max]) + "..."
+	const maxRunes = 400
+	if len([]rune(text)) > maxRunes {
+		text = string([]rune(text)[:maxRunes]) + "..."
 	}
 	return "agent reported: " + text
 }

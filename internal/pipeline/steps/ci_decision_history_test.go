@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -56,7 +55,7 @@ func newCIDecisionPromptFixture(t *testing.T) *ciDecisionPromptFixture {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -64,7 +63,7 @@ func newCIDecisionPromptFixture(t *testing.T) *ciDecisionPromptFixture {
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -75,7 +74,7 @@ func newCIDecisionPromptFixture(t *testing.T) *ciDecisionPromptFixture {
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			f.prompt = opts.Prompt
-			os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(opts.CWD, "ci-fix.txt"), "fixed")
 			return &agent.Result{}, nil
 		},
 	}
@@ -105,7 +104,7 @@ func (f *ciDecisionPromptFixture) capture(t *testing.T) string {
 	// before the step runs; mirror that so the fixture matches production.
 	pipeline.BindBranchDecisions(f.sctx)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	f.sctx.Ctx = ctx
 	step := &CIStep{waitForNextPoll: func(ctx context.Context, _ time.Duration) error {

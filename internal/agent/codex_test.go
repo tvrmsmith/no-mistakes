@@ -31,7 +31,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 		},
 		Unset: []string{"GH_TOKEN"},
 	})}
-	if _, err := ca.Run(context.Background(), RunOpts{Prompt: "test", CWD: dir}); err != nil {
+	if _, err := ca.Run(t.Context(), RunOpts{Prompt: "test", CWD: dir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	data, err := os.ReadFile(capture)
@@ -147,7 +147,7 @@ func writeFakeCodex(t *testing.T, dir, posixScript, windowsScript string) string
 	}
 
 	bin := filepath.Join(dir, name)
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
 	return bin
@@ -166,7 +166,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 `, "")
 	prompt := strings.Repeat("codex-prompt-", 512)
 	ca := &codexAgent{bin: bin}
-	if _, err := ca.Run(context.Background(), RunOpts{Prompt: prompt, CWD: dir}); err != nil {
+	if _, err := ca.Run(t.Context(), RunOpts{Prompt: prompt, CWD: dir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	argv, err := os.ReadFile(filepath.Join(dir, "argv.txt"))
@@ -241,7 +241,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 
 	schema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)
 	ca := &codexAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{
+	result, err := ca.Run(t.Context(), RunOpts{
 		Prompt:     "review",
 		CWD:        t.TempDir(),
 		JSONSchema: schema,
@@ -297,7 +297,7 @@ sleep 100
 		"ping -n 101 127.0.0.1 > nul",
 	}, "\r\n"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	started := time.Now()
 	_, err := (&codexAgent{bin: bin}).Run(ctx, RunOpts{Prompt: "gather evidence", CWD: dir})
@@ -332,7 +332,7 @@ sleep 100
 	// callback makes the same scenario deterministic - progress streamed,
 	// never a terminal completion - at any load. The outer budget only stops
 	// the test hanging if the chunk never arrives at all.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	var chunks []string
 	result, err := (&codexAgent{bin: bin}).Run(ctx, RunOpts{
@@ -368,7 +368,7 @@ exit 1
 	}, "\r\n"))
 
 	ca := &codexAgent{bin: bin}
-	_, err := ca.Run(context.Background(), RunOpts{
+	_, err := ca.Run(t.Context(), RunOpts{
 		Prompt:     "review",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
@@ -415,7 +415,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 	}`)
 
 	ca := &codexAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{
+	result, err := ca.Run(t.Context(), RunOpts{
 		Prompt:     "review",
 		CWD:        t.TempDir(),
 		JSONSchema: schema,
@@ -489,7 +489,7 @@ func TestParseCodexEvents_AgentMessage(t *testing.T) {
 	var lastMessage string
 
 	err := parseCodexEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		nil,
 		&usage,
@@ -527,7 +527,7 @@ func TestParseCodexEvents_SeparatesMultipleMessages(t *testing.T) {
 	var lastMessage string
 
 	err := parseCodexEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -562,7 +562,7 @@ func TestParseCodexEvents_DoesNotSeparateSplitTurnMessages(t *testing.T) {
 	var lastMessage string
 
 	err := parseCodexEvents(
-		context.Background(),
+		t.Context(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
@@ -590,7 +590,7 @@ func TestParseCodexEvents_SkipsMalformedLines(t *testing.T) {
 
 	var usage TokenUsage
 	var lastMessage string
-	err := parseCodexEvents(context.Background(), strings.NewReader(events), nil, &usage, &lastMessage, nil, nil, nil)
+	err := parseCodexEvents(t.Context(), strings.NewReader(events), nil, &usage, &lastMessage, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

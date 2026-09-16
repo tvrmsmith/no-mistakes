@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -90,12 +91,12 @@ func setupRunWithCIRepairEvidence(t *testing.T, ctx context.Context, selected, o
 }
 
 func TestCIFalseNegativesFromRun_IngestsFixedCheckAndReviewBotOnly(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	// ci-1 (ci-check) and ci-2 (ci-review-bot) are fixed; ci-3 (ci-transient) is
 	// selected too but must still be excluded by category; ci-4 (ci-review-bot)
 	// is not selected, so it was dismissed and must be excluded.
 	_, sourceDB, run, _ := setupRunWithGreenReviewAndCI(t, ctx, `["ci-1","ci-2","ci-3"]`, "")
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	gold, err := CIFalseNegativesFromRun(sourceDB, run.ID)
 	if err != nil {
@@ -136,12 +137,12 @@ func TestCIFalseNegativesFromRun_IngestsFixedCheckAndReviewBotOnly(t *testing.T)
 }
 
 func TestCIFalseNegativesFromRun_ExcludesOverriddenAndUnselected(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A CI step that completed only because a human approved an override is not
 	// proof the findings were fixed, even though they were selected.
 	_, overriddenDB, overriddenRun, _ := setupRunWithGreenReviewAndCI(t, ctx, `["ci-1","ci-2"]`, "CI checks still failing; operator approved")
-	defer overriddenDB.Close()
+	defer closers.Quiet(overriddenDB)
 	gold, err := CIFalseNegativesFromRun(overriddenDB, overriddenRun.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +153,7 @@ func TestCIFalseNegativesFromRun_ExcludesOverriddenAndUnselected(t *testing.T) {
 
 	// Nothing selected for repair means nothing was confirmed and fixed.
 	_, noSelDB, noSelRun, _ := setupRunWithGreenReviewAndCI(t, ctx, "", "")
-	defer noSelDB.Close()
+	defer closers.Quiet(noSelDB)
 	gold, err = CIFalseNegativesFromRun(noSelDB, noSelRun.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -163,9 +164,9 @@ func TestCIFalseNegativesFromRun_ExcludesOverriddenAndUnselected(t *testing.T) {
 }
 
 func TestCIFalseNegativesFromRun_IngestsPublishedRepairWithEmptySummary(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, sourceDB, run, _ := setupRunWithCIRepairEvidence(t, ctx, `["ci-2"]`, "", true, "", true, false)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +190,7 @@ func TestCIFalseNegativesFromRun_IngestsPublishedRepairWithEmptySummary(t *testi
 }
 
 func TestCIFalseNegativesFromRun_RequiresLandedRepairAndPassedChecks(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tests := []struct {
 		name            string
 		repairPublished bool
@@ -204,7 +205,7 @@ func TestCIFalseNegativesFromRun_RequiresLandedRepairAndPassedChecks(t *testing.
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, sourceDB, run, _ := setupRunWithCIRepairEvidence(t, ctx, `["ci-1"]`, "", tc.repairPublished, tc.repairSummary, tc.checksPassed, tc.declaredNoCI)
-			defer sourceDB.Close()
+			defer closers.Quiet(sourceDB)
 			gold, err := CIFalseNegativesFromRun(sourceDB, run.ID)
 			if err != nil {
 				t.Fatal(err)
@@ -217,9 +218,9 @@ func TestCIFalseNegativesFromRun_RequiresLandedRepairAndPassedChecks(t *testing.
 }
 
 func TestCIFalseNegativesFromRun_TerminalPRBeforeChecksPassesNothing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, sourceDB, run, _ := setupRunWithCIRepairEvidence(t, ctx, `["ci-1"]`, "", true, "fixed and published", false, false)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.UpdateRunPRState(run.ID, "closed"); err != nil {
 		t.Fatal(err)
 	}
@@ -233,9 +234,9 @@ func TestCIFalseNegativesFromRun_TerminalPRBeforeChecksPassesNothing(t *testing.
 }
 
 func TestCIFalseNegativesFromRun_RequiresCompletedRun(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, sourceDB, run, _ := setupRunWithGreenReviewAndCI(t, ctx, `["ci-1"]`, "")
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.UpdateRunStatus(run.ID, types.RunFailed); err != nil {
 		t.Fatal(err)
 	}
@@ -249,9 +250,9 @@ func TestCIFalseNegativesFromRun_RequiresCompletedRun(t *testing.T) {
 }
 
 func TestAutoIngestCIFalseNegatives_AttachesToGreenReviewAndIsIdempotent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, greenRound := setupRunWithGreenReviewAndCI(t, ctx, `["ci-1","ci-2"]`, "")
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	result, skipped, err := AutoIngestCIFalseNegatives(ctx, p, sourceDB, run.ID)
 	if err != nil {
@@ -268,7 +269,7 @@ func TestAutoIngestCIFalseNegatives_AttachesToGreenReviewAndIsIdempotent(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	labeled, err := store.ListCases("labeled")
 	if err != nil {
 		t.Fatal(err)

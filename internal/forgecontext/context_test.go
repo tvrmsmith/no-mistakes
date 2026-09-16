@@ -1,7 +1,6 @@
 package forgecontext
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,14 +13,14 @@ import (
 func TestResolveSelectsGitHubProfileAndBuildsAuthoritativeEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	hosts := "github.com:\n    users:\n        rudingma:\n    user: rudingma\n"
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profiles := config.ForgeProfiles{
 		"github.com": {GHConfigDir: dir},
 	}
 
-	resolved, err := Resolve(context.Background(), profiles, "https://github.com/rudingma/work-os.git", "")
+	resolved, err := Resolve(t.Context(), profiles, "https://github.com/rudingma/work-os.git", "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -58,14 +57,14 @@ func TestResolveSelectsGitHubProfileAndBuildsAuthoritativeEnvironment(t *testing
 func TestResolveSelectsGitLabProfileWithoutSanitizingGitHub(t *testing.T) {
 	dir := t.TempDir()
 	configYAML := "hosts:\n    gitlab.com:\n        user: matthias78\n"
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profiles := config.ForgeProfiles{
 		"gitlab.com": {GLabConfigDir: dir},
 	}
 
-	resolved, err := Resolve(context.Background(), profiles, "https://gitlab.com/almedia/project.git", "")
+	resolved, err := Resolve(t.Context(), profiles, "https://gitlab.com/almedia/project.git", "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -95,7 +94,7 @@ func TestResolveSelectsGitLabProfileWithoutSanitizingGitHub(t *testing.T) {
 }
 
 func TestResolvePreservesAmbientEnvironmentWithoutProfiles(t *testing.T) {
-	resolved, err := Resolve(context.Background(), nil, "https://github.com/acme/repo.git", "")
+	resolved, err := Resolve(t.Context(), nil, "https://github.com/acme/repo.git", "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -106,10 +105,10 @@ func TestResolvePreservesAmbientEnvironmentWithoutProfiles(t *testing.T) {
 
 func TestResolveMatchedProfileDefinesSelfHostedProvider(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("code.example.test:\n    user: work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("code.example.test:\n    user: work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := Resolve(context.Background(), config.ForgeProfiles{
+	resolved, err := Resolve(t.Context(), config.ForgeProfiles{
 		"code.example.test": {GHConfigDir: dir},
 	}, "https://code.example.test/acme/repo.git", "")
 	if err != nil {
@@ -124,33 +123,33 @@ func TestResolveActivatesStrictMatchingPerProvider(t *testing.T) {
 	githubProfiles := config.ForgeProfiles{
 		"github-personal": {GHConfigDir: filepath.Join(t.TempDir(), "gh")},
 	}
-	if _, err := Resolve(context.Background(), githubProfiles, "https://github.com/acme/repo.git", ""); err == nil {
+	if _, err := Resolve(t.Context(), githubProfiles, "https://github.com/acme/repo.git", ""); err == nil {
 		t.Fatal("unmatched GitHub repository succeeded after GitHub profile activation")
 	}
-	if resolved, err := Resolve(context.Background(), githubProfiles, "https://gitlab.com/acme/repo.git", ""); err != nil || resolved != nil {
+	if resolved, err := Resolve(t.Context(), githubProfiles, "https://gitlab.com/acme/repo.git", ""); err != nil || resolved != nil {
 		t.Fatalf("GitLab repository with only GitHub profiles = (%#v, %v), want ambient nil context", resolved, err)
 	}
 
 	gitlabProfiles := config.ForgeProfiles{
 		"gitlab-work": {GLabConfigDir: filepath.Join(t.TempDir(), "glab")},
 	}
-	if resolved, err := Resolve(context.Background(), gitlabProfiles, "https://github.com/acme/repo.git", ""); err != nil || resolved != nil {
+	if resolved, err := Resolve(t.Context(), gitlabProfiles, "https://github.com/acme/repo.git", ""); err != nil || resolved != nil {
 		t.Fatalf("GitHub repository with only GitLab profiles = (%#v, %v), want ambient nil context", resolved, err)
 	}
-	if _, err := Resolve(context.Background(), gitlabProfiles, "https://gitlab.com/acme/repo.git", ""); err == nil {
+	if _, err := Resolve(t.Context(), gitlabProfiles, "https://gitlab.com/acme/repo.git", ""); err == nil {
 		t.Fatal("unmatched GitLab repository succeeded after GitLab profile activation")
 	}
 }
 
 func TestResolveFailsClosedForUnmatchedSelfHostedProvider(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("code.example.test:\n    user: work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("code.example.test:\n    user: work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profiles := config.ForgeProfiles{
 		"work-code-alias": {GHConfigDir: dir},
 	}
-	if _, err := Resolve(context.Background(), profiles, "https://code.example.test/acme/repo.git", ""); err == nil {
+	if _, err := Resolve(t.Context(), profiles, "https://code.example.test/acme/repo.git", ""); err == nil {
 		t.Fatal("unmatched self-hosted GitHub repository used ambient behavior after GitHub profile activation")
 	}
 }
@@ -158,7 +157,7 @@ func TestResolveFailsClosedForUnmatchedSelfHostedProvider(t *testing.T) {
 func TestResolveUsesForkProfileForGitHubFork(t *testing.T) {
 	dir := t.TempDir()
 	hosts := "github.com:\n    users:\n        contributor:\n    user: contributor\n"
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profiles := config.ForgeProfiles{
@@ -166,7 +165,7 @@ func TestResolveUsesForkProfileForGitHubFork(t *testing.T) {
 	}
 
 	resolved, err := Resolve(
-		context.Background(),
+		t.Context(),
 		profiles,
 		"https://github.com/upstream/project.git",
 		"git@github-contributor:contributor/project.git",
@@ -181,11 +180,11 @@ func TestResolveUsesForkProfileForGitHubFork(t *testing.T) {
 
 func TestResolveUsesForkHostWhenUpstreamHasNoHost(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: contributor\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: contributor\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	resolved, err := Resolve(context.Background(), config.ForgeProfiles{
+	resolved, err := Resolve(t.Context(), config.ForgeProfiles{
 		"github.com": {GHConfigDir: dir},
 	}, "", "https://github.com/contributor/project.git")
 	if err != nil {
@@ -198,14 +197,14 @@ func TestResolveUsesForkHostWhenUpstreamHasNoHost(t *testing.T) {
 
 func TestResolveAcceptsLegacySingleAccountGitHubProfile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: legacy-user\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: legacy-user\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profiles := config.ForgeProfiles{
 		"github.com": {GHConfigDir: dir},
 	}
 
-	resolved, err := Resolve(context.Background(), profiles, "https://github.com/acme/repo.git", "")
+	resolved, err := Resolve(t.Context(), profiles, "https://github.com/acme/repo.git", "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -216,14 +215,14 @@ func TestResolveAcceptsLegacySingleAccountGitHubProfile(t *testing.T) {
 
 func TestResolveRejectsProfileWhoseProviderConflictsWithRemote(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte("hosts:\n    github.com:\n        user: wrong-provider\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte("hosts:\n    github.com:\n        user: wrong-provider\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profiles := config.ForgeProfiles{
 		"github.com": {GLabConfigDir: dir},
 	}
 
-	_, err := Resolve(context.Background(), profiles, "https://github.com/acme/repo.git", "")
+	_, err := Resolve(t.Context(), profiles, "https://github.com/acme/repo.git", "")
 	if err == nil {
 		t.Fatal("GitLab profile was accepted for an obvious GitHub remote")
 	}
@@ -232,11 +231,11 @@ func TestResolveRejectsProfileWhoseProviderConflictsWithRemote(t *testing.T) {
 func TestResolveRejectsGitHubProfileWithMultipleAccounts(t *testing.T) {
 	dir := t.TempDir()
 	hosts := "github.com:\n    users:\n        personal:\n        work:\n    user: personal\n"
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := Resolve(context.Background(), config.ForgeProfiles{
+	_, err := Resolve(t.Context(), config.ForgeProfiles{
 		"github.com": {GHConfigDir: dir},
 	}, "https://github.com/acme/repo.git", "")
 	if err == nil {
@@ -246,7 +245,7 @@ func TestResolveRejectsGitHubProfileWithMultipleAccounts(t *testing.T) {
 
 func TestResolveAcceptsParentAndForkAliasesForSameEffectiveProfile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: contributor\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: contributor\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(t.TempDir(), "gh-link")
@@ -254,7 +253,7 @@ func TestResolveAcceptsParentAndForkAliasesForSameEffectiveProfile(t *testing.T)
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	resolved, err := Resolve(context.Background(), config.ForgeProfiles{
+	resolved, err := Resolve(t.Context(), config.ForgeProfiles{
 		"github.com":      {GHConfigDir: dir},
 		"github-personal": {GHConfigDir: link},
 	}, "https://github.com/upstream/project.git", "git@github-personal:contributor/project.git")
@@ -267,7 +266,7 @@ func TestResolveAcceptsParentAndForkAliasesForSameEffectiveProfile(t *testing.T)
 }
 
 func TestResolveRejectsDifferentParentAndForkProfiles(t *testing.T) {
-	_, err := Resolve(context.Background(), config.ForgeProfiles{
+	_, err := Resolve(t.Context(), config.ForgeProfiles{
 		"github.com":      {GHConfigDir: filepath.Join(t.TempDir(), "parent")},
 		"github-personal": {GHConfigDir: filepath.Join(t.TempDir(), "fork")},
 	}, "https://github.com/upstream/project.git", "git@github-personal:contributor/project.git")
@@ -283,11 +282,11 @@ func TestResolveRejectsDifferentParentAndForkProfiles(t *testing.T) {
 // silent fallback expected_login exists to refuse.
 func TestResolveRejectsConflictingExpectedLoginsOnOneConfigDirectory(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: alice\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: alice\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := Resolve(context.Background(), config.ForgeProfiles{
+	_, err := Resolve(t.Context(), config.ForgeProfiles{
 		"github.com":      {GHConfigDir: dir, ExpectedLogin: "alice"},
 		"github-personal": {GHConfigDir: dir, ExpectedLogin: "bob"},
 	}, "https://github.com/upstream/project.git", "git@github-personal:bob/project.git")
@@ -303,11 +302,11 @@ func TestResolveRejectsConflictingExpectedLoginsOnOneConfigDirectory(t *testing.
 // legitimate alias case working: identical pins are the same selection.
 func TestResolveAcceptsMatchingExpectedLoginOnOneConfigDirectory(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: alice\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: alice\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	resolved, err := Resolve(context.Background(), config.ForgeProfiles{
+	resolved, err := Resolve(t.Context(), config.ForgeProfiles{
 		"github.com":      {GHConfigDir: dir, ExpectedLogin: "alice"},
 		"github-personal": {GHConfigDir: dir, ExpectedLogin: "Alice"},
 	}, "https://github.com/upstream/project.git", "git@github-personal:alice/project.git")
@@ -334,11 +333,11 @@ func envMap(env []string) map[string]string {
 
 func TestResolveEnforcesExpectedGitHubLogin(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: work-account\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte("github.com:\n    user: work-account\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	matched, err := Resolve(context.Background(), config.ForgeProfiles{
+	matched, err := Resolve(t.Context(), config.ForgeProfiles{
 		"github.com": {GHConfigDir: dir, ExpectedLogin: "Work-Account"},
 	}, "https://github.com/acme/repo.git", "")
 	if err != nil {
@@ -348,7 +347,7 @@ func TestResolveEnforcesExpectedGitHubLogin(t *testing.T) {
 		t.Fatalf("resolved context = %#v, want GitHub", matched)
 	}
 
-	if _, err := Resolve(context.Background(), config.ForgeProfiles{
+	if _, err := Resolve(t.Context(), config.ForgeProfiles{
 		"github.com": {GHConfigDir: dir, ExpectedLogin: "personal-account"},
 	}, "https://github.com/acme/repo.git", ""); err == nil {
 		t.Fatal("expected login mismatch to fail closed")
@@ -360,17 +359,17 @@ func TestResolveEnforcesExpectedGitHubLogin(t *testing.T) {
 func TestResolveEnforcesExpectedGitLabLogin(t *testing.T) {
 	dir := t.TempDir()
 	configYAML := "hosts:\n    gitlab.com:\n        user: team-bot\n"
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := Resolve(context.Background(), config.ForgeProfiles{
+	if _, err := Resolve(t.Context(), config.ForgeProfiles{
 		"gitlab.com": {GLabConfigDir: dir, ExpectedLogin: "team-bot"},
 	}, "https://gitlab.com/acme/repo.git", ""); err != nil {
 		t.Fatalf("Resolve with matching login: %v", err)
 	}
 
-	if _, err := Resolve(context.Background(), config.ForgeProfiles{
+	if _, err := Resolve(t.Context(), config.ForgeProfiles{
 		"gitlab.com": {GLabConfigDir: dir, ExpectedLogin: "someone-else"},
 	}, "https://gitlab.com/acme/repo.git", ""); err == nil {
 		t.Fatal("expected login mismatch to fail closed")
@@ -381,10 +380,10 @@ func TestResolveExpectedLoginRequiresDeclaredActiveUser(t *testing.T) {
 	dir := t.TempDir()
 	// A GitLab host entry without a user cannot satisfy a pinned login:
 	// silence must fail closed, never fall back to ambient identity.
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte("hosts:\n    gitlab.com:\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte("hosts:\n    gitlab.com:\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Resolve(context.Background(), config.ForgeProfiles{
+	if _, err := Resolve(t.Context(), config.ForgeProfiles{
 		"gitlab.com": {GLabConfigDir: dir, ExpectedLogin: "team-bot"},
 	}, "https://gitlab.com/acme/repo.git", ""); err == nil {
 		t.Fatal("expected missing active user under a pinned login to fail closed")

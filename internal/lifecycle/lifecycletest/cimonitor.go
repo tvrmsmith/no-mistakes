@@ -3,6 +3,7 @@ package lifecycletest
 import (
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -33,7 +34,7 @@ func SeedResumableCIMonitorRun(t *testing.T, p *paths.Paths, repoPath, branch, p
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 
 	repo, err := database.InsertRepo(repoPath, "git@github.com:user/project.git", "main")
 	if err != nil {

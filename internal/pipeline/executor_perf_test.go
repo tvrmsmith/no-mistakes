@@ -75,7 +75,7 @@ func TestExecutor_RecordsAgentInvocationsLocally(t *testing.T) {
 
 	cfg := &config.Config{Agent: types.AgentClaude, SessionReuse: true}
 	exec := NewExecutor(database, p, cfg, &usageAgent{resumable: true}, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestPerfRecordingAgent_RecordsFallbackAttemptsSeparately(t *testing.T) {
 		round:    func() int { return 1 },
 	}
 
-	if _, err := wrapped.Run(context.Background(), agent.RunOpts{Purpose: "review"}); err != nil {
+	if _, err := wrapped.Run(t.Context(), agent.RunOpts{Purpose: "review"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	invocations, err := database.GetAgentInvocationsByRun(run.ID)
@@ -164,7 +164,7 @@ func TestPerfRecordingAgent_MixedFallbackRecordsActualProviderCold(t *testing.T)
 	}
 
 	sessions := NewRunSessions(database, run.ID, wrapped, true)
-	if _, err := sessions.Run(context.Background(), wrapped, SessionRoleReviewer, agent.RunOpts{Purpose: "review"}, nil); err != nil {
+	if _, err := sessions.Run(t.Context(), wrapped, SessionRoleReviewer, agent.RunOpts{Purpose: "review"}, nil); err != nil {
 		t.Fatalf("run session: %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestExecutor_AccumulatesParkedDuration(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- exec.Execute(context.Background(), run, repo, workDir)
+		done <- exec.Execute(t.Context(), run, repo, workDir)
 	}()
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)

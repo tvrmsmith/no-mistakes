@@ -176,7 +176,7 @@ func TestNewModel_DetachedHEADForcesBranchStep(t *testing.T) {
 }
 
 func TestNewModel_UsesConfigContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cfg := baseConfig(&recorder{})
 	cfg.Context = ctx
 
@@ -477,7 +477,7 @@ func TestRunAuto_SuggestionErrorReturnsFailure(t *testing.T) {
 func TestRunAuto_UsesCallerContext(t *testing.T) {
 	r := &recorder{}
 	cfg := baseConfig(r)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	cfg.Context = ctx
 	cfg.SuggestBranch = func(ctx context.Context) (string, error) {
@@ -503,7 +503,7 @@ func TestRunAuto_UsesCallerContext(t *testing.T) {
 func TestRunAuto_WrapsUnderlyingContextError(t *testing.T) {
 	r := &recorder{}
 	cfg := baseConfig(r)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	cfg.Context = ctx
 	cfg.SuggestBranch = func(ctx context.Context) (string, error) {
@@ -525,7 +525,7 @@ func TestRun_UsesCallerContext(t *testing.T) {
 	cfg.CurrentBranch = "feat/existing"
 	cfg.NeedsBranch = false
 	cfg.IsDirty = false
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	cfg.Context = ctx
 
@@ -547,7 +547,7 @@ func TestRun_ContextCancelResetsTerminalTitle(t *testing.T) {
 	cfg.DisableInput = true
 	cfg.Output = &out
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cfg.Context = ctx
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -584,7 +584,7 @@ func TestWizardTracksCompletedKeyActions(t *testing.T) {
 	m = advance(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m = advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feat: add wizard telemetry")})
 	m = advance(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m = advance(m, tea.KeyMsg{Type: tea.KeyEnter})
+	advance(m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	if !containsWizardEvent(r.telemetry, "branch_created", "source", "user") {
 		t.Fatal("expected branch_created telemetry with user source")
@@ -609,7 +609,7 @@ func TestWizardTracksAbortOnPushDecline(t *testing.T) {
 	m := NewModel(cfg)
 	m = drain(m, m.Init())
 
-	m = advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 
 	if !containsWizardEvent(r.telemetry, "aborted", "reason", "decline_push") {
 		t.Fatal("expected aborted telemetry with decline_push reason")
@@ -621,7 +621,7 @@ func TestWizardTracksAgentSourcedBranchAction(t *testing.T) {
 	m := NewModel(baseConfig(r))
 	m = drain(m, m.Init())
 
-	m = advance(m, tea.KeyMsg{Type: tea.KeyEnter})
+	advance(m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	if !containsWizardEvent(r.telemetry, "branch_created", "source", "agent") {
 		t.Fatal("expected branch_created telemetry with agent source")
@@ -760,7 +760,7 @@ func TestWaitForRun_CompletedTelemetrySkippedOnWaitError(t *testing.T) {
 
 	m := NewModel(cfg)
 	m = drain(m, m.Init())
-	m = advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	advance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 
 	if containsWizardEvent(r.telemetry, "completed", "", nil) {
 		t.Fatal("completed telemetry should not fire when wait fails")

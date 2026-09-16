@@ -108,7 +108,7 @@ func TestPatchAgyFixtureDropsStructuredOutputForPlainActions(t *testing.T) {
 func TestRunAgyReplaysRecordedFixture(t *testing.T) {
 	dir := t.TempDir()
 	fixture := filepath.Join(dir, "antigravity")
-	if err := os.MkdirAll(fixture, 0o755); err != nil {
+	if err := os.MkdirAll(fixture, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	fixtureContents := map[string]string{
@@ -116,7 +116,7 @@ func TestRunAgyReplaysRecordedFixture(t *testing.T) {
 		"structured.jsonl": `{"event":"result","result":{"conversation_id":"structured-recorded","status":"SUCCESS","response":"recorded","structured_output":{"ok":true}}}` + "\n",
 	}
 	for name, content := range fixtureContents {
-		if err := os.WriteFile(filepath.Join(fixture, name), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(fixture, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

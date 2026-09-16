@@ -30,7 +30,7 @@ func TestRebaseStep_DetectsUnpushedLocalDefaultBranchCommits(t *testing.T) {
 	gitCmd(t, working, "config", "user.name", "test")
 	gitCmd(t, working, "config", "user.email", "test@test.com")
 	gitCmd(t, working, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(working, "base.txt"), []byte("base"), 0o644)
+	writeFile(t, filepath.Join(working, "base.txt"), "base")
 	gitCmd(t, working, "add", "-A")
 	gitCmd(t, working, "commit", "-m", "base")
 	d0 := gitCmd(t, working, "rev-parse", "HEAD")
@@ -38,8 +38,8 @@ func TestRebaseStep_DetectsUnpushedLocalDefaultBranchCommits(t *testing.T) {
 	gitCmd(t, working, "push", "origin", "main") // origin/main == D0
 
 	// Unrelated workstream commits to local main but does NOT push.
-	os.WriteFile(filepath.Join(working, "unrelated_a.txt"), []byte("backend a"), 0o644)
-	os.WriteFile(filepath.Join(working, "unrelated_b.txt"), []byte("backend b"), 0o644)
+	writeFile(t, filepath.Join(working, "unrelated_a.txt"), "backend a")
+	writeFile(t, filepath.Join(working, "unrelated_b.txt"), "backend b")
 	gitCmd(t, working, "add", "-A")
 	gitCmd(t, working, "commit", "-m", "unrelated backend work (77 files)")
 	localMainTip := gitCmd(t, working, "rev-parse", "HEAD") // D0 + U, unpushed
@@ -53,14 +53,14 @@ func TestRebaseStep_DetectsUnpushedLocalDefaultBranchCommits(t *testing.T) {
 	gitCmd(t, dir, "fetch", working, "main") // import U's objects (as feature ancestor)
 	gitCmd(t, dir, "checkout", "--detach", localMainTip)
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "my_fix.txt"), []byte("my 2-line fix"), 0o644)
+	writeFile(t, filepath.Join(dir, "my_fix.txt"), "my 2-line fix")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "my fix")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD") // D0 + U + M
 
 	// Upstream-only files must not inflate the proposed PR evidence.
 	gitCmd(t, working, "checkout", "-b", "upstream-advance", d0)
-	if err := os.WriteFile(filepath.Join(working, "aaa_upstream_only.txt"), []byte("upstream"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(working, "aaa_upstream_only.txt"), []byte("upstream"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, working, "add", "-A")
@@ -121,13 +121,13 @@ func TestRebaseStep_DetectsUnpushedLocalDefaultBranchCommitsOnForcePush(t *testi
 	gitCmd(t, working, "config", "user.name", "test")
 	gitCmd(t, working, "config", "user.email", "test@test.com")
 	gitCmd(t, working, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(working, "base.txt"), []byte("base"), 0o644)
+	writeFile(t, filepath.Join(working, "base.txt"), "base")
 	gitCmd(t, working, "add", "-A")
 	gitCmd(t, working, "commit", "-m", "base")
 	gitCmd(t, working, "remote", "add", "origin", upstream)
 	gitCmd(t, working, "push", "origin", "main")
 
-	os.WriteFile(filepath.Join(working, "unrelated_force.txt"), []byte("local main work"), 0o644)
+	writeFile(t, filepath.Join(working, "unrelated_force.txt"), "local main work")
 	gitCmd(t, working, "add", "-A")
 	gitCmd(t, working, "commit", "-m", "unrelated local main work")
 	localMainTip := gitCmd(t, working, "rev-parse", "HEAD")
@@ -137,7 +137,7 @@ func TestRebaseStep_DetectsUnpushedLocalDefaultBranchCommitsOnForcePush(t *testi
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "old_feature.txt"), []byte("old feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "old_feature.txt"), "old feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "old feature")
 	oldFeatureSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -146,7 +146,7 @@ func TestRebaseStep_DetectsUnpushedLocalDefaultBranchCommitsOnForcePush(t *testi
 	gitCmd(t, dir, "fetch", working, "main")
 	gitCmd(t, dir, "checkout", "--detach", localMainTip)
 	gitCmd(t, dir, "checkout", "-B", "feature")
-	os.WriteFile(filepath.Join(dir, "my_force_fix.txt"), []byte("force-pushed fix"), 0o644)
+	writeFile(t, filepath.Join(dir, "my_force_fix.txt"), "force-pushed fix")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "force-pushed fix")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -184,7 +184,7 @@ func TestRebaseStep_LocalDefaultTipIsIntendedDelivery(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	for _, name := range []string{"package.json", "package-lock.json"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("base"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("base"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -194,7 +194,7 @@ func TestRebaseStep_LocalDefaultTipIsIntendedDelivery(t *testing.T) {
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 	for _, name := range []string{"package.json", "package-lock.json"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("upgrade"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("upgrade"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

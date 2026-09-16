@@ -13,7 +13,7 @@ func TestLoadGlobal_SCM(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	data := []byte("scm:\n  cli_wrapper: [\"op\", \"plugin\", \"run\", \"--\"]\n  gh_config_dir: /gh-config\n")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,7 +78,7 @@ func TestLoadGlobal_SCMDefaultsEmpty(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("log_level: info\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("log_level: info\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

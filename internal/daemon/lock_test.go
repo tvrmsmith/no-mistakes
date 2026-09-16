@@ -47,7 +47,7 @@ func TestAcquireSingletonLock_ReleaseAllowsReacquire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second acquire after release: %v", err)
 	}
-	defer lock2.Release()
+	lock2.Release()
 }
 
 func TestAcquireSingletonLock_ReportsExistingHolder(t *testing.T) {

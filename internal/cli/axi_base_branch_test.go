@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -33,7 +32,7 @@ func TestParsePRBaseBranchPushOptions(t *testing.T) {
 
 func TestValidateAxiRunBaseBranch_RejectsInvalidName(t *testing.T) {
 	t.Parallel()
-	err := validateAxiRunBaseBranch(context.Background(), "bad..branch")
+	err := validateAxiRunBaseBranch(t.Context(), "bad..branch")
 	if err == nil {
 		t.Fatal("expected error for invalid branch name")
 	}
@@ -44,7 +43,7 @@ func TestValidateAxiRunBaseBranch_RejectsInvalidName(t *testing.T) {
 
 func TestValidateAxiRunBaseBranch_AllowsEmpty(t *testing.T) {
 	t.Parallel()
-	if err := validateAxiRunBaseBranch(context.Background(), ""); err != nil {
+	if err := validateAxiRunBaseBranch(t.Context(), ""); err != nil {
 		t.Fatalf("empty base branch should be allowed: %v", err)
 	}
 }

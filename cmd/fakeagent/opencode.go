@@ -182,7 +182,7 @@ func (s *fakeOpencodeServer) handleEvents(w http.ResponseWriter, r *http.Request
 			if !ok {
 				return
 			}
-			w.Write(data)
+			writeStream(w, data)
 			flusher.Flush()
 		}
 	}
@@ -266,7 +266,7 @@ func (s *fakeOpencodeServer) handleSessionRoot(w http.ResponseWriter, r *http.Re
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(patched)
+		writeStream(w, patched)
 		return
 	}
 	writeJSON(w, map[string]string{"id": id})
@@ -370,7 +370,7 @@ func (s *fakeOpencodeServer) handleMessage(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(patched)
+		writeStream(w, patched)
 		return
 	}
 
@@ -484,7 +484,23 @@ func eventSessionIdle(sessionID string) map[string]any {
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		reportResponseFailure(err)
+	}
+}
+
+// writeStream sends one already-rendered response body. The headers are
+// already out, so there is no status left to change; a failed write means the
+// client hung up, and saying so on stderr is what keeps the test that reads
+// this stub from blaming the code under test.
+func writeStream(w http.ResponseWriter, data []byte) {
+	if _, err := w.Write(data); err != nil {
+		reportResponseFailure(err)
+	}
+}
+
+func reportResponseFailure(err error) {
+	fmt.Fprintf(os.Stderr, "fakeagent: write opencode response: %v\n", err)
 }
 
 // patchOpencodeMessage rewrites info.structured on the recorded message

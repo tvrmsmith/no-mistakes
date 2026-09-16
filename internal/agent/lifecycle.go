@@ -85,8 +85,8 @@ func nativeAgentActivityObserver(opts RunOpts, name string) func() {
 	}
 }
 
-func emitAgentRetry(opts RunOpts, name string, label string, attempt, max int) {
-	message := fmt.Sprintf("%s retrying after transient error %q (attempt %d/%d)", name, label, attempt, max)
+func emitAgentRetry(opts RunOpts, name string, label string, attempt, maxAttempts int) {
+	message := fmt.Sprintf("%s retrying after transient error %q (attempt %d/%d)", name, label, attempt, maxAttempts)
 	emitAgentControl(opts, LifecycleEvent{
 		Agent:   name,
 		Phase:   LifecyclePhaseRetry,

@@ -26,13 +26,13 @@ func (m mutatingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Resu
 func (m mutatingAgent) Close() error { return nil }
 
 func TestAgentDisambiguatorRestoresAfterBranchSwitchWithDirtyConflict(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 	mainHead := gitTestOutput(t, repo, "rev-parse", "HEAD")
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 		gitTestOutput(t, opts.CWD, "checkout", "other")
-		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o600); err != nil {
 			t.Fatalf("write mutation: %v", err)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"agent_name":"test","session_id":"s1","confidence":0.9,"reason":"matched"}`)}, nil
@@ -66,16 +66,16 @@ func TestAgentDisambiguatorRestoresAfterBranchSwitchWithDirtyConflict(t *testing
 }
 
 func TestAgentDisambiguatorRemovesIgnoredSideEffects(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.log\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.log\n"), 0o600); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
 	}
 	gitTestOutput(t, repo, "add", ".gitignore")
 	gitTestOutput(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ignore logs")
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(opts.CWD, "ignored.log"), []byte("mutated\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "ignored.log"), []byte("mutated\n"), 0o600); err != nil {
 			t.Fatalf("write ignored mutation: %v", err)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"agent_name":"test","session_id":"s1","confidence":0.9,"reason":"matched"}`)}, nil
@@ -99,22 +99,22 @@ func TestAgentDisambiguatorRemovesIgnoredSideEffects(t *testing.T) {
 }
 
 func TestAgentDisambiguatorPreservesPreexistingIgnoredFiles(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o600); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
 	}
 	gitTestOutput(t, repo, "add", ".gitignore")
 	gitTestOutput(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ignore logs")
-	if err := os.WriteFile(filepath.Join(repo, "keep.log"), []byte("keep\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, "keep.log"), []byte("keep\n"), 0o600); err != nil {
 		t.Fatalf("write preexisting ignored file: %v", err)
 	}
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(opts.CWD, "new.log"), []byte("side effect\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "new.log"), []byte("side effect\n"), 0o600); err != nil {
 			t.Fatalf("write ignored mutation: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o600); err != nil {
 			t.Fatalf("write tracked mutation: %v", err)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"agent_name":"test","session_id":"s1","confidence":0.9,"reason":"matched"}`)}, nil
@@ -142,25 +142,25 @@ func TestAgentDisambiguatorPreservesPreexistingIgnoredFiles(t *testing.T) {
 }
 
 func TestAgentDisambiguatorPreservesPreexistingIgnoredDirectory(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("cache/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("cache/\n"), 0o600); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
 	}
 	gitTestOutput(t, repo, "add", ".gitignore")
 	gitTestOutput(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ignore cache")
-	if err := os.Mkdir(filepath.Join(repo, "cache"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(repo, "cache"), 0o750); err != nil {
 		t.Fatalf("mkdir cache: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, "cache", "state.txt"), []byte("before\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, "cache", "state.txt"), []byte("before\n"), 0o600); err != nil {
 		t.Fatalf("write ignored file: %v", err)
 	}
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(opts.CWD, "cache", "state.txt"), []byte("after\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "cache", "state.txt"), []byte("after\n"), 0o600); err != nil {
 			t.Fatalf("mutate ignored file: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o600); err != nil {
 			t.Fatalf("write tracked mutation: %v", err)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"agent_name":"test","session_id":"s1","confidence":0.9,"reason":"matched"}`)}, nil
@@ -192,17 +192,17 @@ func TestAgentDisambiguatorPreservesPreexistingIgnoredDirectory(t *testing.T) {
 }
 
 func TestAgentDisambiguatorRemovesNestedGitRepositorySideEffect(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 		nested := filepath.Join(opts.CWD, "nested")
-		if err := os.Mkdir(nested, 0o755); err != nil {
+		if err := os.Mkdir(nested, 0o750); err != nil {
 			t.Fatalf("mkdir nested: %v", err)
 		}
 		gitTestOutput(t, nested, "init", "-b", "main")
 		gitTestOutput(t, nested, "config", "core.autocrlf", "false")
-		if err := os.WriteFile(filepath.Join(nested, "file.txt"), []byte("nested\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(nested, "file.txt"), []byte("nested\n"), 0o600); err != nil {
 			t.Fatalf("write nested file: %v", err)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"agent_name":"test","session_id":"s1","confidence":0.9,"reason":"matched"}`)}, nil
@@ -223,9 +223,9 @@ func TestAgentDisambiguatorRemovesNestedGitRepositorySideEffect(t *testing.T) {
 }
 
 func TestAgentDisambiguatorPreservesPreexistingIgnoredSymlink(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o600); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
 	}
 	gitTestOutput(t, repo, "add", ".gitignore")
@@ -235,7 +235,7 @@ func TestAgentDisambiguatorPreservesPreexistingIgnoredSymlink(t *testing.T) {
 	}
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o600); err != nil {
 			t.Fatalf("write tracked mutation: %v", err)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"agent_name":"test","session_id":"s1","confidence":0.9,"reason":"matched"}`)}, nil
@@ -260,11 +260,11 @@ func TestAgentDisambiguatorPreservesPreexistingIgnoredSymlink(t *testing.T) {
 }
 
 func TestAgentDisambiguatorReturnsCleanupErrorAfterAgentError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := initDisambiguatorTestRepo(t)
 
 	d := NewAgentDisambiguator(mutatingAgent{run: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "conflict.txt"), []byte("mutated\n"), 0o600); err != nil {
 			t.Fatalf("write tracked mutation: %v", err)
 		}
 		if err := os.Rename(filepath.Join(opts.CWD, ".git"), filepath.Join(opts.CWD, ".git-disabled")); err != nil {
@@ -289,13 +289,13 @@ func initDisambiguatorTestRepo(t *testing.T) string {
 	repo := t.TempDir()
 	gitTestOutput(t, repo, "init", "-b", "main")
 	gitTestOutput(t, repo, "config", "core.autocrlf", "false")
-	if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("main\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("main\n"), 0o600); err != nil {
 		t.Fatalf("write main file: %v", err)
 	}
 	gitTestOutput(t, repo, "add", "conflict.txt")
 	gitTestOutput(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "main")
 	gitTestOutput(t, repo, "checkout", "-b", "other")
-	if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("other\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("other\n"), 0o600); err != nil {
 		t.Fatalf("write other file: %v", err)
 	}
 	gitTestOutput(t, repo, "add", "conflict.txt")

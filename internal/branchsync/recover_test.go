@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
@@ -42,7 +43,7 @@ func (*unreachedCancellationStep) Execute(*pipelinepkg.StepContext) (*pipelinepk
 func (s *cancellationRaceStep) Name() types.StepName { return types.StepReview }
 
 func (s *cancellationRaceStep) Execute(sctx *pipelinepkg.StepContext) (*pipelinepkg.StepOutcome, error) {
-	if err := os.WriteFile(filepath.Join(sctx.WorkDir, "fix.txt"), []byte("pipeline fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sctx.WorkDir, "fix.txt"), []byte("pipeline fix\n"), 0o600); err != nil {
 		return nil, err
 	}
 	if _, err := gitpkg.Run(sctx.Ctx, sctx.WorkDir, "add", "fix.txt"); err != nil {
@@ -85,7 +86,7 @@ type recoverFixture struct {
 // with head_sha at the preserved head and no push provenance.
 func newRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -123,7 +124,7 @@ func newRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +156,7 @@ func newRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 
 func newDivergentArchiveRecoverFixture(t *testing.T) (*recoverFixture, string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -179,7 +180,7 @@ func newDivergentArchiveRecoverFixture(t *testing.T) (*recoverFixture, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -256,13 +257,6 @@ func (f *recoverFixture) custodyReturned() bool {
 	return run.CustodyReturnedAt != nil
 }
 
-func assertKeepLocalRecoveryOffer(t *testing.T, state State) {
-	t.Helper()
-	if state.NextAction == nil || state.NextAction.Code != "recover_custody" || state.NextAction.Command != "no-mistakes axi sync --recover --keep-local" {
-		t.Fatalf("want keep-local recover_custody, got %#v", state.NextAction)
-	}
-}
-
 func assertManualReconciliationOffer(t *testing.T, state State) {
 	t.Helper()
 	if state.Safety != "blocked_recover_manual_reconciliation" {
@@ -283,6 +277,7 @@ func TestTerminalPrePushRunSurfacesGuardedCustodyRecovery(t *testing.T) {
 
 	for _, status := range []types.RunStatus{types.RunCancelled, types.RunFailed, types.RunCompleted} {
 		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
 			f := newRecoverFixture(t, status)
 			state := f.service.InspectCached(f.ctx)
 			if state.State != StatePipelineOwned || state.Safety != "blocked_pipeline_owned_recoverable" {
@@ -414,7 +409,7 @@ func TestRecoverReportsDirtyFinalStateWhenPostMergeHookMutatesWorktree(t *testin
 	hooks := filepath.Join(f.local, ".git", "hooks")
 	hook := filepath.Join(hooks, "post-merge")
 	mustWrite(t, hook, "#!/bin/sh\nprintf hook > hook-output.txt\nexit 1\n")
-	if err := os.Chmod(hook, 0o755); err != nil {
+	if err := os.Chmod(hook, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	state := f.service.Recover(f.ctx, false)
@@ -661,9 +656,10 @@ func TestBoundArchiveMovedAtRecoveryBoundaryRefusesWithoutRecoveryMutation(t *te
 	}
 }
 
+// The cases run in sequence, not in parallel: each one breaks the single
+// archive fixture a different way, asserts the refusal left Git untouched, and
+// restores it for the next.
 func TestBoundArchiveProofMatrixFailsClosedWithoutGitMutation(t *testing.T) {
-	t.Parallel()
-
 	f, archiveRef := newDivergentArchiveRecoverFixture(t)
 	records, err := f.db.GetRecoveryArchivesByRun(f.run.ID)
 	if err != nil || len(records) != 1 {
@@ -829,6 +825,7 @@ func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 	t.Parallel()
 
 	t.Run("gate branch moved", func(t *testing.T) {
+		t.Parallel()
 		f := newRecoverFixture(t, types.RunCancelled)
 		writer := filepath.Join(t.TempDir(), "writer")
 		mustRun(t, filepath.Dir(writer), "-c", "core.autocrlf=false", "clone", f.gate, writer)
@@ -851,6 +848,7 @@ func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("gate branch deleted with recovery ref", func(t *testing.T) {
+		t.Parallel()
 		f := newRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.gate, "update-ref", f.anchorRef(), f.preserved)
 		mustRun(t, f.gate, "update-ref", "-d", "refs/heads/feature/recover")
@@ -863,6 +861,7 @@ func TestRecoverGateDivergenceAndUnavailabilityFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("gate missing", func(t *testing.T) {
+		t.Parallel()
 		f := newRecoverFixture(t, types.RunCancelled)
 		if err := os.RemoveAll(f.gate); err != nil {
 			t.Fatal(err)
@@ -1034,7 +1033,7 @@ func TestRecoverRefusesWhenNothingIsStranded(t *testing.T) {
 // ambiguity and never recoverable pipeline custody.
 func newUnmovedRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -1061,7 +1060,7 @@ func newUnmovedRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -1109,7 +1108,7 @@ func TestCancellationReconcilesCommittedWorktreeHeadBeforeReleaseClassification(
 	}
 	step := &cancellationRaceStep{committed: make(chan string, 1)}
 	executor := pipelinepkg.NewExecutor(f.db, p, nil, nil, []pipelinepkg.Step{step}, nil)
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- executor.Execute(ctx, f.run, f.repo, managed)
@@ -1369,7 +1368,7 @@ func TestRecoverKeepLocalPreservesHeadRestoredAfterPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.service.beforeGateReset = func() {
-		if err := os.WriteFile(objectPath, objectData, 0o444); err != nil {
+		if err := os.WriteFile(objectPath, objectData, 0o400); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1663,6 +1662,7 @@ func TestCancellationReleaseRequiresVerifiedManagedHead(t *testing.T) {
 		{name: "missing worktree keeps custody", wantState: StatePipelineOwned, wantSafety: "blocked_pipeline_owned_recoverable"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			f := newUnmovedRecoverFixture(t, types.RunCancelled)
 			if err := f.db.UpdateRunStatus(f.run.ID, types.RunPending); err != nil {
 				t.Fatal(err)
@@ -1682,7 +1682,7 @@ func TestCancellationReleaseRequiresVerifiedManagedHead(t *testing.T) {
 				t.Fatal(err)
 			}
 			executor := pipelinepkg.NewExecutor(f.db, p, nil, nil, []pipelinepkg.Step{&unreachedCancellationStep{}}, nil)
-			ctx, cancel := context.WithCancelCause(context.Background())
+			ctx, cancel := context.WithCancelCause(t.Context())
 			cancel(errors.New(types.RunCancelReasonAbortedByUser))
 			if err := executor.Execute(ctx, f.run, f.repo, workDir); err == nil {
 				t.Fatal("cancelled executor returned nil")
@@ -1728,7 +1728,7 @@ func TestSuccessfulSkippedDeliveryReleasesVerifiedUnmovedHead(t *testing.T) {
 	}
 	executor := pipelinepkg.NewExecutor(f.db, p, nil, nil, steps, nil)
 	executor.SetSkippedSteps([]types.StepName{types.StepPush, types.StepPR, types.StepCI})
-	if err := executor.Execute(context.Background(), f.run, f.repo, managed); err != nil {
+	if err := executor.Execute(t.Context(), f.run, f.repo, managed); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1775,6 +1775,7 @@ func TestTerminalUnmovedPrePushRunReportsUserOwnedRelease(t *testing.T) {
 
 	for _, status := range []types.RunStatus{types.RunCancelled, types.RunFailed} {
 		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
 			f := newUnmovedRecoverFixture(t, status)
 			state := f.service.InspectCached(f.ctx)
 			if state.State != StateUserOwned || state.Safety != "user_owned" {
@@ -1920,6 +1921,7 @@ func TestReleasedBranchAfterUserResetOrDivergenceStaysUserOwned(t *testing.T) {
 	t.Parallel()
 
 	t.Run("reset behind clean", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "reset", "--hard", f.base)
 		state := f.service.InspectCached(f.ctx)
@@ -1929,12 +1931,14 @@ func TestReleasedBranchAfterUserResetOrDivergenceStaysUserOwned(t *testing.T) {
 		assertReleasedNoOpRecover(t, f, false, f.base)
 	})
 	t.Run("reset behind dirty", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "reset", "--hard", f.base)
 		mustWrite(t, filepath.Join(f.local, "file.txt"), "dirty\n")
 		assertReleasedNoOpRecover(t, f, false, f.base)
 	})
 	t.Run("diverged with keep-local", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "reset", "--hard", f.base)
 		mustWrite(t, filepath.Join(f.local, "rescope.txt"), "rescope\n")
@@ -1957,6 +1961,7 @@ func TestUnmovedRunSelectionPrefersNewerAuthoritativeRuns(t *testing.T) {
 	t.Parallel()
 
 	t.Run("newer active run wins", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		time.Sleep(1100 * time.Millisecond)
 		fresh, err := f.db.InsertRun(f.repo.ID, "feature/recover", f.submitted, f.base)
@@ -1979,6 +1984,7 @@ func TestUnmovedRunSelectionPrefersNewerAuthoritativeRuns(t *testing.T) {
 		}
 	})
 	t.Run("newer pushed binding wins", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		time.Sleep(1100 * time.Millisecond)
 		mustRun(t, f.local, "push", f.remote, "refs/heads/feature/recover:refs/heads/feature/recover")
@@ -2008,6 +2014,7 @@ func TestUnmovedRunWrongContextsStayRefusedWithoutStamp(t *testing.T) {
 	t.Parallel()
 
 	t.Run("different branch", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "checkout", "-b", "feature/other")
 		state := f.service.InspectCached(f.ctx)
@@ -2023,6 +2030,7 @@ func TestUnmovedRunWrongContextsStayRefusedWithoutStamp(t *testing.T) {
 		}
 	})
 	t.Run("detached head", func(t *testing.T) {
+		t.Parallel()
 		f := newUnmovedRecoverFixture(t, types.RunCancelled)
 		mustRun(t, f.local, "checkout", "--detach", f.submitted)
 		state := f.service.InspectCached(f.ctx)
@@ -2156,7 +2164,7 @@ func newRebasedRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixt
 // modelling the fix rounds a cancelled run may have produced.
 func newRebasedRecoverFixtureWithPipelineWork(t *testing.T, status types.RunStatus, pipelineWork func(t *testing.T, pipelineDir string)) *recoverFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -2204,7 +2212,7 @@ func newRebasedRecoverFixtureWithPipelineWork(t *testing.T, status types.RunStat
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -2325,6 +2333,7 @@ func TestRecoverRebasedPreservedHeadEscalatesWhenFixRoundsRewroteOperatorLines(t
 	t.Parallel()
 
 	f := newRebasedRecoverFixtureWithPipelineWork(t, types.RunCancelled, func(t *testing.T, pipelineDir string) {
+		t.Helper()
 		mustWrite(t, filepath.Join(pipelineDir, "feature.txt"), "feature one\nfeature two guarded\n")
 		mustRun(t, pipelineDir, "commit", "-am", "no-mistakes(review): guard the second line")
 	})

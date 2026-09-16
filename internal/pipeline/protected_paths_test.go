@@ -59,7 +59,7 @@ func TestProtectedPathRefusalRequiresDecisionAcrossRecovery(t *testing.T) {
 				}
 			})
 			exec.SetGateReconcileTimings(time.Millisecond, time.Second)
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
 			t.Cleanup(func() {
 				cancel()

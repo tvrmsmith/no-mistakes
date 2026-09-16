@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 )
 
 func (a *opencodeAgent) ensureServer(ctx context.Context, cwd string, env []string) (string, error) {
@@ -76,7 +78,7 @@ func (a *opencodeAgent) connectEventStream(ctx context.Context, baseURL string) 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		closers.Quiet(resp.Body)
 		return nil, fmt.Errorf("opencode event stream failed with %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -130,7 +132,12 @@ func (a *opencodeAgent) messageBody(prompt string, schema json.RawMessage) map[s
 func (a *opencodeAgent) abortSession(baseURL, sessionID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	doJSON(ctx, http.MethodPost, baseURL+"/session/"+sessionID+"/abort", nil, nil)
+	// The turn this aborts is already over for the caller, so a refused abort
+	// changes nothing it can act on. It does mean the server may still be
+	// working on a session no one is reading, which is worth a log line.
+	if _, err := doJSON(ctx, http.MethodPost, baseURL+"/session/"+sessionID+"/abort", nil, nil); err != nil {
+		slog.Warn("opencode abort session failed", "session", sessionID, "error", err)
+	}
 }
 
 func (a *opencodeAgent) deleteSession(baseURL, sessionID string) {
@@ -140,7 +147,7 @@ func (a *opencodeAgent) deleteSession(baseURL, sessionID string) {
 	if req != nil {
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil && resp != nil {
-			resp.Body.Close()
+			defer func() { closers.Quiet(resp.Body) }()
 		}
 	}
 }

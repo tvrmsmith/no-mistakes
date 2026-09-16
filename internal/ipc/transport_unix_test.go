@@ -5,6 +5,7 @@ package ipc_test
 import (
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -22,7 +23,7 @@ func TestServe_SecondListenerForLiveSocketDoesNotStealIt(t *testing.T) {
 	if c, err := ipc.Dial(sock); err != nil {
 		t.Fatalf("first server not reachable before second Serve attempt: %v", err)
 	} else {
-		c.Close()
+		closers.Quiet(c)
 	}
 
 	srv2 := ipc.NewServer()
@@ -34,6 +35,6 @@ func TestServe_SecondListenerForLiveSocketDoesNotStealIt(t *testing.T) {
 	if c, err := ipc.Dial(sock); err != nil {
 		t.Fatalf("first server became unreachable after second Serve attempt: %v", err)
 	} else {
-		c.Close()
+		closers.Quiet(c)
 	}
 }

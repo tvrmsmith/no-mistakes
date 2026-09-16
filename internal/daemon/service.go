@@ -77,7 +77,10 @@ func managedDaemonServiceState(p *paths.Paths, launch managedServiceLaunch) (man
 		}
 		output, err := serviceCommandRunner("launchctl", "print", domain+"/"+launchdServiceLabel(p))
 		if err != nil {
-			return managedServiceExited, nil
+			if launchctlServiceUnloaded(output) {
+				return managedServiceExited, nil
+			}
+			return managedServiceUnknown, err
 		}
 		text := strings.ToLower(string(output))
 		if strings.Contains(text, "state = running") || strings.Contains(text, "pid =") {
@@ -113,6 +116,20 @@ func managedDaemonServiceState(p *paths.Paths, launch managedServiceLaunch) (man
 		return windowsManagedDaemonState(p, launch)
 	}
 	return managedServiceUnknown, nil
+}
+
+// launchctlServiceUnloaded reports whether a failed `launchctl print` failed
+// because the label is not loaded, which is the exited state rather than a
+// failure to read it. launchctl says so in its output ("Could not find service
+// ... in domain for ..."), and runServiceCommand captures stderr, so the text
+// is the discriminator.
+//
+// The distinction matters because the only caller acts on managedServiceExited
+// and ignores an error: reporting exited for every launchctl failure turned a
+// launchctl that is missing, sandboxed, or refusing the domain into evidence
+// that the daemon had died. The linux and windows arms already propagate.
+func launchctlServiceUnloaded(output []byte) bool {
+	return strings.Contains(strings.ToLower(string(output)), "could not find service")
 }
 
 // proxyEnvKeys are the proxy-related variables forwarded into the managed
@@ -400,10 +417,8 @@ func reloadManagedServiceDefinition(p *paths.Paths) error {
 	if serviceManagerBypassed() {
 		return nil
 	}
-	switch runtimeGOOS {
-	case "linux":
-		_, err := serviceCommandRunner("systemctl", "--user", "daemon-reload")
-		if err != nil {
+	if runtimeGOOS == "linux" {
+		if _, err := serviceCommandRunner("systemctl", "--user", "daemon-reload"); err != nil {
 			return fmt.Errorf("systemctl daemon-reload: %w", err)
 		}
 	}
@@ -436,8 +451,7 @@ func resetFailedManagedService(p *paths.Paths) {
 	if serviceManagerBypassed() {
 		return
 	}
-	switch runtimeGOOS {
-	case "linux":
+	if runtimeGOOS == "linux" {
 		_, _ = serviceCommandRunner("systemctl", "--user", "reset-failed", systemdServiceName(p))
 	}
 }

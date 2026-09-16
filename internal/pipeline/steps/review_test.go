@@ -127,7 +127,7 @@ func TestReviewStep_HangingAgentFailsRunAfterTimeout(t *testing.T) {
 	sctx.Config.ReviewAgentTimeout = 20 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected hanging review agent to fail the run")
 	}
 
@@ -176,7 +176,7 @@ func TestReviewStep_WallClockTimeoutPreservesTheAgentReport(t *testing.T) {
 	sctx.Config.ReviewAgentTimeout = 20 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected the review invocation limit to fail the run")
 	}
 
@@ -247,7 +247,7 @@ func TestReviewStep_EachAgentInvocationGetsItsOwnBudget(t *testing.T) {
 
 	step := &ReviewStep{now: func() time.Time { return fakeNow }}
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{step}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err != nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -292,7 +292,7 @@ func TestReviewFix_PostAgentCommitUsesStepParentContext(t *testing.T) {
 				t.Fatal("fixer context has no deadline")
 			}
 			invocationDeadline = deadline
-			if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			fakeNow = deadline.Add(-time.Second)
@@ -390,7 +390,7 @@ func TestReviewStep_ProgressWithoutTerminalCompletionCannotPublish(t *testing.T)
 	sctx.Config.ReviewAgentTimeout = 40 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&ReviewStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected progress-only review to hit its absolute limit")
 	}
 	run, err := sctx.DB.GetRun(sctx.Run.ID)
@@ -439,7 +439,7 @@ func TestReviewStep_FixMode(t *testing.T) {
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
 			if callCount == 1 {
-				os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+				writeFile(t, filepath.Join(dir, "review-fix.txt"), "fixed")
 				return &agent.Result{Output: json.RawMessage(`{"summary":"  'address review findings.'  "}`)}, nil
 			}
 			// Review call — return clean findings
@@ -558,7 +558,7 @@ func TestReviewStep_SourceContentFindingFollowsNormalFixFlow(t *testing.T) {
 				return &agent.Result{Output: output}, nil
 			case 2:
 				assertTestQualityRulePrompt(t, opts.Prompt)
-				if err := os.WriteFile(filepath.Join(dir, "semantic_test.go"), []byte("package app\n"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "semantic_test.go"), []byte("package app\n"), 0o600); err != nil {
 					return nil, err
 				}
 				return &agent.Result{Output: json.RawMessage(`{"summary":"replace source test"}`)}, nil
@@ -644,7 +644,7 @@ func TestReviewStep_FixMode_FocusedVerificationContract(t *testing.T) {
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
 			if callCount == 1 {
-				os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+				writeFile(t, filepath.Join(dir, "review-fix.txt"), "fixed")
 				return &agent.Result{Output: json.RawMessage(`{"summary":"address findings"}`)}, nil
 			}
 			j, _ := json.Marshal(cleanReviewFindings())
@@ -746,10 +746,10 @@ func TestReviewStep_IntendedUsageFixturesApply(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, tc.file)
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(path, []byte(tc.baseline), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(tc.baseline), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "init", "-q")
@@ -762,7 +762,7 @@ func TestReviewStep_IntendedUsageFixturesApply(t *testing.T) {
 			}
 			fixturePath := filepath.Join(dir, "fixture.diff")
 			fixture = []byte(strings.ReplaceAll(string(fixture), "\r\n", "\n"))
-			if err := os.WriteFile(fixturePath, fixture, 0o644); err != nil {
+			if err := os.WriteFile(fixturePath, fixture, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "apply", "--check", fixturePath)
@@ -961,7 +961,7 @@ func TestReviewStep_RereviewTreatsFixRoundsAsPipelineAuthoredCode(t *testing.T) 
 			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				callCount++
 				if callCount == 1 {
-					os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+					writeFile(t, filepath.Join(dir, "review-fix.txt"), "fixed")
 					return &agent.Result{Output: json.RawMessage(`{"summary":"address findings"}`)}, nil
 				}
 				j, _ := json.Marshal(cleanReviewFindings())
@@ -1069,7 +1069,7 @@ func TestUncertifiedRange_PersistsThenFeedsNextInitialReview(t *testing.T) {
 	fixAgent := &mockAgent{name: "test"}
 	fixCtx := newTestContextWithDBRecords(t, fixAgent, dir, baseSHA, headSHA, config.Commands{})
 	fixCtx.ReviewStartingHeadSHA = headSHA
-	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := commitAgentFixes(fixCtx, types.StepReview, "apply fix", "fallback"); err != nil {
@@ -1300,7 +1300,7 @@ func TestReviewStep_RereviewFlagsIntentContradictionAsAskUser(t *testing.T) {
 			if callCount == 1 {
 				// Fixer turn: "resolve" the race finding by deleting the
 				// required guarded removal (retry-only).
-				os.WriteFile(filepath.Join(dir, "fleet-sync.txt"), []byte("retry-only\n"), 0o644)
+				writeFile(t, filepath.Join(dir, "fleet-sync.txt"), "retry-only\n")
 				return &agent.Result{Output: json.RawMessage(`{"summary":"leave persistent refs locks intact"}`)}, nil
 			}
 			// Rereview: the change now contradicts the authoritative criteria,
@@ -1454,7 +1454,7 @@ func TestReviewStep_PushedIgnorePatternsCannotSuppressPathInstructions(t *testin
 	sctx.Config.Review = config.Review{PathInstructions: rules}
 	// The branch adds a source file so the run still has something to review,
 	// and ignores the fixture the trusted rule is scoped to.
-	os.WriteFile(filepath.Join(dir, "app.go"), []byte("package main\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.go"), "package main\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "add source file")
 	sctx.Run.HeadSHA = gitCmd(t, dir, "rev-parse", "HEAD")
@@ -1768,7 +1768,7 @@ func TestReviewStep_RereviewOffersRevertExitFromPriorRoundMachinery(t *testing.T
 			runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				callCount++
 				if callCount == 1 {
-					os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+					writeFile(t, filepath.Join(dir, "review-fix.txt"), "fixed")
 					return &agent.Result{Output: json.RawMessage(`{"summary":"address findings"}`)}, nil
 				}
 				j, _ := json.Marshal(cleanReviewFindings())
@@ -1962,10 +1962,10 @@ func TestReviewStep_SimplificationFixturesApply(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, tc.file)
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(path, []byte(tc.baseline), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(tc.baseline), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "init", "-q")
@@ -1976,7 +1976,7 @@ func TestReviewStep_SimplificationFixturesApply(t *testing.T) {
 			}
 			fixturePath := filepath.Join(dir, "fixture.diff")
 			fixture = []byte(strings.ReplaceAll(string(fixture), "\r\n", "\n"))
-			if err := os.WriteFile(fixturePath, fixture, 0o644); err != nil {
+			if err := os.WriteFile(fixturePath, fixture, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "apply", "--check", fixturePath)

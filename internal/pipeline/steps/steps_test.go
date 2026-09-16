@@ -12,7 +12,12 @@ func TestMain(m *testing.M) {
 	// Agent harnesses inject git config (e.g. safe.bareRepository=explicit)
 	// via GIT_CONFIG_COUNT/KEY_n/VALUE_n; tests that need it re-set it with
 	// t.Setenv (issue #362).
-	os.Unsetenv("GIT_CONFIG_COUNT")
+	// Leaving it set would let that config reach every git call these tests
+	// make, which is the leak this drops.
+	if err := os.Unsetenv("GIT_CONFIG_COUNT"); err != nil {
+		fmt.Fprintf(os.Stderr, "unset GIT_CONFIG_COUNT: %v\n", err)
+		os.Exit(1)
+	}
 	cleanup, err := stepstest.Init()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init fake CLI helper: %v\n", err)

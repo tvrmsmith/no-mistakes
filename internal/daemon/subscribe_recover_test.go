@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -33,7 +33,7 @@ func TestSubscribeReceivesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -169,7 +169,7 @@ func TestSubscribeToSlowRunReceivesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -242,7 +242,7 @@ func TestSubscribeToCompletedRunYieldsOneGapThenCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -309,7 +309,7 @@ func TestRecoverStaleRunsOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -330,21 +330,25 @@ func TestRecoverStaleRunsOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.UpdateRunStatus(staleRun.ID, types.RunRunning)
+	if err := d.UpdateRunStatus(staleRun.ID, types.RunRunning); err != nil {
+		t.Fatalf("mark stale run running: %v", err)
+	}
 	staleStep, err := d.InsertStepResult(staleRun.ID, types.StepReview)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.StartStep(staleStep.ID)
+	if err := d.StartStep(staleStep.ID); err != nil {
+		t.Fatalf("start stale step: %v", err)
+	}
 
-	d.Close()
+	closers.Quiet(d)
 
 	// Start daemon — it should recover the stale run.
 	d, err = db.Open(p.DB())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -364,8 +368,10 @@ func TestRecoverStaleRunsOnStartup(t *testing.T) {
 	t.Cleanup(func() {
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
-			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
-			client.Close()
+			// Best effort: the test may have stopped the daemon
+			// already, and it is the wait below that proves it exited.
+			_ = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
+			closers.Quiet(client)
 		}
 		select {
 		case <-errCh:
@@ -403,7 +409,7 @@ func TestRecoverOnStartup_FinalizesLegacyTerminalPRRun(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = os.RemoveAll(root) })
+			t.Cleanup(func() { removeTempRoot(t, root) })
 			p := paths.WithRoot(root)
 			if err := p.EnsureDirs(); err != nil {
 				t.Fatal(err)
@@ -495,20 +501,20 @@ func TestRecoverOnStartup_ResumesParkedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
 	mockClaude := writeMockClaude(t, t.TempDir())
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+mockClaude+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+mockClaude+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d, err := db.Open(p.DB())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	repo, headSHA := setupTestGitRepo(t, p, d, "resume-parked-run")
 	run, err := d.InsertRun(repo.ID, "main", headSHA, headSHA)
 	if err != nil {
@@ -518,7 +524,7 @@ func TestRecoverOnStartup_ResumesParkedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	worktree := p.WorktreeDir(repo.ID, run.ID)
-	if err := gitpkg.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), worktree, headSHA); err != nil {
+	if err := gitpkg.WorktreeAdd(t.Context(), p.RepoDir(repo.ID), worktree, headSHA); err != nil {
 		t.Fatal(err)
 	}
 	step, err := d.InsertStepResult(run.ID, types.StepReview)
@@ -632,26 +638,26 @@ func TestRecoverOnStartup_ReconcilesHistoricalCIGateFromCurrentPRState(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+			t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 			p := paths.WithRoot(tmpDir)
 			if err := p.EnsureDirs(); err != nil {
 				t.Fatal(err)
 			}
 			mockClaude := writeMockClaude(t, t.TempDir())
 			profileDir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    user: recovery-user\n"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    user: recovery-user\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			globalConfig := "agent: claude\nagent_path_override:\n  claude: " + mockClaude +
 				"\nforge_profiles:\n  github.com:\n    gh_config_dir: " + profileDir + "\n"
-			if err := os.WriteFile(p.ConfigFile(), []byte(globalConfig), 0o644); err != nil {
+			if err := os.WriteFile(p.ConfigFile(), []byte(globalConfig), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			d, err := db.Open(p.DB())
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer closers.Quiet(d)
 			repo, headSHA := setupTestGitRepo(t, p, d, "reconcile-parked-ci-"+strings.ToLower(state))
 			run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
 			if err != nil {
@@ -666,7 +672,7 @@ func TestRecoverOnStartup_ReconcilesHistoricalCIGateFromCurrentPRState(t *testin
 			prURL := "https://github.com/test/repo/pull/42"
 			run.PRURL = &prURL
 			worktree := p.WorktreeDir(repo.ID, run.ID)
-			if err := gitpkg.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), worktree, headSHA); err != nil {
+			if err := gitpkg.WorktreeAdd(t.Context(), p.RepoDir(repo.ID), worktree, headSHA); err != nil {
 				t.Fatal(err)
 			}
 			step, err := d.InsertStepResult(run.ID, types.StepCI)
@@ -744,7 +750,7 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -753,16 +759,18 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 
 	// Create orphaned worktree directories.
 	orphanDir := p.WorktreeDir("some-repo", "some-run")
-	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+	if err := os.MkdirAll(orphanDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(orphanDir, "test.txt"), []byte("orphan"), 0o644)
+	if err := os.WriteFile(filepath.Join(orphanDir, "test.txt"), []byte("orphan"), 0o600); err != nil {
+		t.Fatalf("write orphan file: %v", err)
+	}
 
 	d, err := db.Open(p.DB())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -782,8 +790,10 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 	t.Cleanup(func() {
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
-			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
-			client.Close()
+			// Best effort: the test may have stopped the daemon
+			// already, and it is the wait below that proves it exited.
+			_ = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
+			closers.Quiet(client)
 		}
 		select {
 		case <-errCh:
@@ -813,10 +823,10 @@ func TestSkipWorktreeCleanup_CIMonitorInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	repo, headSHA := setupTestGitRepo(t, p, d, "ci-skip-repo")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	newInterruptedWorktree := func(t *testing.T, recordedHead string) (string, string) {
 		t.Helper()
@@ -846,7 +856,7 @@ func TestSkipWorktreeCleanup_CIMonitorInterrupted(t *testing.T) {
 		runID, wtPath := newInterruptedWorktree(t, headSHA)
 		gitCmd(t, wtPath, "config", "user.email", "test@test.com")
 		gitCmd(t, wtPath, "config", "user.name", "Test")
-		if err := os.WriteFile(filepath.Join(wtPath, "fix.txt"), []byte("ci fix"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(wtPath, "fix.txt"), []byte("ci fix"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		gitCmd(t, wtPath, "add", "-A")
@@ -869,7 +879,7 @@ func TestSkipWorktreeCleanup_CIMonitorInterrupted(t *testing.T) {
 			t.Fatal(err)
 		}
 		wtPath := p.WorktreeDir(repo.ID, run.ID)
-		if err := os.MkdirAll(wtPath, 0o755); err != nil {
+		if err := os.MkdirAll(wtPath, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		skip, _ := skipWorktreeCleanup(ctx, d, run.ID, wtPath)
@@ -894,7 +904,7 @@ func TestRecoverIsolatesGateRepoHooksPath(t *testing.T) {
 	// (without IsolateHooksPath) whose shared local config has been
 	// poisoned by husky during a prior pipeline run.
 	bareDir := p.RepoDir("legacy-repo")
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := gitpkg.InitBare(ctx, bareDir); err != nil {
 		t.Fatal(err)
 	}
@@ -906,7 +916,7 @@ func TestRecoverIsolatesGateRepoHooksPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	migrateGateConfigs(ctx, database, p)
 
 	// Effective core.hookspath should now resolve to the bare's hooks dir.
@@ -938,7 +948,7 @@ func TestRecoverRefreshesLegacyManagedGateHook(t *testing.T) {
 	}
 
 	bareDir := p.RepoDir("legacy-repo")
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := gitpkg.InitBare(ctx, bareDir); err != nil {
 		t.Fatal(err)
 	}
@@ -956,7 +966,7 @@ while read oldrev newrev refname; do
 done
 exit 0
 `
-	if err := os.WriteFile(hookPath, []byte(legacyHook), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(legacyHook), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -964,7 +974,7 @@ exit 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	migrateGateConfigs(ctx, database, p)
 
 	data, err := os.ReadFile(hookPath)

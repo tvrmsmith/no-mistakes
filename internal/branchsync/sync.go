@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -340,12 +341,12 @@ func OpenCurrent() (*Service, func(), error) {
 	}
 	root, err := git.FindGitRoot(".")
 	if err != nil {
-		database.Close()
+		closers.Quiet(database)
 		return nil, nil, fmt.Errorf("not in a git repository")
 	}
 	repo, err := database.GetRepoByPath(root)
 	if err != nil {
-		database.Close()
+		closers.Quiet(database)
 		return nil, nil, err
 	}
 	if repo == nil {
@@ -355,12 +356,12 @@ func OpenCurrent() (*Service, func(), error) {
 		}
 	}
 	if err != nil || repo == nil {
-		database.Close()
+		closers.Quiet(database)
 		return nil, nil, fmt.Errorf("repo not initialized")
 	}
 	globalCfg, cfgErr := config.LoadGlobal(p.ConfigFile())
 	if cfgErr != nil {
-		database.Close()
+		closers.Quiet(database)
 		return nil, nil, cfgErr
 	}
 	return &Service{DB: database, Repo: repo, WorkDir: root, GateDir: p.RepoDir(repo.ID), Paths: p, RemoteTimeout: globalCfg.BranchSyncRemoteTimeout}, func() { _ = database.Close() }, nil
@@ -815,14 +816,6 @@ func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
 		if err != nil {
 			return blockedPlan(state, StatePipelineOwned, "blocked_recover_unverified_head", anchors.qualify("the terminal run has no verified head and the preserved gate head could not be read; no files or refs were changed"))
 		}
-		// A rebase-only run advances runs.head_sha without moving the gate
-		// branch, because the run worktree is detached, so the recorded head
-		// sits in the gate as a detached commit behind an unmoved branch. The
-		// gate still holding that exact commit while its branch is exactly the
-		// head the operator submitted is the same proof the terminal-head
-		// verification would have written, so it stands in for the
-		// verification the run never reached. Anything else is out-of-band
-		// gate movement and refuses.
 		// The detached case proves custody of the RECORDED head, not of the
 		// branch ref that never moved, so it verifies runs.head_sha and leaves
 		// the branch head out of it. Adopting gateHead there would discard the
@@ -1380,25 +1373,8 @@ func (s *Service) recoverAdoptPreserved(ctx context.Context, run *db.Run, state 
 	if s.afterRecoverBranchMove != nil {
 		s.afterRecoverBranchMove()
 	}
-	// KNOWN BOUNDED FUNDAMENTAL-GIT LIMITATION: a concurrent git checkout
-	// landing between this branch-identity verification and the read-tree
-	// working-tree update can apply the preserved tree to another branch's
-	// worktree. This is not data loss: containment is proven before the move,
-	// the pre-recovery head stays anchored at
-	// refs/no-mistakes/recover-local/<run>, custody is never stamped, and the
-	// operation fails closed to a reported failure rather than a false success.
-	// The window is sub-millisecond and inside a worktree the pipeline already
-	// owns. It is irreducible because no single Git operation carries both
-	// guards, and no lock git checkout honors can be held across the two
-	// commands, so a further observation cannot close it. Keep this verification
-	// even though it cannot make the two commands atomic.
-	boundaryBranch, boundaryErr = git.CurrentBranch(ctx, wd)
-	if boundaryErr != nil || boundaryBranch != state.Local.Branch {
-		rollbackDetail := ""
-		if _, rollbackErr := git.Run(ctx, wd, "update-ref", branchRef, head, preserved); rollbackErr != nil {
-			rollbackDetail = fmt.Sprintf("; the branch could not be restored to %s and still requires manual reconciliation", head)
-		}
-		return blockedPlan(state, StatePipelineOwned, "blocked_recover_assumptions_changed", anchors.qualify(fmt.Sprintf("the checked-out branch changed while custody was being returned%s; custody was not recorded", rollbackDetail)))
+	if refused, ok := s.rollbackIfBranchChangedAfterMove(ctx, wd, branchRef, head, preserved, state, anchors); !ok {
+		return refused
 	}
 	// The gate branch is the base of the next run's push. When the preserved
 	// head was only ever a detached commit in the gate, that branch is still
@@ -1519,15 +1495,47 @@ func (s *Service) finishKeepLocalRecover(ctx context.Context, state State, runID
 	return fresh
 }
 
-func recoverAnchorRef(runID string) string {
-	return custody.RecoveryRef(runID)
-}
-
 // gateHoldsDetachedPreservedHead reports the one proof that stands in for a
 // missing terminal-head verification: the gate branch is still exactly the head
 // the operator submitted, and the gate holds the recorded pipeline head as a
 // commit object. That is the shape a rebase-only run leaves behind, because its
 // worktree is detached and only runs.head_sha advances.
+// gateHoldsDetachedPreservedHead reports whether the gate proves custody of a
+// terminal run's recorded head that the run itself never verified. A
+// rebase-only run advances runs.head_sha without moving the gate branch,
+// because the run worktree is detached, so the recorded head sits in the gate
+// as a detached commit behind an unmoved branch. The gate still holding that
+// exact commit while its branch is exactly the head the operator submitted is
+// the same proof the terminal-head verification would have written, so it
+// stands in for the verification the run never reached. Anything else is
+// out-of-band gate movement and refuses.
+// rollbackIfBranchChangedAfterMove re-reads the checked-out branch after the
+// branch ref moved and restores the old head when another checkout landed in
+// between, reporting the refusal. It returns ok=false with the refusing state.
+//
+// The re-check cannot be made atomic with the working-tree update that follows
+// it: a concurrent git checkout landing between the two can apply the preserved
+// tree to another branch's worktree. That is a known bounded Git limitation,
+// not data loss. Containment is proven before the move, the pre-recovery head
+// stays anchored at refs/no-mistakes/recover-local/<run>, custody is never
+// stamped, and the operation fails closed to a reported failure rather than a
+// false success. The window is sub-millisecond and inside a worktree the
+// pipeline already owns, and it is irreducible: no single Git operation carries
+// both guards, and no lock git checkout honors can be held across the two
+// commands. Keep the re-check anyway; it catches every checkout that lands
+// before it.
+func (s *Service) rollbackIfBranchChangedAfterMove(ctx context.Context, wd, branchRef, head, preserved string, state State, anchors *recoverAnchors) (State, bool) {
+	branch, err := git.CurrentBranch(ctx, wd)
+	if err == nil && branch == state.Local.Branch {
+		return State{}, true
+	}
+	rollbackDetail := ""
+	if _, rollbackErr := git.Run(ctx, wd, "update-ref", branchRef, head, preserved); rollbackErr != nil {
+		rollbackDetail = fmt.Sprintf("; the branch could not be restored to %s and still requires manual reconciliation", head)
+	}
+	return blockedPlan(state, StatePipelineOwned, "blocked_recover_assumptions_changed", anchors.qualify(fmt.Sprintf("the checked-out branch changed while custody was being returned%s; custody was not recorded", rollbackDetail))), false
+}
+
 func gateHoldsDetachedPreservedHead(ctx context.Context, gateDir string, run *db.Run, gateHead string) bool {
 	if run == nil || run.SubmittedHeadSHA == nil || gateHead != *run.SubmittedHeadSHA {
 		return false
@@ -1841,7 +1849,8 @@ func (s *Service) classifyRelation(ctx context.Context, state *State, pushed, ba
 		state.NextAction = nil
 		return
 	}
-	if objectExists(ctx, s.workDir(), pushed) {
+	switch {
+	case objectExists(ctx, s.workDir(), pushed):
 		switch {
 		case isAncestor(ctx, s.workDir(), state.Local.Head, pushed):
 			state.State = StateBehind
@@ -1872,10 +1881,10 @@ func (s *Service) classifyRelation(ctx context.Context, state *State, pushed, ba
 			state.Error = "local and pipeline-pushed histories have diverged; no files or refs were changed"
 			return
 		}
-	} else if state.Local.Head == state.Pipeline.SubmittedHead && state.Pipeline.SubmittedHead != pushed {
+	case state.Local.Head == state.Pipeline.SubmittedHead && state.Pipeline.SubmittedHead != pushed:
 		state.State = StateBehind
 		state.Relation = RelationBehind
-	} else {
+	default:
 		state.State = StateAmbiguousContext
 		state.Relation = RelationUnknown
 		state.Safety = "blocked_relation_unknown"

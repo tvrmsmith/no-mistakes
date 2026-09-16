@@ -53,10 +53,10 @@ func Open(path string, policy Policy) (*RotatingWriter, error) {
 	if err := validatePolicy(policy); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open log: %w", err)
 	}
@@ -142,12 +142,12 @@ func (w *RotatingWriter) Close() error {
 // RotateAtStartup bounds existing bootstrap/crash output, moves the latest
 // non-empty process output into retention, and leaves the current inode empty
 // for descriptors the service manager already opened.
-func RotateAtStartup(path string, policy Policy) error {
+func RotateAtStartup(path string, policy Policy) (err error) {
 	w, err := Open(path, policy)
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() { err = errors.Join(err, w.Close()) }()
 	return w.RotateNow()
 }
 
@@ -285,15 +285,18 @@ func copySectionAtomic(src *os.File, offset, length int64, target string) error 
 	return nil
 }
 
-func trimFileTail(path string, maxBytes int64) error {
-	file, err := os.OpenFile(path, os.O_RDWR, 0o644)
+func trimFileTail(path string, maxBytes int64) (err error) {
+	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	// This rewrites the file in place, so its close is where the kept tail
+	// reaches the disk. Dropping that error would report a log that lost its
+	// tail as a trimmed one.
+	defer func() { err = errors.Join(err, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil {
 		return err

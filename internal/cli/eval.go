@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/eval"
@@ -65,7 +66,7 @@ func evalRepoNames(p *paths.Paths) map[string]string {
 	if err != nil {
 		return nil
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repos, err := database.GetRepos()
 	if err != nil {
 		return nil
@@ -83,12 +84,12 @@ func newEvalCaptureCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			store, err := eval.Open(p.EvalDir())
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			if cfg, cfgErr := config.LoadGlobal(p.ConfigFile()); cfgErr == nil {
 				store.SetDiversifiedSize(cfg.Eval.DiversifiedSize)
 			}
@@ -96,11 +97,12 @@ func newEvalCaptureCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "captured %d local review case(s)\n", len(cases))
+			out := newPrinter(cmd.OutOrStdout())
+			out.Printf("captured %d local review case(s)\n", len(cases))
 			for _, c := range cases {
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s  run %s round %s\n", c.ID, c.SourceRunID, c.SourceRoundID)
+				out.Printf("  %s  run %s round %s\n", c.ID, c.SourceRunID, c.SourceRoundID)
 			}
-			return nil
+			return out.Err()
 		},
 	}
 }
@@ -138,18 +140,19 @@ func newEvalMissIngestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			store, err := eval.Open(p.EvalDir())
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			result, err := eval.IngestPostPRMiss(cmd.Context(), store, p, database, args[0], misses)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "ingested %d false-negative gold finding(s) into case %s (%d total)\n", result.Added, result.CaseID, result.Total)
-			return nil
+			out := newPrinter(cmd.OutOrStdout())
+			out.Printf("ingested %d false-negative gold finding(s) into case %s (%d total)\n", result.Added, result.CaseID, result.Total)
+			return out.Err()
 		},
 	}
 	cmd.Flags().StringArrayVar(&findings, "finding", nil, "confirmed miss as JSON finding object with id and description, optional file, line, severity (error|warning|info, default error) and action (auto-fix|ask-user|no-op) (repeatable)")
@@ -173,8 +176,8 @@ func newEvalRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
-			out := cmd.OutOrStdout()
+			defer closers.Quiet(store)
+			out := newPrinter(cmd.OutOrStdout())
 			caseCount := 0
 			session, evaluations, runErr := eval.Replay(cmd.Context(), store, eval.ReplayOptions{
 				Set:       cases,
@@ -182,7 +185,7 @@ func newEvalRunCmd() *cobra.Command {
 				Repeats:   repeats,
 				OnPlan: func(session eval.Session, planned []eval.Case) {
 					caseCount = len(planned)
-					fmt.Fprintf(out, "replaying %d case(s) x %d repeat(s) with %s on %s (cohort %s)\n\n",
+					out.Printf("replaying %d case(s) x %d repeat(s) with %s on %s (cohort %s)\n\n",
 						len(planned), session.Repeats, session.Candidate, session.Set, session.Cohort)
 				},
 				OnResult: func(evaluation eval.Evaluation, completed, total int) {
@@ -190,14 +193,14 @@ func newEvalRunCmd() *cobra.Command {
 				},
 			})
 			if len(evaluations) > 0 {
-				fmt.Fprintln(out)
-				fmt.Fprintln(out, renderEvalRunSummary(session, evaluations, caseCount))
+				out.Println()
+				out.Println(renderEvalRunSummary(session, evaluations, caseCount))
 			}
-			fmt.Fprintf(out, "local eval session %s: %d replay(s), candidate %s, repeats %d\n", session.ID, len(evaluations), candidate, repeats)
+			out.Printf("local eval session %s: %d replay(s), candidate %s, repeats %d\n", session.ID, len(evaluations), candidate, repeats)
 			if runErr != nil {
 				return runErr
 			}
-			return nil
+			return out.Err()
 		},
 	}
 	cmd.Flags().StringVar(&cases, "cases", "", "case set: all, labeled (finding-level gold), diversified (official gold-only holdout), or tune")
@@ -219,7 +222,7 @@ func newEvalSetsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			if refresh {
 				if _, err := store.RefreshDiversified(); err != nil {
 					return err
@@ -229,8 +232,9 @@ func newEvalSetsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), renderEvalSetsDashboard(summaries))
-			return nil
+			out := newPrinter(cmd.OutOrStdout())
+			out.Println(renderEvalSetsDashboard(summaries))
+			return out.Err()
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh-diversified", false, "rebuild the official diversified pin set from current gold")
@@ -247,13 +251,14 @@ func newEvalReportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			reports, err := eval.Report(store)
 			if err != nil {
 				return err
 			}
-			fmt.Fprint(cmd.OutOrStdout(), eval.RenderReport(reports))
-			return nil
+			out := newPrinter(cmd.OutOrStdout())
+			out.Print(eval.RenderReport(reports))
+			return out.Err()
 		},
 	}
 }
@@ -268,12 +273,12 @@ func newEvalRelabelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			store, err := eval.Open(p.EvalDir())
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			if cfg, cfgErr := config.LoadGlobal(p.ConfigFile()); cfgErr == nil {
 				store.SetDiversifiedSize(cfg.Eval.DiversifiedSize)
 			}
@@ -286,8 +291,9 @@ func newEvalRelabelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "relabeled %d local review case(s)\n", len(cases))
-			return nil
+			out := newPrinter(cmd.OutOrStdout())
+			out.Printf("relabeled %d local review case(s)\n", len(cases))
+			return out.Err()
 		},
 	}
 }

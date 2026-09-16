@@ -162,10 +162,10 @@ func fallbackReason(err error) string {
 		return "unknown error"
 	}
 	text := strings.Join(strings.Fields(err.Error()), " ")
-	const max = 160
-	if len([]rune(text)) <= max {
+	const maxRunes = 160
+	if len([]rune(text)) <= maxRunes {
 		return text
 	}
 	runes := []rune(text)
-	return string(runes[:max]) + "..."
+	return string(runes[:maxRunes]) + "..."
 }

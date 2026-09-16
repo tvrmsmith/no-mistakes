@@ -121,12 +121,19 @@ func stageExecutable(target string, binaryData []byte, perm os.FileMode) (string
 	return tmpPath, cleanup, nil
 }
 
-func overwriteExecutable(path string, binaryData []byte, perm os.FileMode) error {
+func overwriteExecutable(path string, binaryData []byte, perm os.FileMode) (err error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, perm)
 	if err != nil {
 		return fmt.Errorf("overwrite executable: %w", err)
 	}
-	defer f.Close()
+	// The close is where the last of the new binary reaches the disk. A
+	// dropped error there leaves a truncated executable reported as a
+	// successful update.
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("overwrite executable: %w", closeErr)
+		}
+	}()
 	if _, err := f.Write(binaryData); err != nil {
 		return fmt.Errorf("overwrite executable: %w", err)
 	}

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -36,7 +38,7 @@ func TestServerClientRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	var result echoResult
 	if err := c.Call("echo", echoParams{Message: "hello"}, &result); err != nil {
@@ -55,15 +57,15 @@ func TestMethodNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	var result json.RawMessage
 	err = c.Call("nonexistent", nil, &result)
 	if err == nil {
 		t.Fatal("expected error for unknown method")
 	}
-	rpcErr, ok := err.(*ipc.RPCError)
-	if !ok {
+	var rpcErr *ipc.RPCError
+	if !errors.As(err, &rpcErr) {
 		t.Fatalf("expected RPCError, got %T: %v", err, err)
 	}
 	if rpcErr.Code != ipc.ErrMethodNotFound {
@@ -83,15 +85,15 @@ func TestHandlerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	var result json.RawMessage
 	err = c.Call("fail", nil, &result)
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	rpcErr, ok := err.(*ipc.RPCError)
-	if !ok {
+	var rpcErr *ipc.RPCError
+	if !errors.As(err, &rpcErr) {
 		t.Fatalf("expected RPCError, got %T: %v", err, err)
 	}
 	if rpcErr.Code != ipc.ErrInternal {
@@ -132,7 +134,7 @@ func TestMultipleClients(t *testing.T) {
 				t.Errorf("client %d dial: %v", n, err)
 				return
 			}
-			defer c.Close()
+			defer closers.Quiet(c)
 
 			var result addResult
 			if err := c.Call("add", addParams{A: n, B: 10}, &result); err != nil {
@@ -170,7 +172,7 @@ func TestMultipleCallsOnSameConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	for i := 0; i < 5; i++ {
 		msg := fmt.Sprintf("msg-%d", i)
@@ -196,7 +198,7 @@ func TestNilParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	var result ipc.HealthResult
 	if err := c.Call("health", nil, &result); err != nil {
@@ -235,7 +237,7 @@ func TestSuccessfulReadRequestsDoNotLogAtInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 	for _, method := range readMethods {
 		var raw json.RawMessage
 		if err := c.Call(method, nil, &raw); err != nil {
@@ -265,7 +267,7 @@ func TestSuccessfulReadRequestsLogAtDebug(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 	var result ipc.GetRunResult
 	if err := c.Call(ipc.MethodGetRun, &ipc.GetRunParams{RunID: "run-1"}, &result); err != nil {
 		t.Fatal(err)
@@ -295,7 +297,7 @@ func TestRequestLoggingKeepsMutationsAndFailuresVisible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 	var rerun ipc.RerunResult
 	if err := c.Call(ipc.MethodRerun, nil, &rerun); err != nil {
 		t.Fatalf("rerun call: %v", err)
@@ -332,7 +334,7 @@ func TestCallWithNilResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	// Call with nil result pointer — should succeed without unmarshaling result.
 	if err := c.Call("noop", nil, nil); err != nil {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"io/fs"
 	"net/http"
@@ -19,39 +20,10 @@ import (
 )
 
 // User-attachments upload contract, pinned against cli/cli v2.99.0
-// (internal/attachments/client.go and userasset.go).
-//
-// This is not a documented REST or GraphQL API. gh itself already depends on
-// the same unofficial HTTP endpoint, and Homebrew still lagged 2.99.0 when
-// this shipped, so no-mistakes posts the request from Go rather than requiring
-// `gh --attach` on PATH. The request shape is:
-//
-//	POST {uploadsPrefix}user-attachments/assets
-//	  ?name=<basename>&content_type=<mime>&repository_id=<numeric repo id>
-//	Authorization: Bearer <token>
-//	Content-Type: application/octet-stream
-//	Accept: application/vnd.github+json
-//
-// uploadsPrefix is https://uploads.github.com/ on github.com and
-// https://uploads.<host>/ on GHEC (*.ghe.com). GHES is refused client-side:
-// gh's checkHost rejects auth.IsEnterprise hosts, and GitHub has not published
-// this endpoint for Enterprise Server.
-//
-// Response JSON is {"url":"https://github.com/user-attachments/assets/<uuid>"}.
-//
-// Credential class is an allowlist matching gh: OAuth (gho_), classic PAT
-// (ghp_), fine-grained PAT (github_pat_). Installation / Actions tokens (ghs_)
-// and GitHub App user-to-server tokens (ghu_) are refused before the request;
-// reporters have 404'd the endpoint with GITHUB_TOKEN even with contents:write
-// (cli/cli#14309). Permission allowlist is ADMIN/MAINTAIN/WRITE; READ/TRIAGE
-// 404. Write access is required to upload; repository access is required to
-// view a private asset.
-//
-// Client-side file rules, also matching gh: extension only (png, jpg, jpeg,
-// gif, webp, svg, mp4, mov, webm), case-insensitive; regular non-empty files
-// only; images at most 10 MiB; videos at most 100 MiB (the server still
-// enforces plan limits). Videos render as a bare URL so GitHub shows a player;
-// images become ![alt](url).
+// (internal/attachments/client.go and userasset.go). This is not a documented
+// REST or GraphQL API. gh itself already depends on the same unofficial HTTP
+// endpoint, and Homebrew still lagged 2.99.0 when this shipped, so no-mistakes
+// posts the request from Go rather than requiring `gh --attach` on PATH.
 
 const (
 	maxUserAssetImageBytes int64 = 10 * 1024 * 1024
@@ -110,6 +82,11 @@ func normalizeGitHubHost(host string) string {
 	return strings.ToLower(strings.TrimSpace(host))
 }
 
+// userAssetUploadPrefix returns the upload host for the endpoint:
+// https://uploads.github.com/ on github.com and https://uploads.<host>/ on GHEC
+// (*.ghe.com). GHES is refused client-side (SupportsUserAttachments): gh's
+// checkHost rejects auth.IsEnterprise hosts, and GitHub has not published this
+// endpoint for Enterprise Server.
 func userAssetUploadPrefix(host string) string {
 	h := normalizeGitHubHost(host)
 	if h == "github.localhost" {
@@ -123,6 +100,12 @@ func userAssetUploadPrefix(host string) string {
 
 // ValidateUserAsset applies gh 2.99.0's client-side attach rules. A failure
 // here must not produce a user-attachments URL.
+//
+// The rules, matching gh: extension only (png, jpg, jpeg, gif, webp, svg, mp4,
+// mov, webm), case-insensitive; regular non-empty files only; images at most
+// 10 MiB; videos at most 100 MiB (the server still enforces plan limits).
+// Videos render as a bare URL so GitHub shows a player; images become
+// ![alt](url).
 func ValidateUserAsset(path string) (UserAsset, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -130,7 +113,8 @@ func ValidateUserAsset(path string) (UserAsset, error) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		if pathErr, ok := err.(*fs.PathError); ok {
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
 			return UserAsset{}, fmt.Errorf("%s: %w", path, pathErr.Err)
 		}
 		return UserAsset{}, err
@@ -179,6 +163,13 @@ const (
 	githubTokenAllowed
 )
 
+// classifyGitHubToken applies gh's credential allowlist: OAuth (gho_), classic
+// PAT (ghp_), fine-grained PAT (github_pat_). Installation / Actions tokens
+// (ghs_) and GitHub App user-to-server tokens (ghu_) are refused before the
+// request; reporters have 404'd the endpoint with GITHUB_TOKEN even with
+// contents:write (cli/cli#14309). The permission allowlist enforced elsewhere
+// is ADMIN/MAINTAIN/WRITE; READ/TRIAGE 404. Write access is required to upload,
+// repository access to view a private asset.
 func classifyGitHubToken(token string) (githubTokenClass, string) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -214,7 +205,16 @@ func (c *UserAssetClient) httpClient() *http.Client {
 
 // UploadFile sends asset and returns the user-attachments URL. The URL is
 // checked against gh's response shape before it is returned so a surprising
-// payload cannot become a dead link in a PR body.
+// payload cannot become a dead link in a PR body. The request is:
+//
+//	POST {uploadsPrefix}user-attachments/assets
+//	  ?name=<basename>&content_type=<mime>&repository_id=<numeric repo id>
+//	Authorization: Bearer <token>
+//	Content-Type: application/octet-stream
+//	Accept: application/vnd.github+json
+//
+// and the response JSON is
+// {"url":"https://github.com/user-attachments/assets/<uuid>"}.
 func (c *UserAssetClient) UploadFile(ctx context.Context, asset UserAsset) (string, error) {
 	if c == nil {
 		return "", errors.New("user-attachments client is not configured")
@@ -231,7 +231,7 @@ func (c *UserAssetClient) UploadFile(ctx context.Context, asset UserAsset) (stri
 	if err != nil {
 		return "", err
 	}
-	defer body.Close()
+	defer closers.Quiet(body)
 	openedInfo, err := body.Stat()
 	if err != nil {
 		return "", err
@@ -268,7 +268,7 @@ func (c *UserAssetClient) UploadFile(ctx context.Context, asset UserAsset) (stri
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { closers.Quiet(resp.Body) }()
 	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "", fmt.Errorf("user-attachments upload HTTP %d", resp.StatusCode)
@@ -292,7 +292,9 @@ func sanitizeUserAttachmentURL(raw, host string) (string, error) {
 	if err != nil || parsed.Host == "" {
 		return "", errors.New("user-attachments response was not an absolute URL")
 	}
-	if !strings.EqualFold(parsed.Scheme, "https") && !(strings.EqualFold(parsed.Scheme, "http") && strings.EqualFold(parsed.Hostname(), "github.localhost")) {
+	httpsScheme := strings.EqualFold(parsed.Scheme, "https")
+	localhostHTTP := strings.EqualFold(parsed.Scheme, "http") && strings.EqualFold(parsed.Hostname(), "github.localhost")
+	if !httpsScheme && !localhostHTTP {
 		return "", errors.New("user-attachments response used an unexpected URL scheme")
 	}
 	if !userAttachmentHostOK(parsed.Hostname(), host) {

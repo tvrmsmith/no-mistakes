@@ -16,7 +16,7 @@ func TestLoadGlobalParsesProviderSpecificForgeProfiles(t *testing.T) {
 		"    gh_config_dir: " + githubDir + "\n" +
 		"  gitlab-work:\n" +
 		"    glab_config_dir: " + gitlabDir + "\n"
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -36,7 +36,7 @@ func TestLoadGlobalParsesProviderSpecificForgeProfiles(t *testing.T) {
 func TestLoadGlobalPreservesAbsentAndEmptyForgeProfiles(t *testing.T) {
 	for _, contents := range []string{"agent: auto\n", "forge_profiles: {}\n"} {
 		path := filepath.Join(t.TempDir(), "config.yaml")
-		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		cfg, err := LoadGlobal(path)
@@ -52,7 +52,7 @@ func TestLoadGlobalPreservesAbsentAndEmptyForgeProfiles(t *testing.T) {
 func TestLoadGlobalRejectsUnknownForgeProfileField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	contents := "forge_profiles:\n  github.com:\n    gh_config_dir: /tmp/gh\n    token: forbidden\n"
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadGlobal(path); err == nil || !strings.Contains(err.Error(), "token") {
@@ -71,7 +71,7 @@ func TestLoadGlobalRejectsForgeProfileWithoutExactlyOneProvider(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			contents := "forge_profiles:\n  github-personal: " + tc.profile + "\n"
-			if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -89,7 +89,7 @@ func TestLoadGlobalExpandsHomeRelativeForgeProfilePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("forge_profiles:\n  github-personal:\n    gh_config_dir: ~/profiles/gh-personal\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("forge_profiles:\n  github-personal:\n    gh_config_dir: ~/profiles/gh-personal\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,7 +107,7 @@ func TestLoadGlobalRejectsNonAbsoluteForgeProfilePath(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			contents := "forge_profiles:\n  github-personal:\n    gh_config_dir: " + value + "\n"
-			if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -128,7 +128,7 @@ func TestLoadGlobalRejectsCaseInsensitiveDuplicateForgeHosts(t *testing.T) {
 		"    gh_config_dir: " + one + "\n" +
 		"  github-personal:\n" +
 		"    gh_config_dir: " + two + "\n"
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,7 +140,7 @@ func TestLoadGlobalRejectsCaseInsensitiveDuplicateForgeHosts(t *testing.T) {
 
 func TestLoadGlobalRejectsEmptyForgeHost(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("forge_profiles:\n  '':\n    gh_config_dir: /tmp/gh\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("forge_profiles:\n  '':\n    gh_config_dir: /tmp/gh\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

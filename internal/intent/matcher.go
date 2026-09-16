@@ -38,9 +38,7 @@ func score(s *Session, diffFiles []string) (float64, []string) {
 
 	var mentioned []string
 	for _, m := range s.Messages {
-		for _, p := range m.FilePaths {
-			mentioned = append(mentioned, p)
-		}
+		mentioned = append(mentioned, m.FilePaths...)
 		// Best-effort scan of assistant text for raw filenames.
 		mentioned = append(mentioned, scanFilePathsInText(m.Text)...)
 	}

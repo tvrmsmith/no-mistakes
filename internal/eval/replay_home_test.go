@@ -2,7 +2,6 @@ package eval
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -30,7 +30,7 @@ const piHOMEProbeReply = `{"type":"agent_end","messages":[{"role":"assistant","c
 // (so Pi's ordinary ~/.pi/agent auth discovery works without an injected API
 // key) while NM_HOME stays a nested sandbox that cannot see production state.
 func TestReplayUsesCallerHOMEAndKeepsIsolatedNMHOME(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	hideHarnessDirOverrides(t)
 	unsetEnv(t, "XAI_API_KEY")
 
@@ -40,7 +40,7 @@ func TestReplayUsesCallerHOMEAndKeepsIsolatedNMHOME(t *testing.T) {
 	writeFile(t, filepath.Join(sentinel, ".pi", "agent", "auth.json"), syntheticPiAuth)
 
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	probeDir := t.TempDir()
 	fakeDir := t.TempDir()
@@ -52,7 +52,7 @@ func TestReplayUsesCallerHOMEAndKeepsIsolatedNMHOME(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestReplayUsesCallerHOMEAndKeepsIsolatedNMHOME(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pipelineAgent.Close()
+	defer closers.Quiet(pipelineAgent)
 	schema := json.RawMessage(`{"type":"object","properties":{"findings":{"type":"array"}},"required":["findings"]}`)
 	if _, err := pipelineAgent.Run(ctx, agent.RunOpts{
 		Prompt:     "review",
@@ -157,15 +157,20 @@ func unsetEnv(t *testing.T, keys ...string) {
 	t.Helper()
 	for _, key := range keys {
 		key := key
-		orig, ok := os.LookupEnv(key)
-		os.Unsetenv(key)
-		t.Cleanup(func() {
-			if ok {
-				_ = os.Setenv(key, orig)
-			} else {
-				os.Unsetenv(key)
-			}
-		})
+		if orig, ok := os.LookupEnv(key); ok {
+			// Setting the value it already has is how the restore gets
+			// registered before the unset below takes it away.
+			t.Setenv(key, orig)
+		} else {
+			t.Cleanup(func() {
+				if err := os.Unsetenv(key); err != nil {
+					t.Errorf("unset %s: %v", key, err)
+				}
+			})
+		}
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
 	}
 }
 
@@ -205,7 +210,7 @@ func installNamedHOMEProbeHarness(t *testing.T, path, probePath, reply string) {
 			"cat >/dev/null\n" +
 			"cat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -216,7 +221,7 @@ func readProbe(t *testing.T, path string) map[string]string {
 	if err != nil {
 		t.Fatalf("read probe %s: %v", path, err)
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 	out := map[string]string{}
 	s := bufio.NewScanner(f)
 	for s.Scan() {
@@ -234,10 +239,10 @@ func readProbe(t *testing.T, path string) map[string]string {
 
 func writeFile(t *testing.T, path, contents string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

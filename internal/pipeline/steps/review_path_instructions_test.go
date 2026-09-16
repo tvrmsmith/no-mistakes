@@ -259,10 +259,10 @@ func TestChangedPathList_RenameAndUnusualNames(t *testing.T) {
 	writeFile := func(rel string) {
 		t.Helper()
 		full := filepath.Join(dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 			t.Fatalf("mkdir for %q: %v", rel, err)
 		}
-		if err := os.WriteFile(full, []byte("package scm\n"), 0o644); err != nil {
+		if err := os.WriteFile(full, []byte("package scm\n"), 0o600); err != nil {
 			t.Fatalf("write %q: %v", rel, err)
 		}
 	}
@@ -278,7 +278,7 @@ func TestChangedPathList_RenameAndUnusualNames(t *testing.T) {
 	}
 
 	// Move legacy.go out of the governed subtree, and add the unusual name.
-	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o750); err != nil {
 		t.Fatalf("mkdir docs: %v", err)
 	}
 	if err := os.Rename(filepath.Join(dir, "internal", "scm", "legacy.go"), filepath.Join(dir, "docs", "legacy.go")); err != nil {

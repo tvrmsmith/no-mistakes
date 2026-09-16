@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -39,7 +40,7 @@ func AutoCapture(ctx context.Context, p *paths.Paths, database *db.DB, runID str
 	if err != nil {
 		return AutoCaptureResult{}, err
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	cases, err := Capture(ctx, store, p, database, runID)
 	if err != nil {

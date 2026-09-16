@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -59,14 +59,14 @@ func TestSubscribeMalformedEvent(t *testing.T) {
 	// Start a fresh minimal server with raw socket control.
 	sock = socketPath(t)
 	ln := rawListen(t, sock)
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer closers.Quiet(conn)
 
 		scanner := bufio.NewScanner(conn)
 		if !scanner.Scan() {
@@ -74,24 +74,24 @@ func TestSubscribeMalformedEvent(t *testing.T) {
 		}
 		// Read the subscribe request, send OK response.
 		var req ipc.Request
-		json.Unmarshal(scanner.Bytes(), &req)
+		decodeFrame(t, scanner.Bytes(), &req)
 
 		enc := json.NewEncoder(conn)
 		okResp := ipc.Response{JSONRPC: "2.0", ID: req.ID}
 		okResult, _ := json.Marshal(map[string]bool{"ok": true})
 		okResp.Result = okResult
-		enc.Encode(okResp)
+		encodeFrame(t, enc, okResp)
 
 		// Send valid event.
 		s1 := "first"
-		enc.Encode(ipc.Event{Type: ipc.EventRunUpdated, RunID: "r1", Status: &s1})
+		encodeFrame(t, enc, ipc.Event{Type: ipc.EventRunUpdated, RunID: "r1", Status: &s1})
 
 		// Send malformed JSON.
-		conn.Write([]byte("{bad json}\n"))
+		sendFrame(t, conn, "{bad json}\n")
 
 		// Send another valid event.
 		s2 := "second"
-		enc.Encode(ipc.Event{Type: ipc.EventRunUpdated, RunID: "r1", Status: &s2})
+		encodeFrame(t, enc, ipc.Event{Type: ipc.EventRunUpdated, RunID: "r1", Status: &s2})
 	}()
 
 	ch, cancel, err := ipc.Subscribe(sock, &ipc.SubscribeParams{RunID: "r1"})
@@ -119,11 +119,10 @@ func TestSubscribeMalformedEvent(t *testing.T) {
 
 func TestSubscribeConnectionClosedBeforeResponse(t *testing.T) {
 	sock := socketPath(t)
-	os.Remove(sock)
 
 	// Start a raw server that closes connection immediately after accept.
 	ln := rawListen(t, sock)
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	go func() {
 		conn, err := ln.Accept()
@@ -133,7 +132,7 @@ func TestSubscribeConnectionClosedBeforeResponse(t *testing.T) {
 		// Read the request then close without responding.
 		scanner := bufio.NewScanner(conn)
 		scanner.Scan() // consume the request
-		conn.Close()
+		closers.Quiet(conn)
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -210,9 +209,8 @@ func TestSubscribeClient(t *testing.T) {
 // change puts an unbounded payload back on the stream, the hazard is here.
 func TestSubscribeOversizedFrameEndsTheStreamAndHidesLaterEvents(t *testing.T) {
 	sock := socketPath(t)
-	os.Remove(sock)
 	ln := rawListen(t, sock)
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	oversized := strings.Repeat("d", 1024*1024+64)
 	go func() {
@@ -220,22 +218,22 @@ func TestSubscribeOversizedFrameEndsTheStreamAndHidesLaterEvents(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer closers.Quiet(conn)
 		scanner := bufio.NewScanner(conn)
 		if !scanner.Scan() {
 			return
 		}
 		var req ipc.Request
-		json.Unmarshal(scanner.Bytes(), &req)
+		decodeFrame(t, scanner.Bytes(), &req)
 		enc := json.NewEncoder(conn)
 		okResp := ipc.Response{JSONRPC: "2.0", ID: req.ID}
 		okResult, _ := json.Marshal(map[string]bool{"ok": true})
 		okResp.Result = okResult
-		enc.Encode(okResp)
+		encodeFrame(t, enc, okResp)
 
-		enc.Encode(ipc.Event{Type: ipc.EventLogChunk, RunID: "r1", Content: &oversized})
+		encodeFrame(t, enc, ipc.Event{Type: ipc.EventLogChunk, RunID: "r1", Content: &oversized})
 		terminal := "failed"
-		enc.Encode(ipc.Event{Type: ipc.EventRunCompleted, RunID: "r1", Status: &terminal})
+		encodeFrame(t, enc, ipc.Event{Type: ipc.EventRunCompleted, RunID: "r1", Status: &terminal})
 	}()
 
 	ch, cancel, err := ipc.Subscribe(sock, &ipc.SubscribeParams{RunID: "r1"})
@@ -259,9 +257,8 @@ func TestSubscribeOversizedFrameEndsTheStreamAndHidesLaterEvents(t *testing.T) {
 // one. Gate events must stay in this regime.
 func TestSubscribeBoundedFramesDeliverThroughTerminalEvent(t *testing.T) {
 	sock := socketPath(t)
-	os.Remove(sock)
 	ln := rawListen(t, sock)
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	findings := strings.Repeat("f", 64*1024)
 	go func() {
@@ -269,24 +266,24 @@ func TestSubscribeBoundedFramesDeliverThroughTerminalEvent(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer closers.Quiet(conn)
 		scanner := bufio.NewScanner(conn)
 		if !scanner.Scan() {
 			return
 		}
 		var req ipc.Request
-		json.Unmarshal(scanner.Bytes(), &req)
+		decodeFrame(t, scanner.Bytes(), &req)
 		enc := json.NewEncoder(conn)
 		okResp := ipc.Response{JSONRPC: "2.0", ID: req.ID}
 		okResult, _ := json.Marshal(map[string]bool{"ok": true})
 		okResp.Result = okResult
-		enc.Encode(okResp)
+		encodeFrame(t, enc, okResp)
 
 		gate := "fix_review"
-		enc.Encode(ipc.Event{Type: ipc.EventStepCompleted, RunID: "r1", Status: &gate, Findings: &findings, StateRev: 4})
-		enc.Encode(ipc.Event{Type: ipc.EventStreamGap, RunID: "r1", StateRev: 9})
+		encodeFrame(t, enc, ipc.Event{Type: ipc.EventStepCompleted, RunID: "r1", Status: &gate, Findings: &findings, StateRev: 4})
+		encodeFrame(t, enc, ipc.Event{Type: ipc.EventStreamGap, RunID: "r1", StateRev: 9})
 		terminal := "failed"
-		enc.Encode(ipc.Event{Type: ipc.EventRunCompleted, RunID: "r1", Status: &terminal, StateRev: 10})
+		encodeFrame(t, enc, ipc.Event{Type: ipc.EventRunCompleted, RunID: "r1", Status: &terminal, StateRev: 10})
 	}()
 
 	ch, cancel, err := ipc.Subscribe(sock, &ipc.SubscribeParams{RunID: "r1"})

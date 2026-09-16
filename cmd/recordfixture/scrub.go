@@ -26,7 +26,7 @@ func scrubFile(path string) error {
 	if bytes.Equal(scrubbed, data) {
 		return nil
 	}
-	return os.WriteFile(path, scrubbed, 0o644)
+	return os.WriteFile(path, scrubbed, 0o600)
 }
 
 func scrubBytes(data []byte) []byte {

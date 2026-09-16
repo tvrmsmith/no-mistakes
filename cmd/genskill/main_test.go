@@ -40,7 +40,7 @@ func TestGeneratedDirRejectsAndRemovesOrphanFiles(t *testing.T) {
 		t.Fatalf("writeDir: %v", err)
 	}
 	orphan := filepath.Join(dir, "retired-reference.md")
-	if err := os.WriteFile(orphan, []byte("stale guidance\n"), 0o644); err != nil {
+	if err := os.WriteFile(orphan, []byte("stale guidance\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -77,11 +77,11 @@ func TestGeneratedDirRefusesEntriesItCannotOwnInsteadOfDeletingThem(t *testing.T
 		t.Fatalf("writeDir: %v", err)
 	}
 	nested := filepath.Join(dir, "vendored")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
+	if err := os.MkdirAll(nested, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	kept := filepath.Join(nested, "keep.md")
-	if err := os.WriteFile(kept, []byte("not ours\n"), 0o644); err != nil {
+	if err := os.WriteFile(kept, []byte("not ours\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +109,7 @@ func TestCheckDirDetectsReferenceFileDrift(t *testing.T) {
 		if err := writeDir(dir); err != nil {
 			t.Fatalf("writeDir: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, ref), []byte("hand-edited\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, ref), []byte("hand-edited\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		err := checkDir(dir)

@@ -1,12 +1,12 @@
 package lifecycle
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/lifecycle/lifecycletest"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -21,7 +21,7 @@ func runFromState(t *testing.T, p *paths.Paths, runID string) *db.Run {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	run, err := database.GetRun(runID)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestWorktreeMatchesRun_AHeadTheRunNeverRecordedIsAdverseEvidence(t *testing
 		t.Fatal("the fixture did not move the worktree head")
 	}
 
-	err := WorktreeMatchesRun(context.Background(), p, runFromState(t, p, parked.RunID))
+	err := WorktreeMatchesRun(t.Context(), p, runFromState(t, p, parked.RunID))
 	if err == nil {
 		t.Fatal("WorktreeMatchesRun(head ahead of the run) = nil, want a refusal")
 	}
@@ -73,7 +73,7 @@ func TestWorktreeMatchesRun_TheRecordedHeadStillResumes(t *testing.T) {
 	plan := lifecycletest.Plan(types.StepReview, types.StepTest)
 	parked := lifecycletest.SeedResumableParkedRun(t, p, "/tmp/project", "feature", plan)
 
-	if err := WorktreeMatchesRun(context.Background(), p, runFromState(t, p, parked.RunID)); err != nil {
+	if err := WorktreeMatchesRun(t.Context(), p, runFromState(t, p, parked.RunID)); err != nil {
 		t.Fatalf("WorktreeMatchesRun(recorded head) = %v, want nil", err)
 	}
 }
@@ -89,7 +89,7 @@ func TestWorktreeMatchesRun_AnUnreadableHeadIsUnavailableEvidence(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	err := WorktreeMatchesRun(context.Background(), p, runFromState(t, p, parked.RunID))
+	err := WorktreeMatchesRun(t.Context(), p, runFromState(t, p, parked.RunID))
 	if !errors.Is(err, pipeline.ErrRecoveryEvidenceUnavailable) {
 		t.Fatalf("WorktreeMatchesRun(unreadable worktree) error = %v, want ErrRecoveryEvidenceUnavailable", err)
 	}

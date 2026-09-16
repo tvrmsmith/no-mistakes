@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"os"
 	"testing"
 )
@@ -14,7 +13,7 @@ func TestPiReader_RealLocalSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("home: %v", err)
 	}
-	sessions, err := NewPiReader().Discover(context.Background(), DiscoverOpts{HomeDir: home})
+	sessions, err := NewPiReader().Discover(t.Context(), DiscoverOpts{HomeDir: home})
 	if err != nil {
 		t.Fatalf("discover real Pi sessions: %v", err)
 	}
@@ -24,7 +23,7 @@ func TestPiReader_RealLocalSessions(t *testing.T) {
 	loaded := 0
 	messages := 0
 	for _, s := range sessions {
-		if err := NewPiReader().Load(context.Background(), s); err != nil {
+		if err := NewPiReader().Load(t.Context(), s); err != nil {
 			t.Fatalf("load real Pi session %q: %v", s.SessionID, err)
 		}
 		if len(s.Messages) > 0 {

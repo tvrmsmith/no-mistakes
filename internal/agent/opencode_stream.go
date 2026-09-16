@@ -30,7 +30,6 @@ func accumulateUsage(byMsg map[string]TokenUsage) TokenUsage {
 
 // parseOpencodeSSE processes the SSE stream from OpenCode's /global/event endpoint.
 func parseOpencodeSSE(r io.Reader, state *opencodeStreamState) error {
-	var sawIdle bool
 	var streamErr error
 	err := parseSSE(r, func(ev sseEvent) bool {
 		if ev.Data == "" {
@@ -136,7 +135,6 @@ func parseOpencodeSSE(r io.Reader, state *opencodeStreamState) error {
 			}
 
 		case "session.idle":
-			sawIdle = true
 			return false
 		}
 
@@ -149,10 +147,8 @@ func parseOpencodeSSE(r io.Reader, state *opencodeStreamState) error {
 	if streamErr != nil {
 		return streamErr
 	}
-	if !sawIdle {
-		// Stream ended without session.idle — not an error if message response
-		// will provide the final result
-	}
+	// A stream that ended without session.idle is not an error; the message
+	// response carries the final result.
 	return nil
 }
 

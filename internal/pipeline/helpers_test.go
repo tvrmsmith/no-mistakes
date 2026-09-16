@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -73,7 +74,7 @@ func setupTest(t *testing.T) (*db.DB, *paths.Paths, *db.Run, *db.Repo) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	repo, err := database.InsertRepoWithID("testrepo", "/tmp/test-repo", "https://github.com/test/repo", "main")
 	if err != nil {
@@ -223,7 +224,7 @@ func waitForStepStatus(t *testing.T, database *db.DB, runID string, stepName typ
 // failed wait was the lint.log leak in TestExecutor_AutoFixRespectsMaxAttempts.
 func startExecutor(t *testing.T, exec *Executor, run *db.Run, repo *db.Repo, workDir string) (<-chan error, context.CancelFunc) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	var finished atomic.Bool
 	t.Cleanup(func() {
@@ -307,7 +308,17 @@ func execGit(t *testing.T, dir string, args ...string) {
 
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// respondOrFail answers the gate the executor is parked at, failing the test
+// when the executor refuses the answer. A refused response leaves the run
+// parked, which the waits below would report as an unrelated timeout.
+func respondOrFail(t *testing.T, exec *Executor, step types.StepName, action types.ApprovalAction, findingIDs []string) {
+	t.Helper()
+	if err := exec.Respond(step, action, findingIDs); err != nil {
+		t.Fatalf("respond %s %s: %v", step, action, err)
 	}
 }

@@ -79,13 +79,13 @@ func TestGenerateCIWorkflow(t *testing.T) {
 			wantErr: true,
 			setup: func(dir string) error {
 				workflowDir := filepath.Join(dir, ".github", "workflows")
-				if err := os.MkdirAll(workflowDir, 0755); err != nil {
+				if err := os.MkdirAll(workflowDir, 0750); err != nil {
 					return err
 				}
 				return os.WriteFile(
 					filepath.Join(workflowDir, "ci.yml"),
 					[]byte("existing"),
-					0644,
+					0600,
 				)
 			},
 		},
@@ -148,7 +148,7 @@ func TestGenerateCIWorkflow(t *testing.T) {
 			if err := os.WriteFile(
 				filepath.Join(dir, ".no-mistakes.yaml"),
 				[]byte(tt.configYAML),
-				0644,
+				0600,
 			); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
@@ -196,13 +196,13 @@ func TestGenerateCIWorkflow_RootsAtGitToplevel(t *testing.T) {
 	if err := os.WriteFile(
 		filepath.Join(dir, ".no-mistakes.yaml"),
 		[]byte("commands:\n  test: \"go test ./...\"\n"),
-		0644,
+		0600,
 	); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	subdir := filepath.Join(dir, "cmd", "sub")
-	if err := os.MkdirAll(subdir, 0755); err != nil {
+	if err := os.MkdirAll(subdir, 0750); err != nil {
 		t.Fatalf("mkdir subdir: %v", err)
 	}
 
@@ -225,7 +225,7 @@ func TestGenerateCIWorkflow_RefusesSymlinkedWorkflowsDir(t *testing.T) {
 	initGitRepo(t, dir)
 
 	outside := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0750); err != nil {
 		t.Fatalf("mkdir .github: %v", err)
 	}
 	// A repository-controlled symlink standing in for the workflows
@@ -237,7 +237,7 @@ func TestGenerateCIWorkflow_RefusesSymlinkedWorkflowsDir(t *testing.T) {
 	if err := os.WriteFile(
 		filepath.Join(dir, ".no-mistakes.yaml"),
 		[]byte("commands:\n  test: \"go test ./...\"\n"),
-		0644,
+		0600,
 	); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -256,12 +256,12 @@ func TestGenerateCIWorkflow_RefusesSymlinkedWorkflowFile(t *testing.T) {
 	initGitRepo(t, dir)
 
 	outsideFile := filepath.Join(t.TempDir(), "evil.yml")
-	if err := os.WriteFile(outsideFile, []byte("original"), 0644); err != nil {
+	if err := os.WriteFile(outsideFile, []byte("original"), 0600); err != nil {
 		t.Fatalf("write outside file: %v", err)
 	}
 
 	workflowDir := filepath.Join(dir, ".github", "workflows")
-	if err := os.MkdirAll(workflowDir, 0755); err != nil {
+	if err := os.MkdirAll(workflowDir, 0750); err != nil {
 		t.Fatalf("mkdir workflows: %v", err)
 	}
 	if err := os.Symlink(outsideFile, filepath.Join(workflowDir, "ci.yml")); err != nil {
@@ -271,7 +271,7 @@ func TestGenerateCIWorkflow_RefusesSymlinkedWorkflowFile(t *testing.T) {
 	if err := os.WriteFile(
 		filepath.Join(dir, ".no-mistakes.yaml"),
 		[]byte("commands:\n  test: \"go test ./...\"\n"),
-		0644,
+		0600,
 	); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

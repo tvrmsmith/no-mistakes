@@ -117,11 +117,12 @@ func unmarshalRequiredTestFindings(raw []byte, findings *Findings) error {
 	for i, scenario := range *payload.Scenarios {
 		issues = append(issues, scenarioContractIssues(i, scenario)...)
 	}
-	if payload.Verdict == nil {
+	switch {
+	case payload.Verdict == nil:
 		issues = append(issues, "missing verdict - set verdict to "+strings.Join(types.KnownTestVerdicts(), ", "))
-	} else if !types.IsKnownTestVerdict(*payload.Verdict) {
+	case !types.IsKnownTestVerdict(*payload.Verdict):
 		issues = append(issues, fmt.Sprintf("verdict %q is not one of %s", *payload.Verdict, strings.Join(types.KnownTestVerdicts(), ", ")))
-	} else {
+	default:
 		if *payload.Verdict != types.TestVerdictNoGo {
 			for i, scenario := range *payload.Scenarios {
 				if scenario.Result != nil && *scenario.Result == types.ScenarioResultFail {

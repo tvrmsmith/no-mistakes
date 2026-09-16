@@ -89,8 +89,8 @@ func TestIntentCache_Cleanup(t *testing.T) {
 	d := openTestDB(t)
 
 	now := time.Now().Unix()
-	d.PutIntentCache(IntentCacheEntry{CacheKey: "old", Summary: "x", AgentName: "claude", SessionID: "s", CreatedAt: now - int64((40 * 24 * time.Hour).Seconds())})
-	d.PutIntentCache(IntentCacheEntry{CacheKey: "new", Summary: "x", AgentName: "claude", SessionID: "s", CreatedAt: now})
+	mustSetup(t, d.PutIntentCache(IntentCacheEntry{CacheKey: "old", Summary: "x", AgentName: "claude", SessionID: "s", CreatedAt: now - int64((40 * 24 * time.Hour).Seconds())}))
+	mustSetup(t, d.PutIntentCache(IntentCacheEntry{CacheKey: "new", Summary: "x", AgentName: "claude", SessionID: "s", CreatedAt: now}))
 
 	deleted, err := d.CleanupOldIntentCache(30 * 24 * time.Hour)
 	if err != nil {

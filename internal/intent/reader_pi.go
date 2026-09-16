@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -105,7 +106,7 @@ func (r *piReader) Load(_ context.Context, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("pi open: %w", err)
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), piScannerMaxTokenSize)
@@ -177,7 +178,7 @@ func piPeekMetadata(path string) (*piMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), piScannerMaxTokenSize)
@@ -248,11 +249,6 @@ func parsePiMessages(raw json.RawMessage, timestamp string) []piParsedMessage {
 	return msgs
 }
 
-func parsePiMessage(raw json.RawMessage, timestamp string) (Message, bool) {
-	msg, ok := parsePiParsedMessage(raw, timestamp)
-	return msg.Message, ok
-}
-
 func parsePiParsedMessage(raw json.RawMessage, timestamp string) (piParsedMessage, bool) {
 	if len(raw) == 0 {
 		return piParsedMessage{}, false
@@ -268,7 +264,7 @@ func parsePiParsedMessage(raw json.RawMessage, timestamp string) (piParsedMessag
 		return piParsedMessage{}, false
 	}
 
-	role := RoleAssistant
+	var role Role
 	switch {
 	case strings.EqualFold(msg.Role, "user"):
 		role = RoleUser

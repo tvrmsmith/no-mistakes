@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -27,7 +28,7 @@ func writeDaemonPIDRecord(t *testing.T, path string, record daemonPIDFile) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -37,16 +38,16 @@ func TestWaitForDaemonStopKeepsArtifactsWhenKillFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("999999"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("999999"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.Socket(), []byte("still-there"), 0o644); err != nil {
+	if err := os.WriteFile(p.Socket(), []byte("still-there"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,7 +129,7 @@ func TestEnsureDaemonDoesNotStartWhenHealthCheckTimesOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	timeoutErr := fmt.Errorf("dial ipc: %w", &ipc.ConnectTimeoutError{
@@ -181,7 +182,7 @@ func TestIsRunningFailsFastWhenSocketAcceptsButDoesNotRespond(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -191,7 +192,7 @@ func TestIsRunningFailsFastWhenSocketAcceptsButDoesNotRespond(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	accepted := make(chan net.Conn, 1)
 	go func() {
@@ -241,13 +242,13 @@ func TestIsRunningSurfacesExistingDeadSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.Socket(), []byte("dead"), 0o644); err != nil {
+	if err := os.WriteFile(p.Socket(), []byte("dead"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -269,7 +270,7 @@ func TestStopDetachedDaemonFallsBackToPIDWhenSocketIsBroken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -282,7 +283,7 @@ func TestStopDetachedDaemonFallsBackToPIDWhenSocketIsBroken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	originalDial := daemonDial
 	daemonDial = func(string) (*ipc.Client, error) {
@@ -349,7 +350,7 @@ func TestStopDetachedDaemonRejectsStalePIDFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -360,7 +361,7 @@ func TestStopDetachedDaemonRejectsStalePIDFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	originalDial := daemonDial
 	daemonDial = func(string) (*ipc.Client, error) {
@@ -403,7 +404,7 @@ func TestStopDetachedDaemonRejectsUnrelatedLiveProcessPIDFallback(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -414,7 +415,7 @@ func TestStopDetachedDaemonRejectsUnrelatedLiveProcessPIDFallback(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	originalDial := daemonDial
 	daemonDial = func(string) (*ipc.Client, error) {
@@ -474,7 +475,7 @@ func TestValidateDaemonPIDFallback_RefusesToKillOwnProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -508,13 +509,13 @@ func TestValidateDaemonPIDFallback_RejectsLegacyPIDFileForReusedPID(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -540,13 +541,13 @@ func TestValidateDaemonPIDFallback_RejectsLegacyPIDFileTouchedNearLivePID(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mtime := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
@@ -631,7 +632,7 @@ func TestWriteDaemonPIDFile_LeavesExistingFileUntouchedOnRenameFailure(t *testin
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "daemon.pid")
 	original := []byte("old-data")
-	if err := os.WriteFile(path, original, 0o644); err != nil {
+	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -672,13 +673,13 @@ func TestStopDetachedDaemonRemovesArtifactsForDeadPID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("999999"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("999999"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
@@ -718,13 +719,13 @@ func TestStaleDaemonArtifactsKeepsPIDForLiveProcessWithoutSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -742,13 +743,13 @@ func TestStaleDaemonArtifactsKeepsRegularEndpointFileForLiveProcess(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(p.Socket(), []byte("127.0.0.1:1234\ntoken\n"), 0o600); err != nil {
@@ -779,7 +780,7 @@ func TestStopDetachedDaemonKeepsArtifactsWhenPIDMissingButDaemonLooksLive(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -789,7 +790,7 @@ func TestStopDetachedDaemonKeepsArtifactsWhenPIDMissingButDaemonLooksLive(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer closers.Quiet(ln)
 
 	originalDial := daemonDial
 	daemonDial = func(string) (*ipc.Client, error) {
@@ -825,13 +826,13 @@ func TestStaleDaemonArtifactsRejectsNonPositivePID(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer os.RemoveAll(tmpDir)
+			defer removeTempRoot(t, tmpDir)
 
 			p := paths.WithRoot(tmpDir)
 			if err := p.EnsureDirs(); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(p.PIDFile(), []byte(tt.pid), 0o644); err != nil {
+			if err := os.WriteFile(p.PIDFile(), []byte(tt.pid), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -864,7 +865,7 @@ func TestReadPIDNoFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	_, err = ReadPID(p)
@@ -887,7 +888,7 @@ func TestWaitForDaemonStopNeverKillsOwnPIDWhenHealthCheckOnlyErrors(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -895,7 +896,7 @@ func TestWaitForDaemonStopNeverKillsOwnPIDWhenHealthCheckOnlyErrors(t *testing.T
 	}
 	startedAt := time.Now()
 	writeDaemonPIDRecord(t, p.PIDFile(), daemonPIDFile{PID: os.Getpid(), StartedAt: startedAt})
-	if err := os.WriteFile(p.Socket(), []byte("still-there"), 0o644); err != nil {
+	if err := os.WriteFile(p.Socket(), []byte("still-there"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -940,16 +941,16 @@ func TestWaitForDaemonStopDoesNotTreatHealthCheckErrorsAsStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.PIDFile(), []byte("999999"), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte("999999"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.Socket(), []byte("still-there"), 0o644); err != nil {
+	if err := os.WriteFile(p.Socket(), []byte("still-there"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -982,14 +983,14 @@ func TestWaitForDaemonStopRejectsStalePIDBeforeKill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
 	writeDaemonPIDRecord(t, p.PIDFile(), daemonPIDFile{PID: os.Getpid(), StartedAt: time.Now().Add(-24 * time.Hour)})
-	if err := os.WriteFile(p.Socket(), []byte("still-there"), 0o644); err != nil {
+	if err := os.WriteFile(p.Socket(), []byte("still-there"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1044,10 +1045,12 @@ func TestReadPIDInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer removeTempRoot(t, tmpDir)
 
 	p := paths.WithRoot(tmpDir)
-	os.WriteFile(filepath.Join(tmpDir, "daemon.pid"), []byte("notanumber"), 0o644)
+	if err := os.WriteFile(filepath.Join(tmpDir, "daemon.pid"), []byte("notanumber"), 0o600); err != nil {
+		t.Fatalf("write pid file: %v", err)
+	}
 	_, err = ReadPID(p)
 	if err == nil {
 		t.Error("expected error for invalid PID content")
@@ -1069,10 +1072,10 @@ func TestReadPIDRejectsNonPositiveValues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer os.RemoveAll(tmpDir)
+			defer removeTempRoot(t, tmpDir)
 
 			p := paths.WithRoot(tmpDir)
-			if err := os.WriteFile(filepath.Join(tmpDir, "daemon.pid"), []byte(tt.pid), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(tmpDir, "daemon.pid"), []byte(tt.pid), 0o600); err != nil {
 				t.Fatal(err)
 			}
 

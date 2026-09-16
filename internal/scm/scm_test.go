@@ -76,7 +76,7 @@ func TestDetectProvider_SSHHostAlias(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := detectProvider(context.Background(), tt.url, func(context.Context, string) (string, error) {
+			got := detectProvider(t.Context(), tt.url, func(context.Context, string) (string, error) {
 				return tt.hostname, nil
 			})
 			if got != tt.want {
@@ -88,7 +88,7 @@ func TestDetectProvider_SSHHostAlias(t *testing.T) {
 
 func TestResolveHost_SSHConfigLookup(t *testing.T) {
 	t.Run("canonical hostname", func(t *testing.T) {
-		got := resolveHost(context.Background(), "git@github-personal:owner/repo.git", func(_ context.Context, alias string) (string, error) {
+		got := resolveHost(t.Context(), "git@github-personal:owner/repo.git", func(_ context.Context, alias string) (string, error) {
 			if alias != "github-personal" {
 				t.Fatalf("alias = %q, want github-personal", alias)
 			}
@@ -100,7 +100,7 @@ func TestResolveHost_SSHConfigLookup(t *testing.T) {
 	})
 
 	t.Run("lookup failure preserves alias", func(t *testing.T) {
-		got := resolveHost(context.Background(), "git@github-personal:owner/repo.git", func(context.Context, string) (string, error) {
+		got := resolveHost(t.Context(), "git@github-personal:owner/repo.git", func(context.Context, string) (string, error) {
 			return "", errors.New("ssh unavailable")
 		})
 		if got != "github-personal" {
@@ -109,7 +109,7 @@ func TestResolveHost_SSHConfigLookup(t *testing.T) {
 	})
 
 	t.Run("HTTPS does not invoke SSH", func(t *testing.T) {
-		got := resolveHost(context.Background(), "https://code.example.com/owner/repo.git", func(context.Context, string) (string, error) {
+		got := resolveHost(t.Context(), "https://code.example.com/owner/repo.git", func(context.Context, string) (string, error) {
 			t.Fatal("SSH lookup invoked for HTTPS remote")
 			return "", nil
 		})
@@ -119,7 +119,7 @@ func TestResolveHost_SSHConfigLookup(t *testing.T) {
 	})
 
 	t.Run("Windows path does not invoke SSH", func(t *testing.T) {
-		got := resolveHost(context.Background(), `C:\repo`, func(context.Context, string) (string, error) {
+		got := resolveHost(t.Context(), `C:\repo`, func(context.Context, string) (string, error) {
 			t.Fatal("SSH lookup invoked for Windows path")
 			return "", nil
 		})
@@ -134,7 +134,7 @@ func TestDetectProvider_ConfiguredForgejoBaseResolvesSSHHostAlias(t *testing.T) 
 	t.Setenv("GH_CONFIG_DIR", t.TempDir())
 
 	got := detectProviderWithForgejoBaseURL(
-		context.Background(),
+		t.Context(),
 		"git@github.com-work:scm/octo/widgets.git",
 		"https://forgejo.gitlab.example:3443/scm",
 		func(_ context.Context, alias string) (string, error) {
@@ -256,7 +256,7 @@ func TestDetectProvider_UsesForgejoBaseEnvironment(t *testing.T) {
 func writeGlabConfig(t *testing.T, body string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GLAB_CONFIG_DIR", dir)
@@ -332,7 +332,7 @@ func TestDetectProvider_GlabConfigMalformedFailsClosed(t *testing.T) {
 func writeGhConfig(t *testing.T, body string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GH_CONFIG_DIR", dir)
@@ -388,10 +388,10 @@ func TestDetectProvider_GhConfigMalformedFailsClosed(t *testing.T) {
 func writeTeaConfig(t *testing.T, body string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "tea"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "tea"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "tea", "config.yml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tea", "config.yml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)

@@ -197,7 +197,7 @@ func fetchRunUpstreamBranch(ctx context.Context, sctx *pipeline.StepContext, bra
 
 	err := fetchRunUpstreamBranchInner(ctx, sctx, branch)
 	if err != nil && errors.Is(context.Cause(ctx), ErrFetchTimeout) {
-		return fmt.Errorf("%w after %s: %v", ErrFetchTimeout, fetchUpstreamTimeout, err)
+		return fmt.Errorf("%w after %s: %w", ErrFetchTimeout, fetchUpstreamTimeout, err)
 	}
 	return err
 }

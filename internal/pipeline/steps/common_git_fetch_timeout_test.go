@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -50,14 +49,14 @@ func TestFetchRunUpstreamBranch_TimesOutAndSaysSo(t *testing.T) {
 	}
 
 	sctx := &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		WorkDir: workDir,
 		Repo:    &db.Repo{UpstreamURL: hangingGitRemote(t)},
 	}
 
 	start := time.Now()
 	// No deadline on the caller context: the fetch must impose its own.
-	err := fetchRunUpstreamBranch(context.Background(), sctx, "main")
+	err := fetchRunUpstreamBranch(t.Context(), sctx, "main")
 	elapsed := time.Since(start)
 
 	if err == nil {

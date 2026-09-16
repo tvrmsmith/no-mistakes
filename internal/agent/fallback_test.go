@@ -45,7 +45,7 @@ func TestFallbackAgentFallsBackOnLaunchFailure(t *testing.T) {
 	}
 	var chunks []string
 
-	result, err := NewFallback([]Agent{first, second}).Run(context.Background(), RunOpts{
+	result, err := NewFallback([]Agent{first, second}).Run(t.Context(), RunOpts{
 		OnChunk: func(text string) { chunks = append(chunks, text) },
 	})
 	if err != nil {
@@ -77,7 +77,7 @@ func TestFallbackAgentDoesNotFallBackOnFindingsResult(t *testing.T) {
 		},
 	}
 
-	result, err := NewFallback([]Agent{first, second}).Run(context.Background(), RunOpts{})
+	result, err := NewFallback([]Agent{first, second}).Run(t.Context(), RunOpts{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -104,7 +104,7 @@ func TestFallbackAgentDoesNotFallBackOnStructuredOutputError(t *testing.T) {
 		},
 	}
 
-	_, err := NewFallback([]Agent{first, second}).Run(context.Background(), RunOpts{})
+	_, err := NewFallback([]Agent{first, second}).Run(t.Context(), RunOpts{})
 	if !errors.Is(err, parseErr) {
 		t.Fatalf("Run() error = %v, want %v", err, parseErr)
 	}
@@ -135,7 +135,7 @@ func TestFallbackAgent_ReportsEveryAttempt(t *testing.T) {
 		},
 	}
 	var attempts []Attempt
-	_, err := NewFallback([]Agent{first, second}).Run(context.Background(), RunOpts{
+	_, err := NewFallback([]Agent{first, second}).Run(t.Context(), RunOpts{
 		OnAttempt: func(attempt Attempt) { attempts = append(attempts, attempt) },
 	})
 	if err != nil {
@@ -167,7 +167,7 @@ func TestFallbackAgent_ExpiredPrimaryDoesNotAnnounceOrStartFallback(t *testing.T
 		},
 	}
 	var lifecycle []LifecycleEvent
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 
 	_, err := NewFallback([]Agent{first, second}).Run(ctx, RunOpts{
@@ -199,7 +199,7 @@ func TestFallbackAgent_AlreadyExpiredContextStartsNoCandidate(t *testing.T) {
 			return &Result{Text: "must not start"}, nil
 		},
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 
 	_, err := NewFallback([]Agent{first, second}).Run(ctx, RunOpts{})

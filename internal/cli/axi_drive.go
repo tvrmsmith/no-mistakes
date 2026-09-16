@@ -15,6 +15,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
@@ -283,14 +284,17 @@ func runAxiRunWithLaunchProof(cmd *cobra.Command, autoYes bool, skipSteps []type
 			runID, err = triggerRun(ctx, env, branch, headSHA, skipSteps, intent, baseBranch)
 		}
 		if err != nil {
-			if ownershipErr, ok := err.(*branchOwnershipError); ok {
+			var ownershipErr *branchOwnershipError
+			if errors.As(err, &ownershipErr) {
 				return emitBranchOwnershipError(cmd, ownershipErr)
 			}
 			return emitError(cmd, 1, err.Error())
 		}
 	}
 	if launchReceipt != nil {
-		emitLaunchReceipt(cmd, *launchReceipt)
+		if err := emitLaunchReceipt(cmd, *launchReceipt); err != nil {
+			return err
+		}
 	}
 
 	run, ciReady, err := driveRun(driveCtx, cmd.ErrOrStderr(), env.client, env.p.Socket(), runID, autoYes)
@@ -463,8 +467,7 @@ func emitBranchOwnershipError(cmd *cobra.Command, ownershipErr *branchOwnershipE
 			branchSyncAgentGuidance,
 		}})
 	}
-	emitDoc(cmd, fields...)
-	return &exitError{code: 1}
+	return emitDocExit(cmd, 1, fields...)
 }
 
 // emitIntentRequiredError refuses a fresh run that carries no intent, and
@@ -484,8 +487,7 @@ func emitIntentRequiredError(cmd *cobra.Command, state branchsync.State) error {
 		help = append(help, "Take the pipeline's commits first: `"+state.NextAction.Command+"`")
 	}
 	fields = append(fields, toon.Field{Key: "help", Value: help})
-	emitDoc(cmd, fields...)
-	return &exitError{code: 2}
+	return emitDocExit(cmd, 2, fields...)
 }
 
 func inspectAxiBranchSync(ctx context.Context, env *axiEnv) branchsync.State {
@@ -556,7 +558,7 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 		return run.ID, nil
 	}
 	if !shouldRerunAfterNoActiveRun(pushErr) {
-		return "", fmt.Errorf("push %q to gate: %v", branch, pushErr)
+		return "", fmt.Errorf("push %q to gate: %w", branch, pushErr)
 	}
 
 	// No run appeared: the push was likely up-to-date. Refresh the caller's
@@ -568,7 +570,7 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 		return "", err
 	}
 	if err := env.client.Call(ipc.MethodRerun, params, &rr); err != nil {
-		return "", fmt.Errorf("no run started for %q: %v", branch, err)
+		return "", fmt.Errorf("no run started for %q: %w", branch, err)
 	}
 	return rr.RunID, nil
 }
@@ -729,8 +731,8 @@ func rerunParams(repoID, branch string, skipSteps []types.StepName, intent, base
 
 // emitLaunchReceipt writes the proof before driveRun subscribes, so callers
 // retain the daemon-authored binding even if later driving blocks or fails.
-func emitLaunchReceipt(cmd *cobra.Command, receipt ipc.LaunchReceipt) {
-	emitDoc(cmd, toon.Field{Key: "launch_receipt", Value: toon.NewObject(
+func emitLaunchReceipt(cmd *cobra.Command, receipt ipc.LaunchReceipt) error {
+	return emitDoc(cmd, toon.Field{Key: "launch_receipt", Value: toon.NewObject(
 		toon.Field{Key: "run_id", Value: receipt.RunID},
 		toon.Field{Key: "disposition", Value: receipt.Disposition},
 		toon.Field{Key: "launch_nonce", Value: receipt.LaunchNonce},
@@ -767,7 +769,12 @@ func driveRun(ctx context.Context, progress io.Writer, client *ipc.Client, socke
 }
 
 func driveRunWithReconciler(ctx context.Context, progress io.Writer, client *ipc.Client, reconciler *runReconciler, runID string, autoApprove bool) (run *ipc.RunInfo, ciReady bool, err error) {
-	pp := &progressPrinter{w: progress, seen: map[string]string{}}
+	pp := &progressPrinter{w: newPrinter(progress), seen: map[string]string{}}
+	// The liveness stream is reported once, on the way out. Abandoning a live
+	// pipeline mid-flight because stderr went away would cost the run; going
+	// quiet about it would leave the operator reading a drive that printed
+	// nothing as a drive that did nothing.
+	defer func() { err = errors.Join(err, pp.w.Err()) }()
 	fixedSteps := map[string]bool{}
 	pendingGate := ""
 	for {
@@ -789,7 +796,7 @@ func driveRunWithReconciler(ctx context.Context, progress io.Writer, client *ipc
 				return run, false, nil
 			}
 			if pipeline.HasProtectedPathRefusal(gate.FindingsJSON) {
-				fmt.Fprintf(progress, "%s: protected-path refusal requires an explicit response; --yes leaves this gate awaiting a response\n", gate.Name)
+				pp.w.Printf("%s: protected-path refusal requires an explicit response; --yes leaves this gate awaiting a response\n", gate.Name)
 				return run, false, nil
 			}
 			gateKey := gate.Name + "\x00" + gate.Status
@@ -945,14 +952,12 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 		}
 		help = append(help, staleMonitorGuidance)
 		fields = append(fields, toon.Field{Key: "help", Value: help})
-		emitDoc(cmd, fields...)
-		return nil
+		return emitDoc(cmd, fields...)
 	}
 
 	if gate, ok := rv.awaitingStep(); ok {
 		fields = append(fields, gateFields(gate)...)
-		emitDoc(cmd, fields...)
-		return nil
+		return emitDoc(cmd, fields...)
 	}
 
 	fields = append(fields, toon.Field{Key: "outcome", Value: outcomeForRun(rv)})
@@ -978,8 +983,7 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 			help = append(help, branchSyncAgentGuidance)
 		}
 		fields = append(fields, toon.Field{Key: "help", Value: help})
-		emitDoc(cmd, fields...)
-		return nil
+		return emitDoc(cmd, fields...)
 	}
 
 	if rv.Status == string(types.RunCIMonitorInterrupted) {
@@ -992,8 +996,7 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 			help = append(help, fmt.Sprintf("Open the PR: %s", rv.PRURL))
 		}
 		fields = append(fields, toon.Field{Key: "help", Value: help})
-		emitDoc(cmd, fields...)
-		return nil
+		return emitDoc(cmd, fields...)
 	}
 
 	help := []string{preserveGateFixCommitsGuidance}
@@ -1004,8 +1007,7 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 		help = append([]string{fmt.Sprintf("Open the PR: %s", rv.PRURL)}, help...)
 	}
 	fields = append(fields, toon.Field{Key: "help", Value: help})
-	emitDoc(cmd, fields...)
-	return &exitError{code: 1}
+	return emitDocExit(cmd, 1, fields...)
 }
 
 // appendFixesField adds a fixes table when the pipeline applied any fixes.
@@ -1271,8 +1273,7 @@ func runAxiAbort(cmd *cobra.Command, runID string) error {
 		if state := inspectAxiBranchSync(ctx, env); relevantCachedSyncState(state) {
 			fields = append(fields, branchSyncField(state))
 		}
-		emitDoc(cmd, fields...)
-		return nil
+		return emitDoc(cmd, fields...)
 	}
 
 	var result ipc.CancelRunResult
@@ -1315,8 +1316,7 @@ func runAxiAbort(cmd *cobra.Command, runID string) error {
 	fields = append(fields,
 		toon.Field{Key: "help", Value: help},
 	)
-	emitDoc(cmd, fields...)
-	return nil
+	return emitDoc(cmd, fields...)
 }
 
 // waitForTerminalRun polls until the exact run reports a terminal status.
@@ -1407,8 +1407,7 @@ func emitUnconfirmedAbort(cmd *cobra.Command, runID, branch, reason string, last
 		"Re-run `no-mistakes axi abort` once the daemon is reachable; a repeated abort is an idempotent no-op",
 		"Do not treat the branch as released or recoverable until a terminal status is confirmed",
 	}})
-	emitDoc(cmd, fields...)
-	return &exitError{code: 1}
+	return emitDocExit(cmd, 1, fields...)
 }
 
 // runAxiAbortByRunID cancels a run by its id directly via the daemon, without
@@ -1442,7 +1441,7 @@ func runAxiAbortByRunID(cmd *cobra.Command, runID string) error {
 	if err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("connect to daemon: %v", err))
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.CancelRunResult
 	if err := client.Call(ipc.MethodCancelRun, &ipc.CancelRunParams{RunID: runID}, &result); err != nil {
@@ -1463,12 +1462,11 @@ func runAxiAbortByRunID(cmd *cobra.Command, runID string) error {
 	if !confirmed {
 		return emitUnconfirmedAbort(cmd, runID, "", reason, runViewPtrFromIPC(final), true)
 	}
-	emitDoc(cmd,
+	return emitDoc(cmd,
 		toon.Field{Key: "aborted", Value: true},
 		toon.Field{Key: "run", Value: runID},
 		toon.Field{Key: "run_status", Value: string(final.Status)},
 	)
-	return nil
 }
 
 // runViewPtrFromIPC adapts an optional IPC run snapshot for the unconfirmed
@@ -1497,12 +1495,11 @@ func resolveInactiveAbortTruth(cmd *cobra.Command, client *ipc.Client, runID str
 		// The daemon's durable lookup names a genuinely unknown id
 		// explicitly; only that exact proof preserves the documented no-op.
 		if isExactRunNotFound(err, runID) {
-			emitDoc(cmd,
+			return emitDoc(cmd,
 				toon.Field{Key: "aborted", Value: false},
 				toon.Field{Key: "run", Value: runID},
 				toon.Field{Key: "detail", Value: "no run with that id exists (no-op)"},
 			)
-			return nil
 		}
 		return emitUnconfirmedAbort(cmd, runID, "", fmt.Sprintf("the daemon reported no active run, and the exact run's durable state could not be read: %v", err), nil, true)
 	}
@@ -1514,13 +1511,12 @@ func resolveInactiveAbortTruth(cmd *cobra.Command, client *ipc.Client, runID str
 		return emitUnconfirmedAbort(cmd, runID, "", fmt.Sprintf("the daemon returned durable state for run %s instead of the requested run %s", run.ID, runID), nil, true)
 	}
 	if terminalStatus(string(run.Status)) {
-		emitDoc(cmd,
+		return emitDoc(cmd,
 			toon.Field{Key: "aborted", Value: false},
 			toon.Field{Key: "run", Value: runID},
 			toon.Field{Key: "run_status", Value: string(run.Status)},
 			toon.Field{Key: "detail", Value: "run is already terminal (idempotent no-op)"},
 		)
-		return nil
 	}
 	return emitUnconfirmedAbort(cmd, runID, run.Branch, fmt.Sprintf("the daemon reported no active run, but the exact run's durable state is still %s", run.Status), runViewPtrFromIPC(run), true)
 }
@@ -1536,30 +1532,28 @@ func resolveDaemonDownAbortTruth(cmd *cobra.Command, p *paths.Paths, runID strin
 	if err != nil {
 		return emitUnconfirmedAbort(cmd, runID, "", fmt.Sprintf("the daemon is not running and the durable run record could not be opened: %v", err), nil, false)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	run, err := database.GetRun(runID)
 	if err != nil {
 		return emitUnconfirmedAbort(cmd, runID, "", fmt.Sprintf("the daemon is not running and the durable run record could not be read: %v", err), nil, false)
 	}
 	if run == nil {
-		emitDoc(cmd,
+		return emitDoc(cmd,
 			toon.Field{Key: "aborted", Value: false},
 			toon.Field{Key: "run", Value: runID},
 			toon.Field{Key: "detail", Value: "daemon not running and no run with that id is recorded (no-op)"},
 		)
-		return nil
 	}
 	if run.ID != runID {
 		return emitUnconfirmedAbort(cmd, runID, "", fmt.Sprintf("the durable record identified run %s instead of the requested run %s", run.ID, runID), nil, false)
 	}
 	if terminalStatus(string(run.Status)) {
-		emitDoc(cmd,
+		return emitDoc(cmd,
 			toon.Field{Key: "aborted", Value: false},
 			toon.Field{Key: "run", Value: runID},
 			toon.Field{Key: "run_status", Value: string(run.Status)},
 			toon.Field{Key: "detail", Value: "daemon not running; run is already terminal (idempotent no-op)"},
 		)
-		return nil
 	}
 	return emitUnconfirmedAbort(cmd, runID, run.Branch, fmt.Sprintf("the daemon is not running, so cancellation cannot be requested, and the durable run record is still %s", run.Status), nil, false)
 }

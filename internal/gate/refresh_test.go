@@ -1,7 +1,6 @@
 package gate
 
 import (
-	"context"
 	"os/exec"
 	"strings"
 	"testing"
@@ -10,7 +9,7 @@ import (
 )
 
 func TestRefreshRepoURLsSSHToHTTPS(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	database, workDir := refreshFixture(t, "git@example.com:owner/project.git", "")
 	gitTestCmd(t, workDir, "remote", "add", "origin", "https://example.com/owner/project.git")
 
@@ -31,7 +30,7 @@ func TestRefreshRepoURLsSSHToHTTPS(t *testing.T) {
 }
 
 func TestRefreshRepoURLsRefreshesUpstreamAndForkTogether(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	database, workDir := refreshFixture(t, "git@github.com:parent/project.git", "git@github.com:fork/project.git")
 	gitTestCmd(t, workDir, "remote", "add", "origin", "https://github.com/parent/project.git")
 	gitTestCmd(t, workDir, "remote", "add", "fork", "https://github.com/fork/project.git")
@@ -50,7 +49,7 @@ func TestRefreshRepoURLsRefreshesUpstreamAndForkTogether(t *testing.T) {
 }
 
 func TestRefreshRepoURLsUnchangedIsNoOp(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	const remote = "https://example.com/owner/project.git"
 	database, workDir := refreshFixture(t, remote, "")
 	gitTestCmd(t, workDir, "remote", "add", "origin", remote)
@@ -89,6 +88,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			name:   "multiple origin URLs",
 			origin: "git@example.com:owner/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com/owner/project.git")
 				gitTestCmd(t, dir, "config", "--add", "remote.origin.url", "ssh://git@example.com/owner/project.git")
 			},
@@ -98,6 +98,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			name:   "blank secondary origin URL",
 			origin: "git@example.com:owner/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com/owner/project.git")
 				gitTestCmd(t, dir, "config", "--add", "remote.origin.url", "")
 			},
@@ -107,6 +108,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			name:   "malformed origin",
 			origin: "git@example.com:owner/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com")
 			},
 			wantReason: RefreshInvalidRemote,
@@ -115,6 +117,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			name:   "credential-bearing origin",
 			origin: "git@example.com:owner/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://user:secret@example.com/owner/project.git")
 			},
 			wantReason: RefreshInvalidRemote,
@@ -124,6 +127,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			origin: "https://example.com/parent/project.git",
 			fork:   "git@example.com:fork/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com/parent/project.git")
 			},
 			wantReason: RefreshRemoteUnreadable,
@@ -133,6 +137,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 			origin: "https://example.com/parent/project.git",
 			fork:   "git@example.com:fork/project.git",
 			addRemotes: func(t *testing.T, dir string) {
+				t.Helper()
 				gitTestCmd(t, dir, "remote", "add", "origin", "https://example.com/parent/project.git")
 				gitTestCmd(t, dir, "remote", "add", "fork-a", "https://example.com/fork/project.git")
 				gitTestCmd(t, dir, "remote", "add", "fork-b", "ssh://git@example.com/fork/project.git")
@@ -148,7 +153,7 @@ func TestRefreshRepoURLsFailurePreservesExactRegistration(t *testing.T) {
 				tt.addRemotes(t, workDir)
 			}
 			before, _ := database.GetRepoByPath(workDir)
-			_, _, err := RefreshRepoURLs(context.Background(), database, before)
+			_, _, err := RefreshRepoURLs(t.Context(), database, before)
 			if err == nil {
 				t.Fatal("expected refresh failure")
 			}

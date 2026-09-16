@@ -174,7 +174,7 @@ func writeFakePi(t *testing.T, dir, posixScript, windowsScript string) string {
 	}
 
 	bin := filepath.Join(dir, name)
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake pi: %v", err)
 	}
 	return bin
@@ -198,7 +198,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"
 		extraArgs:              []string{"--provider", "google"},
 		disableProjectSettings: true,
 	}
-	if _, err := pa.Run(context.Background(), RunOpts{Prompt: "review", CWD: workDir}); err != nil {
+	if _, err := pa.Run(t.Context(), RunOpts{Prompt: "review", CWD: workDir}); err != nil {
 		t.Fatalf("run pi: %v", err)
 	}
 
@@ -237,7 +237,7 @@ printf '%s\n' '{"type":"agent_end","messages":[]}'
 	pa := &piAgent{bin: bin}
 
 	var chunks []string
-	result, err := pa.Run(context.Background(), RunOpts{
+	result, err := pa.Run(t.Context(), RunOpts{
 		Prompt:     "review",
 		CWD:        t.TempDir(),
 		JSONSchema: schema,
@@ -286,7 +286,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"user","content":"prompt"
 
 	schema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)
 	pa := &piAgent{bin: bin}
-	result, err := pa.Run(context.Background(), RunOpts{
+	result, err := pa.Run(t.Context(), RunOpts{
 		Prompt:     "review",
 		CWD:        t.TempDir(),
 		JSONSchema: schema,
@@ -346,7 +346,7 @@ printf '%s\n' "{\"type\":\"agent_end\",\"messages\":[{\"role\":\"user\",\"conten
 
 	schema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)
 	pa := &piAgent{bin: bin}
-	started, err := pa.Run(context.Background(), RunOpts{Prompt: "fix", CWD: workDir, JSONSchema: schema, Session: &SessionRef{}})
+	started, err := pa.Run(t.Context(), RunOpts{Prompt: "fix", CWD: workDir, JSONSchema: schema, Session: &SessionRef{}})
 	if err != nil {
 		t.Fatalf("start durable Pi session: %v", err)
 	}
@@ -360,7 +360,7 @@ printf '%s\n' "{\"type\":\"agent_end\",\"messages\":[{\"role\":\"user\",\"conten
 		t.Fatalf("persisted session ID = %q, %v; want %q", got, err, sessionID)
 	}
 
-	resumed, err := pa.Run(context.Background(), RunOpts{Prompt: "fix", CWD: workDir, JSONSchema: schema, Session: &SessionRef{ID: started.SessionID}})
+	resumed, err := pa.Run(t.Context(), RunOpts{Prompt: "fix", CWD: workDir, JSONSchema: schema, Session: &SessionRef{ID: started.SessionID}})
 	if err != nil {
 		t.Fatalf("resume durable Pi session: %v", err)
 	}
@@ -392,7 +392,7 @@ printf '%s\n' '{"type":"agent_end","messages":[]}'
 		"echo {\"type\":\"agent_end\",\"messages\":[]}",
 	}, "\r\n"))
 
-	_, err := (&piAgent{bin: bin}).Run(context.Background(), RunOpts{
+	_, err := (&piAgent{bin: bin}).Run(t.Context(), RunOpts{
 		Prompt:  "fix",
 		CWD:     t.TempDir(),
 		Session: &SessionRef{},
@@ -414,7 +414,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":"ok
 		"echo {\"type\":\"agent_end\",\"messages\":[{\"role\":\"assistant\",\"content\":\"ok\"}]}",
 	}, "\r\n"))
 
-	_, err := (&piAgent{bin: bin}).Run(context.Background(), RunOpts{
+	_, err := (&piAgent{bin: bin}).Run(t.Context(), RunOpts{
 		Prompt:  "fix",
 		CWD:     t.TempDir(),
 		Session: &SessionRef{ID: "019ff2f3-5f31-744b-90b8-679074ff7687"},
@@ -425,7 +425,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":"ok
 }
 
 func TestPiAgent_RunRejectsInvalidResumeID(t *testing.T) {
-	_, err := (&piAgent{bin: "unused"}).Run(context.Background(), RunOpts{
+	_, err := (&piAgent{bin: "unused"}).Run(t.Context(), RunOpts{
 		Prompt:  "fix",
 		CWD:     t.TempDir(),
 		Session: &SessionRef{ID: "/tmp/not-a-pi-session"},
@@ -443,7 +443,7 @@ func TestPiParser_CapturesFirstValidSessionHeader(t *testing.T) {
 		`{"type":"session","id":"019ff2f3-5f31-744b-90b8-679074ff7687"}`,
 	}, "\n")
 	pp := &piParser{}
-	if err := pp.parse(context.Background(), strings.NewReader(stream)); err != nil {
+	if err := pp.parse(t.Context(), strings.NewReader(stream)); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if pp.sessionID != sessionID {
@@ -459,7 +459,7 @@ func TestPiParser_ClearsPriorAssistantErrorAfterSuccessfulRetry(t *testing.T) {
 	}, "\n")
 
 	pp := &piParser{}
-	if err := pp.parse(context.Background(), strings.NewReader(stream)); err != nil {
+	if err := pp.parse(t.Context(), strings.NewReader(stream)); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if pp.assistantError != "" {
@@ -480,7 +480,7 @@ func TestPiParser_SumsUniqueAssistantUsageAcrossTurns(t *testing.T) {
 	}, "\n")
 
 	pp := &piParser{}
-	if err := pp.parse(context.Background(), strings.NewReader(stream)); err != nil {
+	if err := pp.parse(t.Context(), strings.NewReader(stream)); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	want := TokenUsage{InputTokens: 11, OutputTokens: 7, CacheReadTokens: 9, CacheCreationTokens: 11, Reported: true, CacheCreationReported: true}
@@ -501,7 +501,7 @@ printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":
 	}, "\r\n"))
 
 	pa := &piAgent{bin: bin}
-	_, err := pa.Run(context.Background(), RunOpts{
+	_, err := pa.Run(t.Context(), RunOpts{
 		Prompt:     "review",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),
@@ -526,7 +526,7 @@ printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"
 	}, "\r\n"))
 
 	pa := &piAgent{bin: bin}
-	_, err := pa.Run(context.Background(), RunOpts{
+	_, err := pa.Run(t.Context(), RunOpts{
 		Prompt: "review",
 		CWD:    t.TempDir(),
 	})
@@ -552,7 +552,7 @@ exit 2
 	}, "\r\n"))
 
 	pa := &piAgent{bin: bin}
-	_, err := pa.Run(context.Background(), RunOpts{
+	_, err := pa.Run(t.Context(), RunOpts{
 		Prompt: "review",
 		CWD:    t.TempDir(),
 	})
@@ -574,7 +574,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":"ea
 printf 'pi rejected the prompt\n' >&2
 `, "")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	pa := &piAgent{bin: bin}
 	_, err := pa.Run(ctx, RunOpts{Prompt: strings.Repeat("x", 2*1024*1024), CWD: dir})
@@ -598,7 +598,7 @@ sleep 30
 	}, "\r\n"))
 
 	pa := &piAgent{bin: bin}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err := pa.Run(ctx, RunOpts{
 		Prompt: "review",
@@ -641,7 +641,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"
 	var chunks []string
 	var phases []string
 	pa := &piAgent{bin: bin}
-	if _, err := pa.Run(context.Background(), RunOpts{
+	if _, err := pa.Run(t.Context(), RunOpts{
 		Prompt:      "fix ci",
 		CWD:         t.TempDir(),
 		OnChunk:     func(s string) { chunks = append(chunks, s) },
@@ -689,7 +689,7 @@ exit 0
 	pa := &piAgent{bin: bin}
 	// A pi run with no events yields no text; the error is expected and is not
 	// what this test is about.
-	_, _ = pa.Run(context.Background(), RunOpts{
+	_, _ = pa.Run(t.Context(), RunOpts{
 		Prompt:      "fix ci",
 		CWD:         t.TempDir(),
 		OnLifecycle: func(e LifecycleEvent) { phases = append(phases, e.Phase) },

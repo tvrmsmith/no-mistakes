@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/eval"
@@ -19,7 +20,7 @@ import (
 // corpus with nobody running a command. Without this the eval sets stay empty
 // forever no matter how many reviews the machine performs.
 func TestAutoCaptureEvalCaseCollectsAFinishedRun(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, database, runID := setupFinishedReviewRun(t, ctx)
 	m := NewRunManager(database, p, nil)
 
@@ -44,7 +45,7 @@ func TestAutoCaptureEvalCaseHonorsTheOperatorsSwitches(t *testing.T) {
 		{"no config", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			p, database, runID := setupFinishedReviewRun(t, ctx)
 			m := NewRunManager(database, p, nil)
 
@@ -62,7 +63,7 @@ func TestAutoCaptureEvalCaseHonorsTheOperatorsSwitches(t *testing.T) {
 // still has to return quietly rather than propagate out of the run goroutine,
 // where the enclosing recover would mark a finished run as failed.
 func TestAutoCaptureEvalCaseSurvivesAnUncapturableRun(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, database, _ := setupFinishedReviewRun(t, ctx)
 	m := NewRunManager(database, p, nil)
 
@@ -83,7 +84,7 @@ func capturedCaseCount(t *testing.T, p *paths.Paths) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := store.ListCases("all")
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +106,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	gateDir := p.RepoDir("eval-repo")
 	if err := git.InitBare(ctx, gateDir); err != nil {
@@ -120,7 +121,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	// that cannot answer turns a fast unit test into a minutes-long timeout.
 	mustGitRun(t, ctx, workDir, "config", "commit.gpgsign", "false")
 	mustGitRun(t, ctx, workDir, "config", "tag.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGitRun(t, ctx, workDir, "add", ".")
@@ -129,7 +130,7 @@ func setupFinishedReviewRun(t *testing.T, ctx context.Context) (*paths.Paths, *d
 	mustGitRun(t, ctx, workDir, "push", "origin", "main")
 	baseSHA := mustGitRun(t, ctx, workDir, "rev-parse", "HEAD")
 	mustGitRun(t, ctx, workDir, "checkout", "-b", "feature/eval")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGitRun(t, ctx, workDir, "add", "main.go")

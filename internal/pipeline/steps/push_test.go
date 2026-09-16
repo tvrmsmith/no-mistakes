@@ -19,7 +19,7 @@ func setupGateMirror(t *testing.T, sctx *pipeline.StepContext) string {
 	t.Setenv("NM_HOME", nmHome)
 	gateDir := paths.WithRoot(t.TempDir()).RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
-	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
@@ -40,7 +40,7 @@ func TestPushStep_RefusesPostReviewClobberWithoutLaterPipelineCommit(t *testing.
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	// R is the exact tree the completed review approved.
-	if err := os.WriteFile(filepath.Join(dir, "reviewed.txt"), []byte("reviewed fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "reviewed.txt"), []byte("reviewed fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -51,7 +51,7 @@ func TestPushStep_RefusesPostReviewClobberWithoutLaterPipelineCommit(t *testing.
 	// later pipeline commit, so the existing commit-time continuity guard never
 	// runs.
 	gitCmd(t, dir, "reset", "--hard", submittedHead)
-	if err := os.WriteFile(filepath.Join(dir, "unreviewed.txt"), []byte("unreviewed replacement\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "unreviewed.txt"), []byte("unreviewed replacement\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -101,13 +101,15 @@ func TestAssertReviewApprovedPushHead(t *testing.T) {
 		{
 			name: "equal",
 			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
 				return headSHA
 			},
 		},
 		{
 			name: "legitimate descendant",
 			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
-				if err := os.WriteFile(filepath.Join(dir, "docs.md"), []byte("docs\n"), 0o644); err != nil {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(dir, "docs.md"), []byte("docs\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				gitCmd(t, dir, "add", "-A")
@@ -118,6 +120,7 @@ func TestAssertReviewApprovedPushHead(t *testing.T) {
 		{
 			name: "backward replacement",
 			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
 				gitCmd(t, dir, "reset", "--hard", baseSHA)
 				return baseSHA
 			},
@@ -126,8 +129,9 @@ func TestAssertReviewApprovedPushHead(t *testing.T) {
 		{
 			name: "divergent replacement",
 			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
 				gitCmd(t, dir, "reset", "--hard", baseSHA)
-				if err := os.WriteFile(filepath.Join(dir, "other.txt"), []byte("other\n"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "other.txt"), []byte("other\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				gitCmd(t, dir, "add", "-A")
@@ -137,15 +141,21 @@ func TestAssertReviewApprovedPushHead(t *testing.T) {
 			wantError: "not an equal or descendant",
 		},
 		{
-			name:      "malformed approval",
-			approval:  "HEAD",
-			proposed:  func(t *testing.T, dir, baseSHA, headSHA string) string { return headSHA },
+			name:     "malformed approval",
+			approval: "HEAD",
+			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
+				return headSHA
+			},
 			wantError: "malformed",
 		},
 		{
-			name:      "unreachable approval",
-			approval:  strings.Repeat("a", 40),
-			proposed:  func(t *testing.T, dir, baseSHA, headSHA string) string { return headSHA },
+			name:     "unreachable approval",
+			approval: strings.Repeat("a", 40),
+			proposed: func(t *testing.T, dir, baseSHA, headSHA string) string {
+				t.Helper()
+				return headSHA
+			},
 			wantError: "unreachable",
 		},
 	}
@@ -187,7 +197,7 @@ func TestAssertReviewApprovedPushHead_UsesStepScopedGit(t *testing.T) {
 	dir, baseSHA, approvedHead := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, approvedHead, config.Commands{})
 	recordReviewApproval(t, sctx, approvedHead)
-	if err := os.WriteFile(filepath.Join(dir, "descendant.txt"), []byte("descendant\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "descendant.txt"), []byte("descendant\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -230,7 +240,7 @@ func TestPushStep_BindsRemoteAndDatabaseToVerifiedCommitWhenHEADMovesDuringPush(
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "approved.txt"), []byte("approved descendant\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "approved.txt"), []byte("approved descendant\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -238,7 +248,7 @@ func TestPushStep_BindsRemoteAndDatabaseToVerifiedCommitWhenHEADMovesDuringPush(
 	approvedHead := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	gitCmd(t, dir, "checkout", "--detach", baseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "replacement.txt"), []byte("replacement\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "replacement.txt"), []byte("replacement\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -300,14 +310,14 @@ func TestPushStep_ReconcilesStaleDatabaseHeadSHA(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	actualHeadSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -358,7 +368,7 @@ func TestPushStep_DoesNotPublishTestEvidenceIntoThePushedBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -380,11 +390,11 @@ func TestPushStep_DoesNotPublishTestEvidenceIntoThePushedBranch(t *testing.T) {
 
 	// Evidence for this run exists, collected outside the worktree.
 	evidenceDir := testEvidenceDir(sctx)
-	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+	if err := os.MkdirAll(evidenceDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(evidenceDir) })
-	if err := os.WriteFile(filepath.Join(evidenceDir, "checkout.png"), []byte("png"), 0o644); err != nil {
+	t.Cleanup(func() { removeEvidenceDir(t, evidenceDir) })
+	if err := os.WriteFile(filepath.Join(evidenceDir, "checkout.png"), []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -412,7 +422,7 @@ func TestPushStep_TargetsForkWhenConfigured(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -423,7 +433,7 @@ func TestPushStep_TargetsForkWhenConfigured(t *testing.T) {
 	gitCmd(t, dir, "push", fork, "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -508,10 +518,10 @@ func TestPushStep_CommitsLeftoverChangesWhenLegacyHuskyRuntimeIsMissing(t *testi
 
 	dir, baseSHA, _ := setupGitRepo(t)
 	hooksDir := filepath.Join(dir, ".husky")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/usr/bin/env sh\n. \"$(dirname -- \"$0\")/_/husky.sh\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/usr/bin/env sh\n. \"$(dirname -- \"$0\")/_/husky.sh\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", ".husky/pre-commit")
@@ -525,7 +535,7 @@ func TestPushStep_CommitsLeftoverChangesWhenLegacyHuskyRuntimeIsMissing(t *testi
 	// Positive control: with the hook live, a verified commit cannot succeed in
 	// this worktree, so the assertions below prove the bypass rather than an
 	// inert hook configuration.
-	if err := os.WriteFile(filepath.Join(dir, "hook-probe.txt"), []byte("probe\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "hook-probe.txt"), []byte("probe\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "hook-probe.txt")
@@ -538,7 +548,7 @@ func TestPushStep_CommitsLeftoverChangesWhenLegacyHuskyRuntimeIsMissing(t *testi
 	}
 
 	// Leftover worktree change the Push step must commit before pushing.
-	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("formatted feature code\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("formatted feature code\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -585,7 +595,7 @@ func TestPushStep_AllowsForcePushAfterMidRunRebaseOverPriorPushedGeneration(t *t
 	gitCmd(t, dir, "push", "origin", "main")
 
 	// Generation 1: feature branch is pushed to remote.
-	if err := os.WriteFile(filepath.Join(dir, "gen1_fix.txt"), []byte("gen1 fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "gen1_fix.txt"), []byte("gen1 fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -599,7 +609,7 @@ func TestPushStep_AllowsForcePushAfterMidRunRebaseOverPriorPushedGeneration(t *t
 	gitCmd(t, other, "config", "user.name", "o")
 	gitCmd(t, other, "config", "user.email", "o@test.com")
 	gitCmd(t, other, "checkout", "main")
-	if err := os.WriteFile(filepath.Join(other, "main_advance.txt"), []byte("advance\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "main_advance.txt"), []byte("advance\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, other, "add", "-A")
@@ -610,7 +620,7 @@ func TestPushStep_AllowsForcePushAfterMidRunRebaseOverPriorPushedGeneration(t *t
 	// Mid-run rebase onto new main drops duplicate hunks from gen1Head.
 	gitCmd(t, dir, "fetch", "origin", "main")
 	gitCmd(t, dir, "reset", "--hard", newBaseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "rebased_work.txt"), []byte("rebased work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "rebased_work.txt"), []byte("rebased work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -649,7 +659,7 @@ func TestPushStep_AllowsForcePushOnRerunOverPriorRunPushedGeneration(t *testing.
 	gitCmd(t, dir, "push", "origin", "main")
 
 	// Prior Run 1: pushed gen1Head to the remote.
-	if err := os.WriteFile(filepath.Join(dir, "gen1_fix.txt"), []byte("gen1 fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "gen1_fix.txt"), []byte("gen1 fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -663,7 +673,7 @@ func TestPushStep_AllowsForcePushOnRerunOverPriorRunPushedGeneration(t *testing.
 	gitCmd(t, other, "config", "user.name", "o")
 	gitCmd(t, other, "config", "user.email", "o@test.com")
 	gitCmd(t, other, "checkout", "main")
-	if err := os.WriteFile(filepath.Join(other, "main_advance.txt"), []byte("advance\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "main_advance.txt"), []byte("advance\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, other, "add", "-A")
@@ -674,7 +684,7 @@ func TestPushStep_AllowsForcePushOnRerunOverPriorRunPushedGeneration(t *testing.
 	// Rebase onto new main produces rebasedHead.
 	gitCmd(t, dir, "fetch", "origin", "main")
 	gitCmd(t, dir, "reset", "--hard", newBaseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "rebased_work.txt"), []byte("rebased work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "rebased_work.txt"), []byte("rebased work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -786,7 +796,7 @@ func TestPushStep_UpdatesGateMirrorRefOnSuccessfulPush(t *testing.T) {
 	}
 	gateDir := p.RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
-	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
@@ -800,7 +810,7 @@ func TestPushStep_UpdatesGateMirrorRefOnSuccessfulPush(t *testing.T) {
 
 	// Worktree produces a new non-fast-forward rebased head
 	gitCmd(t, dir, "reset", "--hard", baseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -850,7 +860,7 @@ func TestPushStep_GateMirrorUpdateFailurePropagatesError(t *testing.T) {
 	gateDir := p.RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
 	// Create gateDir as a normal directory that is NOT a valid git repository
-	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+	if err := os.MkdirAll(gateDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -887,7 +897,7 @@ func TestPushStep_GateMirrorFetchesExplicitPushedHeadInDetachedWorktree(t *testi
 	}
 	gateDir := p.RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
-	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
@@ -901,7 +911,7 @@ func TestPushStep_GateMirrorFetchesExplicitPushedHeadInDetachedWorktree(t *testi
 
 	// Detach worktree and create rebased commit on detached HEAD
 	gitCmd(t, dir, "checkout", "--detach", submittedHead)
-	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -992,7 +1002,7 @@ func TestPushStep_GateMirrorDoesNotRewindNewerInterveningPush(t *testing.T) {
 	}
 	gateDir := p.RepoDir(sctx.Repo.ID)
 	sctx.GateDir = gateDir
-	if err := os.MkdirAll(filepath.Dir(gateDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(gateDir), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, filepath.Dir(gateDir), "init", "--bare", filepath.Base(gateDir))
@@ -1001,7 +1011,7 @@ func TestPushStep_GateMirrorDoesNotRewindNewerInterveningPush(t *testing.T) {
 	gitCmd(t, gateDir, "fetch", dir, "refs/heads/feature:refs/heads/feature")
 
 	// Worktree produces a new rebased head
-	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "rebased.txt"), []byte("rebased\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -1009,7 +1019,7 @@ func TestPushStep_GateMirrorDoesNotRewindNewerInterveningPush(t *testing.T) {
 	rebasedHead := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	// Simulate an intervening push advancing gateDir to a newer commit
-	if err := os.WriteFile(filepath.Join(dir, "intervening.txt"), []byte("intervening\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "intervening.txt"), []byte("intervening\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")

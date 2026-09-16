@@ -41,7 +41,7 @@ func TestCacheRoundTripAndStaleness(t *testing.T) {
 	}
 
 	badPath := filepath.Join(t.TempDir(), "corrupt.json")
-	if err := os.WriteFile(badPath, []byte("{bad json"), 0o644); err != nil {
+	if err := os.WriteFile(badPath, []byte("{bad json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := readCache(badPath); got != nil {

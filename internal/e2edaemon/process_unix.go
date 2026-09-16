@@ -114,7 +114,7 @@ func terminateProcessTree(pid int) error {
 	if waitProcessExit(pid, 2*time.Second) {
 		return nil
 	}
-	if command, err := processCommandLine(pid); err != nil || strings.Contains(command, "<defunct>") {
+	if processBeyondSignalling(pid) {
 		return nil
 	}
 	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
@@ -123,8 +123,22 @@ func terminateProcessTree(pid int) error {
 	if waitProcessExit(pid, 2*time.Second) {
 		return nil
 	}
-	if command, err := processCommandLine(pid); err != nil || strings.Contains(command, "<defunct>") {
+	if processBeyondSignalling(pid) {
 		return nil
 	}
 	return fmt.Errorf("process group %d still alive after SIGKILL", pid)
+}
+
+// processBeyondSignalling reports whether sending pid another signal could
+// still change anything. Two states say no and both look like a process that
+// did not exit: ps cannot see the pid, which `ps -p` reports as a non-zero
+// exit and is how a process that already left looks; or ps sees a zombie,
+// which stays in the table until its parent reaps it and which SIGKILL cannot
+// clear. Neither is a leak the caller should report.
+func processBeyondSignalling(pid int) bool {
+	command, err := processCommandLine(pid)
+	if err != nil {
+		return true
+	}
+	return strings.Contains(command, "<defunct>")
 }

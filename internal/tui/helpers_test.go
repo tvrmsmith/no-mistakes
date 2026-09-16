@@ -102,22 +102,6 @@ func visualColumn(line, needle string) int {
 	return lipgloss.Width(line[:idx])
 }
 
-func hasLineContainingAll(view string, needles ...string) bool {
-	for _, line := range strings.Split(stripANSI(view), "\n") {
-		match := true
-		for _, needle := range needles {
-			if !strings.Contains(line, needle) {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
-}
-
 func hasParallelBoxRow(view string) bool {
 	for _, line := range strings.Split(stripANSI(view), "\n") {
 		if strings.Count(line, "╭") >= 2 || strings.Count(line, "╯") >= 2 || strings.Count(line, "│") >= 4 {

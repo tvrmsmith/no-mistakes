@@ -38,7 +38,7 @@ func TestWithSteering_PrependsPreamble(t *testing.T) {
 	steered := WithSteering(inner, evidenceRoot)
 
 	const userPrompt = "Fix the failing test in foo_test.go"
-	if _, err := steered.Run(context.Background(), RunOpts{Prompt: userPrompt, CWD: "/tmp/wt"}); err != nil {
+	if _, err := steered.Run(t.Context(), RunOpts{Prompt: userPrompt, CWD: "/tmp/wt"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestWithSteering_DoesNotDoubleWrap(t *testing.T) {
 	twice := WithSteering(once, evidenceRoot)
 
 	const userPrompt = "do the thing"
-	if _, err := twice.Run(context.Background(), RunOpts{Prompt: userPrompt}); err != nil {
+	if _, err := twice.Run(t.Context(), RunOpts{Prompt: userPrompt}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestSteeringPromptsAgentsWithTheSameRootTheRunWritesTo(t *testing.T) {
 
 	inner := &recordingAgent{name: "claude"}
 	steered := WithSteering(inner, evidenceRoot)
-	if _, err := steered.Run(context.Background(), RunOpts{Prompt: "write evidence to " + runDir}); err != nil {
+	if _, err := steered.Run(t.Context(), RunOpts{Prompt: "write evidence to " + runDir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 

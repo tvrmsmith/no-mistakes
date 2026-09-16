@@ -1,12 +1,12 @@
 package steps
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/lifecycle"
@@ -41,9 +41,9 @@ func TestCIGateReconciliationClearsActiveRunAfterPRBecomesTerminal(t *testing.T)
 			exec.SetGateReconcileTimings(20*time.Millisecond, 5*time.Second)
 
 			done := make(chan error, 1)
-			go func() { done <- exec.Execute(context.Background(), run, repo, dir) }()
+			go func() { done <- exec.Execute(t.Context(), run, repo, dir) }()
 			waitForCIGate(t, database, run.ID)
-			if err := os.WriteFile(statePath, []byte(terminalState+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(statePath, []byte(terminalState+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -81,9 +81,9 @@ func TestCIGateReconciliationPreservesOpenErrorAndUnknownStates(t *testing.T) {
 			exec.SetGateReconcileTimings(20*time.Millisecond, 5*time.Second)
 
 			done := make(chan error, 1)
-			go func() { done <- exec.Execute(context.Background(), run, repo, dir) }()
+			go func() { done <- exec.Execute(t.Context(), run, repo, dir) }()
 			waitForCIGate(t, database, run.ID)
-			if err := os.WriteFile(statePath, []byte(state+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(statePath, []byte(state+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			time.Sleep(60 * time.Millisecond)
@@ -122,7 +122,7 @@ func setupCIGateReconcileTest(t *testing.T) (*db.DB, *paths.Paths, *db.Run, *db.
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(dir, "https://github.com/test/repo", "main")
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func setupCIGateReconcileTest(t *testing.T) (*db.DB, *paths.Paths, *db.Run, *db.
 	binDir := fakeCLIBinDir(t)
 	linkTestBinary(t, binDir, "gh")
 	statePath := filepath.Join(t.TempDir(), "pr-state")
-	if err := os.WriteFile(statePath, []byte("OPEN\n"), 0o644); err != nil {
+	if err := os.WriteFile(statePath, []byte("OPEN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeCLIEnv(binDir, map[string]string{

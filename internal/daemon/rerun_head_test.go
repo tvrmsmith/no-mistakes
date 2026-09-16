@@ -1,11 +1,11 @@
 package daemon
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -46,14 +46,14 @@ func TestRerunChecksCallerHeadAgainstSelectedHead(t *testing.T) {
 					gitCmd(t, repo.WorkingPath, "commit", "--allow-empty", "--amend", "-m", "corrected local head")
 				}
 				callerHead := gitOutput(t, repo.WorkingPath, "rev-parse", "HEAD")
-				if dirty, err := git.HasUncommittedChanges(context.Background(), repo.WorkingPath); err != nil || dirty {
+				if dirty, err := git.HasUncommittedChanges(t.Context(), repo.WorkingPath); err != nil || dirty {
 					t.Fatalf("caller worktree is dirty: %v, err=%v", dirty, err)
 				}
 				client, err := ipc.Dial(p.Socket())
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer client.Close()
+				defer closers.Quiet(client)
 				var result ipc.RerunResult
 				// Use the wire shape so the regression runs on the pre-fix protocol.
 				params := map[string]string{
@@ -112,7 +112,7 @@ func TestRerunRefusalDoesNotSupersedeActiveRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var first ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main", New: selected, Old: selected,

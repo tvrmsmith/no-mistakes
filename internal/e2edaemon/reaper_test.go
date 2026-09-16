@@ -70,15 +70,15 @@ func findRepoRoot() (string, error) {
 
 func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(nmHome, "logs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(nmHome, "logs"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	cfg := "agent: claude\nlog_level: error\n"
-	if err := os.WriteFile(filepath.Join(nmHome, "config.yaml"), []byte(cfg), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(nmHome, "config.yaml"), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(nmHome, "logs", "daemon.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if MatchesDaemonRoot(pid, nmHome) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			status := exec.CommandContext(ctx, bin, "daemon", "status")
 			status.Env = append(os.Environ(),
 				"NM_HOME="+nmHome,
@@ -386,9 +386,9 @@ func runSigkillChildHelper() {
 		os.Exit(1)
 	}
 	// Inline start (no testing.T).
-	_ = os.MkdirAll(filepath.Join(nmHome, "logs"), 0o755)
-	_ = os.WriteFile(filepath.Join(nmHome, "config.yaml"), []byte("agent: claude\nlog_level: error\n"), 0o644)
-	logFile, err := os.OpenFile(filepath.Join(nmHome, "logs", "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	_ = os.MkdirAll(filepath.Join(nmHome, "logs"), 0o750)
+	_ = os.WriteFile(filepath.Join(nmHome, "config.yaml"), []byte("agent: claude\nlog_level: error\n"), 0o600)
+	logFile, err := os.OpenFile(filepath.Join(nmHome, "logs", "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
