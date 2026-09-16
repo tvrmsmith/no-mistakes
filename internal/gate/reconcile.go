@@ -318,14 +318,16 @@ func privateCommitsAbsentFromLive(ctx context.Context, repoDir, liveHead, privat
 			livePatches[patch] = count
 		}
 	}
-	mergedTree, mergeErr := git.Run(ctx, repoDir, "merge-tree", "--write-tree", liveHead, privateHead)
-	if mergeErr != nil {
-		return privateOnly, nil
-	}
 	liveTree, err := git.Run(ctx, repoDir, "rev-parse", "--verify", liveHead+"^{tree}")
 	if err != nil {
 		return nil, err
 	}
+	// git merge-tree exits non-zero on a conflict, and a conflict is the answer
+	// rather than a read failure: the private head does not fold into the live
+	// one, so every private-only commit stays at risk. A clean merge whose tree
+	// differs from the live tree says the same thing, and neither output can
+	// equal liveTree, so the comparison below already carries both verdicts.
+	mergedTree, _ := git.Run(ctx, repoDir, "merge-tree", "--write-tree", liveHead, privateHead)
 	if mergedTree != liveTree {
 		return privateOnly, nil
 	}
