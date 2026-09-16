@@ -59,6 +59,7 @@ func TestPRRawContentRejectsUnprovenResponses(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"", "null", "{}", `{"id":7,"title":"T"}`, `{"id":7,"title":"T","summary":{"raw":null}}`, `{"id":7,"title":"T","summary":{"raw":42}}`, `{"id":8,"title":"T","summary":{"raw":""}}`, `{"id":7,"title":"T","description":"not a raw-read contract"}`, "transport-error"} {
 		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if raw == "transport-error" {
 					w.WriteHeader(503)

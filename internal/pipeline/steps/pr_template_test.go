@@ -264,6 +264,7 @@ func TestPRTemplateDraftFailureDoesNotFallBackOrPublish(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"agent-error", "missing", "nested-json", "missing-heading", "heading", "ownership", "fenced", "oversized"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			sctx, ag, _ := templateTestContext(t)
 			ag.runFn = func(context.Context, agent.RunOpts) (*agent.Result, error) {
 				body := filledPRTemplate
@@ -373,6 +374,7 @@ func TestPRTemplateIncompleteGitHubReadsNeverOverwriteAuthor(t *testing.T) {
 	for _, payload := range []string{`{}`, `null`, `{"title":"Author title"}`, `{"title":"Author title","body":null}`, `{"title":"Author title","body":42}`} {
 		for _, phase := range []string{"initial", "pre-write"} {
 			t.Run(phase+"/"+payload, func(t *testing.T) {
+				t.Parallel()
 				sctx, ag, _ := templateTestContext(t)
 				author := "# Human description\n\n- [x] Approved\nCloses test/repo#7\n"
 				bodyFile := filepath.Join(t.TempDir(), "body.md")

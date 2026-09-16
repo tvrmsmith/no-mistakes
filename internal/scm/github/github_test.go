@@ -1986,6 +1986,7 @@ func TestGetPRContentRequiresExplicitStrings(t *testing.T) {
 	t.Parallel()
 	for _, payload := range []string{`{}`, `null`, `{"title":"Author"}`, `{"body":"Author text"}`, `{"title":"Author","body":null}`, `{"title":null,"body":"Author text"}`, `{"title":"Author","body":42}`, `{"title":false,"body":"text"}`, `[]`, `{"title":`} {
 		t.Run(payload, func(t *testing.T) {
+			t.Parallel()
 			host := New(githubTestCmdFactory(map[string]githubTestResponse{
 				"gh pr view 42 --repo test/repo --json title,body": {stdout: payload},
 			}), nil, "", "test/repo")

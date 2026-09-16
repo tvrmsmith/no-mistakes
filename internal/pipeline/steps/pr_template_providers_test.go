@@ -14,6 +14,7 @@ func TestPRTemplateProviderCompositionUpdateAndRestamp(t *testing.T) {
 	t.Parallel()
 	for _, provider := range []scm.Provider{scm.ProviderGitHub, scm.ProviderGitLab, scm.ProviderGitea, scm.ProviderForgejo, scm.ProviderAzureDevOps, scm.ProviderBitbucket} {
 		t.Run(string(provider), func(t *testing.T) {
+			t.Parallel()
 			sctx, ag, _ := templateTestContext(t)
 			step := &PRStep{}
 			budget := scm.MaxPRBodyChars(provider)

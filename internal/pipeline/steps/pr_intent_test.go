@@ -26,6 +26,7 @@ func TestPRPublishIntentSuppressionCoversDefaultAgentAndFallback(t *testing.T) {
 		{"disabled", &no, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			for _, fallback := range []bool{false, true} {
 				dir, base, head := setupGitRepo(t)
 				ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {

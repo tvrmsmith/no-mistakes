@@ -388,6 +388,7 @@ func TestMerge_CommitBranchReplacementIsGlobalOnly(t *testing.T) {
 	repoPattern := `([A-Z]+-[0-9]+)`
 
 	t.Run("global replacement applies", func(t *testing.T) {
+		t.Parallel()
 		cfg := Merge(
 			&GlobalConfig{Commit: GlobalCommitRaw{CommitRaw: CommitRaw{BranchPattern: &globalPattern}, BranchReplacement: &globalReplacement}},
 			&RepoConfig{},
@@ -402,6 +403,7 @@ func TestMerge_CommitBranchReplacementIsGlobalOnly(t *testing.T) {
 	})
 
 	t.Run("repo pattern disables global replacement", func(t *testing.T) {
+		t.Parallel()
 		cfg := Merge(
 			&GlobalConfig{Commit: GlobalCommitRaw{CommitRaw: CommitRaw{BranchPattern: &globalPattern}, BranchReplacement: &globalReplacement}},
 			&RepoConfig{Commit: CommitRaw{BranchPattern: &repoPattern}},

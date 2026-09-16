@@ -2381,6 +2381,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 	t.Parallel()
 
 	t.Run("different tree", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		pushTerminalRewrite(t, f, func(dir string) { mustWrite(t, filepath.Join(dir, "pipeline.txt"), "different tree\n") })
 		if state := assertUnverifiedRecoveryRefusalNoMutation(t, f); state.Safety != "blocked_recover_unverified_head" {
@@ -2391,6 +2392,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("drops local hunk", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		mustRun(t, f.gate, "update-ref", "refs/heads/feature/recover", mustRun(t, f.gate, "rev-parse", "refs/heads/main"))
 		if state := assertUnverifiedRecoveryRefusalNoMutation(t, f); state.Safety != "blocked_recover_unverified_head" {
@@ -2398,6 +2400,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("rewrites operator line", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		pushTerminalRewrite(t, f, func(dir string) { mustWrite(t, filepath.Join(dir, "feature.txt"), "pipeline replacement\n") })
 		if state := assertUnverifiedRecoveryRefusalNoMutation(t, f); state.Safety != "blocked_recover_unverified_head" {
@@ -2405,6 +2408,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("conflicting create-only anchor", func(t *testing.T) {
+		t.Parallel()
 		f, recorded := newTerminalEqualTreeRewriteFixture(t)
 		mustRun(t, f.gate, "update-ref", f.anchorRef(), recorded)
 		if state := assertUnverifiedRecoveryRefusalNoMutation(t, f); state.Safety != "blocked_recover_anchor_mismatch" {
@@ -2412,6 +2416,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("untrusted recorded head", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		if err := f.db.UpdateRunReviewApprovedHeadSHA(f.run.ID, f.submitted); err != nil {
 			t.Fatal(err)
@@ -2421,6 +2426,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("recorded head does not preserve local", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		pipeline := filepath.Join(t.TempDir(), "uncontained-recorded")
 		mustRun(t, filepath.Dir(pipeline), "-c", "core.autocrlf=false", "clone", f.gate, pipeline)
@@ -2446,6 +2452,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("symbolic live branch", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		mustRun(t, f.gate, "update-ref", "refs/no-mistakes/symbolic-live", f.preserved)
 		mustRun(t, f.gate, "symbolic-ref", "refs/heads/feature/recover", "refs/no-mistakes/symbolic-live")
@@ -2454,6 +2461,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("active run", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		if err := f.db.UpdateRunStatus(f.run.ID, types.RunRunning); err != nil {
 			t.Fatal(err)
@@ -2463,6 +2471,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("dirty worktree", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		mustWrite(t, filepath.Join(f.local, "feature.txt"), "dirty local edit\n")
 		if state := assertUnverifiedRecoveryRefusalNoMutation(t, f); state.Safety != "blocked_recover_unverified_head" {
@@ -2473,6 +2482,7 @@ func TestRecoverTerminalUnverifiedRewriteNegativeControls(t *testing.T) {
 		}
 	})
 	t.Run("racing local branch", func(t *testing.T) {
+		t.Parallel()
 		f, _ := newTerminalEqualTreeRewriteFixture(t)
 		f.service.beforeRecoverTerminalHeadPreserve = func() {
 			mustRun(t, f.local, "checkout", "-b", "racing-branch", f.submitted)

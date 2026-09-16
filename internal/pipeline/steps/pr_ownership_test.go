@@ -57,6 +57,7 @@ func TestPROwnershipRejectsAmbiguityAndEdits(t *testing.T) {
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := parsePROwnedBody(body); err == nil {
 				t.Fatal("ambiguous/editable content was claimed as generated")
 			}
@@ -160,6 +161,7 @@ func TestPROwnershipUpdateFailuresNeverReadAsSuccess(t *testing.T) {
 	content, appendix := ownedFixture(t)
 	for _, mode := range []string{"read-error", "write-error", "verify-error", "verify-divergence", "keeps-changing", "edited-owned", "legacy", "size"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			host := &ownershipRaceHost{body: content.Body}
 			initial := content
 			wantWrites := 0
