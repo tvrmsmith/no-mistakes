@@ -27,7 +27,7 @@ func TestAgentHeadRecordingPreservesSharedGateRefs(t *testing.T) {
 				gitCmd(t, gateDir, "worktree", "add", "--detach", workDir, submittedHead)
 				writeCommit := func(dir, name, content string) string {
 					t.Helper()
-					if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 						t.Fatal(err)
 					}
 					gitCmd(t, dir, "add", name)
@@ -140,7 +140,7 @@ func TestAgentHeadRecordingUpdatesNonSharedWorktreeRef(t *testing.T) {
 			gateDir := setupGateMirror(t, sctx)
 			gitCmd(t, gateDir, "fetch", dir, submittedHead+":refs/heads/feature")
 			gitCmd(t, dir, "checkout", "--detach", submittedHead)
-			if err := os.WriteFile(filepath.Join(dir, "agent.txt"), []byte("agent fix\n"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "agent.txt"), []byte("agent fix\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			gitCmd(t, dir, "add", "agent.txt")

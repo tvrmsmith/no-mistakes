@@ -173,11 +173,6 @@ func (s *RebaseStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 	return updateHeadSHA(ctx, sctx)
 }
 
-// rebaseTargets returns the ordered list of refs to rebase onto.
-func rebaseTargets(branch, defaultBranch string) []string {
-	return rebaseTargetsForBranch(branch, defaultBranch, "origin/"+branch)
-}
-
 func rebaseTargetsForBranch(branch, defaultBranch, branchTarget string) []string {
 	var targets []string
 	if branch != "" && branch != defaultBranch {
@@ -639,17 +634,24 @@ Instructions:
 		return restorePreMergeHead(ctx, sctx, preMergeHead, fmt.Errorf("agent did not merge %s into the branch: a rebase was left in progress", targetRef))
 	}
 
-	// Concluded is not the same as merged. Requiring HEAD to have moved and to
-	// carry BOTH snapshots proves a merge happened, because shouldSkipRebase
-	// has already returned early unless preMergeHead and targetSHA are
-	// divergent: two divergent commits can only both be ancestors of HEAD if
-	// some commit in its history has two parents joining those lines. It also
-	// proves the reviewed head itself was not rewritten, which target ancestry
-	// alone never did and which the CI continuity rule and the attestation's
-	// head binding both depend on. Every way of ending the conflict without
-	// merging fails it: `git merge --abort` leaves HEAD where it was, and a
-	// rebase or a `git reset --hard` onto the target drops the reviewed head
-	// out of the history.
+	return assertBranchHoldsTheMerge(ctx, sctx, preMergeHead, targetSHA, targetRef)
+}
+
+// assertBranchHoldsTheMerge proves the worktree really holds a merge of the
+// reviewed head and the target, and restores the reviewed head when it does
+// not.
+//
+// Concluded is not the same as merged. Requiring HEAD to have moved and to
+// carry BOTH snapshots proves a merge happened, because shouldSkipRebase has
+// already returned early unless preMergeHead and targetSHA are divergent: two
+// divergent commits can only both be ancestors of HEAD if some commit in its
+// history has two parents joining those lines. It also proves the reviewed
+// head itself was not rewritten, which target ancestry alone never did and
+// which the CI continuity rule and the attestation's head binding both depend
+// on. Every way of ending the conflict without merging fails it: `git merge
+// --abort` leaves HEAD where it was, and a rebase or a `git reset --hard` onto
+// the target drops the reviewed head out of the history.
+func assertBranchHoldsTheMerge(ctx context.Context, sctx *pipeline.StepContext, preMergeHead, targetSHA, targetRef string) error {
 	head, err := git.HeadSHA(ctx, sctx.WorkDir)
 	if err != nil {
 		return restorePreMergeHead(ctx, sctx, preMergeHead, fmt.Errorf("get merged head: %w", err))
@@ -677,28 +679,28 @@ Instructions:
 // It is fail-closed: a restore that does not land back exactly on
 // preMergeHead with a clean tree is reported as part of the returned error,
 // never swallowed, so nothing is described as recovered that was not.
+//
+// HEAD reading as preMergeHead is not the same as the worktree being back on
+// it: a reset performed while a rebase is interrupted moves HEAD and leaves
+// the rebase underneath it, so the restore would otherwise report a recovery
+// it never performed. That is what the rebaseInProgress check below is for.
+//
+// HEAD ATTACHMENT is deliberately not verified. The pipeline's run worktree is
+// created detached (`git worktree add --detach`) and no step ever checks a
+// branch out in it, so requiring an attached HEAD would report every correct
+// restore as a failed one. Detachment carries no signal in this worktree; the
+// reviewed-commit comparison is what proves the restore.
 func restorePreMergeHead(ctx context.Context, sctx *pipeline.StepContext, preMergeHead string, cause error) error {
 	if _, err := git.Run(ctx, sctx.WorkDir, "reset", "--hard", preMergeHead); err != nil {
-		return fmt.Errorf("%w; restoring the branch to %s failed, the worktree is left at the rejected head: %v", cause, preMergeHead, err)
+		return fmt.Errorf("%w; restoring the branch to %s failed, the worktree is left at the rejected head: %w", cause, preMergeHead, err)
 	}
 	head, err := git.HeadSHA(ctx, sctx.WorkDir)
 	if err != nil {
-		return fmt.Errorf("%w; restoring the branch to %s could not be verified: %v", cause, preMergeHead, err)
+		return fmt.Errorf("%w; restoring the branch to %s could not be verified: %w", cause, preMergeHead, err)
 	}
 	if head != preMergeHead {
 		return fmt.Errorf("%w; restoring the branch to %s left it at %s instead", cause, preMergeHead, head)
 	}
-	// HEAD reading as preMergeHead is not the same as the worktree being back on
-	// it: a reset performed while a rebase is interrupted moves HEAD and leaves
-	// the rebase underneath it, so the restore would otherwise report a
-	// recovery it never performed.
-	//
-	// HEAD ATTACHMENT is deliberately not verified here. The pipeline's run
-	// worktree is created detached (`git worktree add --detach`) and no step
-	// ever checks a branch out in it, so requiring an attached HEAD would
-	// report every correct restore as a failed one. Detachment carries no
-	// signal in this worktree; the reviewed-commit comparison above is what
-	// proves the restore.
 	if rebaseInProgress(ctx, sctx.WorkDir) {
 		return fmt.Errorf("%w; restoring the branch to %s left a rebase in progress", cause, preMergeHead)
 	}
@@ -709,6 +711,11 @@ func restorePreMergeHead(ctx context.Context, sctx *pipeline.StepContext, preMer
 // Returns true if targetRef doesn't exist, is already merged, or can be fast-forwarded.
 func shouldSkipRebase(ctx context.Context, sctx *pipeline.StepContext, targetRef string) (bool, error) {
 	if _, err := git.Run(ctx, sctx.WorkDir, "rev-parse", "--verify", targetRef); err != nil {
+		// An absent ref is what --verify is for and is the documented skip.
+		// Say why, as every other skip below does: a git that failed for some
+		// other reason also lands here, and skipping the rebase in silence is
+		// how that reaches the push unexplained.
+		sctx.Log(fmt.Sprintf("skipping rebase: cannot resolve %s (%v)", targetRef, err))
 		return true, nil
 	}
 	localSHA, err := git.HeadSHA(ctx, sctx.WorkDir)

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -33,7 +34,7 @@ func shortNMHome(t *testing.T) *paths.Paths {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(nmHome) })
+	t.Cleanup(func() { removeTempRoot(t, nmHome) })
 	t.Setenv("NM_HOME", nmHome)
 
 	p := paths.WithRoot(nmHome)
@@ -85,7 +86,7 @@ func startLegacyDaemonSocketWithGateContext(t *testing.T, gateContext ipc.Handle
 func TestClassifyGateControlCallerQueriesSkewedDaemonOverExemptMethod(t *testing.T) {
 	startLegacyDaemonSocket(t)
 
-	result, err := classifyGateControlCaller(context.Background())
+	result, err := classifyGateControlCaller(t.Context())
 	if err != nil {
 		t.Fatalf("a skewed daemon must still answer the containment query, got: %v", err)
 	}
@@ -105,7 +106,7 @@ func lifecycleRepairCommand(t *testing.T, path ...string) *cobra.Command {
 		parent.AddCommand(child)
 		parent = child
 	}
-	parent.SetContext(context.Background())
+	parent.SetContext(t.Context())
 	parent.SetOut(&bytes.Buffer{})
 	return parent
 }
@@ -158,7 +159,7 @@ func TestGuardGateControlReachesAVerdictInsteadOfDeadlockingUnderSkew(t *testing
 func TestClassifyGateControlCallerFallsBackWhenSkewedDaemonPredatesGateContext(t *testing.T) {
 	startLegacyDaemonSocketWithGateContext(t, nil)
 
-	result, err := classifyGateControlCaller(context.Background())
+	result, err := classifyGateControlCaller(t.Context())
 	if err != nil {
 		t.Fatalf("a daemon without gate_context must fall back to local classification, got: %v", err)
 	}
@@ -201,7 +202,7 @@ func startVersionedDaemonSocket(t *testing.T, version int, gateContext ipc.Handl
 func TestClassifyGateControlCallerRefusesWhenAVersionedDaemonLacksGateContext(t *testing.T) {
 	startVersionedDaemonSocket(t, ipc.ProtocolVersion+1, nil)
 
-	_, err := classifyGateControlCaller(context.Background())
+	_, err := classifyGateControlCaller(t.Context())
 	if err == nil {
 		t.Fatal("a versioned daemon without gate_context must not degrade to local cwd-only classification")
 	}
@@ -224,7 +225,7 @@ func TestClassifyGateControlCallerRefusesWhenALegacyDaemonsGateContextFails(t *t
 		return nil, errors.New("boom")
 	})
 
-	result, err := classifyGateControlCaller(context.Background())
+	result, err := classifyGateControlCaller(t.Context())
 	if err == nil {
 		t.Fatalf("a failed containment query must not read as a verdict, got: %+v", result)
 	}
@@ -311,7 +312,7 @@ func TestDaemonStopCompletesAgainstASkewedDaemon(t *testing.T) {
 	go func() { _ = srv.ServeReady() }()
 	t.Cleanup(func() { srv.Close() })
 
-	if err := os.WriteFile(p.PIDFile(), []byte(strconv.Itoa(child.Process.Pid)), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -338,7 +339,7 @@ func TestAxiAbortByRunIDFailsClosedOnVersionMismatch(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 
 	err := runAxiAbortByRunID(cmd, "orphan-run")
@@ -393,7 +394,7 @@ func TestGlobalConfigErrorStaysDeferredForASkewedDaemon(t *testing.T) {
 
 	configErrorFor := func(t *testing.T, p *paths.Paths) error {
 		t.Helper()
-		if err := os.WriteFile(p.ConfigFile(), []byte(brokenConfig), 0o644); err != nil {
+		if err := os.WriteFile(p.ConfigFile(), []byte(brokenConfig), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		_, err := config.LoadGlobal(p.ConfigFile())
@@ -460,7 +461,7 @@ func TestInitKeepsTheGateItCreatedWhenTheDaemonIsSkewed(t *testing.T) {
 	if openErr != nil {
 		t.Fatalf("open db: %v", openErr)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	repos, repoErr := d.GetRepos()
 	if repoErr != nil {
 		t.Fatalf("get repos: %v", repoErr)
@@ -471,7 +472,7 @@ func TestInitKeepsTheGateItCreatedWhenTheDaemonIsSkewed(t *testing.T) {
 	if _, statErr := os.Stat(p.RepoDir(repos[0].ID)); statErr != nil {
 		t.Fatalf("the gate bare repo was removed: %v", statErr)
 	}
-	if _, remoteErr := git.GetRemoteURL(context.Background(), repoDir, "no-mistakes"); remoteErr != nil {
+	if _, remoteErr := git.GetRemoteURL(t.Context(), repoDir, "no-mistakes"); remoteErr != nil {
 		t.Fatalf("the gate remote was removed from the working clone: %v", remoteErr)
 	}
 }

@@ -111,7 +111,7 @@ func TestFilterStructuredToSchemaKeepsOnlyDeclaredProperties(t *testing.T) {
 		},
 		"required": ["findings", "risk_level", "risk_rationale"]
 	}`)
-	if err := os.WriteFile(schemaPath, schema, 0o644); err != nil {
+	if err := os.WriteFile(schemaPath, schema, 0o600); err != nil {
 		t.Fatalf("write schema: %v", err)
 	}
 

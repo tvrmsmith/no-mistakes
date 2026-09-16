@@ -258,6 +258,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "claude_skills_link_target_exists",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".agents", "skills"))
 				mkdirAll(t, filepath.Join(root, ".claude"))
 				symlink(t, filepath.Join("..", ".agents", "skills"), filepath.Join(root, ".claude", "skills"))
@@ -266,6 +267,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "claude_skills_link_target_missing",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".claude"))
 				symlink(t, filepath.Join("..", ".agents", "skills"), filepath.Join(root, ".claude", "skills"))
 			},
@@ -273,6 +275,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "claude_dir_link",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".agents"))
 				symlink(t, ".agents", filepath.Join(root, ".claude"))
 			},
@@ -280,6 +283,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "agents_skills_link_reverse",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".claude", "skills"))
 				mkdirAll(t, filepath.Join(root, ".agents"))
 				symlink(t, filepath.Join("..", ".claude", "skills"), filepath.Join(root, ".agents", "skills"))
@@ -288,6 +292,7 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 		{
 			name: "agents_dir_link_reverse",
 			setup: func(t *testing.T, root string) {
+				t.Helper()
 				mkdirAll(t, filepath.Join(root, ".claude"))
 				symlink(t, ".claude", filepath.Join(root, ".agents"))
 			},
@@ -324,7 +329,7 @@ func TestInstallOverwritesStaleContent(t *testing.T) {
 	root := t.TempDir()
 	stale := filepath.Join(root, ".claude", "skills", Name, "SKILL.md")
 	mkdirAll(t, filepath.Dir(stale))
-	if err := os.WriteFile(stale, []byte("---\nname: "+Name+"\n---\nstale body\n"), 0o644); err != nil {
+	if err := os.WriteFile(stale, []byte("---\nname: "+Name+"\n---\nstale body\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Install(root); err != nil {
@@ -348,7 +353,7 @@ func TestInstallRestoresStaleAndDeletedReferenceFiles(t *testing.T) {
 		t.Fatalf("first install: %v", err)
 	}
 	dir := filepath.Join(root, ".claude", "skills", Name)
-	if err := os.WriteFile(filepath.Join(dir, ReadingOutputFile), []byte("stale reference\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ReadingOutputFile), []byte("stale reference\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(dir, SyncRecoveryFile)); err != nil {
@@ -373,7 +378,7 @@ func TestInstallSweepsFilesAnOlderVersionShipped(t *testing.T) {
 	}
 	for _, base := range InstallBases {
 		dir := filepath.Join(root, base, Name)
-		if err := os.WriteFile(filepath.Join(dir, "retired-reference.md"), []byte("guidance from an older version\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "retired-reference.md"), []byte("guidance from an older version\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		mkdirAll(t, filepath.Join(dir, "operator-notes"))
@@ -419,7 +424,7 @@ func TestVendored(t *testing.T) {
 		for _, base := range InstallBases {
 			dir := filepath.Join(root, base, Name)
 			mkdirAll(t, dir)
-			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -442,7 +447,7 @@ func TestVendored(t *testing.T) {
 		root := t.TempDir()
 		dir := filepath.Join(root, ".agents", "skills", Name)
 		mkdirAll(t, dir)
-		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		got := Vendored(root)
@@ -455,7 +460,7 @@ func TestVendored(t *testing.T) {
 		root := t.TempDir()
 		dir := filepath.Join(root, ".claude", "skills", "other-skill")
 		mkdirAll(t, dir)
-		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("other"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("other"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if got := Vendored(root); len(got) != 0 {
@@ -466,7 +471,7 @@ func TestVendored(t *testing.T) {
 
 func mkdirAll(t *testing.T, dir string) {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -476,11 +481,4 @@ func symlink(t *testing.T, target, link string) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

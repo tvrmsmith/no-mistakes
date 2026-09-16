@@ -28,7 +28,7 @@ func TestReviewAgentsRouteAndPreserveCapabilities(t *testing.T) {
 	ag := WithReviewAgents(primary, reviewer, fixer)
 	var attempts []string
 	for _, purpose := range []string{"review", "review-fix", "review", "test-evidence", "review-fix"} {
-		result, err := ag.Run(context.Background(), RunOpts{Purpose: purpose, Session: &SessionRef{ID: "prior", Agent: "pi"}, OnAttempt: func(a Attempt) { attempts = append(attempts, a.Agent) }})
+		result, err := ag.Run(t.Context(), RunOpts{Purpose: purpose, Session: &SessionRef{ID: "prior", Agent: "pi"}, OnAttempt: func(a Attempt) { attempts = append(attempts, a.Agent) }})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -80,7 +80,7 @@ func TestReviewAgentsDefaults(t *testing.T) {
 	if !SupportsSessionProvider(ag, "pi") {
 		t.Fatal("default fixer capability lost")
 	}
-	_, err := ag.Run(context.Background(), RunOpts{Purpose: "review-fix"})
+	_, err := ag.Run(t.Context(), RunOpts{Purpose: "review-fix"})
 	if err != nil || len(primary.calls) != 1 {
 		t.Fatal("unset fixer did not use primary")
 	}

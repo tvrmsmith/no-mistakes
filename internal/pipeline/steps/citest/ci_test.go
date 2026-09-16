@@ -43,7 +43,7 @@ func TestCIStep_PendingChecksUseAdaptivePollIntervals(t *testing.T) {
 	current := started
 	var waits []time.Duration
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -161,7 +161,7 @@ func TestCIStep_ContextCancelled(t *testing.T) {
 	sctx.Run.PRURL = &prURL
 	sctx.Config.CITimeout = time.Hour
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately
 	sctx.Ctx = ctx
 
@@ -185,7 +185,7 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 	stepstest.GitCmd(t, dir, "config", "user.name", "test")
 	stepstest.GitCmd(t, dir, "config", "user.email", "test@test.com")
 	stepstest.GitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "init.txt"), "init")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -193,13 +193,13 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 	stepstest.GitCmd(t, dir, "push", "origin", "main")
 
 	stepstest.GitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "feature")
 	originalHeadSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
 	stepstest.GitCmd(t, dir, "push", "origin", "feature")
 
-	os.WriteFile(filepath.Join(dir, "resolved.txt"), []byte("resolved"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "resolved.txt"), "resolved")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "resolve conflict")
 	advancedHeadSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -224,7 +224,7 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 	sctx.PreviousFindings = stepstest.CIGateFindingsJSON("build")
 	sctx.Config.CITimeout = 30 * time.Second
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -340,7 +340,7 @@ func TestCIStep_GetCIChecksNoChecksReported(t *testing.T) {
 	if host == nil {
 		t.Fatalf("buildHost returned nil: %s", skip)
 	}
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "42"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "42"})
 	if err != nil {
 		t.Fatalf("expected no error when gh reports no checks, got: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestCIStep_AllChecksPassingKeepsMonitoringOpenPR(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -473,7 +473,7 @@ func TestCIStep_CIWarningAllowsChecksPassedToBeReannounced(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -530,7 +530,7 @@ func TestCIStep_PersistentCheckReadFailureParksAtAskUser(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -592,7 +592,7 @@ func TestCIStep_CheckReadFailureCounterResetsAfterSuccessfulRead(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -632,7 +632,7 @@ func TestCIStep_CIWarningClearsPersistedReadiness(t *testing.T) {
 	sctx.Run.PRURL = &prURL
 	sctx.Config.CITimeout = 10 * time.Second
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -677,12 +677,14 @@ func TestCIStep_UncertainProviderStateClearsPersistedReadiness(t *testing.T) {
 		{
 			name: "pr_state_error",
 			env: func(t *testing.T) []string {
+				t.Helper()
 				return stepstest.FakeCIGHStateError(t, "provider unavailable", `[{"name":"build","state":"SUCCESS","bucket":"pass"}]`)
 			},
 		},
 		{
 			name: "mergeability_unknown",
 			env: func(t *testing.T) []string {
+				t.Helper()
 				return stepstest.FakeCIGHMergeable(t, "OPEN", `[{"name":"build","state":"SUCCESS","bucket":"pass"}]`, "UNKNOWN")
 			},
 		},
@@ -704,7 +706,7 @@ func TestCIStep_UncertainProviderStateClearsPersistedReadiness(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			sctx.Ctx = ctx
 
@@ -743,7 +745,7 @@ func TestCIStep_OpenPRKeepsMonitoringAfterChecksPass(t *testing.T) {
 	sctx.Run.PRURL = &prURL
 	sctx.Config.CITimeout = 10 * time.Second
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -786,7 +788,7 @@ func TestCIStep_EmptyChecksWithoutNoCIStaysNotReadyPastOldGracePeriod(t *testing
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -858,7 +860,7 @@ func TestCIStep_EmptyChecksWithTrustedNoCIBecomesReady(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -928,7 +930,7 @@ func TestCIStep_DelayedCheckRegistrationStaysNotReadyUntilGreen(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -987,8 +989,8 @@ func TestCIStep_DelayedCheckRegistrationStaysNotReadyUntilGreen(t *testing.T) {
 	logs = nil
 	env = stepstest.FakeCIGH(t, "OPEN", `[{"name":"e2e","state":"SUCCESS","bucket":"pass"}]`)
 	sctx.Env = env
-	sctx.Ctx = context.Background()
-	ctx, cancel = context.WithCancel(context.Background())
+	sctx.Ctx = t.Context()
+	ctx, cancel = context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 	greenStep := (&steps.CIStep{}).SetWaitForNextPoll(func(ctx context.Context, interval time.Duration) error {
@@ -1032,7 +1034,7 @@ func TestCIStep_DeclaredNoCIWithUnexpectedChecksHonorsThem(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1081,7 +1083,7 @@ func TestCIStep_NonEmptyPassingChecksContinueMonitoring(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1134,7 +1136,7 @@ func TestCIStep_BaseBranchAdvanceRearmsTimeout(t *testing.T) {
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1202,7 +1204,7 @@ func TestCIStep_StableBaseStillTimesOut(t *testing.T) {
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1249,7 +1251,7 @@ func TestCIStep_UnresolvedFallbackBaseTipDoesNotRearmTimeout(t *testing.T) {
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1349,7 +1351,7 @@ func TestCIStep_BaseTipResolverDeadlineIsBoundedByRemainingTimeout(t *testing.T)
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1403,7 +1405,7 @@ func TestCIStep_UnlimitedTimeoutNeverExpires(t *testing.T) {
 	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	current := started
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1458,7 +1460,7 @@ func setupCIRerunRepo(t *testing.T) (dir, upstreamURL, baseSHA, headSHA string) 
 	stepstest.GitCmd(t, dir, "config", "user.name", "test")
 	stepstest.GitCmd(t, dir, "config", "user.email", "test@test.com")
 	stepstest.GitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "init.txt"), "init")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA = stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -1466,7 +1468,7 @@ func setupCIRerunRepo(t *testing.T) (dir, upstreamURL, baseSHA, headSHA string) 
 	stepstest.GitCmd(t, dir, "push", "origin", "main")
 
 	stepstest.GitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "feature")
 	headSHA = stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -1510,7 +1512,7 @@ func TestCIStep_CancelledCheckIsRerunBeforeEscalating(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1610,7 +1612,7 @@ func TestCIStep_LaggingRerunRollupKeepsWaitingForTheRepublishedCheck(t *testing.
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1681,7 +1683,7 @@ func TestCIStep_CancelledCheckStaysUnresolvedAfterItsBudget(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1757,7 +1759,7 @@ func TestCIStep_UnresolvedCancelledCheckNeverEntersTheAutoFixLoop(t *testing.T) 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1814,7 +1816,7 @@ func TestCIStep_MovedPublishedHeadClearsCIReadiness(t *testing.T) {
 	t.Parallel()
 	dir, upstream, baseSHA, headSHA := setupCIRerunRepo(t)
 
-	os.WriteFile(filepath.Join(dir, "out-of-band.txt"), []byte("out of band"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "out-of-band.txt"), "out of band")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "out of band commit")
 	stepstest.GitCmd(t, dir, "push", "origin", "feature")
@@ -1836,7 +1838,7 @@ func TestCIStep_MovedPublishedHeadClearsCIReadiness(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 3}
 	sctx.Config.CI = config.CI{RerunTransient: 1}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1889,7 +1891,7 @@ func TestCIStep_SameNamedCancelledChecksShareOneRerunBudget(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1902,7 +1904,11 @@ func TestCIStep_SameNamedCancelledChecksShareOneRerunBudget(t *testing.T) {
 		}
 		return nil
 	})
-	step.Execute(sctx)
+	// The poll hook above cancels the run once the budget question is
+	// settled, so the step ending on that cancellation is this test's exit.
+	if _, err := step.Execute(sctx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("execute CI step: %v", err)
+	}
 
 	if got := strings.Count(ghLog(t, logFile), "run rerun"); got != 1 {
 		t.Fatalf("rerun requests = %d, want exactly one for a budget of one, gh log:\n%s", got, ghLog(t, logFile))
@@ -1938,7 +1944,7 @@ func TestCIStep_GenuineCheckFailureEscalatesOnFirstFailure(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -1997,7 +2003,7 @@ func TestCIStep_MergeConflictEscalatesWithoutRerunningChecks(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 0}
 	sctx.Config.CI = config.CI{RerunTransient: 1}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2058,7 +2064,7 @@ func TestCIStep_TimedOutCheckEscalatesWithoutRerunning(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 0}
 	sctx.Config.CI = config.CI{RerunTransient: 1}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2110,7 +2116,7 @@ func TestCIStep_ZeroRerunBudgetEscalatesCancelledCheckWithoutMakingItReady(t *te
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2193,7 +2199,7 @@ func TestCIStep_CancelledCheckAmongPassingChecksEscalatesInsteadOfPollingForever
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2258,7 +2264,7 @@ func TestCIStep_GreenChecksAtAdvancedHeadAreRecognizedWhileRunTracksOlderHead(t 
 
 	// The branch advances past the commit the run still records, the way a
 	// pipeline fix commit does mid-run.
-	os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "fix.txt"), "pipeline fix")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "no-mistakes(document): align docs")
 	stepstest.GitCmd(t, dir, "push", "origin", "feature")
@@ -2284,7 +2290,7 @@ func TestCIStep_GreenChecksAtAdvancedHeadAreRecognizedWhileRunTracksOlderHead(t 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2322,7 +2328,7 @@ func TestCIStep_MovedPublishedHeadTerminatesInsteadOfRerunning(t *testing.T) {
 	dir, upstream, baseSHA, headSHA := setupCIRerunRepo(t)
 
 	// Someone else advances the published branch out of band.
-	os.WriteFile(filepath.Join(dir, "out-of-band.txt"), []byte("out of band"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "out-of-band.txt"), "out of band")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "out of band commit")
 	movedSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -2345,7 +2351,7 @@ func TestCIStep_MovedPublishedHeadTerminatesInsteadOfRerunning(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2426,7 +2432,7 @@ func TestCIStep_RefusedRerunSpendsBudgetAndEscalates(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2492,7 +2498,7 @@ func TestCIStep_ResolvedRerunDoesNotParkALaterGreenHead(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2501,7 +2507,7 @@ func TestCIStep_ResolvedRerunDoesNotParkALaterGreenHead(t *testing.T) {
 	step := (&steps.CIStep{}).SetWaitForNextPoll(func(ctx context.Context, interval time.Duration) error {
 		polls++
 		if polls == 1 {
-			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			stepstest.GitCmd(t, dir, "add", "-A")
@@ -2572,7 +2578,7 @@ func TestCIStep_SameHeadGreenRerunEmitsChecksPassed(t *testing.T) {
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -2631,7 +2637,7 @@ func TestCIStep_DelayedSameNameCheckRetainsLegacyNameBehavior(t *testing.T) {
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 

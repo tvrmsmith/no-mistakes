@@ -95,6 +95,7 @@ func TestParseRemote(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			orgURL, project, repo, ok := ParseRemote(tc.in)
 			if ok != tc.wantOK {
 				t.Fatalf("ParseRemote(%q) ok = %v, want %v", tc.in, ok, tc.wantOK)
@@ -151,6 +152,7 @@ func TestWebPRURL(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := webPRURL(tc.orgURL, tc.project, tc.repo, tc.repoWebURL, tc.id)
 			if got != tc.want {
 				t.Fatalf("webPRURL() = %q, want %q", got, tc.want)

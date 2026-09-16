@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -342,13 +341,13 @@ func TestDoJSON_Success(t *testing.T) {
 			t.Error("expected x-custom header")
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"result":"ok"}`)
+		writeStub(t, w, `{"result":"ok"}`)
 	}))
 	defer server.Close()
 
 	headers := map[string]string{"x-custom": "value"}
 	body := map[string]string{"key": "val"}
-	resp, err := doJSON(context.Background(), http.MethodPost, server.URL+"/test", headers, body)
+	resp, err := doJSON(t.Context(), http.MethodPost, server.URL+"/test", headers, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -360,11 +359,11 @@ func TestDoJSON_Success(t *testing.T) {
 func TestDoJSON_ErrorStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, "bad request")
+		writeStub(t, w, "bad request")
 	}))
 	defer server.Close()
 
-	_, err := doJSON(context.Background(), http.MethodGet, server.URL+"/test", nil, nil)
+	_, err := doJSON(t.Context(), http.MethodGet, server.URL+"/test", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for 400 status")
 	}
@@ -379,11 +378,11 @@ func TestDoJSON_NilBody(t *testing.T) {
 			t.Error("should not set Content-Type for nil body")
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{}`)
+		writeStub(t, w, `{}`)
 	}))
 	defer server.Close()
 
-	resp, err := doJSON(context.Background(), http.MethodGet, server.URL+"/test", nil, nil)
+	resp, err := doJSON(t.Context(), http.MethodGet, server.URL+"/test", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -426,7 +425,7 @@ func TestRovodevAgent_FullFlow(t *testing.T) {
 		switch {
 		case r.URL.Path == "/v3/sessions/create" && r.Method == http.MethodPost:
 			step++
-			fmt.Fprint(w, `{"session_id":"test-session-123"}`)
+			writeStub(t, w, `{"session_id":"test-session-123"}`)
 
 		case r.URL.Path == "/v3/inline-system-prompt" && r.Method == http.MethodPut:
 			step++
@@ -451,9 +450,9 @@ func TestRovodevAgent_FullFlow(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			// Real rovodev emits top-level usage fields and streams text
 			// via part_start + part_delta events.
-			fmt.Fprint(w, "event: request-usage\ndata: {\"input_tokens\":100,\"output_tokens\":50}\n\n")
-			fmt.Fprint(w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"{\\\"success\\\":true\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
-			fmt.Fprint(w, "event: part_delta\ndata: {\"index\":0,\"delta\":{\"content_delta\":\",\\\"summary\\\":\\\"all good\\\"}\",\"part_delta_kind\":\"text\"},\"event_kind\":\"part_delta\"}\n\n")
+			writeStub(t, w, "event: request-usage\ndata: {\"input_tokens\":100,\"output_tokens\":50}\n\n")
+			writeStub(t, w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"{\\\"success\\\":true\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
+			writeStub(t, w, "event: part_delta\ndata: {\"index\":0,\"delta\":{\"content_delta\":\",\\\"summary\\\":\\\"all good\\\"}\",\"part_delta_kind\":\"text\"},\"event_kind\":\"part_delta\"}\n\n")
 
 		case r.URL.Path == "/v3/sessions/test-session-123" && r.Method == http.MethodDelete:
 			step++
@@ -473,11 +472,11 @@ func TestRovodevAgent_FullFlow(t *testing.T) {
 	}
 	// Parse the test server's port from URL
 	a.server = &managedServer{
-		port: mustParsePort(server.URL),
+		port: mustParsePort(t, server.URL),
 	}
 
 	var chunks []string
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "review this code",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),
@@ -521,15 +520,15 @@ func TestRovodevAgent_NoSchema(t *testing.T) {
 	calledPaths := make(map[string]bool)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calledPaths[r.URL.Path] = true
-		switch {
-		case r.URL.Path == "/v3/sessions/create":
-			fmt.Fprint(w, `{"session_id":"s1"}`)
-		case r.URL.Path == "/v3/set_chat_message":
+		switch r.URL.Path {
+		case "/v3/sessions/create":
+			writeStub(t, w, `{"session_id":"s1"}`)
+		case "/v3/set_chat_message":
 			w.WriteHeader(http.StatusOK)
-		case r.URL.Path == "/v3/stream_chat":
+		case "/v3/stream_chat":
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"done\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
-		case r.URL.Path == "/v3/sessions/s1":
+			writeStub(t, w, "event: part_start\ndata: {\"index\":0,\"part\":{\"content\":\"done\",\"part_kind\":\"text\"},\"event_kind\":\"part_start\"}\n\n")
+		case "/v3/sessions/s1":
 			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -539,10 +538,10 @@ func TestRovodevAgent_NoSchema(t *testing.T) {
 
 	a := &rovodevAgent{
 		bin:    "acli",
-		server: &managedServer{port: mustParsePort(server.URL)},
+		server: &managedServer{port: mustParsePort(t, server.URL)},
 	}
 
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt: "hello",
 		CWD:    t.TempDir(),
 		// No JSONSchema
@@ -563,9 +562,12 @@ func TestRovodevAgent_NoSchema(t *testing.T) {
 	}
 }
 
-func mustParsePort(url string) int {
+func mustParsePort(t *testing.T, url string) int {
+	t.Helper()
 	// url format: http://127.0.0.1:PORT
 	var port int
-	fmt.Sscanf(url, "http://127.0.0.1:%d", &port)
+	if _, err := fmt.Sscanf(url, "http://127.0.0.1:%d", &port); err != nil {
+		t.Fatalf("parse port from %q: %v", url, err)
+	}
 	return port
 }

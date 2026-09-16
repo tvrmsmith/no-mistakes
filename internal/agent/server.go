@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/runenv"
 )
 
@@ -67,7 +68,7 @@ func getAvailablePort() (int, error) {
 		return 0, fmt.Errorf("allocate port: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	closers.Quiet(ln)
 	return port, nil
 }
 
@@ -105,11 +106,12 @@ func startServerWithPort(ctx context.Context, agentName, bin string, args []stri
 	srv := &managedServer{cmd: cmd, port: port, pidFile: pidFile, exited: make(chan struct{}), healthTimeout: defaultHealthTimeout}
 	go func() {
 		srv.waitErr = cmd.Wait()
-		if srv.stopping.Load() {
+		switch {
+		case srv.stopping.Load():
 			slog.Info("managed agent server stopped", "agent", agentName, "pid", cmd.Process.Pid)
-		} else if srv.waitErr != nil {
+		case srv.waitErr != nil:
 			slog.Warn("managed agent server exited", "agent", agentName, "pid", cmd.Process.Pid, "error", srv.waitErr)
-		} else {
+		default:
 			slog.Warn("managed agent server exited", "agent", agentName, "pid", cmd.Process.Pid, "error", "unexpected clean exit")
 		}
 		close(srv.exited)
@@ -163,12 +165,8 @@ func (s *managedServer) waitForHealth(ctx context.Context, path string) error {
 		default:
 		}
 
-		resp, err := client.Get(url)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
+		if healthyResponse(client, url) {
+			return nil
 		}
 
 		select {
@@ -177,6 +175,18 @@ func (s *managedServer) waitForHealth(ctx context.Context, path string) error {
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// healthyResponse reports whether one probe answered 200. The poll above calls
+// it per attempt so each response body closes with its own request instead of
+// piling up until the server is healthy.
+func healthyResponse(client *http.Client, url string) bool {
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer func() { closers.Quiet(resp.Body) }()
+	return resp.StatusCode == http.StatusOK
 }
 
 func serverExitedBeforeHealthyError(waitErr error) error {

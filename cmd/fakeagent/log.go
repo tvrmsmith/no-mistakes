@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -40,10 +41,26 @@ func logInvocation(agent, prompt string, args []string) {
 	}
 	logMu.Lock()
 	defer logMu.Unlock()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	f.Write(append(data, '\n'))
+	defer closeStubLog(path, f)
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		reportStubLogFailure(path, err)
+	}
+}
+
+// closeStubLog finishes the append. The close is where the line reaches the
+// disk, and the log is the only record a test has of what was invoked, so a
+// failure is reported rather than dropped. It is not fatal: the fake agent
+// still owes its caller the response the test is waiting for.
+func closeStubLog(path string, f *os.File) {
+	if err := f.Close(); err != nil {
+		reportStubLogFailure(path, err)
+	}
+}
+
+func reportStubLogFailure(path string, err error) {
+	fmt.Fprintf(os.Stderr, "fakeagent: write invocation log %s: %v\n", path, err)
 }

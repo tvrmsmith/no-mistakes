@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -26,7 +27,7 @@ func TestGateContextReachesHandlerForSkewedPeer(t *testing.T) {
 	})
 
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	writeRawRequestLine(t, conn, 1, ipc.MethodGateContext)
 
@@ -84,7 +85,7 @@ func TestOnlyMetaMethodsAreExemptFromTheVersionGate(t *testing.T) {
 	}
 
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 	scanner := bufio.NewScanner(conn)
 
 	for i, method := range gated {

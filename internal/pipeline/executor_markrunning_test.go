@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
@@ -53,7 +52,7 @@ func TestExecutor_MarkRunningReturnsAFixingStepToRunning(t *testing.T) {
 	}}
 
 	exec := NewExecutor(database, p, &config.Config{AutoFix: config.AutoFix{CI: 1}}, nil, []Step{step}, onEvent)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if calls != 2 {

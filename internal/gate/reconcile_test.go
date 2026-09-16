@@ -1,7 +1,6 @@
 package gate
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +10,7 @@ import (
 
 func TestReconcileStaleBranchArchivesPatchEquivalentHeadBeforeNonForcePush(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	work := initReconcileRepo(t)
 	base := reconcileGit(t, work, "rev-parse", "HEAD")
 
@@ -64,7 +63,7 @@ func TestReconcileStaleBranchArchivesPatchEquivalentHeadBeforeNonForcePush(t *te
 
 func TestReconcileStaleBranchLeavesContainedAncestorForNonForcePush(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	work := initReconcileRepo(t)
 
 	writeReconcileFile(t, work, "feature.txt", "private content\n")
@@ -103,7 +102,7 @@ func TestReconcileStaleBranchLeavesContainedAncestorForNonForcePush(t *testing.T
 
 func TestReconcileStaleBranchRefusesAndNamesUniquePrivateCommits(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	work := initReconcileRepo(t)
 	base := reconcileGit(t, work, "rev-parse", "HEAD")
 
@@ -150,7 +149,7 @@ func TestReconcileStaleBranchRefusesAndNamesUniquePrivateCommits(t *testing.T) {
 
 func TestReconcileStaleBranchArchivesRunOwnedHeadWithoutPatchEquivalence(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	work := initReconcileRepo(t)
 	base := reconcileGit(t, work, "rev-parse", "HEAD")
 
@@ -202,7 +201,7 @@ func TestReconcileStaleBranchArchivesRunOwnedHeadWithoutPatchEquivalence(t *test
 
 func TestPlanStaleBranchReconciliationMutatesNothingAndApplyRefusesMovedHead(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	work := initReconcileRepo(t)
 	base := reconcileGit(t, work, "rev-parse", "HEAD")
 
@@ -255,7 +254,7 @@ func TestPlanStaleBranchReconciliationMutatesNothingAndApplyRefusesMovedHead(t *
 
 func TestArchivedHeadRecordedRejectsUnarchivedClaims(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	work := initReconcileRepo(t)
 	head := reconcileGit(t, work, "rev-parse", "HEAD")
 
@@ -292,7 +291,7 @@ func initReconcileRepo(t *testing.T) string {
 
 func writeReconcileFile(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -337,7 +336,7 @@ func TestReconcileStaleBranchIncludesPatchesHiddenByMergeSimplification(t *testi
 	gateDir := filepath.Join(t.TempDir(), "gate.git")
 	reconcileGit(t, "", "init", "--bare", gateDir)
 	reconcileGit(t, gateDir, "fetch", work, privateHead+":refs/heads/feature")
-	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead, "")
+	result, err := ReconcileStaleBranch(t.Context(), gateDir, work, "feature", liveHead, "")
 	if err != nil || !result.Reconciled {
 		t.Fatalf("merge-contained patch was refused: result=%+v err=%v", result, err)
 	}
@@ -363,7 +362,7 @@ func TestRestoreReconciledBranchPreservesConcurrentRefAndRequiresArchive(t *test
 			gateDir := filepath.Join(t.TempDir(), "gate.git")
 			reconcileGit(t, "", "init", "--bare", gateDir)
 			reconcileGit(t, gateDir, "fetch", work, privateHead+":refs/heads/feature")
-			result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead, "")
+			result, err := ReconcileStaleBranch(t.Context(), gateDir, work, "feature", liveHead, "")
 			if err != nil || !result.Reconciled {
 				t.Fatalf("reconciliation = %+v, err = %v", result, err)
 			}
@@ -373,7 +372,7 @@ func TestRestoreReconciledBranchPreservesConcurrentRefAndRequiresArchive(t *test
 			if state == "missing_archive" {
 				reconcileGit(t, gateDir, "update-ref", "-d", result.ArchivedTag)
 			}
-			err = RestoreReconciledBranch(context.Background(), gateDir, "feature", result)
+			err = RestoreReconciledBranch(t.Context(), gateDir, "feature", result)
 			if state == "missing_archive" {
 				if err == nil {
 					t.Fatal("restored without archive evidence")
@@ -433,7 +432,7 @@ func TestReconcileStaleBranchDecision41AExactSubmittedHeadOnly(t *testing.T) {
 			gateDir := filepath.Join(t.TempDir(), "gate.git")
 			reconcileGit(t, "", "init", "--bare", gateDir)
 			reconcileGit(t, gateDir, "fetch", work, privateHead+":refs/heads/feature")
-			plan, err := PlanMirrorPublicationReconciliation(context.Background(), gateDir, work, "feature", liveHead, ownedHead)
+			plan, err := PlanMirrorPublicationReconciliation(t.Context(), gateDir, work, "feature", liveHead, ownedHead)
 			if variant != "exact" {
 				if err == nil || plan.Reconcile {
 					t.Fatalf("non-exact submitted head exempted: plan=%+v err=%v", plan, err)
@@ -443,10 +442,8 @@ func TestReconcileStaleBranchDecision41AExactSubmittedHeadOnly(t *testing.T) {
 						t.Fatalf("missing at-risk commit %s: %v", commit, err)
 					}
 				}
-			} else {
-				if err != nil || !plan.Reconcile {
-					t.Fatalf("exact submitted-head exception refused: plan=%+v err=%v", plan, err)
-				}
+			} else if err != nil || !plan.Reconcile {
+				t.Fatalf("exact submitted-head exception refused: plan=%+v err=%v", plan, err)
 			}
 			if got := reconcileGit(t, gateDir, "rev-parse", "refs/heads/feature"); got != privateHead {
 				t.Fatalf("planning moved mirror to %s, want %s", got, privateHead)
@@ -455,7 +452,7 @@ func TestReconcileStaleBranchDecision41AExactSubmittedHeadOnly(t *testing.T) {
 				t.Fatalf("planning archived head: %s", got)
 			}
 			if variant == "exact" {
-				result, err := ApplyStaleBranchReconciliation(context.Background(), gateDir, plan)
+				result, err := ApplyStaleBranchReconciliation(t.Context(), gateDir, plan)
 				if err != nil || !result.Reconciled {
 					t.Fatalf("apply = %+v, err = %v", result, err)
 				}
@@ -508,7 +505,7 @@ func TestReconcileStaleBranchRefusesPatchesDiscardedByOursMerge(t *testing.T) {
 			gateDir := filepath.Join(t.TempDir(), "gate.git")
 			reconcileGit(t, "", "init", "--bare", gateDir)
 			reconcileGit(t, gateDir, "fetch", work, privateHead+":refs/heads/feature")
-			result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead, "")
+			result, err := ReconcileStaleBranch(t.Context(), gateDir, work, "feature", liveHead, "")
 			if err == nil || result.Reconciled || !strings.Contains(err.Error(), privateHead) {
 				t.Fatalf("discarded patch accepted or not named: result=%+v err=%v", result, err)
 			}

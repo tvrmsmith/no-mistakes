@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -32,7 +33,8 @@ func (e *repoURLRefreshError) Error() string {
 // ReasonForRefreshFailure returns a bounded reason that contains no remote URL
 // or wrapped dependency output.
 func ReasonForRefreshFailure(err error) RefreshFailureReason {
-	if refreshErr, ok := err.(*repoURLRefreshError); ok {
+	var refreshErr *repoURLRefreshError
+	if errors.As(err, &refreshErr) {
 		return refreshErr.reason
 	}
 	return RefreshRemoteUnreadable

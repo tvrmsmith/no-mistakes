@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,7 +23,7 @@ func writeFakePiExecutable(t *testing.T, dir, posixScript, windowsScript string)
 		script = windowsScript
 	}
 	bin := filepath.Join(dir, name)
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake pi: %v", err)
 	}
 	return bin
@@ -137,7 +136,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"
 		return s.SessionID
 	}
 
-	first, err := rs.Run(context.Background(), pa, SessionRoleFixer, opts, nil)
+	first, err := rs.Run(t.Context(), pa, SessionRoleFixer, opts, nil)
 	if err != nil {
 		t.Fatalf("first fixer turn: %v", err)
 	}
@@ -153,10 +152,10 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"
 	// the identity, re-run the same turn in a fresh session marked as fallback,
 	// and persist the replacement.
 	expire := filepath.Join(dir, "pi-expire")
-	if err := os.WriteFile(expire, []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(expire, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write expire marker: %v", err)
 	}
-	second, err := rs.Run(context.Background(), pa, SessionRoleFixer, opts, nil)
+	second, err := rs.Run(t.Context(), pa, SessionRoleFixer, opts, nil)
 	if err != nil {
 		t.Fatalf("fixer turn after dead resume must fall back, got error: %v", err)
 	}
@@ -183,7 +182,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"
 	if err := os.Remove(expire); err != nil {
 		t.Fatalf("remove expire marker: %v", err)
 	}
-	third, err := rs.Run(context.Background(), pa, SessionRoleFixer, opts, nil)
+	third, err := rs.Run(t.Context(), pa, SessionRoleFixer, opts, nil)
 	if err != nil {
 		t.Fatalf("third fixer turn: %v", err)
 	}

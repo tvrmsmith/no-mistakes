@@ -10,7 +10,7 @@ import (
 
 func TestWorktreeAddAndRemove(t *testing.T) {
 	// create a bare repo with at least one commit by pushing from a regular repo
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "bare.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -49,7 +49,7 @@ func TestWorktreeAddAndRemove(t *testing.T) {
 }
 
 func TestFindMainRepoRoot(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mainRepo := initTestRepo(t)
 
 	// For a normal repo, FindMainRepoRoot should return the same as FindGitRoot.
@@ -70,7 +70,13 @@ func TestFindMainRepoRoot(t *testing.T) {
 	if err := WorktreeAdd(ctx, mainRepo, wtDir, "wt-branch"); err != nil {
 		t.Fatalf("WorktreeAdd failed: %v", err)
 	}
-	t.Cleanup(func() { WorktreeRemove(ctx, mainRepo, wtDir) })
+	t.Cleanup(func() {
+		// A cleanup runs after t.Context is cancelled, so the removal needs
+		// the test's context stripped of that cancellation to still run.
+		if err := WorktreeRemove(context.WithoutCancel(ctx), mainRepo, wtDir); err != nil {
+			t.Errorf("remove worktree %s: %v", wtDir, err)
+		}
+	})
 
 	// FindGitRoot from worktree returns the worktree path.
 	wtRoot, err := FindGitRoot(wtDir)
@@ -136,7 +142,7 @@ func addSubmodule(t *testing.T, superDir, name, remoteDir string) string {
 // own working tree (via core.worktree) so callers read the submodule's
 // remotes, not the superproject's.
 func TestFindMainRepoRootSubmodule(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	superDir := initTestRepo(t)
 	// Give the superproject its own distinct origin so the assertion below
 	// can tell the two apart — the bug is that the gate ends up reading
@@ -184,7 +190,7 @@ func TestFindMainRepoRootSubmodule(t *testing.T) {
 // <super>/.git/modules/a/modules/b. The function must still resolve to the
 // innermost submodule's working tree.
 func TestFindMainRepoRootNestedSubmodule(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	superDir := initTestRepo(t)
 	outerRemote := initTestRepo(t)
 	innerRemote := initTestRepo(t)
@@ -211,7 +217,7 @@ func TestFindMainRepoRootNestedSubmodule(t *testing.T) {
 // common dir at <main>/.git, so the historical "parent of commonDir" answer
 // stays correct and must not regress.
 func TestFindMainRepoRootFromWorktreeStillResolvesToMain(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mainRepo := initTestRepo(t)
 	run(t, mainRepo, "git", "checkout", "-b", "wt-branch")
 	run(t, mainRepo, "git", "checkout", "-")
@@ -219,7 +225,13 @@ func TestFindMainRepoRootFromWorktreeStillResolvesToMain(t *testing.T) {
 	if err := WorktreeAdd(ctx, mainRepo, wtDir, "wt-branch"); err != nil {
 		t.Fatalf("WorktreeAdd: %v", err)
 	}
-	t.Cleanup(func() { WorktreeRemove(ctx, mainRepo, wtDir) })
+	t.Cleanup(func() {
+		// A cleanup runs after t.Context is cancelled, so the removal needs
+		// the test's context stripped of that cancellation to still run.
+		if err := WorktreeRemove(context.WithoutCancel(ctx), mainRepo, wtDir); err != nil {
+			t.Errorf("remove worktree %s: %v", wtDir, err)
+		}
+	})
 
 	got, err := FindMainRepoRoot(wtDir)
 	if err != nil {
@@ -233,7 +245,7 @@ func TestFindMainRepoRootFromWorktreeStillResolvesToMain(t *testing.T) {
 }
 
 func TestPush(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "dest.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -258,7 +270,7 @@ func TestPush(t *testing.T) {
 }
 
 func TestPushWithOptionsForwardsPushOptions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "dest.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -269,7 +281,7 @@ func TestPushWithOptionsForwardsPushOptions(t *testing.T) {
 
 	marker := filepath.Join(t.TempDir(), "push-options.txt")
 	hook := "#!/bin/sh\nprintf '%s:%s\n' \"$GIT_PUSH_OPTION_COUNT\" \"$GIT_PUSH_OPTION_0\" > " + shellSingleQuote(marker) + "\n"
-	if err := os.WriteFile(filepath.Join(bare, "hooks", "post-receive"), []byte(hook), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bare, "hooks", "post-receive"), []byte(hook), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -287,7 +299,7 @@ func TestPushWithOptionsForwardsPushOptions(t *testing.T) {
 }
 
 func TestPushForceWithLease(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "dest.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -320,7 +332,7 @@ func TestPushForceWithLease(t *testing.T) {
 }
 
 func TestLsRemote(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "dest.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -342,7 +354,7 @@ func TestLsRemote(t *testing.T) {
 }
 
 func TestLsRemoteNotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "dest.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -360,7 +372,7 @@ func TestLsRemoteNotFound(t *testing.T) {
 }
 
 func TestDefaultBranch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "upstream.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -377,7 +389,7 @@ func TestDefaultBranch(t *testing.T) {
 }
 
 func TestDefaultBranchNonMain(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "upstream.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -396,7 +408,7 @@ func TestDefaultBranchNonMain(t *testing.T) {
 }
 
 func TestDefaultBranchFallback(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	// Remote doesn't exist — should fall back to "main".
 	branch := DefaultBranch(ctx, src, "nonexistent")
@@ -406,7 +418,7 @@ func TestDefaultBranchFallback(t *testing.T) {
 }
 
 func TestDefaultBranchEmptyRemote(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	src := initTestRepo(t)
 	bare := filepath.Join(t.TempDir(), "empty.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -423,7 +435,7 @@ func TestDefaultBranchEmptyRemote(t *testing.T) {
 
 func TestCurrentBranch(t *testing.T) {
 	dir := initTestRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// default branch after init — could be main or master depending on git config
 	branch, err := CurrentBranch(ctx, dir)

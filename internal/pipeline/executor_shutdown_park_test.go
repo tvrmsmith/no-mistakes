@@ -24,7 +24,7 @@ func TestExecutor_CleanShutdownPreservesGateParkedRun(t *testing.T) {
 	step.outcome.ReviewApprovedHeadSHA = run.HeadSHA
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Execute(ctx, run, repo, workDir)
@@ -128,7 +128,7 @@ func TestExecutor_CleanShutdownPreservesFixReviewGateForResume(t *testing.T) {
 
 	step := newStep()
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Execute(ctx, run, repo, workDir)
@@ -162,7 +162,7 @@ func TestExecutor_CleanShutdownPreservesFixReviewGateForResume(t *testing.T) {
 	resumed := NewExecutor(database, p, cfg, nil, []Step{newStep()}, nil)
 	resumeDone := make(chan error, 1)
 	go func() {
-		resumeDone <- resumed.Resume(context.Background(), preserved, repo, workDir)
+		resumeDone <- resumed.Resume(t.Context(), preserved, repo, workDir)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -216,7 +216,7 @@ func TestExecutor_CleanShutdownFailsRunCancelledMidStep(t *testing.T) {
 	}
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Execute(ctx, run, repo, workDir)
@@ -287,7 +287,7 @@ func TestExecutor_ResumePreservesGateParkedRunOnCleanShutdown(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 
 	ec := collectEvents(exec)
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Resume(ctx, run, repo, workDir)
@@ -345,7 +345,7 @@ func TestExecutor_UserAbortStillCancelsParkedRun(t *testing.T) {
 	step := newApprovalStep(types.StepReview, `{"findings":[{"severity":"warning","description":"needs a human","action":"ask-user"}],"summary":"1 issue"}`)
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- exec.Execute(ctx, run, repo, workDir)
@@ -474,7 +474,7 @@ func TestExecutor_CancellationBeatsABufferedResponse(t *testing.T) {
 		} {
 			t.Run(cause.Error()+"/"+tc.name, func(t *testing.T) {
 				exec := NewExecutor(database, p, nil, nil, []Step{tc.step}, nil)
-				ctx, cancel := context.WithCancelCause(context.Background())
+				ctx, cancel := context.WithCancelCause(t.Context())
 				cancel(cause)
 
 				for i := 0; i < 50; i++ {
@@ -507,7 +507,7 @@ func TestExecutor_ShutdownWithABufferedResponsePreservesTheParkedRun(t *testing.
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	exec.SetGateReconcileTimings(time.Hour, time.Hour)
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(ctx, run, repo, t.TempDir()) }()
 
@@ -566,7 +566,7 @@ func TestExecutor_ShutdownBeatsAResolvedReconciliation(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	exec.SetGateReconcileTimings(time.Hour, time.Hour)
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	exec.mu.Lock()
 	exec.waiting = true
 	exec.waitingStep = types.StepCI
@@ -643,7 +643,7 @@ func TestExecutor_ResumeShutdownBeatsThePreWaitReconciliation(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	exec.SetGateReconcileTimings(time.Hour, time.Hour)
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- exec.Resume(ctx, parked, repo, t.TempDir()) }()
 
@@ -690,7 +690,7 @@ func TestExecutor_ShutdownStillCancelsAnUnansweredGate(t *testing.T) {
 
 	step := newApprovalStep(types.StepReview, "")
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(ErrDaemonShutdown)
 
 	if _, _, err := exec.waitForApprovalOrReconcile(ctx, step, &StepContext{Ctx: ctx}, "", true); !errors.Is(err, ErrDaemonShutdown) {

@@ -42,6 +42,7 @@ func TestProjectPath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := ProjectPath(tc.in); got != tc.want {
 				t.Fatalf("ProjectPath(%q) = %q, want %q", tc.in, got, tc.want)
 			}
@@ -72,7 +73,7 @@ func TestGetMergeableStateTreatsBlockedStatusesAsResolved(t *testing.T) {
 				},
 			}), nil, "", "")
 
-			got, err := host.GetMergeableState(context.Background(), &scm.PR{Number: "123"})
+			got, err := host.GetMergeableState(t.Context(), &scm.PR{Number: "123"})
 			if err != nil {
 				t.Fatalf("GetMergeableState() error = %v", err)
 			}
@@ -95,7 +96,7 @@ func TestGetChecksFallbackParsesMRJSONAfterPreamble(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	checks, err := host.getChecksFallback(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.getChecksFallback(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("getChecksFallback() error = %v", err)
 	}
@@ -153,7 +154,7 @@ func TestGetChecksReturnsFallbackErrors(t *testing.T) {
 
 			host := New(gitlabTestCmdFactory(tt.responses), nil, "", "")
 
-			checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+			checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 			if err == nil {
 				t.Fatalf("GetChecks() error = nil, want error containing %q", tt.wantErrSub)
 			}
@@ -177,7 +178,7 @@ func TestGetChecksReturnsPrimaryStatusErrorWhenMRFlagIsSupported(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err == nil {
 		t.Fatal("GetChecks() error = nil, want primary ci status error")
 	}
@@ -205,7 +206,7 @@ func TestGetChecksFallsBackForVariantUnsupportedMRFlagErrors(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -234,7 +235,7 @@ func TestFindPRWithoutIIDKeepsNumberEmptyAndUpdatesByNumberFromURL(t *testing.T)
 		},
 	}), nil, "", "")
 
-	pr, err := host.FindPR(context.Background(), branch, "main")
+	pr, err := host.FindPR(t.Context(), branch, "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -248,7 +249,7 @@ func TestFindPRWithoutIIDKeepsNumberEmptyAndUpdatesByNumberFromURL(t *testing.T)
 		t.Fatalf("FindPR() URL = %q, want %q", pr.URL, url)
 	}
 
-	updated, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "updated", Body: "body"})
+	updated, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: "updated", Body: "body"})
 	if err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
@@ -276,7 +277,7 @@ func TestUpdatePRDoesNotPassUnsupportedYesFlag(t *testing.T) {
 	}), nil, "", "")
 
 	pr := &scm.PR{Number: "7"}
-	updated, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "updated", Body: "body"})
+	updated, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: "updated", Body: "body"})
 	if err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
@@ -294,7 +295,7 @@ func TestSetPRBaseBranchUsesTargetBranchFlag(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{Number: "7"}, "epic/feature"); err != nil {
+	if err := host.SetPRBaseBranch(t.Context(), &scm.PR{Number: "7"}, "epic/feature"); err != nil {
 		t.Fatalf("SetPRBaseBranch() error = %v", err)
 	}
 }
@@ -308,7 +309,7 @@ func TestFindPRFiltersByBaseBranch(t *testing.T) {
 		},
 	}), nil, "gitlab.example.com", "group/project")
 
-	pr, err := host.FindPR(context.Background(), "feature/refactor", "release/1.0")
+	pr, err := host.FindPR(t.Context(), "feature/refactor", "release/1.0")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -333,7 +334,7 @@ func TestFindPRReturnsCLIError(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+	pr, err := host.FindPR(t.Context(), "feature/refactor", "main")
 	if err == nil {
 		t.Fatal("FindPR() error = nil, want CLI error")
 	}
@@ -354,7 +355,7 @@ func TestFindPRRejectsURLForDifferentProject(t *testing.T) {
 		},
 	}), nil, "gitlab.example.com", "group/project")
 
-	pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+	pr, err := host.FindPR(t.Context(), "feature/refactor", "main")
 	if err == nil {
 		t.Fatal("FindPR() error = nil, want project mismatch error")
 	}
@@ -419,7 +420,7 @@ func TestFindPRReturnsJSONError(t *testing.T) {
 				},
 			}), nil, "", "")
 
-			pr, err := host.FindPR(context.Background(), "feature/refactor", "main")
+			pr, err := host.FindPR(t.Context(), "feature/refactor", "main")
 			if err == nil {
 				t.Fatal("FindPR() error = nil, want JSON error")
 			}
@@ -445,7 +446,7 @@ func TestGetChecksFallbackRequestsJobDetails(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	checks, err := host.getChecksFallback(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.getChecksFallback(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("getChecksFallback() error = %v", err)
 	}
@@ -472,7 +473,7 @@ func TestFetchFailedCheckLogsRequestsJobDetails(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckLogs(context.Background(), &scm.PR{Number: "123"}, "", "", []string{"lint"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), &scm.PR{Number: "123"}, "", "", []string{"lint"})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckLogs() error = %v", err)
 	}
@@ -493,7 +494,7 @@ func TestFetchFailedCheckTargetLogsAggregatesEverySelectedJob(t *testing.T) {
 		"glab ci trace 56": {stdout: "lint failed\n"},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "", "", []scm.CheckTarget{{Name: "build", ProviderID: "gitlab-job:55"}, {Name: "lint", ProviderID: "gitlab-job:56"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "123"}, "", "", []scm.CheckTarget{{Name: "build", ProviderID: "gitlab-job:55"}, {Name: "lint", ProviderID: "gitlab-job:56"}})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckTargetLogs() error = %v", err)
 	}
@@ -516,7 +517,7 @@ func TestFetchFailedCheckTargetLogsReturnsPartialLogsWithRetrievalError(t *testi
 		"glab ci trace 56": {stderr: "expired", code: 1},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "", "", []scm.CheckTarget{{ProviderID: "gitlab-job:55"}, {ProviderID: "gitlab-job:56"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "123"}, "", "", []scm.CheckTarget{{ProviderID: "gitlab-job:55"}, {ProviderID: "gitlab-job:56"}})
 	if err != nil || len(logs) != 2 || logs[0].Output != "build failed" || logs[1].Err == nil || !strings.Contains(logs[1].Err.Error(), "job 56") {
 		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want retained partial logs and job 56 error", logs, err)
 	}
@@ -530,7 +531,7 @@ func TestFetchFailedCheckTargetLogsReportsMissingSelectedJob(t *testing.T) {
 		"glab ci get --pipeline-id 77 --output json --with-job-details": {stdout: `{"jobs":[{"id":55,"name":"build","status":"failed"}]}` + "\n"},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "123"}, "", "", []scm.CheckTarget{{ProviderID: "gitlab-job:999"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "123"}, "", "", []scm.CheckTarget{{ProviderID: "gitlab-job:999"}})
 	if err != nil || len(logs) != 1 || logs[0].Err == nil || !strings.Contains(logs[0].Err.Error(), "gitlab-job:999") {
 		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want explicit missing-target error", logs, err)
 	}
@@ -551,7 +552,7 @@ func TestFetchFailedCheckLogsParsesMRJSONAfterPreamble(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	logs, err := host.FetchFailedCheckLogs(context.Background(), &scm.PR{Number: "123"}, "", "", []string{"lint"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), &scm.PR{Number: "123"}, "", "", []string{"lint"})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckLogs() error = %v", err)
 	}
@@ -580,7 +581,7 @@ func TestAvailableScopesAuthToConfiguredHost(t *testing.T) {
 		"glab auth status": {stderr: "gitlab.com: token invalid\n", code: 1},
 	}), func() bool { return true }, "gitlab.example.com", "")
 
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v, want nil (scoped auth should pass)", err)
 	}
 }
@@ -593,7 +594,7 @@ func TestAvailableFallsBackToUnscopedAuthWhenHostUnknown(t *testing.T) {
 		"glab auth status": {},
 	}), func() bool { return true }, "", "")
 
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v, want nil", err)
 	}
 }
@@ -610,7 +611,7 @@ func TestFindPRDoesNotPassRemovedStateFlag(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	pr, err := host.FindPR(context.Background(), "feature/x", "main")
+	pr, err := host.FindPR(t.Context(), "feature/x", "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -628,7 +629,7 @@ func TestCreatePRAddsDraftFlagWhenConfigured(t *testing.T) {
 		},
 	}), nil, "", "", true)
 
-	pr, err := host.CreatePR(context.Background(), "feature/draft", "main", scm.PRContent{
+	pr, err := host.CreatePR(t.Context(), "feature/draft", "main", scm.PRContent{
 		Title: "fix: draft",
 		Body:  "body",
 	})
@@ -649,7 +650,7 @@ func TestCreatePROmitsDraftFlagByDefault(t *testing.T) {
 		},
 	}), nil, "", "")
 
-	pr, err := host.CreatePR(context.Background(), "feature/x", "main", scm.PRContent{
+	pr, err := host.CreatePR(t.Context(), "feature/x", "main", scm.PRContent{
 		Title: "fix: x",
 		Body:  "body",
 	})
@@ -667,12 +668,12 @@ func TestCreatePRTitleLimitCountsCharacters(t *testing.T) {
 	host := New(gitlabTestCmdFactory(map[string]gitlabTestResponse{
 		"glab mr create --source-branch feature/x --target-branch main --title " + title + " --description body --yes": {},
 	}), nil, "", "")
-	if _, err := host.CreatePR(context.Background(), "feature/x", "main", scm.PRContent{Title: title, Body: "body"}); err != nil {
+	if _, err := host.CreatePR(t.Context(), "feature/x", "main", scm.PRContent{Title: title, Body: "body"}); err != nil {
 		t.Fatalf("255-character title rejected: %v", err)
 	}
 
 	host = New(gitlabTestCmdFactory(nil), nil, "", "")
-	_, err := host.CreatePR(context.Background(), "feature/x", "main", scm.PRContent{Title: strings.Repeat("😀", 256), Body: "body"})
+	_, err := host.CreatePR(t.Context(), "feature/x", "main", scm.PRContent{Title: strings.Repeat("😀", 256), Body: "body"})
 	if err == nil || !strings.Contains(err.Error(), "255 characters") {
 		t.Fatalf("256-character title error = %v", err)
 	}
@@ -688,7 +689,7 @@ func TestUpdatePRTitleLimitIncludesDraftMarker(t *testing.T) {
 		"glab mr update 9 --title Draft: " + allowed + " --description body": {},
 	}), nil, "", "")
 	pr := &scm.PR{Number: "9", URL: "https://gitlab.example.com/group/project/-/merge_requests/9"}
-	if _, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: allowed, Body: "body"}); err != nil {
+	if _, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: allowed, Body: "body"}); err != nil {
 		t.Fatalf("255-character draft title rejected: %v", err)
 	}
 
@@ -697,7 +698,7 @@ func TestUpdatePRTitleLimitIncludesDraftMarker(t *testing.T) {
 			stdout: `{"iid":9,"title":"Draft: old","web_url":"https://gitlab.example.com/group/project/-/merge_requests/9"}` + "\n",
 		},
 	}), nil, "", "")
-	_, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: strings.Repeat("x", 249), Body: "body"})
+	_, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: strings.Repeat("x", 249), Body: "body"})
 	if err == nil || !strings.Contains(err.Error(), "255 characters") {
 		t.Fatalf("256-character draft title error = %v", err)
 	}
@@ -722,7 +723,7 @@ func TestGetChecksReadsJobsViaAPIWhenProjectPathKnown(t *testing.T) {
 		},
 	}), nil, "gitlab.example.com", "group/project")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -754,7 +755,7 @@ func TestGetChecksLeavesCompletedAtZeroWhenFinishedAtMissingOrInvalid(t *testing
 		},
 	}), nil, "", "group/project")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -791,7 +792,7 @@ func TestGetChecksPaginatesJobsAcrossConcatenatedPages(t *testing.T) {
 		},
 	}), nil, "", "group/project")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -861,7 +862,7 @@ func TestGetChecksSurfacesErrorWhenPaginatedPageIsCorrupt(t *testing.T) {
 		},
 	}), nil, "", "group/project")
 
-	if _, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"}); err == nil {
+	if _, err := host.GetChecks(t.Context(), &scm.PR{Number: "123"}); err == nil {
 		t.Fatal("GetChecks() error = nil, want decode error surfaced from the corrupt page")
 	}
 }
@@ -920,7 +921,7 @@ func TestUpdatePRPreservesDraftTitle(t *testing.T) {
 	}), nil, "", "")
 
 	pr := &scm.PR{Number: "9", URL: "https://gitlab.example.com/group/project/-/merge_requests/9"}
-	if _, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "fix: x", Body: "body"}); err != nil {
+	if _, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: "fix: x", Body: "body"}); err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
 }
@@ -936,7 +937,7 @@ func TestUpdatePRDoesNotAddDraftToReadyMR(t *testing.T) {
 	}), nil, "", "")
 
 	pr := &scm.PR{Number: "9", URL: "https://gitlab.example.com/group/project/-/merge_requests/9"}
-	if _, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "fix: x", Body: "body"}); err != nil {
+	if _, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: "fix: x", Body: "body"}); err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
 }
@@ -957,7 +958,7 @@ func TestUpdatePRRejectsMissingLiveTitle(t *testing.T) {
 		}), nil, "", "")
 
 		pr := &scm.PR{Number: "9"}
-		_, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "fix: x", Body: "body"})
+		_, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: "fix: x", Body: "body"})
 		if err == nil || !strings.Contains(err.Error(), "missing merge request title") {
 			t.Fatalf("UpdatePR() error = %v, want missing title error", err)
 		}

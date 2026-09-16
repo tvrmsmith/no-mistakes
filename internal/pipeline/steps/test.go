@@ -133,14 +133,15 @@ Previous test findings to address:
 	if evidenceDir == "" {
 		return nil, fmt.Errorf("test evidence dir is not configured for this run")
 	}
-	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+	if err := os.MkdirAll(evidenceDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create test evidence dir: %w", err)
 	}
-	if testCmd == "" {
+	switch {
+	case testCmd == "":
 		sctx.Log("no test command configured, asking agent to run tests...")
-	} else if baselineExitCode != 0 {
+	case baselineExitCode != 0:
 		sctx.Log("configured test command failed, asking agent to gather live evidence...")
-	} else {
+	default:
 		sctx.Log("baseline tests passed, asking agent to gather live evidence...")
 	}
 	reassessHistory := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + testguidance.Rule

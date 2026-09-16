@@ -34,13 +34,13 @@ func (inv *Inventory) AcquireSlot(timeout time.Duration) (*Slot, error) {
 	if inv == nil {
 		return nil, fmt.Errorf("e2edaemon: nil inventory")
 	}
-	max := MaxConcurrent()
+	limit := MaxConcurrent()
 	deadline := time.Now().Add(timeout)
 	if timeout <= 0 {
 		deadline = time.Now().Add(2 * time.Minute)
 	}
 	for {
-		for i := 0; i < max; i++ {
+		for i := 0; i < limit; i++ {
 			path := filepath.Join(inv.Dir, slotsDirName, fmt.Sprintf("slot-%d.lock", i))
 			f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 			if err != nil {
@@ -51,11 +51,11 @@ func (inv *Inventory) AcquireSlot(timeout time.Duration) (*Slot, error) {
 			return &Slot{inv: inv, path: path, n: i}, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("e2edaemon: concurrency cap %d reached (set %s to raise)", max, EnvMaxConcurrent)
+			return nil, fmt.Errorf("e2edaemon: concurrency cap %d reached (set %s to raise)", limit, EnvMaxConcurrent)
 		}
 		// Drop clearly stale slot files (owner process gone) so a crashed
 		// harness cannot permanently exhaust the cap.
-		inv.reclaimStaleSlots(max)
+		inv.reclaimStaleSlots(limit)
 		time.Sleep(50 * time.Millisecond)
 	}
 }
@@ -69,8 +69,8 @@ func (s *Slot) Release() {
 	s.path = ""
 }
 
-func (inv *Inventory) reclaimStaleSlots(max int) {
-	for i := 0; i < max; i++ {
+func (inv *Inventory) reclaimStaleSlots(limit int) {
+	for i := 0; i < limit; i++ {
 		path := filepath.Join(inv.Dir, slotsDirName, fmt.Sprintf("slot-%d.lock", i))
 		data, err := os.ReadFile(path)
 		if err != nil {

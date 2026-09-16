@@ -33,7 +33,7 @@ func TestReinstallSystemdServiceInheritsProxyFromExistingUnitWhenEnvUnset(t *tes
 	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -98,7 +98,7 @@ func TestReinstallLaunchAgentInheritsProxyFromExistingPlistWhenEnvUnset(t *testi
 	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
 
 	plistPath := launchAgentPath(p)
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,7 +166,7 @@ func TestInstallSystemdUserServiceInheritsProxyFromExistingWhenEnvUnset(t *testi
 	serviceCommandRunner = func(string, ...string) ([]byte, error) { return nil, nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 

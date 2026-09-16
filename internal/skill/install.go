@@ -59,11 +59,11 @@ func Install(root string) ([]string, error) {
 		if err != nil {
 			return written, err
 		}
-		if err := os.MkdirAll(realDir, 0o755); err != nil {
+		if err := os.MkdirAll(realDir, 0o750); err != nil {
 			return written, err
 		}
 		for _, f := range files {
-			if err := os.WriteFile(filepath.Join(realDir, f.Name), []byte(f.Content), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(realDir, f.Name), []byte(f.Content), 0o600); err != nil {
 				return written, err
 			}
 			written = append(written, filepath.Join(base, Name, f.Name))

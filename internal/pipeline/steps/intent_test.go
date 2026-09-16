@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/intent"
@@ -35,7 +36,7 @@ func newIntentStepContext(t *testing.T) *pipeline.StepContext {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	repo, err := database.InsertRepo(t.TempDir(), "git@example.com:test/repo.git", "main")
 	if err != nil {
@@ -47,7 +48,7 @@ func newIntentStepContext(t *testing.T) *pipeline.StepContext {
 	}
 
 	return &pipeline.StepContext{
-		Ctx:     context.Background(),
+		Ctx:     t.Context(),
 		Run:     run,
 		Repo:    repo,
 		WorkDir: repo.WorkingPath,

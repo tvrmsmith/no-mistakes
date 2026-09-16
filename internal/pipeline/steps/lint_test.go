@@ -27,7 +27,7 @@ func TestLintStep_FixMode_CommitsChanges(t *testing.T) {
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
-			os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "lint-fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`{"summary":"  'fix lint issues,'  "}`)}, nil
 		},
 	}
@@ -88,7 +88,7 @@ func TestLintStep_FixMode_UsesFallbackSummaryWhenStructuredSummaryMalformed(t *t
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "lint-fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`not json`)}, nil
 		},
 	}
@@ -116,7 +116,7 @@ func TestLintStep_NoConfiguredLint_CommitsAgentFixesWithoutApproval(t *testing.T
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
-			os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "lint-fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"format code"}`)}, nil
 		},
 	}
@@ -175,6 +175,7 @@ func TestLintStep_NoConfiguredLint_RejectsInvalidSummaryWithoutStaging(t *testin
 		{name: "blank", summary: " \t\n "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			gitCmd(t, dir, "checkout", "--detach", headSHA)
 
@@ -188,7 +189,7 @@ func TestLintStep_NoConfiguredLint_RejectsInvalidSummaryWithoutStaging(t *testin
 			ag := &mockAgent{
 				name: "test",
 				runFn: func(_ context.Context, _ agent.RunOpts) (*agent.Result, error) {
-					if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o600); err != nil {
 						return nil, err
 					}
 					return &agent.Result{Output: output}, nil
@@ -257,7 +258,7 @@ func TestLintStep_HangingAgentFailsRunAfterTimeout(t *testing.T) {
 	sctx.Config.AgentTimeout = 20 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&LintStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected hanging lint agent to fail the run")
 	}
 
@@ -284,7 +285,7 @@ func TestLintStep_FixAgentSuccessfulReturnAfterTimeoutFailsWithoutCommit(t *test
 	ag := &mockAgent{
 		name: "late-lint-fix-agent",
 		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o600); err != nil {
 				return nil, err
 			}
 			<-ctx.Done()

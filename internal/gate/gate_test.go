@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -19,19 +20,24 @@ func TestMain(m *testing.M) {
 	// Agent harnesses inject git config (e.g. safe.bareRepository=explicit)
 	// via GIT_CONFIG_COUNT/KEY_n/VALUE_n; tests that need it re-set it with
 	// t.Setenv (issue #362).
-	os.Unsetenv("GIT_CONFIG_COUNT")
+	// Leaving it set would let that config reach every git call these tests
+	// make, which is the leak this drops.
+	if err := os.Unsetenv("GIT_CONFIG_COUNT"); err != nil {
+		fmt.Fprintf(os.Stderr, "unset GIT_CONFIG_COUNT: %v\n", err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
 }
 
 func TestProvisionGateDoesNotStampUnsupportedHookIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	workDir := filepath.Join(root, "work")
 	if out, err := exec.Command("git", "init", workDir).CombinedOutput(); err != nil {
 		t.Fatalf("init worktree: %v: %s", err, out)
 	}
 	reposDir := filepath.Join(root, "repos")
-	if err := os.MkdirAll(reposDir, 0o755); err != nil {
+	if err := os.MkdirAll(reposDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	bareDir := filepath.Join(reposDir, "repo.git")
@@ -75,7 +81,7 @@ func copyDirTree(t *testing.T, src, dst string) {
 		}
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return os.MkdirAll(target, 0o750)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -127,7 +133,7 @@ func openTestDB(t *testing.T, p *paths.Paths) *db.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 	return d
 }
 
@@ -139,7 +145,7 @@ func TestInit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -222,7 +228,7 @@ func TestInitUnderSafeBareRepositoryExplicit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, created, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -271,7 +277,7 @@ func TestInitRefusesManagedValidationWorktreeBeforePartialMutation(t *testing.T)
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	database := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 	repo, _, err := Init(ctx, database, p, workDir)
 	if err != nil {
 		t.Fatalf("init outer gate: %v", err)
@@ -323,7 +329,7 @@ func TestInitIsIdempotent(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, created, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -371,7 +377,7 @@ func TestInitWithForkPreservesForkOnPlainReinit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	parentURL := "https://github.com/parent/project.git"
 	forkURL := "https://github.com/fork/project.git"
@@ -428,7 +434,7 @@ func TestInitRefreshUpdatesRepoMetadata(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, created, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -517,7 +523,7 @@ func TestInitRefreshUsesPersistedRepoID(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	legacyID := "legacy-repo"
 	originURL, err := gitpkg.GetRemoteURL(ctx, workDir, "origin")
@@ -569,7 +575,7 @@ func TestInitRepairsBrokenGate(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -613,7 +619,7 @@ func TestInitReattachesGateAfterWorkingDirRename(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -686,7 +692,7 @@ func TestInitCreatesFreshGateForCopiedWorkingDir(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -736,7 +742,7 @@ func TestInitRepointsOrphanGateRemoteOnFreshInit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -774,7 +780,7 @@ func TestInitDoesNotOverwriteExistingNoMistakesRemoteOnFreshInit(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	customRemote := filepath.Join(resolveSymlinks(t, t.TempDir()), "custom.git")
 	if out, err := exec.Command("git", "init", "--bare", customRemote).CombinedOutput(); err != nil {
@@ -806,7 +812,7 @@ func TestInitRefreshPreservesCustomPostReceiveHook(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -814,7 +820,7 @@ func TestInitRefreshPreservesCustomPostReceiveHook(t *testing.T) {
 	}
 	hookPath := filepath.Join(p.RepoDir(repo.ID), "hooks", "post-receive")
 	customHook := []byte("#!/bin/sh\necho custom hook\n")
-	if err := os.WriteFile(hookPath, customHook, 0o755); err != nil {
+	if err := os.WriteFile(hookPath, customHook, 0o700); err != nil {
 		t.Fatalf("write custom hook: %v", err)
 	}
 
@@ -845,7 +851,7 @@ func TestInitNoOrigin(t *testing.T) {
 	}
 	d := openTestDB(t, p)
 
-	_, _, err := Init(context.Background(), d, p, work)
+	_, _, err := Init(t.Context(), d, p, work)
 	if err == nil {
 		t.Fatal("expected error when no origin remote")
 	}
@@ -870,7 +876,7 @@ func TestInitNotGitRepo(t *testing.T) {
 	}
 	d := openTestDB(t, p)
 
-	_, _, err := Init(context.Background(), d, p, notGit)
+	_, _, err := Init(t.Context(), d, p, notGit)
 	if err == nil {
 		t.Fatal("expected error for non-git directory")
 	}
@@ -918,7 +924,7 @@ func TestInitDetectsDefaultBranchFromRemote(t *testing.T) {
 	}
 	d := openTestDB(t, p)
 
-	repo, _, err := Init(context.Background(), d, p, work)
+	repo, _, err := Init(t.Context(), d, p, work)
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -937,7 +943,7 @@ func TestEject(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -978,7 +984,7 @@ func TestEjectCleansUpWorktrees(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -987,7 +993,7 @@ func TestEjectCleansUpWorktrees(t *testing.T) {
 
 	// Create a fake worktree directory to verify cleanup.
 	wtDir := p.WorktreeDir(repo.ID, "fake-run-id")
-	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+	if err := os.MkdirAll(wtDir, 0o750); err != nil {
 		t.Fatalf("create worktree dir: %v", err)
 	}
 
@@ -1015,7 +1021,7 @@ func TestEjectCleansUpWorktreesInConfiguredRoot(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -1038,16 +1044,16 @@ func TestEjectCleansUpWorktreesInConfiguredRoot(t *testing.T) {
 	foreignRunDir := filepath.Join(root, "01JZ8XQ7V6K9M3B0T5N2R4C8YD")
 	operatorDir := filepath.Join(root, "scratch-checkout")
 	for _, dir := range []string{ownRunDir, foreignRunDir, operatorDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatalf("create dir: %v", err)
 		}
 	}
 	operatorFile := filepath.Join(root, "mise.local.toml")
-	if err := os.WriteFile(operatorFile, []byte("[tools]\n"), 0o644); err != nil {
+	if err := os.WriteFile(operatorFile, []byte("[tools]\n"), 0o600); err != nil {
 		t.Fatalf("write operator file: %v", err)
 	}
 	configYAML := "worktree_roots:\n  " + yamlPath(repo.WorkingPath) + ": " + yamlPath(root) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -1084,7 +1090,7 @@ func TestEjectNotInitialized(t *testing.T) {
 	}
 	d := openTestDB(t, p)
 
-	_, err := Eject(context.Background(), d, p, work)
+	_, err := Eject(t.Context(), d, p, work)
 	if err == nil {
 		t.Fatal("expected error when not initialized")
 	}
@@ -1111,7 +1117,7 @@ func TestInit_PostReceiveSurvivesHooksPathPoisoning(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {
@@ -1125,14 +1131,14 @@ func TestInit_PostReceiveSurvivesHooksPathPoisoning(t *testing.T) {
 	marker := filepath.Join(markerDir, "fired")
 	hookPath := filepath.Join(bareDir, "hooks", "post-receive")
 	hook := "#!/bin/sh\ntouch '" + marker + "'\nexit 0\n"
-	if err := os.WriteFile(hookPath, []byte(hook), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(hook), 0o700); err != nil {
 		t.Fatalf("write marker hook: %v", err)
 	}
 	// This unit test has no isolated daemon. Stub only pre-receive admission;
 	// the behavior under test is hookspath isolation for post-receive. Full
 	// fail-closed admission is covered by the isolated-daemon e2e regression.
 	preHookPath := filepath.Join(bareDir, "hooks", "pre-receive")
-	if err := os.WriteFile(preHookPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(preHookPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatalf("write admission stub: %v", err)
 	}
 
@@ -1175,7 +1181,7 @@ func TestInitRedactsCredentialURL(t *testing.T) {
 		t.Fatalf("ensure dirs: %v", err)
 	}
 	d := openTestDB(t, p)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	repo, _, err := Init(ctx, d, p, workDir)
 	if err != nil {

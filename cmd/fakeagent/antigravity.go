@@ -39,7 +39,12 @@ func runAgy(args []string, scenario *Scenario) int {
 			fmt.Fprintf(os.Stderr, "fakeagent: agy patch: %v\n", err)
 			return 1
 		}
-		os.Stdout.Write(patched)
+		// The fixture is the whole response the pipeline is waiting for, so a
+		// short write means it read a truncated one. Exit nonzero instead.
+		if _, err := os.Stdout.Write(patched); err != nil {
+			fmt.Fprintf(os.Stderr, "fakeagent: write agy fixture: %v\n", err)
+			return 1
+		}
 		return 0
 	}
 

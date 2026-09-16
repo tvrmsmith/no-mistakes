@@ -20,16 +20,17 @@ func renderLocalBranchStatus(state *branchsync.State, refreshing bool, width int
 	} else {
 		switch state.State {
 		case branchsync.StatePipelineOwned:
-			if recoverableBranchSync(state) {
+			switch {
+			case recoverableBranchSync(state):
 				if archiveKeepLocalRecovery(state) {
 					message = "Later pipeline work is preserved by a verified archive. Recover custody while keeping the exact required local head."
 				} else {
 					message = "Run ended without publishing its pipeline commits; they are preserved in the local gate. Recover custody to take the branch back, or rerun to resume validation."
 				}
 				footer = "u recover custody"
-			} else if state.NextAction != nil && state.NextAction.Code == "recover_custody" {
+			case state.NextAction != nil && state.NextAction.Code == "recover_custody":
 				message = "Run ended without a recoverable preserved head. Keep the current local head and return custody with `no-mistakes axi sync --recover --keep-local`."
-			} else {
+			default:
 				message = "Local branch unchanged; the pipeline fix is not pushed yet. Do not make follow-up commits."
 			}
 		case branchsync.StatePushInProgress:
@@ -44,12 +45,13 @@ func renderLocalBranchStatus(state *branchsync.State, refreshing bool, width int
 		case branchsync.StateDirty:
 			message = "Local branch is behind, but the worktree has uncommitted or in-progress changes."
 		case branchsync.StateDiverged:
-			if state.Safety == branchsync.SafetySafeEquivalentAdvance {
+			switch {
+			case state.Safety == branchsync.SafetySafeEquivalentAdvance:
 				message = "Local branch diverged, but its changes are represented in the live pipeline head. Sync will preserve the old head before advancing."
-			} else if state.NextAction != nil && state.NextAction.Code == branchsync.NextActionSync {
+			case state.NextAction != nil && state.NextAction.Code == branchsync.NextActionSync:
 				message = "Local branch diverged, but the pipeline head may contain equivalent work. Refresh to verify before syncing."
 				footer = "u sync branch"
-			} else {
+			default:
 				message = "Local branch and pipeline-pushed head have diverged. No automatic reconciliation is allowed."
 			}
 		case branchsync.StateLocalAhead:

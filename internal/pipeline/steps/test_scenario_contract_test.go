@@ -731,12 +731,12 @@ func commitCIWorkflowOnlyChange(t *testing.T, dir, baseSHA string) string {
 	t.Helper()
 	gitCmd(t, dir, "checkout", "-B", "feature", baseSHA)
 	workflowDir := filepath.Join(dir, ".github", "workflows")
-	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+	if err := os.MkdirAll(workflowDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(workflowDir, "ci.yml")
 	body := "name: CI\non: push\njobs:\n  test:\n    runs-on: windows-latest\n    steps:\n      - run: go test ./internal/git/...\n"
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")

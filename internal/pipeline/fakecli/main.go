@@ -35,11 +35,7 @@ func handleFakeCLI(mode string) {
 	logFile := os.Getenv("FAKE_CLI_LOG")
 
 	if logFile != "" {
-		f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if f != nil {
-			fmt.Fprintln(f, strings.Join(args, " "))
-			f.Close()
-		}
+		appendLog(logFile, strings.Join(args, " ")+"\n")
 	}
 	logFakeCLIStdinBody(args, logFile)
 
@@ -102,15 +98,31 @@ func logFakeCLIStdinBody(args []string, logFile string) {
 	}
 	body, err := readFakeBody()
 	if err != nil {
-		return
+		fatalf("read fake CLI stdin: %v", err)
 	}
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	appendLog(logFile, "stdin --body "+string(body)+"\n")
+}
+
+// appendLog records one line in the invocation log the test reads back. That
+// log is the test's only evidence of what was invoked, so a failed write exits
+// nonzero rather than letting the test read a missing line as a call that
+// never happened.
+func appendLog(logFile, line string) {
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return
+		fatalf("open fake CLI log %s: %v", logFile, err)
 	}
-	defer f.Close()
-	fmt.Fprint(f, "stdin --body ")
-	fmt.Fprintln(f, string(body))
+	if _, err := io.WriteString(f, line); err != nil {
+		fatalf("write fake CLI log %s: %v", logFile, err)
+	}
+	if err := f.Close(); err != nil {
+		fatalf("close fake CLI log %s: %v", logFile, err)
+	}
+}
+
+func fatalf(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "fakecli: "+format+"\n", a...)
+	os.Exit(1)
 }
 
 func argsUseStdinBodyFile(args []string) bool {
@@ -125,11 +137,7 @@ func argsUseStdinBodyFile(args []string) bool {
 func fakeRecordSuccessHandler() {
 	logFile := os.Getenv("FAKE_CLI_LOG")
 	if logFile != "" {
-		f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if f != nil {
-			fmt.Fprintln(f, filepath.Base(os.Args[0]))
-			f.Close()
-		}
+		appendLog(logFile, filepath.Base(os.Args[0])+"\n")
 	}
 	os.Exit(0)
 }
@@ -540,7 +548,7 @@ func fakeGHStorePRBody(args []string) {
 	}
 	body, err := readFakeBody()
 	if err == nil {
-		err = os.WriteFile(path, body, 0o644)
+		err = os.WriteFile(path, body, 0o600)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -692,7 +700,7 @@ func fakeCIGHSequenceHandler(args []string) {
 		if index >= len(entries) {
 			index = len(entries) - 1
 		}
-		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o644); err != nil {
+		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -719,7 +727,7 @@ func fakeCIGHSequenceHandler(args []string) {
 		if index >= len(entries) {
 			index = len(entries) - 1
 		}
-		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o644); err != nil {
+		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -840,7 +848,7 @@ func fakeCIGlabSequenceHandler(args []string) {
 		if index >= len(entries) {
 			index = len(entries) - 1
 		}
-		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o644); err != nil {
+		if err := os.WriteFile(indexPath, []byte(strconv.Itoa(index+1)), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

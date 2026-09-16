@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,20 +55,24 @@ func captureCodex(ctx context.Context, bin string, forward []string, prompt, out
 	if err != nil {
 		return fmt.Errorf("tempdir: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer scratch.RemoveAll(tmp)
 	cmd.Dir = tmp
 
 	f, err := os.Create(outPath)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", outPath, err)
 	}
-	defer f.Close()
-
 	cmd.Stdout = f
 	cmd.Stderr = os.Stderr
 	fmt.Fprintf(os.Stderr, "recording codex → %s\n", outPath)
 	if err := cmd.Run(); err != nil {
+		closers.Quiet(f)
 		return fmt.Errorf("run codex: %w", err)
+	}
+	// Closing is where the last of the capture reaches the disk, so a failure
+	// here means the fixture is short and must not be scrubbed and kept.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", outPath, err)
 	}
 	if err := scrubFile(outPath); err != nil {
 		return fmt.Errorf("scrub %s: %w", outPath, err)

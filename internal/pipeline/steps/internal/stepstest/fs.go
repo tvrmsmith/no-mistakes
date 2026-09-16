@@ -1,6 +1,8 @@
 package stepstest
 
 import (
+	"errors"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,18 +44,21 @@ func copyPath(srcPath, dstPath string) error {
 	return copyFile(srcPath, dstPath, info.Mode().Perm())
 }
 
-func copyFile(srcPath, dstPath string, perm os.FileMode) error {
+func copyFile(srcPath, dstPath string, perm os.FileMode) (err error) {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer closers.Quiet(src)
 
 	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perm)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
+	// Closing the destination is where a buffered write reaches the disk, so
+	// its error is the copy's error. Dropping it reports a truncated file as a
+	// complete one.
+	defer func() { err = errors.Join(err, dst.Close()) }()
 
 	if _, err := io.Copy(dst, src); err != nil {
 		return err

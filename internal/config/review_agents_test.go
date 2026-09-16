@@ -39,7 +39,13 @@ func TestReviewAgentsRejectInvalidConfig(t *testing.T) {
 		"review_agents: {fixer: {agent: rovodev, model: x}}",
 		"review_agents: {reviewer: {agent: pi, typo: x}}",
 	} {
-		t.Run(input, func(t *testing.T) { loadGlobalConfigError(t, input) })
+		t.Run(input, func(t *testing.T) {
+			// The helper fails the test if the config loads. This case
+			// asserts the refusal itself, not its wording.
+			if err := loadGlobalConfigError(t, input); err == nil {
+				t.Fatal("LoadGlobal returned no error")
+			}
+		})
 	}
 }
 

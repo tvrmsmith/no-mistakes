@@ -14,9 +14,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -27,6 +29,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/procreap"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -75,7 +78,9 @@ func Run() (retErr error) {
 	if err != nil {
 		return fmt.Errorf("open daemon lifecycle log: %w", err)
 	}
-	defer lifecycleLog.Close()
+	// Closing the log writer is where its last buffered lines reach the disk,
+	// so it joins the run's error like the bootstrap capture above.
+	defer func() { retErr = errors.Join(retErr, lifecycleLog.Close()) }()
 	initLogger(lifecycleLog, "info")
 	defer func() {
 		if retErr != nil {
@@ -106,7 +111,7 @@ func Run() (retErr error) {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	logStartupPhase("database", databaseStarted)
 
 	return runWithOptionsLocked(p, d, globalCfg, nil, startupStarted)
@@ -207,7 +212,7 @@ func RunWithOptions(p *paths.Paths, d *db.DB, stepFactory StepFactory) error {
 // so startup reads and validates config.yaml exactly once. Re-reading it per
 // consumer would let one startup act on two different documents, and every later
 // read needs a fallback for a failure the caller has already refused to start on.
-func runWithOptionsLocked(p *paths.Paths, d *db.DB, globalCfg *config.GlobalConfig, stepFactory StepFactory, startupStarted time.Time) error {
+func runWithOptionsLocked(p *paths.Paths, d *db.DB, globalCfg *config.GlobalConfig, stepFactory StepFactory, startupStarted time.Time) (retErr error) {
 	// Refuse an unusable worktree placement before anything walks, sweeps, or
 	// removes a directory under it. This is the second half of worktree_roots
 	// validation: internal/config checks every entry it can judge without
@@ -222,7 +227,9 @@ func runWithOptionsLocked(p *paths.Paths, d *db.DB, globalCfg *config.GlobalConf
 		return fmt.Errorf("open managed server log: %w", err)
 	}
 	agent.SetManagedServerOutput(managedServerLog)
-	defer managedServerLog.Close()
+	// The close is where the managed server's last captured output reaches
+	// the disk, so it joins the daemon's error rather than being dropped.
+	defer func() { retErr = errors.Join(retErr, managedServerLog.Close()) }()
 	defer agent.SetManagedServerOutput(nil)
 
 	defer func() {
@@ -317,8 +324,8 @@ func runWithOptionsLocked(p *paths.Paths, d *db.DB, globalCfg *config.GlobalConf
 	// A new daemon may have already replaced the socket.
 	if pidData, err := os.ReadFile(pidPath); err == nil {
 		if current, readErr := readDaemonPIDFileData(pidData); readErr == nil && current.PID == pidRecord.PID && current.StartedAt.Equal(pidRecord.StartedAt) {
-			os.Remove(pidPath)
-			os.Remove(socketPath)
+			scratch.Remove(pidPath)
+			scratch.Remove(socketPath)
 		}
 	}
 	slog.Info("daemon stopped")
@@ -800,7 +807,12 @@ func cleanupOrphanWorktrees(d *db.DB, p *paths.Paths, leftover []db.RunWorktree)
 		removeOrphanWorktree(ctx, wt)
 	}
 	for _, dir := range repoDirs {
-		os.Remove(dir)
+		// Drops the per-repo parent once its last worktree is gone. A
+		// directory that still holds a live run's worktree is the normal
+		// case, so only an unexpected failure is reported.
+		if err := os.Remove(dir); err != nil && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("remove empty repo worktree directory failed", "dir", dir, "error", err)
+		}
 	}
 }
 
@@ -1156,31 +1168,11 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if p.DrainTimeoutMS <= 0 {
 			timeout = defaultDrainTimeout
 		}
-		// Drain runs synchronously on this handler goroutine so its report
-		// reaches the caller in this same RPC response, with no second RPC or
-		// DB read needed to learn what got interrupted. That's safe here:
-		// ipc/server.go gives every connection its own goroutine and doesn't
-		// close s.done until Close() is called, so blocking this one doesn't
-		// stall the listener or any other connection (see the concurrent
-		// MethodHealth test alongside this handler's tests).
-		//
-		// ctx is this connection's own context, which the server cancels the
-		// moment Close() runs. That is late: doShutdown runs mgr.Shutdown()
-		// first, so by then the runs the drain was waiting on have already
-		// been cancelled. mgr.Shutdown's own signal, closed before it cancels
-		// anything, is what Drain's wait loop reacts to, so a signal aborts an
-		// in-flight drain outright rather than waiting out its deadline and
-		// reports those runs as stopped mid-flight rather than as finished;
-		// that's intentional, not a bug to fix here. A caller that hangs up
-		// mid-drain is NOT observed: ipc/server.go detects a closed peer only
-		// on the stream path, and this connection's scanner loop is blocked
-		// inside this handler, so such a drain runs to its own deadline.
-		// What the drain hadn't finished by then is left for
-		// mgr.Shutdown() below to cancel, same as always, and since
-		// CancelCauseFunc keeps only the first cause, a run the drain meant to
-		// classify as a cut CI monitor can land as a plain shutdown-cancelled
-		// failure instead - an accepted, best-effort tradeoff of a signal
-		// racing a drain.
+		// Synchronous on this handler goroutine so the report reaches the
+		// caller in this same RPC response. ipc/server.go gives every
+		// connection its own goroutine, so blocking this one stalls neither
+		// the listener nor another connection. Drain's own doc comment owns
+		// what ctx and a concurrent Shutdown signal mean for it.
 		report := mgr.Drain(ctx, timeout)
 		// DrainOnly leaves the process alive with mgr's refuse-new-runs latch
 		// still set. Under launchd KeepAlive / systemd Restart=always, exiting

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -30,7 +29,7 @@ func TestRootInteractiveWizardFailsLoudlyWhenRunRegistrationIsSlow(t *testing.T)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	if _, _, err := gate.Init(context.Background(), d, p, "."); err != nil {
+	if _, _, err := gate.Init(t.Context(), d, p, "."); err != nil {
 		t.Fatal(err)
 	}
 
@@ -45,7 +44,7 @@ func TestRootInteractiveWizardFailsLoudlyWhenRunRegistrationIsSlow(t *testing.T)
 		if cfg.WaitForRun == nil {
 			t.Fatal("expected wait function")
 		}
-		if err := cfg.WaitForRun(context.Background(), "feat/slow"); err != nil {
+		if err := cfg.WaitForRun(t.Context(), "feat/slow"); err != nil {
 			return wizard.Result{}, err
 		}
 		return wizard.Result{Success: true, Pushed: true, TargetBranch: "feat/slow"}, nil

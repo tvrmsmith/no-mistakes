@@ -31,6 +31,7 @@ func TestExtractHost(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := ExtractHost(tt.remote); got != tt.want {
 				t.Errorf("ExtractHost(%q) = %q, want %q", tt.remote, got, tt.want)
 			}
@@ -71,6 +72,7 @@ func TestCheckBucketHelpers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := tt.check.Failing(); got != tt.wantFailing {
 				t.Errorf("Failing() = %v, want %v", got, tt.wantFailing)
 			}
@@ -95,6 +97,7 @@ func TestMergeableStateHelpers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.state), func(t *testing.T) {
+			t.Parallel()
 			if got := tt.state.Conflict(); got != tt.wantConflict {
 				t.Errorf("Conflict() = %v, want %v", got, tt.wantConflict)
 			}

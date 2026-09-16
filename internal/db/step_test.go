@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -38,7 +39,7 @@ func TestAutomaticSkipReasonMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	if err := d.CompleteSkippedStep(step.ID, 0, 12, "ci.log", "provider unavailable"); err != nil {
 		t.Fatal(err)
 	}
@@ -122,9 +123,15 @@ func TestStepsByRun(t *testing.T) {
 	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
 
 	// insert in reverse order to verify ordering
-	d.InsertStepResult(run.ID, types.StepLint)
-	d.InsertStepResult(run.ID, types.StepReview)
-	d.InsertStepResult(run.ID, types.StepTest)
+	if _, err := d.InsertStepResult(run.ID, types.StepLint); err != nil {
+		t.Fatalf("insert step result: %v", err)
+	}
+	if _, err := d.InsertStepResult(run.ID, types.StepReview); err != nil {
+		t.Fatalf("insert step result: %v", err)
+	}
+	if _, err := d.InsertStepResult(run.ID, types.StepTest); err != nil {
+		t.Fatalf("insert step result: %v", err)
+	}
 
 	steps, err := d.GetStepsByRun(run.ID)
 	if err != nil {

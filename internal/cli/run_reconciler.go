@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -83,7 +84,7 @@ func (s *ipcRunStateSource) call(ctx context.Context, method string, params, res
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	timeout := getRunCallTimeout()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -106,7 +107,7 @@ func (s *ipcRunStateSource) probeHealth(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	timeout := ipc.DefaultDialTimeout
 	if deadline, ok := ctx.Deadline(); ok {

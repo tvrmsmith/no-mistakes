@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -35,13 +36,13 @@ func newEvidenceFixture(t *testing.T) *evidenceFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 	repo, err := d.InsertRepoWithID("repo1", "/nonexistent/work", "https://example.com/owner/repo1", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
 	root := p.EvidenceRoot("")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	return &evidenceFixture{t: t, db: d, p: p, repo: repo, root: root}
@@ -61,11 +62,11 @@ func (f *evidenceFixture) seed(branch string, status types.RunStatus, age time.D
 		}
 	}
 	dir := filepath.Join(f.root, run.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		f.t.Fatal(err)
 	}
 	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			f.t.Fatal(err)
 		}
 	}
@@ -176,7 +177,7 @@ func TestReapEvidenceKeepsEverythingWhenBothBoundsAreDisabled(t *testing.T) {
 func TestReapEvidenceLeavesUnownedDirectoriesAlone(t *testing.T) {
 	f := newEvidenceFixture(t)
 	unowned := filepath.Join(f.root, "unrelated-directory")
-	if err := os.MkdirAll(unowned, 0o755); err != nil {
+	if err := os.MkdirAll(unowned, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	when := time.Now().Add(-365 * 24 * time.Hour)
@@ -221,10 +222,10 @@ func TestReapLegacyEvidenceDrainsTheSharedTempRootUnderTheSamePolicy(t *testing.
 			}
 		}
 		dir := filepath.Join(legacy, run.ID)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "old.png"), []byte("artifact"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "old.png"), []byte("artifact"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		when := time.Now().Add(-age)
@@ -262,7 +263,7 @@ func TestReapLegacyEvidenceLeavesTheCurrentRootAlone(t *testing.T) {
 		t.Skipf("os.TempDir() does not follow TMPDIR on this platform (got %q)", os.TempDir())
 	}
 	legacy := filepath.Join(fakeTemp, legacyEvidenceDirName)
-	if err := os.MkdirAll(filepath.Join(legacy, "run-x"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(legacy, "run-x"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 

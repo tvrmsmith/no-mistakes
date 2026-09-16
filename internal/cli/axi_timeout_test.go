@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -61,10 +62,10 @@ func TestDriveRun_SlowGetRunRetriesAfterHealthProbe(t *testing.T) {
 	startIPCServer(t, srv, socketPath)
 
 	client := dialReady(t, socketPath)
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	started := time.Now()
-	run, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
+	run, _, err := driveRun(t.Context(), io.Discard, client, socketPath, "run-1", false)
 	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("slow live daemon treated as failure: %v", err)
@@ -100,9 +101,9 @@ func TestDriveRun_GetRunRPCErrorIsNotRetried(t *testing.T) {
 	startIPCServer(t, srv, socketPath)
 
 	client := dialReady(t, socketPath)
-	defer client.Close()
+	defer closers.Quiet(client)
 
-	_, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
+	_, _, err := driveRun(t.Context(), io.Discard, client, socketPath, "run-1", false)
 	if err == nil || !strings.Contains(err.Error(), "database unavailable") {
 		t.Fatalf("error = %v, want genuine RPC failure", err)
 	}
@@ -129,9 +130,9 @@ func TestDriveRun_SlowGetRunWithFailedHealthIsDead(t *testing.T) {
 	startIPCServer(t, srv, socketPath)
 
 	client := dialReady(t, socketPath)
-	defer client.Close()
+	defer closers.Quiet(client)
 
-	_, _, err := driveRun(context.Background(), io.Discard, client, socketPath, "run-1", false)
+	_, _, err := driveRun(t.Context(), io.Discard, client, socketPath, "run-1", false)
 	if err == nil || !strings.Contains(err.Error(), "health probe failed") {
 		t.Fatalf("error = %v, want health-probe failure after slow get_run", err)
 	}
@@ -295,7 +296,7 @@ func TestNoMistakesBinary_WaitAndSlowDaemon(t *testing.T) {
 	bin := buildNoMistakesBinary(t)
 
 	help := execNoMistakes(t, bin, "axi", "run", "--help")
-	if !strings.Contains(help, "--wait") || !(strings.Contains(help, "8m0s") || strings.Contains(help, "8m")) {
+	if !strings.Contains(help, "--wait") || (!strings.Contains(help, "8m0s") && !strings.Contains(help, "8m")) {
 		t.Fatalf("real binary axi run --help missing default --wait 8m:\n%s", help)
 	}
 	respondHelp := execNoMistakes(t, bin, "axi", "respond", "--help")
@@ -418,7 +419,7 @@ func newAxiTimeoutFixture(t *testing.T, opts axiTimeoutOpts) *axiTimeoutFixture 
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")
@@ -512,7 +513,7 @@ func startIPCServer(t *testing.T, srv *ipc.Server, socketPath string) {
 			t.Error("fake daemon did not stop")
 		}
 	})
-	dialReady(t, socketPath).Close()
+	closers.Quiet(dialReady(t, socketPath))
 }
 
 func dialReady(t *testing.T, socketPath string) *ipc.Client {

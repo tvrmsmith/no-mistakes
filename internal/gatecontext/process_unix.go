@@ -3,6 +3,7 @@
 package gatecontext
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,7 +21,8 @@ func processParentPID(pid int) (int, error) {
 	if err != nil {
 		// The authenticated client can disappear only after sending its request;
 		// treat an already-gone process as the end of the chain.
-		if _, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			return 0, nil
 		}
 		return 0, err

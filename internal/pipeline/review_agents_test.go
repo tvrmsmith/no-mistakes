@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
@@ -16,10 +15,10 @@ func TestReviewRoleRoutingPersistsAndRecoversOnlyFixerSession(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		// Mirrors fresh review turns and resumable fixes through the step timeout wrapper.
 		sctx := &StepContext{Agent: routed, Sessions: sessions}
-		if _, err := sctx.RunAgentContext(context.Background(), agent.RunOpts{Purpose: "review"}); err != nil {
+		if _, err := sctx.RunAgentContext(t.Context(), agent.RunOpts{Purpose: "review"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := sctx.RunAgentSessionContext(context.Background(), SessionRoleFixer, agent.RunOpts{Purpose: "review-fix"}); err != nil {
+		if _, err := sctx.RunAgentSessionContext(t.Context(), SessionRoleFixer, agent.RunOpts{Purpose: "review-fix"}); err != nil {
 			t.Fatal(err)
 		}
 		sessions = NewRunSessions(database, run.ID, routed, true)

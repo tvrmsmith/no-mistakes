@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 )
 
 // Agent invocation session modes recorded for local performance telemetry.
@@ -190,7 +192,7 @@ func (d *DB) GetAgentInvocationsByRun(runID string) ([]AgentInvocation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get agent invocations: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 
 	var invocations []AgentInvocation
 	for rows.Next() {
@@ -319,7 +321,7 @@ func (d *DB) AgentInvocationAggregates() ([]AgentInvocationAggregate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent invocation aggregates: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 
 	var aggregates []AgentInvocationAggregate
 	for rows.Next() {

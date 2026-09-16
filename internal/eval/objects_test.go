@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -27,15 +28,15 @@ import (
 // are actually distinguishable: with a per-case bundle the second case roughly
 // doubles the corpus, and with a shared object pool it adds almost nothing.
 func TestCaptureDoesNotCopyRepositoryHistoryPerCase(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, repo, firstRound := setupCapturedRunWithHistory(t, ctx, 24)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
@@ -68,12 +69,12 @@ func TestCaptureDoesNotCopyRepositoryHistoryPerCase(t *testing.T) {
 // deep Windows temp directories. Git for Windows otherwise uses the legacy
 // path limit and fails while locking an otherwise valid ref.
 func TestObjectPoolEnablesLongPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	pool := store.poolDir(strings.Repeat("a", 64))
 	if err := initializeObjectPool(ctx, pool); err != nil {
@@ -92,12 +93,12 @@ func TestObjectPoolEnablesLongPaths(t *testing.T) {
 // contract: automatic collection must not grow without bound, and it must never
 // reclaim a case a candidate comparison already depends on.
 func TestPruneBoundsTheCorpusOldestFirstAndKeepsEvaluatedCases(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	ids := []string{"case-oldest", "case-middle", "case-evaluated", "case-newest"}
 	for i, id := range ids {
@@ -137,12 +138,12 @@ func TestPruneBoundsTheCorpusOldestFirstAndKeepsEvaluatedCases(t *testing.T) {
 // zero cap, which is the escape hatch for someone building a large corpus on
 // purpose.
 func TestPruneKeepsCasesReservedByAReplaySession(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	for i, id := range []string{"a", "b", "c"} {
 		seedCase(t, store, id, int64(i))
 	}
@@ -168,12 +169,12 @@ func TestPruneKeepsCasesReservedByAReplaySession(t *testing.T) {
 }
 
 func TestPruneReleasesAbandonedReplayReservations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	for i, id := range []string{"old", "new"} {
 		seedCase(t, store, id, int64(i))
 	}
@@ -195,12 +196,12 @@ func TestPruneReleasesAbandonedReplayReservations(t *testing.T) {
 }
 
 func TestPruneKeepsEveryCaseWhenTheCapIsDisabled(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	for i, id := range []string{"a", "b", "c"} {
 		seedCase(t, store, id, int64(i))
 	}
@@ -221,19 +222,27 @@ func TestPruneKeepsEveryCaseWhenTheCapIsDisabled(t *testing.T) {
 // objects: one case leaving the corpus must not strip the pins another case
 // still replays from.
 func TestConcurrentCaptureKeepsThePublishedCaseRestorable(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	const workers = 8
 	stores := make([]*Store, workers)
+	// Registered before the loop so a failure part way through still closes
+	// the stores already opened.
+	defer func() {
+		for _, store := range stores {
+			if store != nil {
+				closers.Quiet(store)
+			}
+		}
+	}()
 	for i := range stores {
 		store, err := Open(p.EvalDir())
 		if err != nil {
 			t.Fatal(err)
 		}
 		stores[i] = store
-		defer store.Close()
 	}
 	start := make(chan struct{})
 	errs := make(chan error, workers)
@@ -273,14 +282,14 @@ func TestConcurrentCaptureKeepsThePublishedCaseRestorable(t *testing.T) {
 }
 
 func TestCaptureReconcilesPendingDeletionBeforeRecapturing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -328,14 +337,14 @@ func TestCaptureReconcilesPendingDeletionBeforeRecapturing(t *testing.T) {
 }
 
 func TestDropCaseObjectsRemovesPoolAfterLastCase(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -351,14 +360,14 @@ func TestDropCaseObjectsRemovesPoolAfterLastCase(t *testing.T) {
 }
 
 func TestDropCaseObjectsReleasesOnlyItsOwnPins(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, repo, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +400,7 @@ func TestDropCaseObjectsReleasesOnlyItsOwnPins(t *testing.T) {
 func seedCase(t *testing.T, store *Store, id string, capturedAt int64) {
 	t.Helper()
 	dir := store.caseDir(id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeJSON(filepath.Join(dir, "labels.json"), Labels{Version: labelsVersion}); err != nil {
@@ -404,7 +413,7 @@ func seedCase(t *testing.T, store *Store, id string, capturedAt int64) {
 	if err := writeJSON(filepath.Join(dir, "manifest.json"), c.Manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "original"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "original"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeJSON(filepath.Join(dir, "original", "decision.json"), Decision{}); err != nil {
@@ -431,7 +440,7 @@ func padHistory(t *testing.T, ctx context.Context, workDir string, commits int) 
 			t.Fatal(err)
 		}
 		name := fmt.Sprintf("padding-%02d.bin", i)
-		if err := os.WriteFile(filepath.Join(workDir, name), []byte(hex.EncodeToString(blob)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte(hex.EncodeToString(blob)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		mustGit(t, ctx, workDir, "add", name)
@@ -466,7 +475,7 @@ func dirSize(t *testing.T, root string) int64 {
 // two cases from the same repository.
 func addSecondReviewRound(t *testing.T, ctx context.Context, sourceDB *db.DB, runID, workDir string, firstRound *db.StepRound) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, workDir, "add", "main.go")

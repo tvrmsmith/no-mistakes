@@ -2,9 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/spf13/cobra"
 )
@@ -21,7 +21,7 @@ func newRunsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer d.Close()
+			defer closers.Quiet(d)
 
 			repo, err := findRepo(d)
 			if err != nil {
@@ -33,11 +33,11 @@ func newRunsCmd() *cobra.Command {
 				return fmt.Errorf("list runs: %w", err)
 			}
 
-			w := cmd.OutOrStdout()
+			w := newPrinter(cmd.OutOrStdout())
 
 			if len(runs) == 0 {
-				fmt.Fprintf(w, "  %s\n", sDim.Render("no runs yet. Push through the gate to start a pipeline:"))
-				fmt.Fprintf(w, "  %s\n", sBold.Render("git push no-mistakes <branch>"))
+				w.Printf("  %s\n", sDim.Render("no runs yet. Push through the gate to start a pipeline:"))
+				w.Printf("  %s\n", sBold.Render("git push no-mistakes <branch>"))
 				return nil
 			}
 
@@ -52,7 +52,7 @@ func newRunsCmd() *cobra.Command {
 			}
 
 			if len(runs) > len(shown) {
-				fmt.Fprintf(w, "\n  %s\n", sDim.Render(fmt.Sprintf("(%d more runs, use --limit to see more)", len(runs)-len(shown))))
+				w.Printf("\n  %s\n", sDim.Render(fmt.Sprintf("(%d more runs, use --limit to see more)", len(runs)-len(shown))))
 			}
 
 			return nil
@@ -63,7 +63,7 @@ func newRunsCmd() *cobra.Command {
 	return cmd
 }
 
-func printRunLine(w io.Writer, r *db.Run) {
+func printRunLine(w *printer, r *db.Run) {
 	ts := time.Unix(r.CreatedAt, 0).Format("2006-01-02 15:04")
 	sha := r.HeadSHA
 	if len(sha) > 8 {
@@ -73,5 +73,5 @@ func printRunLine(w io.Writer, r *db.Run) {
 	if r.PRURL != nil {
 		pr = fmt.Sprintf("  %s", *r.PRURL)
 	}
-	fmt.Fprintf(w, "  %-12s %-20s %s  %s%s\n", runStatusStyle(r.Status), r.Branch, sDim.Render(sha), sDim.Render(ts), pr)
+	w.Printf("  %-12s %-20s %s  %s%s\n", runStatusStyle(r.Status), r.Branch, sDim.Render(sha), sDim.Render(ts), pr)
 }

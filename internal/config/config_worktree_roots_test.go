@@ -18,7 +18,7 @@ func writeWorktreeRootsConfig(t *testing.T, entries map[string]string) string {
 		b.WriteString("  " + yamlPath(checkout) + ": " + yamlPath(root) + "\n")
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -90,7 +90,7 @@ func TestLoadGlobal_WorktreeRootsRejectsEmptyValues(t *testing.T) {
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := LoadGlobal(path); err == nil {
@@ -123,7 +123,7 @@ func TestLoadGlobal_WorktreeRootsRejectsSharedRoot(t *testing.T) {
 func TestLoadGlobal_WorktreeRootsRejectsDuplicateCheckout(t *testing.T) {
 	dir := t.TempDir()
 	checkout := filepath.Join(dir, "src", "repo-a")
-	if err := os.MkdirAll(checkout, 0o755); err != nil {
+	if err := os.MkdirAll(checkout, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	_, err := LoadGlobal(writeWorktreeRootsConfig(t, map[string]string{
@@ -156,7 +156,7 @@ func TestLoadGlobal_RejectsMisspelledWorktreeRootsKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data := "worktree_root:\n  " + yamlPath(filepath.Join(dir, "src")) + ": " + yamlPath(filepath.Join(dir, "runs")) + "\n"
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,7 +184,7 @@ func TestInspectGlobalConfigMappingPresence(t *testing.T) {
 	}
 	for name, contents := range present {
 		path := filepath.Join(t.TempDir(), "config.yaml")
-		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if !InspectGlobalConfigMapping(path, "worktree_roots").Present {
@@ -201,7 +201,7 @@ func TestInspectGlobalConfigMappingPresence(t *testing.T) {
 	}
 	for name, contents := range absent {
 		path := filepath.Join(t.TempDir(), "config.yaml")
-		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if InspectGlobalConfigMapping(path, "worktree_roots").Present {
@@ -286,7 +286,7 @@ func TestInspectGlobalConfigMappingReportsWhatCanBeAppended(t *testing.T) {
 		},
 	} {
 		path := filepath.Join(t.TempDir(), "config.yaml")
-		if err := os.WriteFile(path, []byte(tc.contents), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(tc.contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		got := InspectGlobalConfigMapping(path, "worktree_roots")

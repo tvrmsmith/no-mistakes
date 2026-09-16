@@ -37,14 +37,17 @@ func (e *exitError) Unwrap() error { return e.err }
 func Execute() int {
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {
+		// Last resort. Execute returns the exit code and nothing runs after
+		// it, so a failed write to stderr has no second channel to report
+		// itself on; the nonzero code is what survives.
 		var ee *exitError
 		if errors.As(err, &ee) {
 			if ee.err != nil {
-				fmt.Fprintln(root.ErrOrStderr(), ee.err)
+				_, _ = fmt.Fprintln(root.ErrOrStderr(), ee.err)
 			}
 			return ee.code
 		}
-		fmt.Fprintln(root.ErrOrStderr(), err)
+		_, _ = fmt.Fprintln(root.ErrOrStderr(), err)
 		return 1
 	}
 	return 0

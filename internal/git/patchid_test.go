@@ -1,7 +1,6 @@
 package git
 
 import (
-	"context"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -22,7 +21,7 @@ func TestStablePatchIDIsPerFileAndTreatsGlobCharactersLiterally(t *testing.T) {
 				t.Skip("Windows filenames cannot contain an asterisk")
 			}
 			dir := initTestRepo(t)
-			ctx := context.Background()
+			ctx := t.Context()
 
 			base := run(t, dir, "git", "rev-parse", "HEAD")
 			writeFile(t, filepath.Join(dir, tc.literal), "wildcard file\n")

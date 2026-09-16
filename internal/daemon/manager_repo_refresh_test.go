@@ -2,12 +2,12 @@ package daemon
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -35,7 +35,7 @@ func TestRunStartRefreshesCloneURLWithoutMutatingRemotes(t *testing.T) {
 		return []pipeline.Step{&captureRefreshRepoStep{seen: seen}}
 	})
 	t.Cleanup(manager.Shutdown)
-	runID, err := manager.startRun(context.Background(), repo, "main", head, refreshTestZeroSHA, "test", nil, "refresh repository URL", "")
+	runID, err := manager.startRun(t.Context(), repo, "main", head, refreshTestZeroSHA, "test", nil, "refresh repository URL", "")
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -54,10 +54,10 @@ func TestRunStartRefreshesCloneURLWithoutMutatingRemotes(t *testing.T) {
 	if stored.UpstreamURL != currentURL {
 		t.Fatalf("stored upstream = %q, want %q", stored.UpstreamURL, currentURL)
 	}
-	if cloneURL, err := git.GetConfiguredRemoteURL(context.Background(), repo.WorkingPath, "origin"); err != nil || cloneURL != currentURL {
+	if cloneURL, err := git.GetConfiguredRemoteURL(t.Context(), repo.WorkingPath, "origin"); err != nil || cloneURL != currentURL {
 		t.Fatalf("clone origin = %q, %v; want unchanged %q", cloneURL, err, currentURL)
 	}
-	if gateURL, err := git.GetConfiguredRemoteURL(context.Background(), p.RepoDir(repo.ID), "origin"); err != nil || gateURL != oldURL {
+	if gateURL, err := git.GetConfiguredRemoteURL(t.Context(), p.RepoDir(repo.ID), "origin"); err != nil || gateURL != oldURL {
 		t.Fatalf("gate origin = %q, %v; want unchanged %q", gateURL, err, oldURL)
 	}
 	t.Logf(
@@ -78,18 +78,21 @@ func TestRunStartURLRefreshFailuresWarnSafelyAndContinueWithOldRegistration(t *t
 		{
 			name: "malformed origin",
 			setup: func(t *testing.T, _ *paths.Paths, _ *db.DB, repo *db.Repo) {
+				t.Helper()
 				gitCmd(t, repo.WorkingPath, "remote", "add", "origin", "https://example.com")
 			},
 		},
 		{
 			name: "credential-bearing origin",
 			setup: func(t *testing.T, _ *paths.Paths, _ *db.DB, repo *db.Repo) {
+				t.Helper()
 				gitCmd(t, repo.WorkingPath, "remote", "add", "origin", "https://user:top-secret@example.com/owner/project.git")
 			},
 		},
 		{
 			name: "ambiguous fork remotes",
 			setup: func(t *testing.T, _ *paths.Paths, database *db.DB, repo *db.Repo) {
+				t.Helper()
 				if _, err := database.ReplaceRepoURLs(repo.ID, repo.UpstreamURL, "git@example.com:fork/project.git"); err != nil {
 					t.Fatal(err)
 				}
@@ -102,12 +105,13 @@ func TestRunStartURLRefreshFailuresWarnSafelyAndContinueWithOldRegistration(t *t
 		{
 			name: "database write failure",
 			setup: func(t *testing.T, p *paths.Paths, _ *db.DB, repo *db.Repo) {
+				t.Helper()
 				gitCmd(t, repo.WorkingPath, "remote", "add", "origin", "https://example.com/owner/project.git")
 				raw, err := sql.Open("sqlite", p.DB())
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer raw.Close()
+				defer closers.Quiet(raw)
 				if _, err := raw.Exec(`CREATE TRIGGER reject_run_start_repo_url_update BEFORE UPDATE OF upstream_url, fork_url ON repos BEGIN SELECT RAISE(FAIL, 'injected URL write failure'); END`); err != nil {
 					t.Fatal(err)
 				}
@@ -142,7 +146,7 @@ func TestRunStartURLRefreshFailuresWarnSafelyAndContinueWithOldRegistration(t *t
 				return []pipeline.Step{&captureRefreshRepoStep{seen: seen}}
 			})
 			t.Cleanup(manager.Shutdown)
-			runID, err := manager.startRun(context.Background(), before, "main", head, refreshTestZeroSHA, "test", nil, "refresh failure must fail open", "")
+			runID, err := manager.startRun(t.Context(), before, "main", head, refreshTestZeroSHA, "test", nil, "refresh failure must fail open", "")
 			if err != nil {
 				t.Fatalf("ordinary run did not continue: %v\nlogs: %s", err, logs.String())
 			}
@@ -184,8 +188,8 @@ type captureRefreshRepoStep struct {
 
 func (s *captureRefreshRepoStep) Name() types.StepName { return types.StepReview }
 func (s *captureRefreshRepoStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
-	copy := *sctx.Repo
-	s.seen <- &copy
+	repoCopy := *sctx.Repo
+	s.seen <- &repoCopy
 	return &pipeline.StepOutcome{}, nil
 }
 

@@ -112,9 +112,13 @@ func TestGetRoundsByStep(t *testing.T) {
 	step, _ := d.InsertStepResult(run.ID, types.StepLint)
 
 	findings1 := `{"findings":[{"id":"lint-1","severity":"error","description":"missing check"}],"summary":"1 error"}`
-	d.InsertStepRound(step.ID, 1, "initial", &findings1, nil, 800)
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &findings1, nil, 800); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 	fixSummary := "fix missing check"
-	d.InsertStepRound(step.ID, 2, "auto_fix", nil, &fixSummary, 600)
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", nil, &fixSummary, 600); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 
 	rounds, err := d.GetRoundsByStep(step.ID)
 	if err != nil {
@@ -171,13 +175,21 @@ func TestStepFixSummaries(t *testing.T) {
 	step, _ := d.InsertStepResult(run.ID, types.StepReview)
 
 	findings := `{"findings":[{"id":"review-1","severity":"warning","description":"x"}],"summary":"1"}`
-	d.InsertStepRound(step.ID, 1, "initial", &findings, nil, 100)
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &findings, nil, 100); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 	s1 := "handle nil pointer in executor"
-	d.InsertStepRound(step.ID, 2, "auto_fix", nil, &s1, 100)
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", nil, &s1, 100); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 	// Legacy fix round without a recorded summary still counts as a fix.
-	d.InsertStepRound(step.ID, 3, "user_fix", nil, nil, 100)
+	if _, err := d.InsertStepRound(step.ID, 3, "user_fix", nil, nil, 100); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 	s2 := "tighten log path validation"
-	d.InsertStepRound(step.ID, 4, "auto_fix", nil, &s2, 100)
+	if _, err := d.InsertStepRound(step.ID, 4, "auto_fix", nil, &s2, 100); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 
 	got, err := d.StepFixSummaries(step.ID)
 	if err != nil {
@@ -207,7 +219,9 @@ func TestStepRoundStats(t *testing.T) {
 		t.Fatalf("set selection: %v", err)
 	}
 	fixSummary := "fix missing check"
-	d.InsertStepRound(step.ID, 2, "auto_fix", nil, &fixSummary, 600)
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", nil, &fixSummary, 600); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 
 	stats, err := d.StepRoundStats(step.ID)
 	if err != nil {
@@ -272,7 +286,9 @@ func TestStepFixSummariesNoFixRounds(t *testing.T) {
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
 	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
 	step, _ := d.InsertStepResult(run.ID, types.StepLint)
-	d.InsertStepRound(step.ID, 1, "initial", nil, nil, 100)
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", nil, nil, 100); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 
 	got, err := d.StepFixSummaries(step.ID)
 	if err != nil {
@@ -288,7 +304,9 @@ func TestStepRoundCascadeDelete(t *testing.T) {
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
 	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
 	step, _ := d.InsertStepResult(run.ID, types.StepReview)
-	d.InsertStepRound(step.ID, 1, "initial", nil, nil, 100)
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", nil, nil, 100); err != nil {
+		t.Fatalf("insert step round: %v", err)
+	}
 
 	if err := d.DeleteRepo(repo.ID); err != nil {
 		t.Fatalf("delete repo: %v", err)

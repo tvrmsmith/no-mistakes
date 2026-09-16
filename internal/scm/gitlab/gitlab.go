@@ -84,6 +84,10 @@ func ProjectPath(raw string) string {
 	return strings.TrimSuffix(path, ".git")
 }
 
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
 // isWindowsDrivePath reports whether raw begins with a Windows drive specifier
 // like "C:\..." or "C:/...". Such a path's drive-letter colon must not be
 // mistaken for the host:path separator of scp-style SSH syntax, which would
@@ -92,8 +96,7 @@ func isWindowsDrivePath(raw string) bool {
 	if len(raw) < 2 || raw[1] != ':' {
 		return false
 	}
-	c := raw[0]
-	if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+	if c := raw[0]; !isASCIILetter(c) {
 		return false
 	}
 	return len(raw) == 2 || raw[2] == '\\' || raw[2] == '/'

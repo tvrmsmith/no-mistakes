@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -21,7 +22,7 @@ func newRoundHistoryContext(t *testing.T) (*pipeline.StepContext, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	repo, err := database.InsertRepo(t.TempDir(), "https://example.invalid/repo", "main")
 	if err != nil {
@@ -107,7 +108,7 @@ func TestStepRoundHistorySectionBoundsDeclinedFindings(t *testing.T) {
 
 	items := make([]string, 0, maxDecisionLinesPerSection+5)
 	for i := 0; i < maxDecisionLinesPerSection+5; i++ {
-		items = append(items, fmt.Sprintf(`{"id":"finding-%02d","severity":"error","description":"%s","action":"ask-user"}`,
+		items = append(items, fmt.Sprintf(`{"id":"finding-%02d","severity":"error","description":%q,"action":"ask-user"}`,
 			i, strings.Repeat("x", maxDecisionLineBytes)))
 	}
 	findings := `{"findings":[` + strings.Join(items, ",") + `]}`

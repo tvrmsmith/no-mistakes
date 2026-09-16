@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -205,7 +207,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 
 	// Create log directory for this run
 	logDir := e.paths.RunLogDir(run.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		return e.failRun(run, repo, fmt.Errorf("create log dir: %w", err))
 	}
 
@@ -383,7 +385,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		return err
 	}
 	logDir := e.paths.RunLogDir(run.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		return e.failRun(run, repo, fmt.Errorf("create log dir: %w", err))
 	}
 	e.initializeRunScopes(run.ID)
@@ -1024,7 +1026,7 @@ func (e *Executor) ciMonitorPreservable(stepID string, run *db.Run, workDir stri
 	if !e.runReachedItsPR(run.ID) {
 		return refusal
 	}
-	return fmt.Errorf("%w: %s", ErrCIMonitorInterrupted, refusal)
+	return fmt.Errorf("%w: %w", ErrCIMonitorInterrupted, refusal)
 }
 
 // runReachedItsPR reports whether the run has a PR URL recorded. A read that
@@ -1102,11 +1104,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	var durationOverrideMS int64 // sum of step-reported overrides (demo mode)
 
 	// Open log file for persistent step logging
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return false, "", fmt.Errorf("create step log file %s: %w", stepName, err)
 	}
-	defer logFile.Close()
+	defer closers.Quiet(logFile)
 
 	// Build step context with log callback that emits events and writes to file.
 	// lastChunkNewline tracks whether the most recent chunk ended with \n,
@@ -1149,7 +1151,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			lastChunkNewline = true
 		}
 		e.emitLogChunk(run, repo, stepName, text)
-		fmt.Fprint(logFile, text)
+		writeStepLog(logFile, stepName, text)
 		touchLogActivity(text, true)
 	}
 	writeLogChunk := func(text string) {
@@ -1157,7 +1159,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			lastChunkNewline = strings.HasSuffix(text, "\n")
 		}
 		e.emitLogChunk(run, repo, stepName, text)
-		fmt.Fprint(logFile, text)
+		writeStepLog(logFile, stepName, text)
 		touchLogActivity(text, strings.Contains(text, "\n"))
 	}
 	onAgentLifecycle := func(event agent.LifecycleEvent) {
@@ -1256,7 +1258,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		Log:              writeLog,
 		LogChunk:         writeLogChunk,
 		LogFile: func(text string) {
-			fmt.Fprintln(logFile, text)
+			writeStepLog(logFile, stepName, text+"\n")
 			touchLogActivity(text, true)
 		},
 		CIReadinessChanged: ciReadinessChanged,
@@ -1300,7 +1302,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// credentialled upstream URL that slipped into a wrapped error can
 			// never land in the log file.
 			redactedErr := safeurl.RedactText(err.Error())
-			fmt.Fprintf(logFile, "\nerror: %s\n", redactedErr)
+			writeStepLog(logFile, stepName, fmt.Sprintf("\nerror: %s\n", redactedErr))
 			touchLogActivity("error: "+redactedErr, true)
 			// A clean daemon stop of a live CI monitor preserves it for the
 			// next start instead of failing it: the monitor is nearly
@@ -1932,7 +1934,7 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 	// plain failure.
 	if !errors.Is(err, ErrCIMonitorInterrupted) {
 		for _, ctx := range ctxs {
-			if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
+			if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
 				errMsg = cause.Error()
 				break
 			}
@@ -2228,4 +2230,13 @@ func selectedFindingCount(raw string, ids []string) int {
 		return len(ids)
 	}
 	return findingsCount(raw)
+}
+
+// writeStepLog appends to the step's own log file. The file is a record of the
+// work, not the work itself, so a failed write is reported and the step carries
+// on; failing the step here would throw away the run the log was recording.
+func writeStepLog(logFile io.Writer, stepName types.StepName, text string) {
+	if _, err := io.WriteString(logFile, text); err != nil {
+		slog.Warn("write step log", "step", stepName, "error", err)
+	}
 }

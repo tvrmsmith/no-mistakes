@@ -89,7 +89,7 @@ func validateGlobalCommitRaw(raw GlobalCommitRaw) error {
 	if raw.BranchReplacement == nil {
 		return nil
 	}
-	if raw.CommitRaw.BranchPattern == nil {
+	if raw.BranchPattern == nil {
 		return fmt.Errorf("commit.branch_replacement requires commit.branch_pattern")
 	}
 	return validateBranchReplacement(*raw.BranchReplacement)
@@ -284,11 +284,11 @@ func isUnsafeInvisibleFixMessageRune(r rune) bool {
 }
 
 func validateFixMessageTemplate(tmpl *template.Template) error {
-	if len(tmpl.Templates()) != 1 || tmpl.Tree == nil || tmpl.Tree.Root == nil {
+	if len(tmpl.Templates()) != 1 || tmpl.Tree == nil || tmpl.Root == nil {
 		return fmt.Errorf("commit.fix_message supports only literal text and {{.Step}}, {{.Summary}}, or {{.Branch}} placeholders")
 	}
 	placeholders := 0
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		switch node := node.(type) {
 		case *parse.TextNode:
 		case *parse.ActionNode:
@@ -308,7 +308,7 @@ func validateFixMessageTemplate(tmpl *template.Template) error {
 
 func predictFixMessageBytes(tmpl *template.Template, data fixMessageData) (int, error) {
 	size := 0
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		nodeBytes := 0
 		switch node := node.(type) {
 		case *parse.TextNode:
@@ -359,7 +359,7 @@ func fixMessagePlaceholderName(pipe *parse.PipeNode) (string, bool) {
 }
 
 func fixMessageTemplateUses(tmpl *template.Template, name string) bool {
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		if action, ok := node.(*parse.ActionNode); ok {
 			if placeholder, ok := fixMessagePlaceholderName(action.Pipe); ok && placeholder == name {
 				return true

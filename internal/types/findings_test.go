@@ -560,7 +560,7 @@ func TestFinding_Action_Values(t *testing.T) {
 			t.Fatal(err)
 		}
 		s := string(raw)
-		if !strings.Contains(s, fmt.Sprintf(`"action":"%s"`, action)) {
+		if !strings.Contains(s, fmt.Sprintf(`"action":%q`, action)) {
 			t.Errorf("expected action %q in output, got %s", action, s)
 		}
 	}

@@ -1,7 +1,6 @@
 package gate
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +11,7 @@ func TestReconciliationRejectsSymbolicRefs(t *testing.T) {
 	for _, phase := range []string{"plan", "apply"} {
 		for _, symbolic := range []string{"branch", "dangling_branch", "archive_branch", "archive_other", "dangling_archive"} {
 			t.Run(phase+"/"+symbolic, func(t *testing.T) {
-				ctx := context.Background()
+				ctx := t.Context()
 				work, gateDir, privateHead, liveHead := reconciliationRefFixture(t)
 				plan, err := PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead, privateHead)
 				if err != nil || !plan.Reconcile {
@@ -60,7 +59,7 @@ func TestReconciliationRejectsSymbolicRefs(t *testing.T) {
 func TestReconciliationDirectArchiveSurvivesBranchRecreation(t *testing.T) {
 	for _, archiveState := range []string{"new", "existing"} {
 		t.Run(archiveState, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			work, gateDir, privateHead, liveHead := reconciliationRefFixture(t)
 			archive := "refs/tags/no-mistakes-abandoned/feature/" + privateHead
 			if archiveState == "existing" {
@@ -76,7 +75,7 @@ while read old new ref; do
   fi
 done
 `
-			if err := os.WriteFile(filepath.Join(gateDir, "hooks", "reference-transaction"), []byte(hook), 0o755); err != nil {
+			if err := os.WriteFile(filepath.Join(gateDir, "hooks", "reference-transaction"), []byte(hook), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			result, err := ReconcileStaleBranch(ctx, gateDir, work, "feature", liveHead, privateHead)

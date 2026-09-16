@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -20,15 +21,15 @@ import (
 )
 
 func TestCaptureCreatesPortableReviewCaseWithoutRecordingRemoteURL(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, repo, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
@@ -84,9 +85,9 @@ func TestCaptureCreatesPortableReviewCaseWithoutRecordingRemoteURL(t *testing.T)
 }
 
 func TestCaptureRejectsReviewRoundBeforeGateDecision(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestCaptureRejectsReviewRoundBeforeGateDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err == nil || !strings.Contains(err.Error(), "no recorded gate decision") {
 		t.Fatalf("capture error = %v, want missing gate decision", err)
 	}
@@ -116,9 +117,9 @@ func TestCaptureRejectsReviewRoundBeforeGateDecision(t *testing.T) {
 }
 
 func TestCaptureExplainsMissingConfigurationProvenance(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	steps, err := sourceDB.GetStepsByRun(run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +133,7 @@ func TestCaptureExplainsMissingConfigurationProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	_, err = Capture(ctx, store, p, sourceDB, run.ID)
 	if !errors.Is(err, ErrNoCapturableReview) {
 		t.Fatalf("capture error = %v, want ErrNoCapturableReview", err)
@@ -143,16 +144,16 @@ func TestCaptureExplainsMissingConfigurationProvenance(t *testing.T) {
 }
 
 func TestCapturePinsConfigurationFromSourceReview(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	gateDir := p.RepoDir(run.RepoID)
 	workDir := filepath.Join(p.Root(), "advance-main")
 	mustGit(t, ctx, p.Root(), "clone", gateDir, workDir)
 	mustGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustGit(t, ctx, workDir, "config", "user.name", "Eval Test")
 	mustGit(t, ctx, workDir, "checkout", "main")
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("ignore_patterns: ['advanced-only']\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("ignore_patterns: ['advanced-only']\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, workDir, "add", ".no-mistakes.yaml")
@@ -165,7 +166,7 @@ func TestCapturePinsConfigurationFromSourceReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -176,10 +177,10 @@ func TestCapturePinsConfigurationFromSourceReview(t *testing.T) {
 }
 
 func TestCapturePreservesFixRoundStartingHead(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, repo, firstRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
-	if err := os.WriteFile(filepath.Join(repo.WorkingPath, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o644); err != nil {
+	defer closers.Quiet(sourceDB)
+	if err := os.WriteFile(filepath.Join(repo.WorkingPath, "main.go"), []byte("package sample\n\nfunc Fixed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, repo.WorkingPath, "add", "main.go")
@@ -199,7 +200,7 @@ func TestCapturePreservesFixRoundStartingHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -210,9 +211,9 @@ func TestCapturePreservesFixRoundStartingHead(t *testing.T) {
 }
 
 func TestReplayRestoresCaseIntoAnIsolatedWorktree(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	fakeDir := t.TempDir()
 	fake := filepath.Join(fakeDir, "claude")
@@ -227,7 +228,7 @@ func TestReplayRestoresCaseIntoAnIsolatedWorktree(t *testing.T) {
 	} else {
 		script = "#!/bin/sh\n[ \"$NM_HOME\" = \"" + p.Root() + "\" ] && touch \"" + p.Root() + "/shared-home-used\"\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(fake)+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -235,7 +236,7 @@ func TestReplayRestoresCaseIntoAnIsolatedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -274,9 +275,9 @@ func TestReplayRestoresCaseIntoAnIsolatedWorktree(t *testing.T) {
 // the harness through the same agentcfg mapping the pipeline uses, so an
 // effort-aware comparison actually runs at the effort it reports.
 func TestReplayPinsCandidateModelAndEffortOnTheHarness(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	fakeDir := t.TempDir()
 	tuningArgsPath := filepath.Join(fakeDir, "tuning-args.txt")
@@ -295,7 +296,7 @@ func TestReplayPinsCandidateModelAndEffortOnTheHarness(t *testing.T) {
 	} else {
 		script = "#!/bin/sh\nprintf '%s %s\\n%s %s\\n' \"$1\" \"$2\" \"$3\" \"$4\" > \"" + tuningArgsPath + "\"\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(fake)+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -304,7 +305,7 @@ func TestReplayPinsCandidateModelAndEffortOnTheHarness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -461,10 +462,10 @@ func TestPersistEvaluationQueuesEveryUnexpectedCandidateFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	caseDir := store.caseDir("candidate-findings")
-	if err := os.MkdirAll(caseDir, 0o755); err != nil {
+	if err := os.MkdirAll(caseDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	labels := Labels{Version: labelsVersion}
@@ -620,9 +621,9 @@ func TestCaptureDoesNotLabelSkipOrApproveAsPass(t *testing.T) {
 		{name: "skip", status: types.StepStatusSkipped},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-			defer sourceDB.Close()
+			defer closers.Quiet(sourceDB)
 			if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
 				t.Fatal(err)
 			}
@@ -637,7 +638,7 @@ func TestCaptureDoesNotLabelSkipOrApproveAsPass(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 			if err != nil {
 				t.Fatal(err)
@@ -654,9 +655,9 @@ func TestCaptureDoesNotLabelSkipOrApproveAsPass(t *testing.T) {
 }
 
 func TestCaptureWritesFalseNegativeGoldForUserAddedFinding(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"},{"id":"user-1","severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	if err := sourceDB.SetStepRoundUserFindings(reviewRound.ID, &userFindings); err != nil {
 		t.Fatal(err)
@@ -670,7 +671,7 @@ func TestCaptureWritesFalseNegativeGoldForUserAddedFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -691,9 +692,9 @@ func TestCaptureWritesFalseNegativeGoldForUserAddedFinding(t *testing.T) {
 }
 
 func TestCaptureWritesUserAddedGoldWithoutSelectionSource(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"id":"user-1","severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	if err := sourceDB.SetStepRoundUserFindings(reviewRound.ID, &userFindings); err != nil {
 		t.Fatal(err)
@@ -706,7 +707,7 @@ func TestCaptureWritesUserAddedGoldWithoutSelectionSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -720,9 +721,9 @@ func TestCaptureWritesUserAddedGoldWithoutSelectionSource(t *testing.T) {
 }
 
 func TestCaptureLeavesUnknownSelectedFindingUnlabeled(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	selected := `["user-added-write-was-lost"]`
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, &selected, db.RoundSelectionSourceUser); err != nil {
 		t.Fatal(err)
@@ -732,7 +733,7 @@ func TestCaptureLeavesUnknownSelectedFindingUnlabeled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -743,16 +744,16 @@ func TestCaptureLeavesUnknownSelectedFindingUnlabeled(t *testing.T) {
 }
 
 func TestCaptureAndReportScoresMatchingCandidateAsTruePositive(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	installFakeReviewAgent(t, p, `{"findings":[{"id":"other","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`)
 
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -775,9 +776,9 @@ func TestCaptureAndReportScoresMatchingCandidateAsTruePositive(t *testing.T) {
 }
 
 func TestCaptureAndReportLeavesUnmatchedCandidateFindingsPending(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -794,7 +795,7 @@ func TestCaptureAndReportLeavesUnmatchedCandidateFindingsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -952,10 +953,10 @@ func setupCapturedRunWithHistoryAndFindings(t *testing.T, ctx context.Context, p
 	mustGit(t, ctx, root, "clone", gateDir, workDir)
 	mustGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustGit(t, ctx, workDir, "config", "user.name", "Eval Test")
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("review:\n  path_instructions:\n    - path: '*.go'\n      instructions: review error paths\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("review:\n  path_instructions:\n    - path: '*.go'\n      instructions: review error paths\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, workDir, "add", ".")
@@ -965,7 +966,7 @@ func setupCapturedRunWithHistoryAndFindings(t *testing.T, ctx context.Context, p
 	mustGit(t, ctx, workDir, "push", "origin", "main")
 	baseSHA := mustGit(t, ctx, workDir, "rev-parse", "HEAD")
 	mustGit(t, ctx, workDir, "checkout", "-b", "feature/eval")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGit(t, ctx, workDir, "add", "main.go")
@@ -1033,7 +1034,7 @@ func installFakeReviewAgent(t *testing.T, p *paths.Paths, findingsJSON string) {
 	} else {
 		script = "#!/bin/sh\n[ \"$NM_HOME\" = \"" + p.Root() + "\" ] && touch \"" + p.Root() + "/shared-home-used\"\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(fake)+string(os.PathListSeparator)+os.Getenv("PATH"))

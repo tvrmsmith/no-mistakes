@@ -142,7 +142,7 @@ func TestCaptureCodexPlacesForwardedFlagsBeforePrompt(t *testing.T) {
 		}, "\r\n")
 	}
 	binPath := filepath.Join(tmp, binName)
-	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
 
@@ -192,7 +192,7 @@ func TestCaptureAgyPlacesForwardedFlagsBeforePromptAndSchemaLast(t *testing.T) {
 		}, "\r\n")
 	}
 	binPath := filepath.Join(tmp, binName)
-	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake agy: %v", err)
 	}
 
@@ -245,7 +245,7 @@ func TestCaptureAgyPlacesForwardedFlagsBeforePromptAndSchemaLast(t *testing.T) {
 func TestCaptureAgyRejectsErrorThenSuccessResult(t *testing.T) {
 	tmp := t.TempDir()
 	outPath := filepath.Join(tmp, "out.jsonl")
-	if err := os.WriteFile(outPath, []byte("existing fixture\n"), 0o644); err != nil {
+	if err := os.WriteFile(outPath, []byte("existing fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,7 +264,7 @@ func TestCaptureAgyRejectsErrorThenSuccessResult(t *testing.T) {
 		}, "\r\n")
 	}
 	binPath := filepath.Join(tmp, binName)
-	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake agy: %v", err)
 	}
 
@@ -284,7 +284,7 @@ func TestCaptureAgyRejectsErrorThenSuccessResult(t *testing.T) {
 func TestCaptureAgyRejectsErrorResultWithoutReplacingFixture(t *testing.T) {
 	tmp := t.TempDir()
 	outPath := filepath.Join(tmp, "out.jsonl")
-	if err := os.WriteFile(outPath, []byte("existing fixture\n"), 0o644); err != nil {
+	if err := os.WriteFile(outPath, []byte("existing fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -298,7 +298,7 @@ func TestCaptureAgyRejectsErrorResultWithoutReplacingFixture(t *testing.T) {
 		script = "@echo off\r\necho {\"event\":\"result\",\"result\":{\"status\":\"ERROR\"}}\r\n"
 	}
 	binPath := filepath.Join(tmp, binName)
-	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake agy: %v", err)
 	}
 

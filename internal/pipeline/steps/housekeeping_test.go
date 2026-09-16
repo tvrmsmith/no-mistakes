@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -160,16 +161,6 @@ func TestDocumentStep_ConfiguredLintCommandKeepsLintCategorizedFindingInDocument
 // pays no second agent invocation.
 func TestLintStep_ConsumesCombinedResultWithoutAgentPass(t *testing.T) {
 	t.Parallel()
-	dir, baseSHA, headSHA := setupGitRepo(t)
-
-	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			t.Error("lint step must not invoke the agent when a combined result exists")
-			return &agent.Result{}, nil
-		},
-	}
-	sctx := newHousekeepingContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	cases := []struct {
 		name          string
@@ -194,6 +185,18 @@ func TestLintStep_ConsumesCombinedResultWithoutAgentPass(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Each case owns its context: the combined result is a
+			// consume-once stash, so cases sharing one would race for it.
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			ag := &mockAgent{
+				name: "test",
+				runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+					t.Error("lint step must not invoke the agent when a combined result exists")
+					return &agent.Result{}, nil
+				},
+			}
+			sctx := newHousekeepingContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
 			sctx.Shared.SetHousekeepingLint(pipeline.HousekeepingLintResult{FindingsJSON: tc.findings, Summary: "housekeeping"})
 			outcome, err := (&LintStep{}).Execute(sctx)
 			if err != nil {
@@ -329,7 +332,7 @@ func TestPipeline_DocumentPlusLintIsOneAgentInvocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(workDir, "https://github.com/test/repo", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)
@@ -350,7 +353,7 @@ func TestPipeline_DocumentPlusLintIsOneAgentInvocation(t *testing.T) {
 
 	cfg := &config.Config{Agent: types.AgentClaude}
 	exec := pipeline.NewExecutor(database, paths.WithRoot(t.TempDir()), cfg, ag, []pipeline.Step{&DocumentStep{}, &LintStep{}}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 

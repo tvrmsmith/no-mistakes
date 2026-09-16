@@ -1,11 +1,11 @@
 package pipeline
 
 import (
-	"context"
 	"database/sql"
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -18,7 +18,7 @@ func TestExecutor_TerminalizesRunWhenInitialStatusWriteFails(t *testing.T) {
 	events := &eventCollector{}
 	exec := NewExecutor(database, p, nil, nil, []Step{newPassStep(types.StepReview)}, events.handler)
 
-	err := exec.Execute(context.Background(), run, repo, t.TempDir())
+	err := exec.Execute(t.Context(), run, repo, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "update run status") {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -31,7 +31,7 @@ func TestExecutor_TerminalizesRunWhenFinalCompletedWriteFails(t *testing.T) {
 	events := &eventCollector{}
 	exec := NewExecutor(database, p, nil, nil, []Step{newPassStep(types.StepReview)}, events.handler)
 
-	err := exec.Execute(context.Background(), run, repo, t.TempDir())
+	err := exec.Execute(t.Context(), run, repo, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "update run status") {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -44,7 +44,7 @@ func installRunStatusFailureTrigger(t *testing.T, path, status string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer raw.Close()
+	defer closers.Quiet(raw)
 	_, err = raw.Exec(`CREATE TRIGGER reject_test_run_status
 		BEFORE UPDATE OF status ON runs
 		WHEN NEW.status = '` + status + `'

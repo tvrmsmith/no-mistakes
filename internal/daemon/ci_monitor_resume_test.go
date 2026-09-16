@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -111,7 +112,7 @@ func startCIMonitorRunCore(t *testing.T, p *paths.Paths, d *db.DB, repoID string
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -319,7 +320,7 @@ func TestRejectedCIMonitorKeepsItsWorktree(t *testing.T) {
 	// Move the worktree head off the run's head, the adverse fact recovery
 	// refuses on while the directory itself is still there to lose.
 	workDir := p.WorktreeDir(repo.ID, runID)
-	if err := os.WriteFile(filepath.Join(workDir, "autofix.txt"), []byte("unpushed ci repair\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "autofix.txt"), []byte("unpushed ci repair\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", ".")
@@ -472,7 +473,7 @@ func TestLivePushStillSupersedesACIMonitoringRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	run, err := d.GetRun(monitorID)
 	if err != nil {
@@ -574,7 +575,7 @@ func TestCIMonitorWithUncommittedWorkIsNotResumed(t *testing.T) {
 	}
 
 	workDir := p.WorktreeDir(repo.ID, runID)
-	if err := os.WriteFile(filepath.Join(workDir, "half-written.go"), []byte("package broken\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "half-written.go"), []byte("package broken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

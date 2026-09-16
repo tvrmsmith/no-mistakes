@@ -1,12 +1,12 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -50,14 +50,14 @@ func gatePinFixture(t *testing.T, defaultBranchYAML string, pinnedGates []config
 		t.Fatal(err)
 	}
 	mockClaude := writeMockClaude(t, t.TempDir())
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+mockClaude+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+mockClaude+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d, err := db.Open(p.DB())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	repo, _ := setupTestGitRepo(t, p, d, "repo1")
 	headSHA := commitDefaultBranchConfig(t, repo.WorkingPath, defaultBranchYAML)
@@ -91,7 +91,7 @@ func gatePinFixture(t *testing.T, defaultBranchYAML string, pinnedGates []config
 // .no-mistakes.yaml and returns the new commit.
 func commitDefaultBranchConfig(t *testing.T, workDir, yaml string) string {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", ".")
@@ -160,7 +160,7 @@ func TestPrepareRecoveredRun_ResumesWithTheGatesTheRunPinned(t *testing.T) {
 	// parked. The run's own head, and its recorded steps, are untouched.
 	commitDefaultBranchConfig(t, repo.WorkingPath, twoGatesYAML)
 
-	plan, err := m.prepareRecoveredRun(context.Background(), run)
+	plan, err := m.prepareRecoveredRun(t.Context(), run)
 	if err != nil {
 		t.Fatalf("parked run must still recover after the default branch changed its gates: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestPrepareRecoveredRun_UnpinnedRunRecoversAsTheCorePipeline(t *testing.T) 
 		t.Fatalf("fixture pinned %q (err %v), want the pre-upgrade empty pin", payload, err)
 	}
 
-	plan, err := m.prepareRecoveredRun(context.Background(), run)
+	plan, err := m.prepareRecoveredRun(t.Context(), run)
 	if err != nil {
 		t.Fatalf("unpinned parked run must recover: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestPrepareRecoveredRun_UnusableGatePinFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := m.prepareRecoveredRun(context.Background(), run)
+	_, err := m.prepareRecoveredRun(t.Context(), run)
 	if err == nil {
 		t.Fatal("an unusable gate pin must not resume the run")
 	}

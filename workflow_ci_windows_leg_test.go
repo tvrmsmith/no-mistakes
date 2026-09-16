@@ -15,17 +15,9 @@ import (
 
 // The Windows test leg is process-spawn bound: the git-backed packages run
 // thousands of git.exe invocations, and Defender real-time scanning taxes every
-// one. Untuned, a single ./... job compiled every binary and then ran those
-// packages sequentially until timeout-minutes cancelled it with no verdict.
-// These tests pin the properties that keep that from silently coming back - the
-// scan-exclusion step, a three-way shard split (core remainder, git-heavy
-// packages without pipeline/steps, and pipeline/steps alone) so each job's wall
-// stays inside the cap, and a per-binary Go timeout well inside that cap so a
-// genuine hang lands as a goroutine dump instead of an opaque job cancellation.
-//
-// The workflow cannot be exercised from `go test` (it needs a Windows runner),
-// so it is asserted through a typed workflow, `go list` package sets, and a
-// normalized command view.
+// one. The workflow cannot be exercised from `go test` (it needs a Windows
+// runner), so it is asserted here through a typed workflow, `go list` package
+// sets, and a normalized command view.
 
 func loadCIWorkflowDoc(t *testing.T) *wfDoc {
 	t.Helper()
@@ -175,6 +167,9 @@ func (c workflowCommand) hasArg(want string) bool {
 	return false
 }
 
+// TestCIWorkflow_WindowsTestsRunWithScanExclusions pins the scan-exclusion
+// step. Untuned, Defender real-time scanning taxed every git.exe spawn and a
+// single ./... job ran until timeout-minutes cancelled it with no verdict.
 func TestCIWorkflow_WindowsTestsRunWithScanExclusions(t *testing.T) {
 	t.Parallel()
 
@@ -202,6 +197,12 @@ func TestCIWorkflow_WindowsTestsRunWithScanExclusions(t *testing.T) {
 	}
 }
 
+// TestCIWorkflow_WindowsHangSurfacesAsGoTimeoutNotJobCancellation pins the two
+// properties that keep a wedged Windows leg legible: a three-way shard split
+// (core remainder, git-heavy packages without pipeline/steps, and
+// pipeline/steps alone) so each job's wall stays inside the cap, and a
+// per-binary Go timeout well inside that cap so a genuine hang lands as a
+// goroutine dump instead of an opaque job cancellation.
 func TestCIWorkflow_WindowsHangSurfacesAsGoTimeoutNotJobCancellation(t *testing.T) {
 	t.Parallel()
 

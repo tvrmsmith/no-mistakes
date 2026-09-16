@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	_ "modernc.org/sqlite"
 )
 
@@ -35,7 +38,7 @@ func Open(root string) (*Store, error) {
 	}
 	root = filepath.Clean(root)
 	cases := filepath.Join(root, "cases")
-	if err := os.MkdirAll(cases, 0o755); err != nil {
+	if err := os.MkdirAll(cases, 0o750); err != nil {
 		return nil, fmt.Errorf("create eval cases directory: %w", err)
 	}
 	database, err := sql.Open("sqlite", filepath.Join(root, "registry.sqlite")+"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)")
@@ -283,7 +286,7 @@ func (s *Store) listCases(set string, refreshDiversified bool) ([]Case, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list eval cases: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var all []Case
 	for rows.Next() {
 		var id, dir string
@@ -354,7 +357,7 @@ func (s *Store) loadDiversifiedPins() ([]diversifiedPin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list diversified pins: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var pins []diversifiedPin
 	for rows.Next() {
 		var pin diversifiedPin
@@ -374,7 +377,7 @@ func (s *Store) replaceDiversifiedPins(pins []diversifiedPin) error {
 	if err != nil {
 		return fmt.Errorf("begin diversified pin update: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 	if _, err := tx.Exec(`DELETE FROM diversified_pins`); err != nil {
 		return fmt.Errorf("clear diversified pins: %w", err)
 	}
@@ -398,7 +401,7 @@ func (s *Store) casesForRun(runID string) ([]Case, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list eval cases for run: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var out []Case
 	for rows.Next() {
 		var id, dir string
@@ -442,7 +445,7 @@ func (s *Store) pendingFindingCounts() (map[string]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sum queued candidate findings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	out := map[string]int{}
 	for rows.Next() {
 		var caseID string
@@ -506,28 +509,14 @@ func (s *Store) Prune(ctx context.Context, maxCases int) (int, error) {
 	if excess <= 0 {
 		return 0, nil
 	}
-	rows, err := s.db.Query(`SELECT c.id, c.path, c.repo_fingerprint FROM cases c
+	victims, err := scanCaseObjects(
+		s.db.QueryContext(ctx, `SELECT c.id, c.path, c.repo_fingerprint FROM cases c
 WHERE NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.case_id = c.id)
   AND NOT EXISTS (SELECT 1 FROM replay_case_reservations r WHERE r.case_id = c.id AND r.reserved_until > ?)
-ORDER BY c.captured_at, c.id LIMIT ?`, time.Now().Unix(), excess)
+ORDER BY c.captured_at, c.id LIMIT ?`, time.Now().Unix(), excess))
 	if err != nil {
 		return 0, fmt.Errorf("select prunable eval cases: %w", err)
 	}
-	type victim struct{ id, dir, fingerprint string }
-	var victims []victim
-	for rows.Next() {
-		var v victim
-		if err := rows.Scan(&v.id, &v.dir, &v.fingerprint); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("scan prunable eval case: %w", err)
-		}
-		victims = append(victims, v)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, fmt.Errorf("select prunable eval cases: %w", err)
-	}
-	rows.Close()
 
 	pruned := 0
 	for _, v := range victims {
@@ -553,26 +542,41 @@ ORDER BY c.captured_at, c.id LIMIT ?`, time.Now().Unix(), excess)
 	return pruned, nil
 }
 
-func (s *Store) cleanupPendingCaseDeletions(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, path, repo_fingerprint FROM pending_case_deletions ORDER BY id`)
-	if err != nil {
-		return fmt.Errorf("list pending eval case deletions: %w", err)
+// caseObject is one (id, directory, pool fingerprint) triple, the shape both
+// prune passes read before they start deleting.
+type caseObject struct{ id, dir, fingerprint string }
+
+// scanCaseObjects drains a query of case triples and closes it. It takes the
+// query's own results so the rows handle never outlives this call: both callers
+// write to the same database as soon as it returns, and an open read across
+// those writes is what locks SQLite out.
+func scanCaseObjects(rows *sql.Rows, queryErr error) (items []caseObject, err error) {
+	if queryErr != nil {
+		return nil, queryErr
 	}
-	type pending struct{ id, dir, fingerprint string }
-	var items []pending
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close rows: %w", closeErr)
+		}
+	}()
 	for rows.Next() {
-		var item pending
+		var item caseObject
 		if err := rows.Scan(&item.id, &item.dir, &item.fingerprint); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan pending eval case deletion: %w", err)
+			return nil, fmt.Errorf("scan: %w", err)
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *Store) cleanupPendingCaseDeletions(ctx context.Context) error {
+	items, err := scanCaseObjects(s.db.QueryContext(ctx, `SELECT id, path, repo_fingerprint FROM pending_case_deletions ORDER BY id`))
+	if err != nil {
 		return fmt.Errorf("list pending eval case deletions: %w", err)
 	}
-	rows.Close()
 	for _, item := range items {
 		if err := dropCaseObjects(ctx, s.poolDir(item.fingerprint), item.id); err != nil {
 			return err
@@ -647,7 +651,7 @@ func writeJSON(path string, value any) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}
@@ -721,4 +725,14 @@ func dominantLanguage(files []string, fallback string) string {
 		return "mixed"
 	}
 	return entries[0].name
+}
+
+// discardTx undoes a transaction that did not commit. A committed transaction
+// answers sql.ErrTxDone, which is the ordinary way out and not a failure; the
+// caller is already returning the error that caused the rollback, so anything
+// else is logged rather than raised over it.
+func discardTx(tx *sql.Tx) {
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		slog.Warn("discard transaction failed", "error", err)
+	}
 }

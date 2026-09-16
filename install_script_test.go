@@ -22,7 +22,7 @@ func TestInstallScriptInstallsUserOwnedBinaryAndPathSymlink(t *testing.T) {
 	makeInstallArchive(t, archivePath, binaryScript)
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(localBin, 0o755); err != nil {
+	if err := os.MkdirAll(localBin, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,11 +44,11 @@ func TestInstallScriptReplacesExistingPathEntryWithSymlink(t *testing.T) {
 	makeInstallArchive(t, archivePath, binaryScript)
 	fakeBin := makeFakeInstallCommands(t)
 	linkDir := filepath.Join(t.TempDir(), "link-bin")
-	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+	if err := os.MkdirAll(linkDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	oldPath := filepath.Join(linkDir, "no-mistakes")
-	if err := os.WriteFile(oldPath, []byte("old-binary"), 0o755); err != nil {
+	if err := os.WriteFile(oldPath, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -71,7 +71,7 @@ func TestInstallScriptRestartsDaemonAfterInstall(t *testing.T) {
 	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NO_MISTAKES_CALL_LOG\"\n")
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(localBin, 0o755); err != nil {
+	if err := os.MkdirAll(localBin, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -98,7 +98,7 @@ func TestInstallScriptFailsWhenDaemonRestartFails(t *testing.T) {
 	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NO_MISTAKES_CALL_LOG\"\nif [ \"$1\" = \"daemon\" ] && [ \"$2\" = \"restart\" ]; then\n  exit 23\nfi\n")
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(localBin, 0o755); err != nil {
+	if err := os.MkdirAll(localBin, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,7 +128,7 @@ func TestInstallScriptResolvesVersionFromLatestRedirect(t *testing.T) {
 	makeInstallArchive(t, archivePath, binaryScript)
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(localBin, 0o755); err != nil {
+	if err := os.MkdirAll(localBin, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	curlLog := filepath.Join(t.TempDir(), "curl.log")
@@ -166,7 +166,7 @@ func TestInstallScriptFailsWhenLatestRedirectHasNoTag(t *testing.T) {
 	makeInstallArchive(t, archivePath, "#!/bin/sh\nexit 0\n")
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(localBin, 0o755); err != nil {
+	if err := os.MkdirAll(localBin, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -220,7 +220,7 @@ func runInstallScript(t *testing.T, home, fakeBin string, extraEnv map[string]st
 func runInstallScriptCommand(t *testing.T, home, fakeBin string, extraEnv map[string]string) ([]byte, error) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "docs/install.sh")
 	pathValue := strings.Join([]string{fakeBin, filepath.Join(home, ".local", "bin"), os.Getenv("PATH")}, string(os.PathListSeparator))
@@ -261,7 +261,6 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
 	gz := gzip.NewWriter(file)
 	tw := tar.NewWriter(gz)
 	data := []byte(binaryContent)
@@ -276,6 +275,11 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 		t.Fatal(err)
 	}
 	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The file close is where the compressed archive reaches the disk, so a
+	// test reading it back needs that error, not a truncated fixture.
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -323,7 +327,7 @@ exit 1
 
 func writeExecutable(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }

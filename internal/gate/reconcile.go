@@ -271,12 +271,12 @@ func privateCommitsAbsentFromLive(ctx context.Context, repoDir, liveHead, privat
 	privateCommits := make([]privateCommit, 0, len(privateOnly))
 	paths := make(map[string]bool)
 	for _, commit := range privateOnly {
-		patches, comparable, err := perFilePatchIDs(ctx, repoDir, commit)
+		patches, comparablePatches, err := perFilePatchIDs(ctx, repoDir, commit)
 		if err != nil {
 			return nil, err
 		}
-		privateCommits = append(privateCommits, privateCommit{sha: commit, patches: patches, comparable: comparable})
-		if !comparable {
+		privateCommits = append(privateCommits, privateCommit{sha: commit, patches: patches, comparable: comparablePatches})
+		if !comparablePatches {
 			continue
 		}
 		for _, patch := range patches {
@@ -318,14 +318,16 @@ func privateCommitsAbsentFromLive(ctx context.Context, repoDir, liveHead, privat
 			livePatches[patch] = count
 		}
 	}
-	mergedTree, mergeErr := git.Run(ctx, repoDir, "merge-tree", "--write-tree", liveHead, privateHead)
-	if mergeErr != nil {
-		return privateOnly, nil
-	}
 	liveTree, err := git.Run(ctx, repoDir, "rev-parse", "--verify", liveHead+"^{tree}")
 	if err != nil {
 		return nil, err
 	}
+	// git merge-tree exits non-zero on a conflict, and a conflict is the answer
+	// rather than a read failure: the private head does not fold into the live
+	// one, so every private-only commit stays at risk. A clean merge whose tree
+	// differs from the live tree says the same thing, and neither output can
+	// equal liveTree, so the comparison below already carries both verdicts.
+	mergedTree, _ := git.Run(ctx, repoDir, "merge-tree", "--write-tree", liveHead, privateHead)
 	if mergedTree != liveTree {
 		return privateOnly, nil
 	}
@@ -348,11 +350,11 @@ func liveSidePatchIDs(ctx context.Context, repoDir, liveHead, privateHead string
 		return nil, err
 	}
 	for _, commit := range liveOnly {
-		patches, comparable, err := perFilePatchIDs(ctx, repoDir, commit)
+		patches, comparablePatches, err := perFilePatchIDs(ctx, repoDir, commit)
 		if err != nil {
 			return nil, err
 		}
-		if !comparable {
+		if !comparablePatches {
 			continue
 		}
 		for _, patch := range patches {

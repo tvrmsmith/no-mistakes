@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -24,7 +25,7 @@ func TestShutdown_BareRequestReturnsImmediatelyWithoutDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.ShutdownResult
 	start := time.Now()
@@ -55,7 +56,7 @@ func TestShutdown_DrainWithNoInFlightRunsReportsDrainedEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.ShutdownResult
 	if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 2000}, &result); err != nil {
@@ -119,7 +120,7 @@ func TestDrainDoesNotCutACIMonitor(t *testing.T) {
 
 	// The daemon drains in-flight handlers as it exits, so an idle client
 	// connection left open outlives the shutdown it is waiting for.
-	client.Close()
+	closers.Quiet(client)
 	if err := instance.stopAndWait(t); err != nil {
 		t.Fatalf("daemon exited with error: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestShutdown_DrainReportsDeadlineCutForNonCIRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var pushResult ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -217,7 +218,7 @@ func TestShutdown_DrainDoesNotStarveOtherRPCs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer pushClient.Close()
+	defer closers.Quiet(pushClient)
 
 	var pushResult ipc.PushReceivedResult
 	if err := pushClient.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -239,13 +240,13 @@ func TestShutdown_DrainDoesNotStarveOtherRPCs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer drainClient.Close()
+	defer closers.Quiet(drainClient)
 
 	healthClient, err := ipc.Dial(p.Socket())
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer healthClient.Close()
+	defer closers.Quiet(healthClient)
 
 	// The drain blocks its handler for its whole 2s deadline on a run that
 	// never finishes. Health is probed continuously across that window and
@@ -340,7 +341,7 @@ func waitForDrainInFlight(t *testing.T, socket string, drainDone <-chan error) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
@@ -389,7 +390,7 @@ func TestShutdown_ShutdownConcurrentWithDrainEndsItPromptly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer pushClient.Close()
+	defer closers.Quiet(pushClient)
 
 	var pushResult ipc.PushReceivedResult
 	if err := pushClient.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -411,7 +412,7 @@ func TestShutdown_ShutdownConcurrentWithDrainEndsItPromptly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer drainClient.Close()
+	defer closers.Quiet(drainClient)
 
 	drainStart := time.Now()
 	drainDone := make(chan error, 1)
@@ -431,7 +432,7 @@ func TestShutdown_ShutdownConcurrentWithDrainEndsItPromptly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer sigClient.Close()
+	defer closers.Quiet(sigClient)
 	if err := sigClient.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil); err != nil {
 		t.Fatalf("signal-equivalent shutdown: %v", err)
 	}
@@ -514,7 +515,7 @@ func TestShutdown_ConcurrentDrainsOnlyOneDrains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer pushClient.Close()
+	defer closers.Quiet(pushClient)
 
 	var pushResult ipc.PushReceivedResult
 	if err := pushClient.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -546,9 +547,13 @@ func TestShutdown_ConcurrentDrainsOnlyOneDrains(t *testing.T) {
 		if dialErr != nil {
 			t.Fatalf("dial daemon: %v", dialErr)
 		}
-		defer client.Close()
 		clients = append(clients, client)
 	}
+	defer func() {
+		for _, client := range clients {
+			closers.Quiet(client)
+		}
+	}()
 	launch := make(chan struct{})
 	for _, client := range clients {
 		go func(client *ipc.Client) {
@@ -612,7 +617,7 @@ func TestStopWithOptions_ManagedServiceDrainsBeforeSignalling(t *testing.T) {
 	}, &pushResult); err != nil {
 		t.Fatalf("push received: %v", err)
 	}
-	pushClient.Close()
+	closers.Quiet(pushClient)
 
 	select {
 	case <-started:
@@ -627,10 +632,10 @@ func TestStopWithOptions_ManagedServiceDrainsBeforeSignalling(t *testing.T) {
 	home := t.TempDir()
 	runtimeGOOS = "darwin"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	if err := os.MkdirAll(filepath.Dir(launchAgentPath(p)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(launchAgentPath(p)), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(launchAgentPath(p), []byte("<plist/>"), 0o644); err != nil {
+	if err := os.WriteFile(launchAgentPath(p), []byte("<plist/>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -656,7 +661,7 @@ func TestStopWithOptions_ManagedServiceDrainsBeforeSignalling(t *testing.T) {
 				// outlives StopWithOptions, which unlinks its socket on the
 				// way out and leaves nothing able to shut it down.
 				_ = probe.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &ipc.ShutdownResult{})
-				probe.Close()
+				closers.Quiet(probe)
 			}
 		}
 		return nil, nil
@@ -700,7 +705,7 @@ func TestShutdown_DrainOnlyDrainsWithoutExiting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.ShutdownResult
 	if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{Drain: true, DrainTimeoutMS: 2000, DrainOnly: true}, &result); err != nil {
@@ -721,7 +726,7 @@ func TestShutdown_DrainOnlyDrainsWithoutExiting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial after drain-only: %v; want the daemon still listening for its service manager to stop", err)
 	}
-	defer fresh.Close()
+	defer closers.Quiet(fresh)
 	var health ipc.HealthResult
 	if err := fresh.Call(ipc.MethodHealth, &ipc.HealthParams{}, &health); err != nil {
 		t.Fatalf("health after drain-only: %v; want the daemon still running", err)
@@ -781,7 +786,7 @@ func TestShutdown_DrainOnlyWithoutDrainIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	inverted := []ipc.ShutdownParams{
 		{DrainOnly: true},

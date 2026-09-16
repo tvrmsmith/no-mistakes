@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -51,7 +50,7 @@ func TestCIStep_CommitAndPush_DoesNotClobberUnseenUpstreamCommit(t *testing.T) {
 			gitCmd(t, dir, "config", "user.name", "test")
 			gitCmd(t, dir, "config", "user.email", "test@test.com")
 			gitCmd(t, dir, "checkout", "-b", "main")
-			os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+			writeFile(t, filepath.Join(dir, "init.txt"), "init")
 			gitCmd(t, dir, "add", "-A")
 			gitCmd(t, dir, "commit", "-m", "initial")
 			baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -59,7 +58,7 @@ func TestCIStep_CommitAndPush_DoesNotClobberUnseenUpstreamCommit(t *testing.T) {
 			gitCmd(t, dir, "push", "origin", "main")
 
 			gitCmd(t, dir, "checkout", "-b", "feature")
-			os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+			writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 			gitCmd(t, dir, "add", "-A")
 			gitCmd(t, dir, "commit", "-m", "feature")
 			headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -72,7 +71,7 @@ func TestCIStep_CommitAndPush_DoesNotClobberUnseenUpstreamCommit(t *testing.T) {
 			gitCmd(t, other, "config", "user.name", "other")
 			gitCmd(t, other, "config", "user.email", "other@test.com")
 			gitCmd(t, other, "checkout", "feature")
-			os.WriteFile(filepath.Join(other, "approved.txt"), []byte("approved review fix"), 0o644)
+			writeFile(t, filepath.Join(other, "approved.txt"), "approved review fix")
 			gitCmd(t, other, "add", "-A")
 			gitCmd(t, other, "commit", "-m", "approved review fix")
 			approvedSHA := gitCmd(t, other, "rev-parse", "HEAD")
@@ -80,7 +79,7 @@ func TestCIStep_CommitAndPush_DoesNotClobberUnseenUpstreamCommit(t *testing.T) {
 
 			// The CI auto-fix agent produces a new head in the worktree that does NOT
 			// contain the approved commit (simulating a rebase from stale local state).
-			os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("ci fix"), 0o644)
+			writeFile(t, filepath.Join(dir, "ci-fix.txt"), "ci fix")
 
 			ag := &mockAgent{name: "test"}
 			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
@@ -142,7 +141,7 @@ func TestPushStep_RefusesToClobberAdvancedUpstreamBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -150,7 +149,7 @@ func TestPushStep_RefusesToClobberAdvancedUpstreamBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	gitCmd(t, dir, "push", "origin", "feature") // last-seen origin == H1, tracking ref set
@@ -161,14 +160,14 @@ func TestPushStep_RefusesToClobberAdvancedUpstreamBranch(t *testing.T) {
 	gitCmd(t, other, "config", "user.name", "other")
 	gitCmd(t, other, "config", "user.email", "other@test.com")
 	gitCmd(t, other, "checkout", "feature")
-	os.WriteFile(filepath.Join(other, "upstream.txt"), []byte("landed upstream"), 0o644)
+	writeFile(t, filepath.Join(other, "upstream.txt"), "landed upstream")
 	gitCmd(t, other, "add", "-A")
 	gitCmd(t, other, "commit", "-m", "landed upstream")
 	advancedSHA := gitCmd(t, other, "rev-parse", "HEAD")
 	gitCmd(t, other, "push", "origin", "feature") // origin == H2 (has upstream.txt)
 
 	// The worktree's validated/rebased head does not contain the upstream commit.
-	os.WriteFile(filepath.Join(dir, "validated.txt"), []byte("validated"), 0o644)
+	writeFile(t, filepath.Join(dir, "validated.txt"), "validated")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "validated change")
 	h3 := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -215,7 +214,7 @@ func TestForcePushRun_RefusesToClobberOutOfBandBranchCommit(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	m0 := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -225,7 +224,7 @@ func TestForcePushRun_RefusesToClobberOutOfBandBranchCommit(t *testing.T) {
 	// Feature branch v1 (M0 + A), pushed to origin. This is the gate's last
 	// observed branch head and sets the local origin/feature tracking ref.
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("v1"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "v1")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature v1")
 	h1 := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -237,7 +236,7 @@ func TestForcePushRun_RefusesToClobberOutOfBandBranchCommit(t *testing.T) {
 	gitCmd(t, other, "config", "user.name", "other")
 	gitCmd(t, other, "config", "user.email", "other@test.com")
 	gitCmd(t, other, "checkout", "feature")
-	os.WriteFile(filepath.Join(other, "approved.txt"), []byte("approved out-of-band fix"), 0o644)
+	writeFile(t, filepath.Join(other, "approved.txt"), "approved out-of-band fix")
 	gitCmd(t, other, "add", "-A")
 	gitCmd(t, other, "commit", "-m", "approved out-of-band fix")
 	approvedSHA := gitCmd(t, other, "rev-parse", "HEAD")
@@ -246,7 +245,7 @@ func TestForcePushRun_RefusesToClobberOutOfBandBranchCommit(t *testing.T) {
 	// The user force-pushes a rewrite of feature (drops A, adds A') that does NOT
 	// contain the out-of-band commit. This is a force push relative to BaseSHA=H1.
 	gitCmd(t, dir, "reset", "--hard", m0)
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("v2 rewritten"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "v2 rewritten")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature v2 (rewrite)")
 	h1prime := gitCmd(t, dir, "rev-parse", "HEAD")

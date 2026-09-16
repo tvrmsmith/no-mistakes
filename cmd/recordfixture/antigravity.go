@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
@@ -53,7 +55,7 @@ func captureAgy(ctx context.Context, bin string, forward []string, prompt, outPa
 	if err != nil {
 		return fmt.Errorf("tempdir: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer scratch.RemoveAll(tmp)
 	cmd.Dir = tmp
 
 	// Capture into a temporary sibling so a nonzero exit or cancellation
@@ -64,9 +66,15 @@ func captureAgy(ctx context.Context, bin string, forward []string, prompt, outPa
 	if err != nil {
 		return fmt.Errorf("create %s: %w", staging, err)
 	}
+	// The success path below closes f itself and checks that error, because
+	// the close is where the capture reaches the disk. This one only releases
+	// the handle of a recording that was abandoned.
+	captured := false
 	defer func() {
-		f.Close()
-		os.Remove(staging)
+		if !captured {
+			closers.Quiet(f)
+		}
+		scratch.Remove(staging)
 	}()
 
 	cmd.Stdout = f
@@ -79,6 +87,7 @@ func captureAgy(ctx context.Context, bin string, forward []string, prompt, outPa
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", staging, err)
 	}
+	captured = true
 	if err := validateAgyCapture(staging); err != nil {
 		return fmt.Errorf("validate %s: %w", staging, err)
 	}
@@ -96,7 +105,7 @@ func validateAgyCapture(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 
 	var resultCount int
 	decoder := json.NewDecoder(f)

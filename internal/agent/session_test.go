@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
@@ -73,7 +72,7 @@ func TestParseClaudeEvents_CapturesSessionID(t *testing.T) {
 `
 	var usage TokenUsage
 	var result *claudeResult
-	if err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result); err != nil {
+	if err := parseClaudeEvents(t.Context(), strings.NewReader(events), nil, &usage, &result); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if result == nil {
@@ -94,7 +93,7 @@ func TestParseClaudeEvents_SessionIDFallsBackToLastSeen(t *testing.T) {
 `
 	var usage TokenUsage
 	var result *claudeResult
-	if err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result); err != nil {
+	if err := parseClaudeEvents(t.Context(), strings.NewReader(events), nil, &usage, &result); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if result == nil || result.sessionID != "sess-a" {
@@ -146,7 +145,7 @@ func TestParseCodexEvents_CapturesThreadID(t *testing.T) {
 `
 	var usage TokenUsage
 	var lastMessage, codexErr, threadID string
-	if err := parseCodexEvents(context.Background(), strings.NewReader(events), nil, &usage, &lastMessage, &codexErr, &threadID, nil); err != nil {
+	if err := parseCodexEvents(t.Context(), strings.NewReader(events), nil, &usage, &lastMessage, &codexErr, &threadID, nil); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if threadID != "019f4d4d-5dc0-75c1-8efe-adf4531bd733" {

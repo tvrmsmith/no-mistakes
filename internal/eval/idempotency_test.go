@@ -1,12 +1,12 @@
 package eval
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -14,15 +14,15 @@ import (
 // relabels the frozen case in place and leaves every corpus artifact exactly
 // as the first pass wrote it.
 func TestCaptureTwiceLeavesIdenticalCorpusState(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 
 	first, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
@@ -64,9 +64,9 @@ func TestCaptureTwiceLeavesIdenticalCorpusState(t *testing.T) {
 // every recapture or relabel appended another copy (the mergeGold empty-ID
 // duplication).
 func TestCaptureTwiceDoesNotDuplicateUserAddedGoldWithoutID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	if err := sourceDB.SetStepRoundUserFindings(reviewRound.ID, &userFindings); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestCaptureTwiceDoesNotDuplicateUserAddedGoldWithoutID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	for i := 0; i < 2; i++ {
 		cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 		if err != nil {
@@ -92,9 +92,9 @@ func TestCaptureTwiceDoesNotDuplicateUserAddedGoldWithoutID(t *testing.T) {
 }
 
 func TestCaptureRepairsDuplicateUserAddedGoldWithoutID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	userFindings := `{"findings":[{"severity":"warning","file":"main.go","line":1,"description":"missing audit","action":"auto-fix","source":"user"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	if err := sourceDB.SetStepRoundUserFindings(reviewRound.ID, &userFindings); err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestCaptureRepairsDuplicateUserAddedGoldWithoutID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -131,9 +131,9 @@ func TestCaptureRepairsDuplicateUserAddedGoldWithoutID(t *testing.T) {
 }
 
 func TestRelabelRunTwiceLeavesIdenticalLabels(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	if err := sourceDB.UpdateRunPRState(run.ID, "merged"); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestRelabelRunTwiceLeavesIdenticalLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	cases, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -210,16 +210,16 @@ func TestRefreshDiversifiedTwiceKeepsTheSamePins(t *testing.T) {
 // land in the same cohort, the scores are deterministic, and the frozen corpus
 // itself is untouched.
 func TestReplayTwiceKeepsCorpusUntouchedAndCohortStable(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 	installFakeReviewAgent(t, p, `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`)
 
 	store, err := Open(p.EvalDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	captured, err := Capture(ctx, store, p, sourceDB, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +319,7 @@ func mustDiversifiedPinRows(t *testing.T, store *Store) []diversifiedPinRow {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var out []diversifiedPinRow
 	for rows.Next() {
 		var row diversifiedPinRow

@@ -196,20 +196,8 @@ func publishRunHead(sctx *pipeline.StepContext, headBeingPushed, localRefUpdate 
 		}
 		return fmt.Errorf("verify successful push to %s: remote head %s does not equal pushed head %s", pushTarget, verifiedRemote, headBeingPushed)
 	}
-	// Settle the gate mirror BEFORE recording the publication. The remote
-	// already has the head, but a run is only "published" once the gate mirror
-	// carries it too: `no-mistakes rerun` resolves its starting head from the
-	// gate, so a head recorded as published while the gate is behind is a head
-	// a later rerun silently omits.
-	//
-	// Ordering it here is what makes a mirror failure retryable instead of
-	// having to choose between two wrong answers. Nothing durable has been
-	// written yet, so the caller's next attempt re-enters this path, finds the
-	// remote already at this head (an up-to-date no-op push), and retries the
-	// mirror. The alternative orderings both lose: recording first and
-	// returning the error makes the CI monitor treat an already published
-	// repair as a failed one, and recording first and swallowing the error
-	// strands the gate behind the remote for good.
+	// Before the publication is recorded; the ordering is the contract, and
+	// updateGateMirrorAfterPush owns why.
 	if err := updateGateMirrorAfterPush(ctx, sctx, ref, headBeingPushed, mirrorPlan); err != nil {
 		return err
 	}
@@ -262,6 +250,19 @@ func runOwnedSubmittedHead(sctx *pipeline.StepContext) string {
 	return strings.TrimSpace(*sctx.Run.SubmittedHeadSHA)
 }
 
+// updateGateMirrorAfterPush settles the gate mirror, and its caller must do
+// this BEFORE recording the publication. The remote already has the head, but a
+// run is only "published" once the gate mirror carries it too: `no-mistakes
+// rerun` resolves its starting head from the gate, so a head recorded as
+// published while the gate is behind is a head a later rerun silently omits.
+//
+// That ordering is what makes a mirror failure retryable instead of a choice
+// between two wrong answers. Nothing durable has been written yet, so the
+// caller's next attempt re-enters the push path, finds the remote already at
+// this head (an up-to-date no-op push), and retries the mirror. The
+// alternatives both lose: recording first and returning the error makes the CI
+// monitor treat an already published repair as a failed one, and recording
+// first and swallowing the error strands the gate behind the remote for good.
 func updateGateMirrorAfterPush(ctx context.Context, sctx *pipeline.StepContext, ref, headBeingPushed string, mirrorPlan gatepkg.StaleBranchPlan) (err error) {
 	if sctx.Repo == nil || strings.TrimSpace(sctx.GateDir) == "" {
 		return nil
@@ -367,12 +368,15 @@ func reviewApprovedHead(sctx *pipeline.StepContext, run *db.Run) (string, string
 	return approvedHead, ""
 }
 
+// hexDigits is every character a git object ID may contain.
+const hexDigits = "0123456789abcdefABCDEF"
+
 func isFullGitObjectID(value string) bool {
 	if len(value) != 40 && len(value) != 64 {
 		return false
 	}
 	for _, r := range value {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+		if !strings.ContainsRune(hexDigits, r) {
 			return false
 		}
 	}

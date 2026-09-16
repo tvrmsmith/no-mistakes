@@ -37,7 +37,7 @@ func TestPullRequestWorkflowsExcludeReleasePleaseOutputs(t *testing.T) {
 		if !strings.HasSuffix(name, ".yml") && !strings.HasSuffix(name, ".yaml") {
 			continue
 		}
-		path := filepath.Join(".github/workflows", name)
+		path := filepath.Join(".github", "workflows", name)
 		pr, ok := loadWorkflowPullRequest(t, path)
 		if !ok {
 			continue

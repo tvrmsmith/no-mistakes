@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"strings"
 )
 
@@ -71,7 +73,7 @@ func isManagedPreReceiveHook(content []byte) bool {
 // an existing user hook behind the managed wrapper.
 func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	hooksDir := filepath.Join(bareDir, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		return false, err
 	}
 	hookPath := filepath.Join(hooksDir, "pre-receive")
@@ -221,7 +223,7 @@ func isManagedPostReceiveHook(content []byte) bool {
 // the hooks directory of a bare repo at bareDir.
 func InstallPostReceiveHook(bareDir string) error {
 	hooksDir := filepath.Join(bareDir, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		return err
 	}
 	hookPath := filepath.Join(hooksDir, "post-receive")
@@ -232,7 +234,7 @@ func InstallPostReceiveHook(bareDir string) error {
 // Custom hooks are left untouched; missing hooks are installed for gate repos.
 func RefreshManagedPostReceiveHook(bareDir string) (bool, error) {
 	hooksDir := filepath.Join(bareDir, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		return false, err
 	}
 	hookPath := filepath.Join(hooksDir, "post-receive")
@@ -265,7 +267,14 @@ func writeGateFileAtomic(path string, content []byte, mode os.FileMode, pattern 
 		return err
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	// Discards the staging file on any way out that did not rename it. A
+	// successful rename leaves nothing here to remove.
+	renamed := false
+	defer func() {
+		if !renamed {
+			scratch.Remove(tmpPath)
+		}
+	}()
 	if _, err := tmp.Write(content); err != nil {
 		_ = tmp.Close()
 		return err
@@ -277,7 +286,11 @@ func writeGateFileAtomic(path string, content []byte, mode os.FileMode, pattern 
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	renamed = true
+	return nil
 }
 
 // GateConfigCurrent is a subprocess-free restart check for a gate that has

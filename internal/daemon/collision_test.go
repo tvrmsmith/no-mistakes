@@ -210,7 +210,7 @@ func TestReconcileCollidingDaemons_ReapsStaleStrayAndResetsManagedUnit(t *testin
 		t.Fatal(err)
 	}
 	// A socket file the stale stray left behind; cleanup must remove it.
-	if err := os.WriteFile(p.Socket(), []byte("stale"), 0o644); err != nil {
+	if err := os.WriteFile(p.Socket(), []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -227,10 +227,10 @@ func TestReconcileCollidingDaemons_ReapsStaleStrayAndResetsManagedUnit(t *testin
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	// Pretend the managed unit is installed so stopManagedService reaches the
 	// systemctl stop call instead of short-circuiting.
-	if err := os.MkdirAll(filepath.Dir(systemdUserServicePath(p)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(systemdUserServicePath(p)), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(systemdUserServicePath(p), []byte("[Service]\nExecStart=/x daemon run\n"), 0o644); err != nil {
+	if err := os.WriteFile(systemdUserServicePath(p), []byte("[Service]\nExecStart=/x daemon run\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var svcCmds []string

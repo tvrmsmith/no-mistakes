@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -132,7 +133,7 @@ func runRequireAction(t *testing.T, run actionRun) actionResult {
 	t.Helper()
 	python := pythonInterpreter(t)
 	outputFile := filepath.Join(t.TempDir(), "github_output")
-	if err := os.WriteFile(outputFile, nil, 0o644); err != nil {
+	if err := os.WriteFile(outputFile, nil, 0o600); err != nil {
 		t.Fatalf("seed GITHUB_OUTPUT: %v", err)
 	}
 
@@ -178,11 +179,12 @@ func runRequireAction(t *testing.T, run actionRun) actionResult {
 		}
 	}
 
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		result.conclusion = "success"
 	default:
-		if _, ok := err.(*exec.ExitError); !ok {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
 			t.Fatalf("execute composite action: %v\n%s", err, buf.String())
 		}
 		result.conclusion = "failure"
@@ -446,7 +448,7 @@ func TestRequireActionReadsTheEventPayloadWhenInputsAreOmitted(t *testing.T) {
 	eventPath := filepath.Join(t.TempDir(), "event.json")
 	payload := `{"pull_request":{"number":812,"body":` + mustJSONString(t, compliant) +
 		`,"head":{"sha":"` + requiredWorkflowTestHeadSHA + `","ref":"fm/example"},"user":{"login":"kunchenguid"}}}`
-	if err := os.WriteFile(eventPath, []byte(payload), 0o644); err != nil {
+	if err := os.WriteFile(eventPath, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write event payload: %v", err)
 	}
 	// The live lookup is the only source once no explicit pr-body/pr-head-sha
@@ -500,6 +502,14 @@ func TestRequireActionLiveLookupHeadBindStillApplies(t *testing.T) {
 // stubPullsAPI serves exactly one GET /repos/{repo}/pulls/{number} response,
 // standing in for the real GitHub API in the live-lookup tests below. It
 // fails the test if called for any other path or method, or more than once.
+//
+// A caller that forwards no explicit pr-body/pr-head-sha (the ordinary
+// pull_request-triggered workflow, see its own comment on PR_BODY/PR_HEAD_SHA)
+// requires the live lookup to reach any verdict at all: a lookup failure fails
+// the whole gate closed rather than falling back to the event payload. A test
+// covering such a caller therefore needs this stub to reach the verdict logic
+// at all, which is what a real runner with `permissions: pull-requests: read`
+// does.
 func stubPullsAPI(t *testing.T, repo, number string, status int, body string, headSHA string) *httptest.Server {
 	t.Helper()
 	wantPath := "/repos/" + repo + "/pulls/" + number
@@ -542,7 +552,7 @@ func writeEventPayload(t *testing.T, number int, body, headSHA string) string {
 		`{"pull_request":{"number":%d,"body":%s,"head":{"sha":%q,"ref":"fm/example"},"user":{"login":"kunchenguid"}}}`,
 		number, mustJSONString(t, body), headSHA,
 	)
-	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write event payload: %v", err)
 	}
 	return path

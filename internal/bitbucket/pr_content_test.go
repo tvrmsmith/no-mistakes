@@ -1,14 +1,25 @@
 package bitbucket
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/scm"
 )
+
+// writeStub sends one stub HTTP response body. A short write means the client
+// hung up mid-request, which changes what the adapter under test sees, so it
+// is reported rather than dropped. It runs on the server's goroutine, where
+// t.Errorf is allowed and t.Fatalf is not.
+func writeStub(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("write stub response: %v", err)
+	}
+}
 
 func TestPRRawContentLifecyclePreservesTitleDraftAndMarkdown(t *testing.T) {
 	t.Parallel()
@@ -40,15 +51,15 @@ func TestPRRawContentLifecyclePreservesTitleDraftAndMarkdown(t *testing.T) {
 	}))
 	defer server.Close()
 	h := NewHost(&Client{baseURL: server.URL, httpClient: server.Client()}, RepoRef{Workspace: "owner", RepoSlug: "repo"}, true)
-	pr, err := h.CreatePR(context.Background(), "feature", "main", scm.PRContent{Title: title, Body: body})
+	pr, err := h.CreatePR(t.Context(), "feature", "main", scm.PRContent{Title: title, Body: body})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"", "# Human\n\n😀 café\nCloses owner/repo#9\n"} {
-		if _, err := h.UpdatePR(context.Background(), pr, scm.PRContent{Body: want}); err != nil {
+		if _, err := h.UpdatePR(t.Context(), pr, scm.PRContent{Body: want}); err != nil {
 			t.Fatal(err)
 		}
-		got, err := h.GetPRContent(context.Background(), pr)
+		got, err := h.GetPRContent(t.Context(), pr)
 		if err != nil || got.Body != want || got.Title != title || !draft {
 			t.Fatalf("content=%+v draft=%v err=%v", got, draft, err)
 		}
@@ -59,15 +70,16 @@ func TestPRRawContentRejectsUnprovenResponses(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"", "null", "{}", `{"id":7,"title":"T"}`, `{"id":7,"title":"T","summary":{"raw":null}}`, `{"id":7,"title":"T","summary":{"raw":42}}`, `{"id":8,"title":"T","summary":{"raw":""}}`, `{"id":7,"title":"T","description":"not a raw-read contract"}`, "transport-error"} {
 		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if raw == "transport-error" {
 					w.WriteHeader(503)
 				}
-				fmt.Fprint(w, raw)
+				writeStub(t, w, raw)
 			}))
 			defer server.Close()
 			h := NewHost(&Client{baseURL: server.URL, httpClient: server.Client()}, RepoRef{Workspace: "owner", RepoSlug: "repo"}, false)
-			if _, err := h.GetPRContent(context.Background(), &scm.PR{Number: "7"}); err == nil {
+			if _, err := h.GetPRContent(t.Context(), &scm.PR{Number: "7"}); err == nil {
 				t.Errorf("accepted %q", raw)
 			}
 		})

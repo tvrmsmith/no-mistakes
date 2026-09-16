@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"bytes"
-	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -52,7 +51,7 @@ func trustedDefaultBranchConfig() *config.RepoConfig {
 
 func writeWorkingPathConfig(t *testing.T, dir, body string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -70,7 +69,7 @@ func TestApplyWorkingPathTrustedConfig_ParseFailureKeepsTrustedCopy(t *testing.T
 	repo := &db.Repo{WorkingPath: workingPath}
 	trusted := trustedDefaultBranchConfig()
 
-	got := applyWorkingPathTrustedConfig(context.Background(), globalCfg, repo, trusted, "run")
+	got := applyWorkingPathTrustedConfig(t.Context(), globalCfg, repo, trusted, "run")
 	if got != trusted {
 		t.Fatalf("expected the trusted copy back unchanged, got %+v", got)
 	}
@@ -93,7 +92,7 @@ func TestApplyWorkingPathTrustedConfig_UnstatableFileKeepsTrustedCopy(t *testing
 	}
 	base := t.TempDir()
 	notADir := filepath.Join(base, "notadir")
-	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,7 +101,7 @@ func TestApplyWorkingPathTrustedConfig_UnstatableFileKeepsTrustedCopy(t *testing
 	repo := &db.Repo{WorkingPath: notADir}
 	trusted := trustedDefaultBranchConfig()
 
-	got := applyWorkingPathTrustedConfig(context.Background(), globalCfg, repo, trusted, "run")
+	got := applyWorkingPathTrustedConfig(t.Context(), globalCfg, repo, trusted, "run")
 	if got != trusted {
 		t.Fatalf("expected the trusted copy back unchanged, got %+v", got)
 	}
@@ -122,7 +121,7 @@ func TestApplyWorkingPathTrustedConfig_AbsentFileIsSilent(t *testing.T) {
 	repo := &db.Repo{WorkingPath: workingPath}
 	trusted := trustedDefaultBranchConfig()
 
-	got := applyWorkingPathTrustedConfig(context.Background(), globalCfg, repo, trusted, "run")
+	got := applyWorkingPathTrustedConfig(t.Context(), globalCfg, repo, trusted, "run")
 	if got != trusted {
 		t.Fatalf("expected the trusted copy back unchanged, got %+v", got)
 	}
@@ -136,7 +135,7 @@ func TestApplyWorkingPathTrustedConfig_AbsentFileIsSilent(t *testing.T) {
 // maintainer opted in, so it still steers the run.
 func TestApplyWorkingPathTrustedConfig_TrackedFileStillApplies(t *testing.T) {
 	workingPath := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, args := range [][]string{
 		{"init"},
 		{"config", "user.email", "test@example.invalid"},
@@ -182,7 +181,7 @@ func TestApplyWorkingPathTrustedConfig_OptInOffIgnoresWorkingPath(t *testing.T) 
 	repo := &db.Repo{WorkingPath: workingPath}
 	trusted := trustedDefaultBranchConfig()
 
-	got := applyWorkingPathTrustedConfig(context.Background(), globalCfg, repo, trusted, "run")
+	got := applyWorkingPathTrustedConfig(t.Context(), globalCfg, repo, trusted, "run")
 	if got.Commands.Lint != "trusted-lint" {
 		t.Fatalf("commands.lint = %q, want the trusted value while the opt-in is off", got.Commands.Lint)
 	}

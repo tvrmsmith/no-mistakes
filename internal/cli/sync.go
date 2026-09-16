@@ -9,6 +9,7 @@ import (
 	toON "github.com/toon-format/toon-go"
 
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/spf13/cobra"
@@ -40,7 +41,7 @@ const custodyRecoveryGuidance = "Recover custody first with `no-mistakes axi syn
 const refusedRecoveryRerunGuidance = "Do not reach for `no-mistakes rerun` here: it makes the run active again and the exits named above are then refused. It also refuses a known clean caller HEAD mismatch against the selected preserved head, so if the heads differ, inspect `no-mistakes axi status` and follow its exact `branch_sync.next_action.command` for custody or synchronization, then submit intended local commits with a fresh `no-mistakes axi run` once custody permits."
 
 func newSyncCmd() *cobra.Command {
-	var check, yes, recover, keepLocal bool
+	var check, yes, recoverCustody, keepLocal bool
 	var bindArchiveRef string
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -68,19 +69,19 @@ func newSyncCmd() *cobra.Command {
 			if check && yes {
 				return &exitError{code: 2, err: fmt.Errorf("--check and --yes cannot be used together")}
 			}
-			if check && recover {
+			if check && recoverCustody {
 				return &exitError{code: 2, err: fmt.Errorf("--check and --recover cannot be used together")}
 			}
-			if keepLocal && !recover {
+			if keepLocal && !recoverCustody {
 				return &exitError{code: 2, err: fmt.Errorf("--keep-local requires --recover")}
 			}
-			if bindArchiveRef != "" && (check || yes || recover || keepLocal) {
+			if bindArchiveRef != "" && (check || yes || recoverCustody || keepLocal) {
 				return &exitError{code: 2, err: fmt.Errorf("--bind-archive-ref cannot be combined with synchronization or recovery flags")}
 			}
 			if bindArchiveRef != "" {
 				return runHumanBindRecoveryArchive(cmd, bindArchiveRef)
 			}
-			if recover {
+			if recoverCustody {
 				return runHumanRecover(cmd, keepLocal, yes)
 			}
 			return runHumanSync(cmd, check, yes)
@@ -88,14 +89,14 @@ func newSyncCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "freshly verify and show the synchronization plan without changing HEAD")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply an eligible guarded synchronization without prompting")
-	cmd.Flags().BoolVar(&recover, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
+	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
 	return cmd
 }
 
 func newAxiSyncCmd() *cobra.Command {
-	var check, recover, keepLocal bool
+	var check, recoverCustody, keepLocal bool
 	var bindArchiveRef string
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -115,20 +116,20 @@ func newAxiSyncCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if check && recover {
+			if check && recoverCustody {
 				return emitError(cmd, 2, "--check and --recover cannot be used together")
 			}
-			if keepLocal && !recover {
+			if keepLocal && !recoverCustody {
 				return emitError(cmd, 2, "--keep-local requires --recover")
 			}
-			if bindArchiveRef != "" && (check || recover || keepLocal) {
+			if bindArchiveRef != "" && (check || recoverCustody || keepLocal) {
 				return emitError(cmd, 2, "--bind-archive-ref cannot be combined with synchronization or recovery flags")
 			}
-			return runAxiSync(cmd, check, recover, keepLocal, bindArchiveRef)
+			return runAxiSync(cmd, check, recoverCustody, keepLocal, bindArchiveRef)
 		},
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "freshly verify and return the plan without changing HEAD")
-	cmd.Flags().BoolVar(&recover, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
+	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
 	return cmd
@@ -141,18 +142,19 @@ func openSyncService() (*branchsync.Service, func(), error) {
 	}
 	repo, err := findRepo(d)
 	if err != nil {
-		d.Close()
+		closers.Quiet(d)
 		return nil, nil, err
 	}
 	globalCfg, cfgErr := config.LoadGlobal(p.ConfigFile())
 	if cfgErr != nil {
-		d.Close()
+		closers.Quiet(d)
 		return nil, nil, cfgErr
 	}
 	return &branchsync.Service{DB: d, Repo: repo, WorkDir: ".", GateDir: p.RepoDir(repo.ID), Paths: p, RemoteTimeout: globalCfg.BranchSyncRemoteTimeout}, func() { _ = d.Close() }, nil
 }
 
 func runHumanSync(cmd *cobra.Command, check, yes bool) error {
+	w := newPrinter(cmd.OutOrStdout())
 	started := time.Now()
 	mode := "apply"
 	if check {
@@ -170,18 +172,18 @@ func runHumanSync(cmd *cobra.Command, check, yes bool) error {
 
 	state := service.Refresh(cmd.Context())
 	observed = state
-	printHumanSyncState(cmd, state)
+	printHumanSyncState(w, state)
 	if check {
 		if syncStateSuccessful(state, true) {
 			result = "noop"
-			return nil
+			return w.Err()
 		}
 		result = "refused"
 		return &exitError{code: 1}
 	}
 	if state.State == branchsync.StateSynchronized || state.State == branchsync.StateMergedRemoteRemoved || state.State == branchsync.StateUserOwned {
 		result = "noop"
-		return nil
+		return w.Err()
 	}
 	if !branchsync.CanApply(state) {
 		result = "refused"
@@ -189,14 +191,14 @@ func runHumanSync(cmd *cobra.Command, check, yes bool) error {
 	}
 	if !yes {
 		if !syncInteractive() {
-			fmt.Fprintln(cmd.OutOrStdout(), "  Non-interactive input cannot confirm this plan. Re-run with `no-mistakes sync --yes`.")
+			w.Println("  Non-interactive input cannot confirm this plan. Re-run with `no-mistakes sync --yes`.")
 			result = "refused"
 			return &exitError{code: 1}
 		}
 		if state.Safety == branchsync.SafetySafeEquivalentAdvance {
-			fmt.Fprint(cmd.OutOrStdout(), "  Apply this guarded synchronization? [y/N] ")
+			w.Print("  Apply this guarded synchronization? [y/N] ")
 		} else {
-			fmt.Fprint(cmd.OutOrStdout(), "  Apply this exact strict fast-forward? [y/N] ")
+			w.Print("  Apply this exact strict fast-forward? [y/N] ")
 		}
 		line, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 		if readErr != nil && strings.TrimSpace(line) == "" {
@@ -204,28 +206,29 @@ func runHumanSync(cmd *cobra.Command, check, yes bool) error {
 		}
 		answer := strings.ToLower(strings.TrimSpace(line))
 		if answer != "y" && answer != "yes" {
-			fmt.Fprintln(cmd.OutOrStdout(), "  Cancelled; no files or refs were changed.")
+			w.Println("  Cancelled; no files or refs were changed.")
 			result = "cancelled"
-			return nil
+			return w.Err()
 		}
 	}
 
 	applyResult := service.Apply(cmd.Context())
 	observed = applyResult
-	printHumanSyncState(cmd, applyResult)
+	printHumanSyncState(w, applyResult)
 	if syncStateSuccessful(applyResult, false) {
 		if applyResult.Changed {
 			result = "applied"
 		} else {
 			result = "noop"
 		}
-		return nil
+		return w.Err()
 	}
 	result = "refused"
 	return &exitError{code: 1}
 }
 
 func runHumanBindRecoveryArchive(cmd *cobra.Command, archiveRef string) error {
+	w := newPrinter(cmd.OutOrStdout())
 	started := time.Now()
 	var observed branchsync.State
 	result := "error"
@@ -239,17 +242,18 @@ func runHumanBindRecoveryArchive(cmd *cobra.Command, archiveRef string) error {
 
 	state := service.BindRecoveryArchive(cmd.Context(), archiveRef)
 	observed = state
-	printHumanSyncState(cmd, state)
+	printHumanSyncState(w, state)
 	if verifiedArchiveRecovery(state) {
-		fmt.Fprintln(cmd.OutOrStdout(), "  Archive evidence bound; follow the exact guarded recovery action shown above.")
+		w.Println("  Archive evidence bound; follow the exact guarded recovery action shown above.")
 		result = "applied"
-		return nil
+		return w.Err()
 	}
 	result = "refused"
 	return &exitError{code: 1}
 }
 
 func runHumanRecover(cmd *cobra.Command, keepLocal, yes bool) error {
+	w := newPrinter(cmd.OutOrStdout())
 	started := time.Now()
 	mode := "recover"
 	if keepLocal {
@@ -270,84 +274,83 @@ func runHumanRecover(cmd *cobra.Command, keepLocal, yes bool) error {
 	// A branch released by cancellation needs no confirmation: the recovery is
 	// an idempotent no-op that cannot mutate anything.
 	if !yes && state.State != branchsync.StateUserOwned {
-		printHumanSyncState(cmd, state)
+		printHumanSyncState(w, state)
 		if !syncInteractive() {
 			retry := "no-mistakes sync --recover --yes"
 			if keepLocal {
 				retry = "no-mistakes sync --recover --keep-local --yes"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  Non-interactive input cannot confirm this recovery. Re-run with `%s`.\n", retry)
+			w.Printf("  Non-interactive input cannot confirm this recovery. Re-run with `%s`.\n", retry)
 			result = "refused"
 			return &exitError{code: 1}
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "  Recovery returns custody of this branch from its terminal run. The only")
+		w.Println("  Recovery returns custody of this branch from its terminal run. The only")
 		if keepLocal {
 			if state.Recovery != nil && state.Recovery.KeepLocal {
-				fmt.Fprintln(cmd.OutOrStdout(), "  possible Git change is moving the local gate branch to the exact required")
-				fmt.Fprintln(cmd.OutOrStdout(), "  head; the worktree and verified divergent archive are never touched.")
+				w.Println("  possible Git change is moving the local gate branch to the exact required")
+				w.Println("  head; the worktree and verified divergent archive are never touched.")
 			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "  possible changes are anchoring available preserved pipeline commits, discarding")
-				fmt.Fprintln(cmd.OutOrStdout(), "  genuinely missing ones, and moving the local gate branch to your current head;")
-				fmt.Fprintln(cmd.OutOrStdout(), "  the worktree is never touched.")
+				w.Println("  possible changes are anchoring available preserved pipeline commits, discarding")
+				w.Println("  genuinely missing ones, and moving the local gate branch to your current head;")
+				w.Println("  the worktree is never touched.")
 			}
 		} else {
-			fmt.Fprintln(cmd.OutOrStdout(), "  possible worktree change is a fast-forward of this clean behind branch, or")
-			fmt.Fprintln(cmd.OutOrStdout(), "  adoption of a diverged preserved head proven to carry every local change;")
-			fmt.Fprintln(cmd.OutOrStdout(), "  unproven divergence refuses, and --keep-local keeps the current head.")
+			w.Println("  possible worktree change is a fast-forward of this clean behind branch, or")
+			w.Println("  adoption of a diverged preserved head proven to carry every local change;")
+			w.Println("  unproven divergence refuses, and --keep-local keeps the current head.")
 		}
-		fmt.Fprint(cmd.OutOrStdout(), "  Return custody of this branch? [y/N] ")
+		w.Print("  Return custody of this branch? [y/N] ")
 		line, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 		if readErr != nil && strings.TrimSpace(line) == "" {
 			return readErr
 		}
 		answer := strings.ToLower(strings.TrimSpace(line))
 		if answer != "y" && answer != "yes" {
-			fmt.Fprintln(cmd.OutOrStdout(), "  Cancelled; no files or refs were changed.")
+			w.Println("  Cancelled; no files or refs were changed.")
 			result = "cancelled"
-			return nil
+			return w.Err()
 		}
 	}
 
 	recovered := service.Recover(cmd.Context(), keepLocal)
 	observed = recovered
-	printHumanSyncState(cmd, recovered)
+	printHumanSyncState(w, recovered)
 	if recovered.Recovered {
 		if recovered.State == branchsync.StateUserOwned {
-			fmt.Fprintln(cmd.OutOrStdout(), "  Nothing to recover; cancellation already released this branch to you.")
+			w.Println("  Nothing to recover; cancellation already released this branch to you.")
 		} else {
-			fmt.Fprintln(cmd.OutOrStdout(), "  Custody returned; start a fresh run when ready.")
+			w.Println("  Custody returned; start a fresh run when ready.")
 		}
 		if recovered.Changed {
 			result = "applied"
 		} else {
 			result = "noop"
 		}
-		return nil
+		return w.Err()
 	}
 	result = "refused"
 	return &exitError{code: 1}
 }
 
-func printHumanSyncState(cmd *cobra.Command, state branchsync.State) {
-	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "\n  Local branch: %s\n", humanSyncSummary(state))
+func printHumanSyncState(w *printer, state branchsync.State) {
+	w.Printf("\n  Local branch: %s\n", humanSyncSummary(state))
 	if state.Local.Head != "" {
-		fmt.Fprintf(w, "  local:    %s %s\n", state.Local.Branch, state.Local.Head)
+		w.Printf("  local:    %s %s\n", state.Local.Branch, state.Local.Head)
 	}
 	if state.Pipeline.PushedHead != "" {
-		fmt.Fprintf(w, "  pipeline: %s\n", state.Pipeline.PushedHead)
+		w.Printf("  pipeline: %s\n", state.Pipeline.PushedHead)
 	} else if state.Pipeline.CurrentHead != "" && state.Pipeline.CurrentHead != state.Local.Head {
-		fmt.Fprintf(w, "  preserved: %s (run %s, %s)\n", state.Pipeline.CurrentHead, state.Pipeline.RunID, state.Pipeline.Status)
+		w.Printf("  preserved: %s (run %s, %s)\n", state.Pipeline.CurrentHead, state.Pipeline.RunID, state.Pipeline.Status)
 	}
 	if state.Recovery != nil && state.Recovery.ArchiveRef != "" {
-		fmt.Fprintf(w, "  archive:  %s -> %s (%s)\n", state.Recovery.ArchiveRef, state.Recovery.PreservedHead, state.Recovery.Proof)
-		fmt.Fprintf(w, "  required: %s\n", state.Recovery.RequiredHead)
+		w.Printf("  archive:  %s -> %s (%s)\n", state.Recovery.ArchiveRef, state.Recovery.PreservedHead, state.Recovery.Proof)
+		w.Printf("  required: %s\n", state.Recovery.RequiredHead)
 	}
 	if state.Target.Ref != "" {
-		fmt.Fprintf(w, "  target:   %s %s (%s)\n", state.Target.Remote, state.Target.Ref, state.Target.Kind)
+		w.Printf("  target:   %s %s (%s)\n", state.Target.Remote, state.Target.Ref, state.Target.Kind)
 	}
 	if state.Error != "" {
-		fmt.Fprintf(w, "  blocked:  %s\n", state.Error)
+		w.Printf("  blocked:  %s\n", state.Error)
 	}
 }
 
@@ -396,7 +399,7 @@ func humanSyncSummary(state branchsync.State) string {
 	}
 }
 
-func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveRef string) error {
+func runAxiSync(cmd *cobra.Command, check, recoverCustody, keepLocal bool, bindArchiveRef string) error {
 	started := time.Now()
 	mode := "apply"
 	switch {
@@ -404,9 +407,9 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveR
 		mode = "bind_archive"
 	case check:
 		mode = "check"
-	case recover && keepLocal:
+	case recoverCustody && keepLocal:
 		mode = "recover_keep_local"
-	case recover:
+	case recoverCustody:
 		mode = "recover"
 	}
 	var state branchsync.State
@@ -424,7 +427,7 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveR
 		state = service.BindRecoveryArchive(cmd.Context(), bindArchiveRef)
 	case check:
 		state = service.Refresh(cmd.Context())
-	case recover:
+	case recoverCustody:
 		state = service.Recover(cmd.Context(), keepLocal)
 	default:
 		state = service.Apply(cmd.Context())
@@ -446,9 +449,9 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveR
 	if len(help) > 0 {
 		fields = append(fields, toON.Field{Key: "help", Value: help})
 	}
-	emitDoc(cmd, fields...)
+	docErr := emitDoc(cmd, fields...)
 	successful := syncStateSuccessful(state, check)
-	if recover {
+	if recoverCustody {
 		successful = state.Recovered
 	}
 	if bindArchiveRef != "" {
@@ -460,10 +463,10 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool, bindArchiveR
 		} else {
 			result = "noop"
 		}
-		return nil
+		return docErr
 	}
 	result = "refused"
-	return &exitError{code: 1}
+	return &exitError{code: 1, err: docErr}
 }
 
 func verifiedArchiveRecovery(state branchsync.State) bool {

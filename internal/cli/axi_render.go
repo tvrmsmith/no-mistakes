@@ -741,9 +741,20 @@ func axiEncodingError(err error) string {
 	return out + "\n"
 }
 
-// emitDoc writes a finished TOON document to stdout.
-func emitDoc(cmd *cobra.Command, fields ...toon.Field) {
-	fmt.Fprint(cmd.OutOrStdout(), axiDoc(fields...))
+// emitDoc writes a finished TOON document to stdout. The document is the whole
+// answer, so a caller that cannot write it has produced nothing and must
+// return the error rather than report success.
+func emitDoc(cmd *cobra.Command, fields ...toon.Field) error {
+	out := newPrinter(cmd.OutOrStdout())
+	out.Print(axiDoc(fields...))
+	return out.Err()
+}
+
+// emitDocExit writes a document that carries a refusal and exits with code. A
+// failed write rides along as the exit error, so a lost refusal reaches the
+// operator as a message instead of a bare nonzero exit.
+func emitDocExit(cmd *cobra.Command, code int, fields ...toon.Field) error {
+	return &exitError{code: code, err: emitDoc(cmd, fields...)}
 }
 
 // emitError renders a structured TOON error to stdout and returns an exitError
@@ -753,6 +764,5 @@ func emitError(cmd *cobra.Command, code int, msg string, help ...string) error {
 	if len(help) > 0 {
 		fields = append(fields, toon.Field{Key: "help", Value: help})
 	}
-	emitDoc(cmd, fields...)
-	return &exitError{code: code}
+	return emitDocExit(cmd, code, fields...)
 }

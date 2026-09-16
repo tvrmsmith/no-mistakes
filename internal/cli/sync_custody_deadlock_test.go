@@ -38,14 +38,14 @@ func newCLIRebaseOnlyDeadlockFixture(t *testing.T) cliRecoverFixture {
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")
 	cliGit(t, local, "commit", "-m", "base")
 	base := cliGit(t, local, "rev-parse", "HEAD")
 	cliGit(t, local, "checkout", "-b", "personal-build")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "commit", "-am", "operator work")
@@ -145,14 +145,14 @@ func TestAxiSyncRecoverBreaksTheRebaseOnlyCustodyDeadlock(t *testing.T) {
 		}
 	}
 
-	recover, err := executeCmd("axi", "sync", "--recover")
+	recoverOut, err := executeCmd("axi", "sync", "--recover")
 	if err != nil {
-		t.Fatalf("advertised recovery refused instead of returning custody: %v\n%s", err, recover)
+		t.Fatalf("advertised recovery refused instead of returning custody: %v\n%s", err, recoverOut)
 	}
-	t.Logf("axi sync --recover:\n%s", recover)
+	t.Logf("axi sync --recover:\n%s", recoverOut)
 	for _, want := range []string{"recovered: true", "state: custody_returned", "changed: true", "no-mistakes axi run --intent"} {
-		if !strings.Contains(recover, want) {
-			t.Errorf("recovery output missing %q:\n%s", want, recover)
+		if !strings.Contains(recoverOut, want) {
+			t.Errorf("recovery output missing %q:\n%s", want, recoverOut)
 		}
 	}
 	if got := cliGit(t, f.local, "rev-parse", "HEAD"); got != f.preserved {

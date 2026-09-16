@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -50,7 +51,13 @@ func ExecuteWithAutoFix(t *testing.T, step pipeline.Step, sctx *pipeline.StepCon
 		}
 		parsed, parseErr := types.ParseFindingsJSON(outcome.Findings)
 		if parseErr != nil {
-			return outcome, nil
+			// Ending the loop here would report the auto-fixable outcome as one
+			// the executor declined to fix, which is the opposite of what the
+			// executor does with unparseable findings (see
+			// pipeline.autoFixableFindingsJSON, which passes them through). A
+			// step under test that emits findings this helper cannot read is a
+			// bug in the test, so say so instead of absorbing it.
+			t.Fatalf("parse auto-fix findings: %v (findings: %s)", parseErr, outcome.Findings)
 		}
 		normalized := types.NormalizeFindings(parsed, string(step.Name()))
 		fixable := types.AutoFixableFindings(normalized, types.FindingSeverityWarning)
@@ -134,6 +141,27 @@ func GitCmd(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// WriteStub sends one stub HTTP response body. A short write means the client
+// hung up, which would otherwise surface as an unexplained adapter error, so it
+// is reported. It runs on the server's goroutine, where t.Errorf is allowed and
+// t.Fatalf is not.
+func WriteStub(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("write stub response: %v", err)
+	}
+}
+
+// WriteFile writes a test fixture file and fails the test if the write does
+// not land, so a later assertion cannot read a missing file as a behavior
+// change.
+func WriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func GitStatusPorcelain(t *testing.T, dir string) string {
 	t.Helper()
 	return GitCmd(t, dir, "status", "--porcelain")
@@ -177,18 +205,24 @@ func EnsureGitRepoTemplate(t *testing.T) {
 			return strings.TrimSpace(string(out))
 		}
 
+		write := func(name, content string) {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+				panic(fmt.Sprintf("write %s: %v", name, err))
+			}
+		}
+
 		run("init")
 		run("config", "user.name", "test")
 		run("config", "user.email", "test@test.com")
 		run("checkout", "-b", "main")
 
-		os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base content"), 0o644)
+		write("base.txt", "base content")
 		run("add", "-A")
 		run("commit", "-m", "base commit")
 		gitRepoTemplate.baseSHA = run("rev-parse", "HEAD")
 
 		run("checkout", "-b", "feature")
-		os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature code\n"), 0o644)
+		write("feature.txt", "feature code\n")
 		run("add", "-A")
 		run("commit", "-m", "add feature")
 		gitRepoTemplate.headSHA = run("rev-parse", "HEAD")
@@ -236,10 +270,10 @@ func NewTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	return &pipeline.StepContext{
-		Ctx:  context.Background(),
+		Ctx:  t.Context(),
 		Run:  &db.Run{ID: "run-1", RepoID: "repo-1", Branch: "refs/heads/feature", HeadSHA: headSHA, BaseSHA: baseSHA},
 		Repo: &db.Repo{ID: "repo-1", WorkingPath: workDir, UpstreamURL: "https://github.com/test/repo", DefaultBranch: "main"},
 		// The executor resolves this from the app root in production. Tests get
@@ -315,7 +349,7 @@ func Init() (func() error, error) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
-			return nil, fmt.Errorf("go build fakecli: %w: %s; cleanup: %v", err, out, cleanupErr)
+			return nil, fmt.Errorf("go build fakecli: %w: %s; cleanup: %w", err, out, cleanupErr)
 		}
 		return nil, fmt.Errorf("go build fakecli: %w: %s", err, out)
 	}
@@ -410,7 +444,7 @@ func LinkFakeCLI(t *testing.T, binDir, name string) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if err := os.WriteFile(dst, data, 0o755); err != nil {
+		if err := os.WriteFile(dst, data, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -478,13 +512,13 @@ func NewFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			api.listCalls++
 			w.Header().Set("Content-Type", "application/json")
 			if api.existingPRID == 0 {
-				fmt.Fprint(w, `{"values":[]}`)
+				WriteStub(t, w, `{"values":[]}`)
 				return
 			}
-			fmt.Fprintf(w, `{"values":[{"id":%d,"links":{"html":{"href":%q}}}]}`,
+			WriteStub(t, w, fmt.Sprintf(`{"values":[{"id":%d,"links":{"html":{"href":%q}}}]}`,
 				api.existingPRID,
 				api.existingPRURL,
-			)
+			))
 		case r.Method == http.MethodPost && r.URL.Path == "/2.0/repositories/test/repo/pullrequests":
 			api.createCalls++
 			body, err := io.ReadAll(r.Body)
@@ -494,9 +528,9 @@ func NewFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			api.lastCreateBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprintf(w, `{"id":99,"links":{"html":{"href":%q}}}`,
+			WriteStub(t, w, fmt.Sprintf(`{"id":99,"links":{"html":{"href":%q}}}`,
 				api.createdPRURL,
-			)
+			))
 		case r.Method == http.MethodPut && r.URL.Path == fmt.Sprintf("/2.0/repositories/test/repo/pullrequests/%d", api.existingPRID):
 			api.updateCalls++
 			body, err := io.ReadAll(r.Body)
@@ -505,10 +539,10 @@ func NewFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			}
 			api.lastUpdateBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"id":%d,"links":{"html":{"href":%q}}}`,
+			WriteStub(t, w, fmt.Sprintf(`{"id":%d,"links":{"html":{"href":%q}}}`,
 				api.existingPRID,
 				api.existingPRURL,
-			)
+			))
 		default:
 			t.Fatalf("unexpected Bitbucket PR API request: %s %s", r.Method, r.URL.String())
 		}
@@ -561,31 +595,31 @@ func NewFakeBitbucketCIAPI(t *testing.T, prState, statusesJSON string) *fakeBitb
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pullrequests/42":
 			api.prStateCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"id":42,"state":%q,"source":{"commit":{"hash":%q}}}`, api.prState, api.prSourceSHA)
+			WriteStub(t, w, fmt.Sprintf(`{"id":42,"state":%q,"source":{"commit":{"hash":%q}}}`, api.prState, api.prSourceSHA))
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pullrequests/42/statuses":
 			api.statusesCalls++
 			api.lastStatusesQ = r.URL.Query().Get("q")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.statusesJSON)
+			WriteStub(t, w, api.statusesJSON)
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines" && api.pipelinesJSON != "":
 			api.pipelinesCalls++
 			api.lastPipelineQ = r.URL.Query().Get("target.commit.hash")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.pipelinesJSON)
+			WriteStub(t, w, api.pipelinesJSON)
 		case r.Method == http.MethodGet && api.stepsByPath[r.URL.Path] != "":
 			api.stepsCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.stepsByPath[r.URL.Path])
+			WriteStub(t, w, api.stepsByPath[r.URL.Path])
 		case r.Method == http.MethodGet && api.stepLogsByPath[r.URL.Path] != "":
 			api.stepLogCalls++
-			fmt.Fprint(w, api.stepLogsByPath[r.URL.Path])
+			WriteStub(t, w, api.stepLogsByPath[r.URL.Path])
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines/{pipeline-1}/steps" && api.stepsJSON != "":
 			api.stepsCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.stepsJSON)
+			WriteStub(t, w, api.stepsJSON)
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines/{pipeline-1}/steps/{step-1}/log" && api.stepLog != "":
 			api.stepLogCalls++
-			fmt.Fprint(w, api.stepLog)
+			WriteStub(t, w, api.stepLog)
 		default:
 			t.Fatalf("unexpected Bitbucket CI API request: %s %s", r.Method, r.URL.String())
 		}
@@ -710,10 +744,10 @@ func FakeCIGHSequenceMergeable(t *testing.T, state string, checks []string, merg
 	checksPath := filepath.Join(t.TempDir(), "checks.txt")
 	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
 
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o600); err != nil {
 		t.Fatalf("write checks sequence: %v", err)
 	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("write checks index: %v", err)
 	}
 
@@ -735,10 +769,10 @@ func FakeCIGHSequence(t *testing.T, state string, checks []string) []string {
 	checksPath := filepath.Join(t.TempDir(), "checks.txt")
 	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
 
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o600); err != nil {
 		t.Fatalf("write checks sequence: %v", err)
 	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("write checks index: %v", err)
 	}
 
@@ -765,10 +799,10 @@ func FakeCIGHLoggedSequence(t *testing.T, state string, checks []string, mergeab
 	indexPath := filepath.Join(tempDir, "checks-index.txt")
 	logFile = filepath.Join(tempDir, "gh.log")
 
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o600); err != nil {
 		t.Fatalf("write checks sequence: %v", err)
 	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("write checks index: %v", err)
 	}
 
@@ -844,10 +878,10 @@ func FakeCIGlabSequence(t *testing.T, state string, checks []string) []string {
 	checksPath := filepath.Join(t.TempDir(), "checks.txt")
 	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
 
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o600); err != nil {
 		t.Fatalf("write checks sequence: %v", err)
 	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("write checks index: %v", err)
 	}
 

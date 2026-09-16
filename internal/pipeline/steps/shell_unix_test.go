@@ -36,7 +36,7 @@ func TestRunShellCommandWithEnv_KillsGrandchildOnCancel(t *testing.T) {
 	script := "i=0; while [ $i -lt 10000 ]; do printf '%s\\n' \"$i\" > " + heartbeat +
 		"; sleep 0.1; i=$((i+1)); done & echo $! > " + pidFile + "; wait"
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel) // never leak the 1000s heartbeat loop if we assert early
 
 	done := make(chan struct{})
@@ -92,7 +92,7 @@ func TestRunShellCommandWithEnv_ReapsGrandchildOnCleanExit(t *testing.T) {
 	script := "( i=0; while [ $i -lt 10000 ]; do printf '%s\\n' \"$i\" > " + heartbeat +
 		"; sleep 0.1; i=$((i+1)); done ) >/dev/null 2>&1 & echo $! > " + pidFile + "; exit 0"
 
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, _, err := runShellCommandWithEnv(ctx, dir, nil, script); err != nil {
 		t.Fatalf("runShellCommandWithEnv: %v", err)
 	}

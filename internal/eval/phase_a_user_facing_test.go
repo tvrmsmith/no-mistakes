@@ -1,13 +1,13 @@
 package eval
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -23,7 +23,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		if evidenceDir == "" {
 			return
 		}
-		if err := os.WriteFile(filepath.Join(evidenceDir, name), []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(evidenceDir, name), []byte(body), 0o600); err != nil {
 			t.Fatalf("write evidence %s: %v", name, err)
 		}
 	}
@@ -201,9 +201,9 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 	})
 
 	t.Run("capture labels shipped-unfixed as FP and leaves an undecided round unlabeled", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-		defer sourceDB.Close()
+		defer closers.Quiet(sourceDB)
 		if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -239,7 +239,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		// stays unlabeled: shipping unfixed is only evidence of a false positive
 		// when the human actually resolved the gate without selecting the finding.
 		p2, sourceDB2, run2, _, firstRound := setupCapturedRun(t, ctx)
-		defer sourceDB2.Close()
+		defer closers.Quiet(sourceDB2)
 		if err := sourceDB2.SetStepRoundSelection(firstRound.ID, nil, ""); err != nil {
 			t.Fatal(err)
 		}

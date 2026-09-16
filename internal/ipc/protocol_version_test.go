@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 )
 
@@ -35,7 +36,7 @@ func TestMatchedProtocolVersionReachesHandlerAndHealthReportsVersion(t *testing.
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer c.Close()
+	defer closers.Quiet(c)
 
 	var raw json.RawMessage
 	if err := c.Call("echo", nil, &raw); err != nil {
@@ -127,7 +128,7 @@ func TestOldClientGatedMethodFailsClosedWithoutRunningHandler(t *testing.T) {
 	})
 
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	writeRawRequestLine(t, conn, 1, "gated")
 
@@ -171,7 +172,7 @@ func TestOldClientStreamMethodFailsClosedWithoutStartingStream(t *testing.T) {
 	})
 
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	writeRawRequestLine(t, conn, 1, ipc.MethodSubscribe)
 
@@ -213,7 +214,7 @@ func TestOldClientHealthCallSucceedsAndReportsDaemonVersion(t *testing.T) {
 	})
 
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	writeRawRequestLine(t, conn, 1, ipc.MethodHealth)
 
@@ -251,7 +252,7 @@ func TestNewerClientGatedMethodIsRefusedAndBlamesTheStaleDaemon(t *testing.T) {
 	})
 
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	const newerClientVersion = ipc.ProtocolVersion + 1
 	writeRawRequestLineAtVersion(t, conn, 1, "gated", newerClientVersion)
@@ -296,7 +297,7 @@ func TestOldClientShutdownReachesHandlerDespiteVersionSkew(t *testing.T) {
 	})
 
 	conn := rawDial(t, sock)
-	defer conn.Close()
+	defer closers.Quiet(conn)
 
 	writeRawRequestLine(t, conn, 1, ipc.MethodShutdown)
 

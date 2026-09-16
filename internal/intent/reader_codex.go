@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	_ "modernc.org/sqlite"
 )
 
@@ -51,7 +52,7 @@ func (r *codexReader) Discover(ctx context.Context, opts DiscoverOpts) ([]*Sessi
 	if err != nil {
 		return nil, fmt.Errorf("codex open: %w", err)
 	}
-	defer db.Close()
+	defer closers.Quiet(db)
 
 	matcher := newRepoMatcher(ctx, opts.OriginCWD)
 	winStart := opts.WindowStart.Unix()
@@ -68,7 +69,7 @@ func (r *codexReader) Discover(ctx context.Context, opts DiscoverOpts) ([]*Sessi
 		// threads table missing or schema changed: treat as no data.
 		return nil, nil
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 
 	var out []*Session
 	for rows.Next() {
@@ -115,7 +116,7 @@ func (r *codexReader) Load(_ context.Context, s *Session) error {
 		}
 		return fmt.Errorf("codex open rollout: %w", err)
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)

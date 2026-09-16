@@ -30,7 +30,7 @@ func TestTestStep_HangingEvidenceAgentFailsRunAfterTimeout(t *testing.T) {
 	sctx.Config.TestAgentTimeout = 20 * time.Millisecond
 
 	exec := pipeline.NewExecutor(sctx.DB, paths.WithRoot(t.TempDir()), sctx.Config, ag, []pipeline.Step{&TestStep{}}, nil)
-	if err := exec.Execute(context.Background(), sctx.Run, sctx.Repo, dir); err == nil {
+	if err := exec.Execute(t.Context(), sctx.Run, sctx.Repo, dir); err == nil {
 		t.Fatal("expected hanging evidence agent to fail the run")
 	}
 
@@ -130,6 +130,7 @@ func TestTestStep_EmptyEvidenceFails(t *testing.T) {
 		{name: "whitespace entries", output: json.RawMessage(`{"findings":[],"summary":"","tested":[" \t"],"testing_summary":"tests passed","artifacts":[]}`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			ag := &mockAgent{
 				name: "test",
@@ -177,7 +178,7 @@ func TestTestStep_FixAgentTimeoutDoesNotCancelPostProcessing(t *testing.T) {
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o600); err != nil {
 				return nil, err
 			}
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix tests","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
@@ -209,7 +210,7 @@ func TestTestStep_FixAgentSuccessfulReturnAfterTimeoutFailsWithoutCommit(t *test
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
-			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o600); err != nil {
 				return nil, err
 			}
 			<-ctx.Done()
@@ -242,7 +243,7 @@ func TestTestStep_FixMode(t *testing.T) {
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
-			os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`{"summary":"  \"fix test failures.\"  ","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
@@ -306,7 +307,7 @@ func TestTestStep_FixMode_UsesConfiguredCommitMessage(t *testing.T) {
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix test failures","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
@@ -341,7 +342,7 @@ func TestTestStep_FixMode_UsesFallbackSummaryWhenStructuredSummaryMalformed(t *t
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			if !fixTurnDone {
 				fixTurnDone = true
-				os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644)
+				writeFile(t, filepath.Join(dir, "fix.txt"), "fixed")
 				return &agent.Result{Output: json.RawMessage(`{"not_summary":"oops"}`)}, nil
 			}
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
@@ -374,7 +375,7 @@ func TestTestStep_FixMode_AgentWritesNewTests_ProceedsAutomatically(t *testing.T
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			callCount++
 			// Simulate agent creating a new test file during fix in another supported language
-			os.WriteFile(filepath.Join(dir, "component.spec.tsx"), []byte("export {}\n"), 0o644)
+			writeFile(t, filepath.Join(dir, "component.spec.tsx"), "export {}\n")
 			return &agent.Result{Output: json.RawMessage(`{"summary":"add regression test","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
@@ -396,7 +397,9 @@ func TestTestStep_FixMode_AgentWritesNewTests_ProceedsAutomatically(t *testing.T
 	}
 
 	var f Findings
-	json.Unmarshal([]byte(outcome.Findings), &f)
+	if err := json.Unmarshal([]byte(outcome.Findings), &f); err != nil {
+		t.Fatalf("parse findings: %v", err)
+	}
 	foundTestFile := false
 	for _, item := range f.Items {
 		if strings.Contains(item.Description, "component.spec.tsx") {
@@ -642,7 +645,7 @@ func TestTestStep_FixMode_TargetedVerificationContract(t *testing.T) {
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix targeted failure","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
@@ -693,7 +696,7 @@ func TestTestStep_FixMode_DriverFullSuiteInstructionDoesNotOverrideContract(t *t
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644)
+			writeFile(t, filepath.Join(dir, "fix.txt"), "fixed")
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix focused failure","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}

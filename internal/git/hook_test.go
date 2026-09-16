@@ -35,11 +35,11 @@ func TestPreReceiveHookScript(t *testing.T) {
 func TestRefreshManagedPreReceiveHookPreservesCustomHook(t *testing.T) {
 	bare := t.TempDir()
 	hooks := filepath.Join(bare, "hooks")
-	if err := os.MkdirAll(hooks, 0o755); err != nil {
+	if err := os.MkdirAll(hooks, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	custom := []byte("#!/bin/sh\necho custom\n")
-	if err := os.WriteFile(filepath.Join(hooks, "pre-receive"), custom, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(hooks, "pre-receive"), custom, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := RefreshManagedPreReceiveHook(bare)
@@ -74,7 +74,7 @@ func TestGateConfigCurrentRejectsMissingOrTamperedAdmissionHook(t *testing.T) {
 		t.Fatal("fresh managed admission hook should be current")
 	}
 	pre := filepath.Join(bare, "hooks", "pre-receive")
-	if err := os.WriteFile(pre, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(pre, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if GateConfigCurrent(bare) {
@@ -198,19 +198,19 @@ func TestPostReceiveHookScriptDoesNotEvaluatePushOptions(t *testing.T) {
 
 	base := t.TempDir()
 	bare := filepath.Join(base, "test.git")
-	if err := os.MkdirAll(bare, 0o755); err != nil {
+	if err := os.MkdirAll(bare, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
 	argsPath := filepath.Join(base, "args.txt")
 	fakeBin := filepath.Join(base, "fake-no-mistakes")
 	fakeScript := "#!/bin/sh\nprintf '%s\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
-	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
+	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	hookPath := filepath.Join(base, "post-receive")
-	if err := os.WriteFile(hookPath, []byte(postReceiveHookScript(fakeBin)), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(postReceiveHookScript(fakeBin)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +239,7 @@ func TestPostReceiveHookScriptDoesNotEvaluatePushOptions(t *testing.T) {
 }
 
 func TestInstallPostReceiveHook(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -277,14 +277,14 @@ func TestInstallPostReceiveHook(t *testing.T) {
 }
 
 func TestRefreshManagedPostReceiveHookPreservesCustomHook(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
 	}
 	hookPath := filepath.Join(bare, "hooks", "post-receive")
 	custom := "#!/bin/sh\necho custom hook\n"
-	if err := os.WriteFile(hookPath, []byte(custom), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(custom), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -305,7 +305,7 @@ func TestRefreshManagedPostReceiveHookPreservesCustomHook(t *testing.T) {
 }
 
 func TestRefreshManagedPostReceiveHookInstallsMissingHook(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -343,7 +343,7 @@ func TestPostReceiveHook_ResolvesAbsoluteGateDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("post-receive hook is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	base := t.TempDir()
 	bare := filepath.Join(base, "test.git")
@@ -356,15 +356,15 @@ func TestPostReceiveHook_ResolvesAbsoluteGateDir(t *testing.T) {
 	argsPath := filepath.Join(base, "args.txt")
 	fakeBin := filepath.Join(base, "fake-no-mistakes")
 	fakeScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
-	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
+	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	hookPath := filepath.Join(bare, "hooks", "post-receive")
-	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(hookPath, []byte(postReceiveHookScript(fakeBin)), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(postReceiveHookScript(fakeBin)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -409,7 +409,7 @@ func TestPostReceiveHook_FallsBackToHookLocationForGateDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("post-receive hook is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	base := t.TempDir()
 	bare := filepath.Join(base, "test.git")
@@ -420,24 +420,24 @@ func TestPostReceiveHook_FallsBackToHookLocationForGateDir(t *testing.T) {
 	argsPath := filepath.Join(base, "args.txt")
 	fakeBin := filepath.Join(base, "fake-no-mistakes")
 	fakeScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
-	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
+	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	fakePath := filepath.Join(base, "bin")
-	if err := os.MkdirAll(fakePath, 0o755); err != nil {
+	if err := os.MkdirAll(fakePath, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	fakeGit := filepath.Join(fakePath, "git")
-	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\nexit 127\n"), 0o755); err != nil {
+	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\nexit 127\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	hookPath := filepath.Join(bare, "hooks", "post-receive")
-	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(hookPath, []byte(postReceiveHookScript(fakeBin)), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(postReceiveHookScript(fakeBin)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -501,7 +501,7 @@ func TestPostReceiveHook_SurfacesNotifyFailures(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("post-receive hook is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	base := t.TempDir()
 	bare := filepath.Join(base, "test.git")
@@ -529,17 +529,17 @@ func TestPostReceiveHook_SurfacesNotifyFailures(t *testing.T) {
 	// distinctive marker on stderr.
 	fakeBin := filepath.Join(base, "fake-no-mistakes")
 	fakeScript := "#!/bin/sh\necho 'TESTMARKER notify failed' >&2\nexit 7\n"
-	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
+	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	// Install the real hook generated against the fake binary.
 	hooksDir := filepath.Join(bare, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	hookPath := filepath.Join(hooksDir, "post-receive")
-	if err := os.WriteFile(hookPath, []byte(postReceiveHookScript(fakeBin)), 0o755); err != nil {
+	if err := os.WriteFile(hookPath, []byte(postReceiveHookScript(fakeBin)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -562,7 +562,7 @@ func TestPostReceiveHook_SurfacesNotifyFailures(t *testing.T) {
 }
 
 func TestIsolateHooksPath_OverridesPoisonedSharedConfig(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -612,7 +612,7 @@ func TestIsolateHooksPath_LinkedWorktreeCanRebase(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("worktree + shell pipeline is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -667,7 +667,7 @@ func TestIsolateHooksPath_PushToGateStillWorks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("post-receive hook is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -678,12 +678,12 @@ func TestIsolateHooksPath_PushToGateStillWorks(t *testing.T) {
 	// Install a trivial post-receive hook that writes a marker file so we can
 	// confirm hookspath resolution still finds the bare's hooks dir.
 	hooksDir := filepath.Join(bare, "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	marker := filepath.Join(base, "hook-ran")
 	hookScript := "#!/bin/sh\necho ran > " + marker + "\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(hooksDir, "post-receive"), []byte(hookScript), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(hooksDir, "post-receive"), []byte(hookScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -744,7 +744,7 @@ func TestIsolateHooksPath_MigratesFromPreFixState(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("worktree + shell pipeline is /bin/sh-only")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -779,7 +779,7 @@ func TestIsolateHooksPath_MigratesFromPreFixState(t *testing.T) {
 }
 
 func TestIsolateHooksPath_Idempotent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -793,7 +793,7 @@ func TestIsolateHooksPath_Idempotent(t *testing.T) {
 }
 
 func TestIsolateHooksPath_SkipsIsolationWhenWorktreeConfigUnsupported(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := filepath.Join(t.TempDir(), "test.git")
 	if err := InitBare(ctx, bare); err != nil {
 		t.Fatal(err)
@@ -837,7 +837,7 @@ func TestIsolateHooksPath_SkipsIsolationWhenWorktreeConfigUnsupported(t *testing
 // poll and the CI step hangs until ci_timeout. No real gh or network is
 // needed; the failure is purely in git's repo resolution, which gh depends on.
 func TestIsolateHooksPath_LinkedWorktreeResolvesRepoForCLI(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -898,7 +898,7 @@ func TestIsolateHooksPath_LinkedWorktreeResolvesRepoForCLI(t *testing.T) {
 // worktree is the CI step's cwd. The old-git path is simulated deterministically
 // via the runGit stub so this reproduces the reporter's config state on any git.
 func TestLinkedWorktreeLeaksCoreBareWithoutRelocation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := t.TempDir()
 	bare := filepath.Join(base, "gate.git")
 	if err := InitBare(ctx, bare); err != nil {
@@ -952,7 +952,7 @@ func TestInstallPostReceiveHookCreatesDir(t *testing.T) {
 	// hooks dir might not exist in some bare repos; installer should create it
 	dir := t.TempDir()
 	bareDir := filepath.Join(dir, "test.git")
-	if err := os.MkdirAll(bareDir, 0o755); err != nil {
+	if err := os.MkdirAll(bareDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 

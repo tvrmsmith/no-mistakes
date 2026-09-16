@@ -21,6 +21,7 @@ func TestPRTemplateStructureRequiresH1TextAndOrder(t *testing.T) {
 		"fenced":    "```markdown\n# Summary\n# Validation\n```",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if err := validateTemplateStructure(template, body); err == nil {
 				t.Fatal("invalid H1 structure accepted")
 			}
@@ -57,6 +58,7 @@ func TestPRTemplateDraftAllowsSubordinateCompletion(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			sctx, ag, _ := templateTestContext(t)
 			ag.runFn = func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				for _, rule := range []string{"Only these H1 headings are structurally required", "Make a best effort", "fill all applicable sections", "falsely claim human signoff", "mark human approval checkboxes complete"} {

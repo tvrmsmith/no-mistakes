@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -29,7 +29,7 @@ func TestValidateRecoveredSessionProviders_RejectsUnavailableFixerProvider(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepo("/tmp/repo", "https://example.com/repo.git", "main")
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestValidateRecoveredSessionProviders_RejectsUnavailableFixerProvider(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer claude.Close()
+	defer closers.Quiet(claude)
 	if err := validateRecoveredSessionProviders(database, run.ID, claude); err == nil || !strings.Contains(err.Error(), `session provider "codex" is no longer configured`) {
 		t.Fatalf("validate recovered fixer provider error = %v", err)
 	}
@@ -67,7 +67,7 @@ func TestPushReceivedTracksRunTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -125,7 +125,7 @@ func TestProofLaunchReceiptBindsIndependentGenerationAndFirstObserver(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer client.Close()
+		defer closers.Quiet(client)
 		var result ipc.StartFreshRunResult
 		err = client.Call(ipc.MethodStartFreshRun, &ipc.StartFreshRunParams{
 			RepoID: repo.ID, Branch: "main", HeadSHA: headSHA, Intent: intent,
@@ -190,7 +190,7 @@ func TestProofLaunchReceiptPushCrashWindowConcurrentClaimsAndImmutableReplay(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var pushed ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main",
@@ -237,7 +237,7 @@ func TestProofLaunchReceiptPushCrashWindowConcurrentClaimsAndImmutableReplay(t *
 		go func() {
 			c, err := ipc.Dial(p.Socket())
 			if err == nil {
-				defer c.Close()
+				defer closers.Quiet(c)
 				var result ipc.StartFreshRunResult
 				err = c.Call(ipc.MethodStartFreshRun, &ipc.StartFreshRunParams{
 					RepoID: repo.ID, Branch: "main", HeadSHA: headSHA, Intent: intent,
@@ -302,7 +302,7 @@ func TestPushReceivedSkipStepsConfiguresExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -349,7 +349,7 @@ func TestPushReceivedAllowsDifferentBranchRunsConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -477,7 +477,7 @@ func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 	})
 
 	profileDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    users:\n        test-user:\n    user: test-user\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(profileDir, "hosts.yml"), []byte("github.com:\n    users:\n        test-user:\n    user: test-user\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	globalConfig, err := os.ReadFile(p.ConfigFile())
@@ -485,7 +485,7 @@ func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	globalConfig = append(globalConfig, []byte(fmt.Sprintf("forge_profiles:\n  github.com:\n    gh_config_dir: %s\n", profileDir))...)
-	if err := os.WriteFile(p.ConfigFile(), globalConfig, 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), globalConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -494,7 +494,7 @@ func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -556,7 +556,7 @@ func TestPushReceivedKeepsConcurrentForgeProfilesIsolated(t *testing.T) {
 	personalDir := t.TempDir()
 	workDir := t.TempDir()
 	for dir, host := range map[string]string{personalDir: "personal.example.test", workDir: "work.example.test"} {
-		if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(host+":\n    user: test-user\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(host+":\n    user: test-user\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -568,7 +568,7 @@ func TestPushReceivedKeepsConcurrentForgeProfilesIsolated(t *testing.T) {
 		"forge_profiles:\n  personal.example.test:\n    gh_config_dir: %s\n  work.example.test:\n    gh_config_dir: %s\n",
 		personalDir, workDir,
 	))...)
-	if err := os.WriteFile(p.ConfigFile(), globalConfig, 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), globalConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -691,7 +691,7 @@ func TestPushReceivedConcurrentDifferentBranchRunsAvoidSharedConfigLock(t *testi
 	// Mirror a real gate: enable the per-worktree config isolation that
 	// `no-mistakes init` installs, which is what lets identity writes avoid the
 	// shared config.lock.
-	if err := git.IsolateHooksPath(context.Background(), p.RepoDir(repoID)); err != nil {
+	if err := git.IsolateHooksPath(t.Context(), p.RepoDir(repoID)); err != nil {
 		t.Fatalf("isolate hooks path: %v", err)
 	}
 
@@ -709,7 +709,7 @@ func TestPushReceivedConcurrentDifferentBranchRunsAvoidSharedConfigLock(t *testi
 				errs[i] = err
 				return
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			var res ipc.PushReceivedResult
 			errs[i] = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 				Gate: p.RepoDir(repoID),
@@ -769,7 +769,7 @@ func TestRerunSkipStepsConfiguresExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -822,7 +822,7 @@ func TestRerunInheritsIntentFromSelectedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -879,7 +879,7 @@ func TestRerunInheritsPRBaseBranchFromSelectedRun(t *testing.T) {
 	repo, headSHA := setupTestGitRepo(t, p, d, "pr-base-rerun-repo")
 	workDir := repo.WorkingPath
 	gitCmd(t, workDir, "checkout", "-b", "epic/feature")
-	if err := os.WriteFile(filepath.Join(workDir, "epic.txt"), []byte("epic\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "epic.txt"), []byte("epic\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", "epic.txt")
@@ -891,7 +891,7 @@ func TestRerunInheritsPRBaseBranchFromSelectedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -936,7 +936,7 @@ func TestRerunInheritsPRURLFromSelectedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -981,7 +981,7 @@ func TestRerunDoesNotInheritClosedPRURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var first ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -1024,7 +1024,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 	gitCmd(t, "", "init", work)
 	gitCmd(t, work, "config", "user.email", "test@test.com")
 	gitCmd(t, work, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("submitted\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("submitted\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, work, "add", "file.txt")
@@ -1032,7 +1032,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 	submitted := gitOutput(t, work, "rev-parse", "HEAD")
 	gitCmd(t, "", "init", "--bare", gate)
 	gitCmd(t, work, "push", gate, "HEAD:refs/heads/feature/recover")
-	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("preserved\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("preserved\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, work, "commit", "-am", "pipeline fix")
@@ -1042,7 +1042,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 	run.TerminalHeadVerifiedAt = &now
 	gitCmd(t, work, "push", gate, preserved+":refs/no-mistakes/recover/"+run.ID)
 
-	head, err := resolveRerunHead(context.Background(), gate, run.Branch, run)
+	head, err := resolveRerunHead(t.Context(), gate, run.Branch, run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1054,7 +1054,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 	}
 
 	gitCmd(t, gate, "update-ref", custody.RecoveryRef(run.ID), submitted)
-	if _, err := resolveRerunHead(context.Background(), gate, run.Branch, run); err == nil {
+	if _, err := resolveRerunHead(t.Context(), gate, run.Branch, run); err == nil {
 		t.Fatal("rerun accepted a mismatched recovery ref")
 	}
 	if got := gitOutput(t, gate, "rev-parse", custody.RecoveryRef(run.ID)); got != submitted {
@@ -1063,7 +1063,7 @@ func TestResolveRerunHeadUsesPreservedTerminalHeadInsteadOfStaleGateBranch(t *te
 
 	blob := gitOutput(t, gate, "hash-object", "-w", filepath.Join(work, "file.txt"))
 	gitCmd(t, gate, "update-ref", custody.RecoveryRef(run.ID), blob)
-	if _, err := resolveRerunHead(context.Background(), gate, run.Branch, run); err == nil {
+	if _, err := resolveRerunHead(t.Context(), gate, run.Branch, run); err == nil {
 		t.Fatal("rerun accepted an unpeelable recovery ref")
 	}
 	if got := gitOutput(t, gate, "rev-parse", custody.RecoveryRef(run.ID)); got != blob {
@@ -1079,7 +1079,7 @@ func TestResolveRerunHeadUsesAdvancedGateWhenSubmittedHeadWasTerminal(t *testing
 	gitCmd(t, "", "init", work)
 	gitCmd(t, work, "config", "user.email", "test@test.com")
 	gitCmd(t, work, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("submitted\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("submitted\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, work, "add", "file.txt")
@@ -1087,7 +1087,7 @@ func TestResolveRerunHeadUsesAdvancedGateWhenSubmittedHeadWasTerminal(t *testing
 	submitted := gitOutput(t, work, "rev-parse", "HEAD")
 	gitCmd(t, "", "init", "--bare", gate)
 	gitCmd(t, work, "push", gate, "HEAD:refs/heads/feature/recover")
-	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("advanced\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "file.txt"), []byte("advanced\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, work, "commit", "-am", "advanced gate")
@@ -1096,14 +1096,14 @@ func TestResolveRerunHeadUsesAdvancedGateWhenSubmittedHeadWasTerminal(t *testing
 	now := int64(1)
 	run := &db.Run{ID: "run-1", Branch: "feature/recover", Status: types.RunFailed, HeadSHA: submitted, SubmittedHeadSHA: &submitted, TerminalHeadVerifiedAt: &now}
 
-	head, err := resolveRerunHead(context.Background(), gate, run.Branch, run)
+	head, err := resolveRerunHead(t.Context(), gate, run.Branch, run)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if head != advanced {
 		t.Fatalf("rerun head = %s, want advanced gate head %s", head, advanced)
 	}
-	if _, err := git.Run(context.Background(), gate, "rev-parse", "--verify", custody.RecoveryRef(run.ID)); err == nil {
+	if _, err := git.Run(t.Context(), gate, "rev-parse", "--verify", custody.RecoveryRef(run.ID)); err == nil {
 		t.Fatal("rerun created a recovery ref for the already-published submitted head")
 	}
 }
@@ -1119,7 +1119,7 @@ func TestPushReceivedReturnsBeforeIntentSummarization(t *testing.T) {
 	})
 
 	slowClaude := writeSlowMockClaude(t, t.TempDir())
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+slowClaude+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: "+slowClaude+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1132,7 +1132,7 @@ func TestPushReceivedReturnsBeforeIntentSummarization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	started := time.Now()
 	var result ipc.PushReceivedResult
@@ -1173,11 +1173,11 @@ func writeManagerClaudeFixture(t *testing.T, home, repoCWD string, lines []strin
 	t.Helper()
 	encoded := testClaudeProjectDirName(repoCWD)
 	dir := filepath.Join(home, ".claude", "projects", encoded)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "session-uuid-1.jsonl")
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1198,7 +1198,7 @@ func TestPushReceivedTracksRunTelemetryAfterPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -1248,7 +1248,7 @@ func TestPushReceivedDemoModeBypassesAgentResolution(t *testing.T) {
 		return []pipeline.Step{step}
 	})
 
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: /path/that/does/not/exist\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: claude\nagent_path_override:\n  claude: /path/that/does/not/exist\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1258,7 +1258,7 @@ func TestPushReceivedDemoModeBypassesAgentResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -1307,7 +1307,7 @@ func TestProofLaunchFallbackReturnsReusedWhenObserverClaimsDuringSetup(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	const intent = "claim while the fallback initializes"
 	var fresh ipc.StartFreshRunResult
 	done := make(chan error, 1)
@@ -1328,7 +1328,7 @@ func TestProofLaunchFallbackReturnsReusedWhenObserverClaimsDuringSetup(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer observer.Close()
+	defer closers.Quiet(observer)
 	var first ipc.ClaimLaunchReceiptResult
 	if err := observer.Call(ipc.MethodClaimLaunchReceipt, &ipc.ClaimLaunchReceiptParams{
 		RepoID: repo.ID, Branch: "main", SubmittedHeadSHA: head,
@@ -1366,7 +1366,7 @@ func TestProofLaunchFallbackInheritsOnlyLivePRIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			launch := func(nonce, base string) *db.Run {
 				t.Helper()
 				var result ipc.StartFreshRunResult

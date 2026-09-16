@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"bytes"
-	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -75,7 +75,7 @@ func configureWorktreeRoot(t *testing.T, p *paths.Paths, workingPath, root strin
 		updated += "\n"
 	}
 	updated += "worktree_roots:\n  " + yamlPath(workingPath) + ": " + yamlPath(root) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(updated), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(updated), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -93,11 +93,11 @@ func TestRunWorktreeIsCreatedInConfiguredRoot(t *testing.T) {
 
 	repo, headSHA := setupTestGitRepo(t, p, d, "worktree-root-repo")
 	root := filepath.Join(t.TempDir(), "repo-runs")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	foreign := filepath.Join(root, "mise.local.toml")
-	if err := os.WriteFile(foreign, []byte("[tools]\n"), 0o644); err != nil {
+	if err := os.WriteFile(foreign, []byte("[tools]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	configureWorktreeRoot(t, p, repo.WorkingPath, root)
@@ -106,7 +106,7 @@ func TestRunWorktreeIsCreatedInConfiguredRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
@@ -156,13 +156,13 @@ func TestRunSetupFailureLeavesNoWorktreeBehind(t *testing.T) {
 
 	// A gate whose registered checkout no longer exists.
 	source := filepath.Join(t.TempDir(), "work")
-	if err := os.MkdirAll(source, 0o755); err != nil {
+	if err := os.MkdirAll(source, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, source, "init")
 	gitCmd(t, source, "config", "user.email", "test@test.com")
 	gitCmd(t, source, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(source, "test.txt"), []byte("hello"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "test.txt"), []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, source, "add", ".")
@@ -186,7 +186,7 @@ func TestRunSetupFailureLeavesNoWorktreeBehind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: gateDir,
@@ -229,7 +229,7 @@ func TestRunCreationJudgesOnlyItsOwnPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	push := func(gateID, head, branch string) (ipc.PushReceivedResult, error) {
 		var result ipc.PushReceivedResult
@@ -275,17 +275,17 @@ func TestCleanupOrphanWorktrees_ConfiguredRootRemovesOnlyRunDirectories(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	workingPath := filepath.Join(t.TempDir(), "checkout")
-	if err := os.MkdirAll(workingPath, 0o755); err != nil {
+	if err := os.MkdirAll(workingPath, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	root := filepath.Join(t.TempDir(), "repo-runs")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte("worktree_roots:\n  "+yamlPath(workingPath)+": "+yamlPath(root)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("worktree_roots:\n  "+yamlPath(workingPath)+": "+yamlPath(root)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -315,12 +315,12 @@ func TestCleanupOrphanWorktrees_ConfiguredRootRemovesOnlyRunDirectories(t *testi
 	terminalWT := filepath.Join(root, terminalRun.ID)
 	operatorDir := filepath.Join(root, "scratch-checkout")
 	for _, dir := range []string{activeWT, terminalWT, operatorDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatal(err)
 		}
 	}
 	operatorFile := filepath.Join(root, "mise.local.toml")
-	if err := os.WriteFile(operatorFile, []byte("[tools]\n"), 0o644); err != nil {
+	if err := os.WriteFile(operatorFile, []byte("[tools]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -347,11 +347,11 @@ func TestCleanupOrphanWorktrees_UnconfiguredRepoUsesDefaultRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	root := filepath.Join(t.TempDir(), "repo-runs")
 	other := filepath.Join(t.TempDir(), "other-checkout")
-	if err := os.WriteFile(p.ConfigFile(), []byte("worktree_roots:\n  "+yamlPath(other)+": "+yamlPath(root)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("worktree_roots:\n  "+yamlPath(other)+": "+yamlPath(root)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
@@ -366,7 +366,7 @@ func TestCleanupOrphanWorktrees_UnconfiguredRepoUsesDefaultRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	terminalWT := p.WorktreeDir(repo.ID, terminalRun.ID)
-	if err := os.MkdirAll(terminalWT, 0o755); err != nil {
+	if err := os.MkdirAll(terminalWT, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -445,7 +445,7 @@ func TestDaemonRefusesToStartWithWorktreeRootInsideAnotherRegisteredCheckout(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	victim, err := d.InsertRepoWithID("victimrepo", filepath.Join(t.TempDir(), "victim"), "https://example.com/owner/victim", "main")
 	if err != nil {
@@ -489,7 +489,7 @@ func TestDaemonRefusesToStartWithWorktreeRootInsideItsOwnWorktreesDirectory(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	// A second repository with a live run, whose worktree the misread would
 	// have deleted along with the directory holding it.
@@ -505,7 +505,7 @@ func TestDaemonRefusesToStartWithWorktreeRootInsideItsOwnWorktreesDirectory(t *t
 		t.Fatal(err)
 	}
 	liveWT := p.WorktreeDir(victim.ID, liveRun.ID)
-	if err := os.MkdirAll(liveWT, 0o755); err != nil {
+	if err := os.MkdirAll(liveWT, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -544,14 +544,14 @@ func TestCleanupOrphanWorktrees_OperatorRootRemovesOnlyWhatARunRecorded(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	workingPath := filepath.Join(t.TempDir(), "checkout")
 	root := filepath.Join(t.TempDir(), "repo-runs")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte("worktree_roots:\n  "+yamlPath(workingPath)+": "+yamlPath(root)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("worktree_roots:\n  "+yamlPath(workingPath)+": "+yamlPath(root)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -606,7 +606,7 @@ func TestCleanupOrphanWorktrees_OperatorRootRemovesOnlyWhatARunRecorded(t *testi
 	}
 	strayWT := filepath.Join(root, strayRun.ID)
 	for _, dir := range []string{ownWT, otherWT, unclaimedWT, strayWT} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -643,7 +643,7 @@ func TestStartupSweepSetIsBoundedByThePresentNotByRunHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -670,7 +670,7 @@ func TestStartupSweepSetIsBoundedByThePresentNotByRunHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	leftoverWT := filepath.Join(root, leftoverRun.ID)
-	if err := os.MkdirAll(leftoverWT, 0o755); err != nil {
+	if err := os.MkdirAll(leftoverWT, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.SetRunWorktreeDir(leftoverRun.ID, leftoverWT); err != nil {
@@ -728,7 +728,7 @@ func TestCleanupOrphanWorktrees_ReachesARootTheConfigNoLongerNames(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -741,7 +741,7 @@ func TestCleanupOrphanWorktrees_ReachesARootTheConfigNoLongerNames(t *testing.T)
 	// No worktree_roots entry at all: this placement exists only on the run.
 	abandonedRoot := filepath.Join(t.TempDir(), "former-runs")
 	recordedWT := filepath.Join(abandonedRoot, run.ID)
-	if err := os.MkdirAll(recordedWT, 0o755); err != nil {
+	if err := os.MkdirAll(recordedWT, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.SetRunWorktreeDir(run.ID, recordedWT); err != nil {
@@ -775,7 +775,7 @@ func TestStepDiff_ReadsThePlacementItsRunRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	workingPath := filepath.Join(t.TempDir(), "checkout")
 	repo, err := d.InsertRepoWithID("repo1", workingPath, "https://example.com/owner/repo1", "main")
@@ -788,18 +788,18 @@ func TestStepDiff_ReadsThePlacementItsRunRecorded(t *testing.T) {
 	}
 
 	created := filepath.Join(t.TempDir(), "repo-runs", run.ID)
-	if err := os.MkdirAll(created, 0o755); err != nil {
+	if err := os.MkdirAll(created, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, created, "init")
 	runGit(t, created, "config", "user.email", "test@example.com")
 	runGit(t, created, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(created, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(created, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, created, "add", "tracked.txt")
 	runGit(t, created, "commit", "-m", "base")
-	if err := os.WriteFile(filepath.Join(created, "tracked.txt"), []byte("agent fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(created, "tracked.txt"), []byte("agent fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.SetRunWorktreeDir(run.ID, created); err != nil {
@@ -809,7 +809,7 @@ func TestStepDiff_ReadsThePlacementItsRunRecorded(t *testing.T) {
 	// The operator pastes a different root while the run is parked.
 	configureWorktreeRoot(t, p, workingPath, filepath.Join(t.TempDir(), "somewhere-else"))
 
-	diff, truncated, err := NewRunManager(d, p, nil).StepDiff(context.Background(), run.ID)
+	diff, truncated, err := NewRunManager(d, p, nil).StepDiff(t.Context(), run.ID)
 	if err != nil {
 		t.Fatalf("step diff after a mid-run placement edit: %v", err)
 	}
@@ -830,7 +830,7 @@ func TestPrepareRecoveredRun_LocatesThePlacementItsRunRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, headSHA := setupTestGitRepo(t, p, d, "repo1")
 	run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
@@ -857,7 +857,7 @@ func TestPrepareRecoveredRun_LocatesThePlacementItsRunRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.prepareRecoveredRun(context.Background(), stored); err != nil && strings.Contains(err.Error(), "worktree is missing") {
+	if _, err := m.prepareRecoveredRun(t.Context(), stored); err != nil && strings.Contains(err.Error(), "worktree is missing") {
 		t.Fatalf("recovery lost the run's recorded worktree %q: %v", created, err)
 	}
 }
@@ -878,7 +878,7 @@ func TestPrepareRecoveredRun_UnrecordedRunKeepsItsDefaultPlacement(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, headSHA := setupTestGitRepo(t, p, d, "repo1")
 	run, err := d.InsertRun(repo.ID, "feature", headSHA, headSHA)
@@ -905,7 +905,7 @@ func TestPrepareRecoveredRun_UnrecordedRunKeepsItsDefaultPlacement(t *testing.T)
 	if stored.WorktreePath() != "" {
 		t.Fatalf("fixture recorded a placement %q, want the pre-upgrade NULL", stored.WorktreePath())
 	}
-	if _, err := NewRunManager(d, p, nil).prepareRecoveredRun(context.Background(), stored); err != nil && strings.Contains(err.Error(), "worktree is missing") {
+	if _, err := NewRunManager(d, p, nil).prepareRecoveredRun(t.Context(), stored); err != nil && strings.Contains(err.Error(), "worktree is missing") {
 		t.Fatalf("recovery looked past the default placement of a run that recorded none: %v", err)
 	}
 }
@@ -924,7 +924,7 @@ func TestReportUnusableWorktreeRoots_NamesEntriesThatDoNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	registered := filepath.Join(t.TempDir(), "checkout")
 	stale := filepath.Join(t.TempDir(), "moved-away")
@@ -934,7 +934,7 @@ func TestReportUnusableWorktreeRoots_NamesEntriesThatDoNothing(t *testing.T) {
 	configYAML := "worktree_roots:\n" +
 		"  " + yamlPath(registered) + ": " + yamlPath(filepath.Join(t.TempDir(), "runs-a")) + "\n" +
 		"  " + yamlPath(stale) + ": " + yamlPath(filepath.Join(t.TempDir(), "runs-b")) + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

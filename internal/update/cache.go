@@ -24,10 +24,10 @@ func writeCache(path string, entry *checkCache) error {
 	if err != nil {
 		return fmt.Errorf("write cache: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("write cache dir: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write cache file: %w", err)
 	}
 	return nil

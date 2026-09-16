@@ -13,11 +13,8 @@ import (
 // isCIActive returns true if the CI step is currently running.
 func isCIActive(steps []ipc.StepResultInfo) bool {
 	for _, s := range steps {
-		if s.StepName == types.StepCI {
-			switch s.Status {
-			case types.StepStatusRunning:
-				return true
-			}
+		if s.StepName == types.StepCI && s.Status == types.StepStatusRunning {
+			return true
 		}
 	}
 	return false
@@ -90,17 +87,17 @@ func renderCIViewWithSelection(run *ipc.RunInfo, steps []ipc.StepResultInfo, fin
 
 	b.WriteString("\n")
 
-	switch status {
-	case types.StepStatusRunning:
-		if activity.AutoFixing {
+	if status == types.StepStatusRunning {
+		switch {
+		case activity.AutoFixing:
 			style := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBlue))
 			b.WriteString(style.Render("\u2699 Auto-fixing CI failures...") + "\n")
-		} else if activity.Ready {
+		case activity.Ready:
 			style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiGreen))
 			b.WriteString(style.Render("✓ Checks passed") + "\n")
 			dim := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBrightBlack))
 			b.WriteString(dim.Render("still monitoring until merged or closed") + "\n")
-		} else {
+		default:
 			style := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiGreen))
 			b.WriteString(style.Render("◉ Monitoring CI checks...") + "\n")
 		}

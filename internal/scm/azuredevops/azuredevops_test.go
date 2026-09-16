@@ -2,6 +2,7 @@ package azuredevops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,7 +46,7 @@ func TestAvailableChecksExtensionAndAuth(t *testing.T) {
 		"az extension show --name azure-devops":                                             {stdout: "{}\n"},
 		"az devops project list --query value[0].id --output tsv --organization " + testOrg: {stdout: "abc\n"},
 	})
-	if err := h.Available(context.Background()); err != nil {
+	if err := h.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v, want nil", err)
 	}
 }
@@ -56,7 +57,7 @@ func TestAvailableReportsMissingExtension(t *testing.T) {
 	h := newTestHost(map[string]azdoTestResponse{
 		"az extension show --name azure-devops": {stderr: "not installed\n", code: 1},
 	})
-	err := h.Available(context.Background())
+	err := h.Available(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "azure-devops extension") {
 		t.Fatalf("Available() error = %v, want azure-devops extension error", err)
 	}
@@ -71,7 +72,7 @@ func TestFindPRReturnsBrowsableURL(t *testing.T) {
 		},
 	})
 
-	pr, err := h.FindPR(context.Background(), "feature", "main")
+	pr, err := h.FindPR(t.Context(), "feature", "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -161,7 +162,7 @@ func TestFindPRDiscoversExistingPRWithoutWebURL(t *testing.T) {
 				},
 			}), func() bool { return true }, org, testProject, testRepo)
 
-			pr, err := h.FindPR(context.Background(), "feature", "main")
+			pr, err := h.FindPR(t.Context(), "feature", "main")
 			if err != nil {
 				t.Fatalf("FindPR() error = %v", err)
 			}
@@ -206,7 +207,7 @@ func TestFindPRListsOnceWithoutShowLookup(t *testing.T) {
 			var rec []capturedCmd
 			h := newCapturingHost(&rec, azdoTestResponse{stdout: reportedListPRJSON + "\n"})
 
-			pr, err := h.FindPR(context.Background(), "feature", tc.base)
+			pr, err := h.FindPR(t.Context(), "feature", tc.base)
 			if err != nil {
 				t.Fatalf("FindPR() error = %v", err)
 			}
@@ -248,7 +249,7 @@ func TestFindPRAcceptsEquivalentOrganizationURLForms(t *testing.T) {
 		},
 	}), func() bool { return true }, "https://myorg.visualstudio.com", testProject, testRepo)
 
-	pr, err := h.FindPR(context.Background(), "feature", "main")
+	pr, err := h.FindPR(t.Context(), "feature", "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -269,7 +270,7 @@ func TestFindPRNoMatch(t *testing.T) {
 		},
 	})
 
-	pr, err := h.FindPR(context.Background(), "feature", "")
+	pr, err := h.FindPR(t.Context(), "feature", "")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -288,7 +289,7 @@ func TestFindPRIgnoresStderrChatter(t *testing.T) {
 		},
 	})
 
-	pr, err := h.FindPR(context.Background(), "feature", "main")
+	pr, err := h.FindPR(t.Context(), "feature", "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -371,14 +372,13 @@ func TestFindPRRejectsInvalidResponse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
 			h := newTestHost(map[string]azdoTestResponse{
 				"az repos pr list --source-branch feature --status active --target-branch main --organization " + testOrg + " --project " + testProject + " --repository " + testRepo + " --output json": {
 					stdout: tc.output,
 				},
 			})
 
-			pr, err := h.FindPR(context.Background(), "feature", "main")
+			pr, err := h.FindPR(t.Context(), "feature", "main")
 			if err == nil {
 				t.Fatal("FindPR() error = nil, want parse error")
 			}
@@ -404,7 +404,7 @@ func TestCreatePRConstructsURL(t *testing.T) {
 		stdout: `{"pullRequestId":7,"url":"https://dev.azure.com/myorg/_apis/git/repositories/abc/pullRequests/7"}` + "\n",
 	})
 
-	pr, err := h.CreatePR(context.Background(), "feature", "main", scm.PRContent{Title: "T", Body: "B"})
+	pr, err := h.CreatePR(t.Context(), "feature", "main", scm.PRContent{Title: "T", Body: "B"})
 	if err != nil {
 		t.Fatalf("CreatePR() error = %v", err)
 	}
@@ -452,7 +452,7 @@ func TestCreatePRAddsDraftFlagWhenConfigured(t *testing.T) {
 				stdout: `{"pullRequestId":7}` + "\n",
 			}), func() bool { return true }, testOrg, testProject, testRepo, tc.draft)
 
-			pr, err := h.CreatePR(context.Background(), "feature", "main", scm.PRContent{Title: "T", Body: "B"})
+			pr, err := h.CreatePR(t.Context(), "feature", "main", scm.PRContent{Title: "T", Body: "B"})
 			if err != nil {
 				t.Fatalf("CreatePR() error = %v", err)
 			}
@@ -486,7 +486,7 @@ func TestCreatePRTruncatesOverlongDescription(t *testing.T) {
 	var rec []capturedCmd
 	h := newCapturingHost(&rec, azdoTestResponse{stdout: `{"pullRequestId":7}` + "\n"})
 
-	pr, err := h.CreatePR(context.Background(), "feature", "main", scm.PRContent{Title: "T", Body: body})
+	pr, err := h.CreatePR(t.Context(), "feature", "main", scm.PRContent{Title: "T", Body: body})
 	if err != nil {
 		t.Fatalf("CreatePR() error = %v", err)
 	}
@@ -521,7 +521,7 @@ func TestCreatePRWritesMultilineDescriptionToFile(t *testing.T) {
 	var rec []capturedCmd
 	h := newCapturingHost(&rec, azdoTestResponse{stdout: `{"pullRequestId":7}` + "\n"})
 
-	if _, err := h.CreatePR(context.Background(), "feature", "main", scm.PRContent{Title: "T", Body: multilineDescriptionBody}); err != nil {
+	if _, err := h.CreatePR(t.Context(), "feature", "main", scm.PRContent{Title: "T", Body: multilineDescriptionBody}); err != nil {
 		t.Fatalf("CreatePR() error = %v", err)
 	}
 	assertDescriptionRoundTrips(t, rec, multilineDescriptionBody)
@@ -533,7 +533,7 @@ func TestUpdatePRWritesMultilineDescriptionToFile(t *testing.T) {
 	var rec []capturedCmd
 	h := newCapturingHost(&rec, azdoTestResponse{stdout: `{"pullRequestId":42}` + "\n"})
 
-	if _, err := h.UpdatePR(context.Background(), &scm.PR{Number: "42"}, scm.PRContent{Title: "T", Body: multilineDescriptionBody}); err != nil {
+	if _, err := h.UpdatePR(t.Context(), &scm.PR{Number: "42"}, scm.PRContent{Title: "T", Body: multilineDescriptionBody}); err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
 	assertDescriptionRoundTrips(t, rec, multilineDescriptionBody)
@@ -586,12 +586,13 @@ func TestGetPRState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
+			t.Parallel()
 			h := newTestHost(map[string]azdoTestResponse{
 				"az repos pr show --id 42 --organization " + testOrg + " --output json": {
 					stdout: fmt.Sprintf(`{"pullRequestId":42,"status":%q}`, tc.raw) + "\n",
 				},
 			})
-			state, err := h.GetPRState(context.Background(), &scm.PR{Number: "42"})
+			state, err := h.GetPRState(t.Context(), &scm.PR{Number: "42"})
 			if err != nil {
 				t.Fatalf("GetPRState() error = %v", err)
 			}
@@ -618,12 +619,13 @@ func TestGetMergeableState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
+			t.Parallel()
 			h := newTestHost(map[string]azdoTestResponse{
 				"az repos pr show --id 42 --organization " + testOrg + " --output json": {
 					stdout: fmt.Sprintf(`{"pullRequestId":42,"mergeStatus":%q}`, tc.raw) + "\n",
 				},
 			})
-			got, err := h.GetMergeableState(context.Background(), &scm.PR{Number: "42"})
+			got, err := h.GetMergeableState(t.Context(), &scm.PR{Number: "42"})
 			if err != nil {
 				t.Fatalf("GetMergeableState() error = %v", err)
 			}
@@ -651,7 +653,7 @@ func TestGetChecksMapsPolicyEvaluations(t *testing.T) {
 		},
 	})
 
-	checks, err := h.GetChecks(context.Background(), &scm.PR{Number: "42"})
+	checks, err := h.GetChecks(t.Context(), &scm.PR{Number: "42"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -691,7 +693,7 @@ func TestGetChecksExcludesApprovalGatesOnHealthyPR(t *testing.T) {
 		},
 	})
 
-	checks, err := h.GetChecks(context.Background(), &scm.PR{Number: "42"})
+	checks, err := h.GetChecks(t.Context(), &scm.PR{Number: "42"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -706,7 +708,7 @@ func TestGetChecksEmpty(t *testing.T) {
 	h := newTestHost(map[string]azdoTestResponse{
 		"az repos pr policy list --id 42 --organization " + testOrg + " --output json": {stdout: "[]\n"},
 	})
-	checks, err := h.GetChecks(context.Background(), &scm.PR{Number: "42"})
+	checks, err := h.GetChecks(t.Context(), &scm.PR{Number: "42"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -723,7 +725,7 @@ func TestFindPRReturnsCLIError(t *testing.T) {
 			stderr: "TF401019: not found\n", code: 1,
 		},
 	})
-	_, err := h.FindPR(context.Background(), "feature", "")
+	_, err := h.FindPR(t.Context(), "feature", "")
 	if err == nil || !strings.Contains(err.Error(), "az repos pr list") {
 		t.Fatalf("FindPR() error = %v, want az repos pr list context", err)
 	}
@@ -733,11 +735,11 @@ func TestFetchFailedCheckLogsUnsupported(t *testing.T) {
 	t.Parallel()
 
 	h := newTestHost(nil)
-	logs, err := h.FetchFailedCheckLogs(context.Background(), &scm.PR{Number: "42"}, "feature", "abc123", []string{"ci-build"})
+	logs, err := h.FetchFailedCheckLogs(t.Context(), &scm.PR{Number: "42"}, "feature", "abc123", []string{"ci-build"})
 	if logs != "" {
 		t.Fatalf("FetchFailedCheckLogs() logs = %q, want empty", logs)
 	}
-	if err != scm.ErrUnsupported {
+	if !errors.Is(err, scm.ErrUnsupported) {
 		t.Fatalf("FetchFailedCheckLogs() error = %v, want ErrUnsupported", err)
 	}
 }

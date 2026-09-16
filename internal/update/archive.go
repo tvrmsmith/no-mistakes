@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"path/filepath"
 )
@@ -23,7 +24,7 @@ func extractBinaryFromTarGz(archive []byte, binaryName string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open tar.gz: %w", err)
 	}
-	defer gz.Close()
+	defer closers.Quiet(gz)
 
 	tr := tar.NewReader(gz)
 	for {
@@ -51,14 +52,20 @@ func extractBinaryFromZip(archive []byte, binaryName string) ([]byte, error) {
 		if filepath.Base(file.Name) != binaryName {
 			continue
 		}
-		rc, err := file.Open()
-		if err != nil {
-			return nil, fmt.Errorf("open zip entry: %w", err)
-		}
-		defer rc.Close()
-		return readExtractedBinary(rc)
+		return readZipEntry(file)
 	}
 	return nil, fmt.Errorf("binary not found in zip: %s", binaryName)
+}
+
+// readZipEntry owns the entry reader so the close is a function-scoped defer
+// rather than one queued inside the caller's loop.
+func readZipEntry(file *zip.File) ([]byte, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open zip entry: %w", err)
+	}
+	defer closers.Quiet(rc)
+	return readExtractedBinary(rc)
 }
 
 func readExtractedBinary(r io.Reader) ([]byte, error) {

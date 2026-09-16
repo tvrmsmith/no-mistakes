@@ -337,11 +337,12 @@ func NormalizeForgejoBaseURL(raw string) (string, *url.URL, error) {
 	if (parsed.Scheme == "http" && port == "80") || (parsed.Scheme == "https" && port == "443") {
 		port = ""
 	}
-	if port != "" {
+	switch {
+	case port != "":
 		parsed.Host = net.JoinHostPort(hostname, port)
-	} else if strings.Contains(hostname, ":") {
+	case strings.Contains(hostname, ":"):
 		parsed.Host = "[" + hostname + "]"
-	} else {
+	default:
 		parsed.Host = hostname
 	}
 	parsed.Path = strings.TrimRight(path.Clean("/"+strings.Trim(parsed.Path, "/")), "/")

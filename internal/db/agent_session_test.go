@@ -1,6 +1,7 @@
 package db
 
 import (
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"path/filepath"
 	"testing"
 )
@@ -11,7 +12,7 @@ func openSessionTestDB(t *testing.T) (*DB, *Repo, *Run) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 	repo, err := d.InsertRepo("/tmp/repo", "https://github.com/test/repo", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)
@@ -116,7 +117,7 @@ func TestOpenMigratesRunAgentSessionsTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	repo, err := d.InsertRepo("/tmp/repo", "https://github.com/test/repo", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)

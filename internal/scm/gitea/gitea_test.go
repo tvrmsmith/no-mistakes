@@ -2,6 +2,7 @@ package gitea
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -100,7 +101,7 @@ func TestGetMergeableStateReturnsErrUnsupported(t *testing.T) {
 	t.Parallel()
 
 	host := New(nil, nil, "", "", "")
-	if _, err := host.GetMergeableState(context.Background(), &scm.PR{Number: "1"}); err != scm.ErrUnsupported {
+	if _, err := host.GetMergeableState(t.Context(), &scm.PR{Number: "1"}); !errors.Is(err, scm.ErrUnsupported) {
 		t.Fatalf("GetMergeableState() error = %v, want scm.ErrUnsupported", err)
 	}
 }
@@ -109,7 +110,7 @@ func TestAvailableFailsClosedWithoutConfiguredLogin(t *testing.T) {
 	t.Parallel()
 
 	host := New(giteaTestCmdFactory(nil), func() bool { return true }, "gitea.example.com", "", "owner/repo")
-	if err := host.Available(context.Background()); err == nil {
+	if err := host.Available(t.Context()); err == nil {
 		t.Fatal("Available() error = nil, want error when no tea login is configured for the host")
 	}
 }
@@ -121,7 +122,7 @@ func TestAvailableScopesToConfiguredLogin(t *testing.T) {
 		"tea api --login work /user": {stdout: `{"login":"someuser"}`},
 	}), func() bool { return true }, "gitea.example.com", "work", "owner/repo")
 
-	if err := host.Available(context.Background()); err != nil {
+	if err := host.Available(t.Context()); err != nil {
 		t.Fatalf("Available() error = %v, want nil", err)
 	}
 }
@@ -133,7 +134,7 @@ func TestAvailableReturnsErrorOnAuthFailure(t *testing.T) {
 		"tea api --login work /user": {stderr: "invalid username, password or token\n", code: 1},
 	}), func() bool { return true }, "gitea.example.com", "work", "owner/repo")
 
-	if err := host.Available(context.Background()); err == nil {
+	if err := host.Available(t.Context()); err == nil {
 		t.Fatal("Available() error = nil, want error on auth failure")
 	}
 }
@@ -142,7 +143,7 @@ func TestAvailableReturnsErrorWhenCLIMissing(t *testing.T) {
 	t.Parallel()
 
 	host := New(giteaTestCmdFactory(nil), func() bool { return false }, "gitea.example.com", "work", "owner/repo")
-	if err := host.Available(context.Background()); err == nil {
+	if err := host.Available(t.Context()); err == nil {
 		t.Fatal("Available() error = nil, want error when tea CLI is missing")
 	}
 }
@@ -157,7 +158,7 @@ func TestFindPRMatchesByHeadBranch(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.FindPR(context.Background(), "feature/x", "main")
+	pr, err := host.FindPR(t.Context(), "feature/x", "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -181,7 +182,7 @@ func TestFindPRFiltersByBaseBranch(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.FindPR(context.Background(), "feature/x", "main")
+	pr, err := host.FindPR(t.Context(), "feature/x", "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -199,7 +200,7 @@ func TestFindPRReturnsNilWhenNoneOpen(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.FindPR(context.Background(), "feature/x", "main")
+	pr, err := host.FindPR(t.Context(), "feature/x", "main")
 	if err != nil {
 		t.Fatalf("FindPR() error = %v", err)
 	}
@@ -221,7 +222,7 @@ func TestFindPRReturnsErrorOnMalformedJSON(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.FindPR(context.Background(), "feature/x", "main")
+	pr, err := host.FindPR(t.Context(), "feature/x", "main")
 	if err == nil {
 		t.Fatalf("FindPR() error = nil, want error for malformed JSON output; pr = %+v", pr)
 	}
@@ -243,7 +244,7 @@ func TestFindPRReturnsErrorOnNonJSONOutput(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.FindPR(context.Background(), "feature/x", "main")
+	pr, err := host.FindPR(t.Context(), "feature/x", "main")
 	if err == nil {
 		t.Fatalf("FindPR() error = nil, want error for non-JSON output; pr = %+v", pr)
 	}
@@ -262,7 +263,7 @@ func TestFindPRReturnsCLIError(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.FindPR(context.Background(), "feature/x", "main")
+	pr, err := host.FindPR(t.Context(), "feature/x", "main")
 	if err == nil {
 		t.Fatal("FindPR() error = nil, want CLI error")
 	}
@@ -290,7 +291,7 @@ func TestCreatePRUsesFindPRForStructuredResult(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.CreatePR(context.Background(), "feature/x", "main", scm.PRContent{Title: "t", Body: "See http://example.com/evidence for details"})
+	pr, err := host.CreatePR(t.Context(), "feature/x", "main", scm.PRContent{Title: "t", Body: "See http://example.com/evidence for details"})
 	if err != nil {
 		t.Fatalf("CreatePR() error = %v", err)
 	}
@@ -312,7 +313,7 @@ func TestCreatePRFallsBackToOutputScanWhenRelistFails(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.CreatePR(context.Background(), "feature/x", "main", scm.PRContent{Title: "t", Body: "body"})
+	pr, err := host.CreatePR(t.Context(), "feature/x", "main", scm.PRContent{Title: "t", Body: "body"})
 	if err != nil {
 		t.Fatalf("CreatePR() error = %v", err)
 	}
@@ -331,7 +332,7 @@ func TestCreatePRReturnsCLIError(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	pr, err := host.CreatePR(context.Background(), "feature/x", "main", scm.PRContent{Title: "t", Body: "body"})
+	pr, err := host.CreatePR(t.Context(), "feature/x", "main", scm.PRContent{Title: "t", Body: "body"})
 	if err == nil {
 		t.Fatal("CreatePR() error = nil, want CLI error")
 	}
@@ -353,7 +354,7 @@ func TestUpdatePRUsesNumberWhenPresent(t *testing.T) {
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
 	pr := &scm.PR{Number: "7", URL: "http://gitea.example.com/owner/repo/pulls/7"}
-	updated, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "updated", Body: "body"})
+	updated, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: "updated", Body: "body"})
 	if err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
@@ -372,7 +373,7 @@ func TestUpdatePRFallsBackToNumberFromURL(t *testing.T) {
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
 	pr := &scm.PR{URL: "http://gitea.example.com/owner/repo/pulls/7"}
-	if _, err := host.UpdatePR(context.Background(), pr, scm.PRContent{Title: "updated", Body: "body"}); err != nil {
+	if _, err := host.UpdatePR(t.Context(), pr, scm.PRContent{Title: "updated", Body: "body"}); err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
 }
@@ -386,7 +387,7 @@ func TestSetPRBaseBranchPatchesPullViaTeaAPI(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{Number: "7"}, "epic/feature"); err != nil {
+	if err := host.SetPRBaseBranch(t.Context(), &scm.PR{Number: "7"}, "epic/feature"); err != nil {
 		t.Fatalf("SetPRBaseBranch() error = %v", err)
 	}
 }
@@ -400,7 +401,7 @@ func TestSetPRBaseBranchFallsBackToNumberFromURL(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{URL: "https://gitea.example.com/owner/repo/pulls/7"}, "epic/feature"); err != nil {
+	if err := host.SetPRBaseBranch(t.Context(), &scm.PR{URL: "https://gitea.example.com/owner/repo/pulls/7"}, "epic/feature"); err != nil {
 		t.Fatalf("SetPRBaseBranch() error = %v", err)
 	}
 }
@@ -409,7 +410,7 @@ func TestSetPRBaseBranchFailsClosedWithoutIdentity(t *testing.T) {
 	t.Parallel()
 
 	host := New(giteaTestCmdFactory(nil), nil, "gitea.example.com", "work", "owner/repo")
-	if err := host.SetPRBaseBranch(context.Background(), &scm.PR{}, "epic/feature"); err == nil {
+	if err := host.SetPRBaseBranch(t.Context(), &scm.PR{}, "epic/feature"); err == nil {
 		t.Fatal("SetPRBaseBranch() with no PR identity: expected error, got nil")
 	}
 }
@@ -425,7 +426,7 @@ func TestGetPRStateReportsMergedBeforeClosed(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	state, err := host.GetPRState(context.Background(), &scm.PR{Number: "7"})
+	state, err := host.GetPRState(t.Context(), &scm.PR{Number: "7"})
 	if err != nil {
 		t.Fatalf("GetPRState() error = %v", err)
 	}
@@ -443,7 +444,7 @@ func TestGetPRStateReportsClosedWhenNotMerged(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	state, err := host.GetPRState(context.Background(), &scm.PR{Number: "7"})
+	state, err := host.GetPRState(t.Context(), &scm.PR{Number: "7"})
 	if err != nil {
 		t.Fatalf("GetPRState() error = %v", err)
 	}
@@ -461,7 +462,7 @@ func TestGetPRStateReportsOpen(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	state, err := host.GetPRState(context.Background(), &scm.PR{Number: "7"})
+	state, err := host.GetPRState(t.Context(), &scm.PR{Number: "7"})
 	if err != nil {
 		t.Fatalf("GetPRState() error = %v", err)
 	}
@@ -486,7 +487,7 @@ func TestGetChecksFetchesJobsForMatchingHeadRun(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "7"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "7"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -530,7 +531,7 @@ func TestGetChecksReturnsNilWhenLatestRunPredatesTheCurrentHeadSHA(t *testing.T)
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "7"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "7"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -551,7 +552,7 @@ func TestGetChecksReturnsNilWhenNoRunsExistYet(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "7"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "7"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -582,7 +583,7 @@ func TestGetChecksSelectsHighestIDRunWhenListOrderIsNotNewestFirst(t *testing.T)
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "7"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "7"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -615,7 +616,7 @@ func TestGetChecksSearchesPastAHigherIDRunForAnotherCommit(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "7"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "7"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}
@@ -642,7 +643,7 @@ func TestFetchFailedCheckLogsStripsHeaderAndTargetsFailedJob(t *testing.T) {
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	logs, err := host.FetchFailedCheckLogs(context.Background(), &scm.PR{Number: "7"}, "", "", []string{"build"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), &scm.PR{Number: "7"}, "", "", []string{"build"})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckLogs() error = %v", err)
 	}
@@ -668,7 +669,7 @@ func TestFetchFailedCheckTargetLogsAggregatesEverySelectedJob(t *testing.T) {
 		"tea actions runs logs 10 --job 11 --repo owner/repo --login work": {stdout: "Logs for job 11:\n---\nlint failed\n"},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{Name: "build", ProviderID: "gitea-job:10"}, {Name: "lint", ProviderID: "gitea-job:11"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{Name: "build", ProviderID: "gitea-job:10"}, {Name: "lint", ProviderID: "gitea-job:11"}})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckTargetLogs() error = %v", err)
 	}
@@ -688,7 +689,7 @@ func TestFetchFailedCheckTargetLogsReturnsPartialLogsWithRetrievalError(t *testi
 		"tea actions runs logs 10 --job 11 --repo owner/repo --login work":                      {stderr: "expired", code: 1},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{ProviderID: "gitea-job:10"}, {ProviderID: "gitea-job:11"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{ProviderID: "gitea-job:10"}, {ProviderID: "gitea-job:11"}})
 	if err != nil || len(logs) != 2 || logs[0].Output != "build failed" || logs[1].Err == nil || !strings.Contains(logs[1].Err.Error(), "job 11") {
 		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want retained partial logs and job 11 error", logs, err)
 	}
@@ -703,7 +704,7 @@ func TestFetchFailedCheckTargetLogsReportsMissingSelectedJob(t *testing.T) {
 		"tea api --login work /repos/owner/repo/actions/runs/10/jobs":                           {stdout: `{"jobs":[{"id":10,"name":"build","status":"completed","conclusion":"failure","head_sha":"abc123"}]}`},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	logs, err := host.FetchFailedCheckTargetLogs(context.Background(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{ProviderID: "gitea-job:999"}})
+	logs, err := host.FetchFailedCheckTargetLogs(t.Context(), &scm.PR{Number: "7"}, "", "abc123", []scm.CheckTarget{{ProviderID: "gitea-job:999"}})
 	if err != nil || len(logs) != 1 || logs[0].Err == nil || !strings.Contains(logs[0].Err.Error(), "gitea-job:999") {
 		t.Fatalf("FetchFailedCheckTargetLogs() = (%+v, %v), want explicit missing-target error", logs, err)
 	}
@@ -728,7 +729,7 @@ func TestFetchFailedCheckLogsSelectsHighestIDRunWhenListOrderIsNotNewestFirst(t 
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	logs, err := host.FetchFailedCheckLogs(context.Background(), &scm.PR{Number: "7"}, "", "", []string{"build"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), &scm.PR{Number: "7"}, "", "", []string{"build"})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckLogs() error = %v", err)
 	}
@@ -763,7 +764,7 @@ func TestFetchFailedCheckLogsSearchesPastAHigherIDRunForAnotherCommit(t *testing
 		},
 	}), nil, "gitea.example.com", "work", "owner/repo")
 
-	logs, err := host.FetchFailedCheckLogs(context.Background(), &scm.PR{Number: "7"}, "", "abc123", []string{"build"})
+	logs, err := host.FetchFailedCheckLogs(t.Context(), &scm.PR{Number: "7"}, "", "abc123", []string{"build"})
 	if err != nil {
 		t.Fatalf("FetchFailedCheckLogs() error = %v", err)
 	}
@@ -776,7 +777,7 @@ func TestFetchFailedCheckLogsReturnsEmptyForNoFailingNames(t *testing.T) {
 	t.Parallel()
 
 	host := New(giteaTestCmdFactory(nil), nil, "gitea.example.com", "work", "owner/repo")
-	logs, err := host.FetchFailedCheckLogs(context.Background(), &scm.PR{Number: "7"}, "", "", nil)
+	logs, err := host.FetchFailedCheckLogs(t.Context(), &scm.PR{Number: "7"}, "", "", nil)
 	if err != nil {
 		t.Fatalf("FetchFailedCheckLogs() error = %v", err)
 	}

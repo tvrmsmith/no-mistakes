@@ -358,6 +358,17 @@ func (b *checkRerunBudget) cancelledAfterRerun(checks []scm.Check) (unresolved, 
 // Checks this run DID re-run are deliberately excluded: cancelledAfterRerun
 // owns those, because it also has to tell a republished rerun apart from a
 // rollup that has not refreshed yet, and it spends rollup grace while doing so.
+//
+// These checks have to reach the same gate, or a repository on the default
+// rerun budget of 0 polls a rollup that has already stopped moving until its
+// idle timeout. There is no settling window beyond the caller's own "nothing
+// is still pending" condition, for the same reason a genuine failure gets
+// none: a status rollup is per commit, so a cancellation in it belongs to the
+// commit under test and cannot be a leftover from a head this run already
+// replaced. Only the cancel bucket qualifies. A check whose state this version
+// does not recognize is not known to be terminal, so it stays on the
+// wait-then-timeout path rather than being escalated as a conclusion the
+// provider never reported.
 func (b *checkRerunBudget) cancelledWithoutRerun(checks []scm.Check) []string {
 	var names []string
 	seen := map[string]struct{}{}
