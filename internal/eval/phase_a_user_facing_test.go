@@ -1,13 +1,13 @@
 package eval
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -23,7 +23,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		if evidenceDir == "" {
 			return
 		}
-		if err := os.WriteFile(filepath.Join(evidenceDir, name), []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(evidenceDir, name), []byte(body), 0o600); err != nil {
 			t.Fatalf("write evidence %s: %v", name, err)
 		}
 	}
@@ -43,7 +43,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 			changedFiles:  []string{"main.go"},
 			roundFindings: findingsJSON(findingSpec{ID: "f1", Severity: "error", File: "main.go", Line: 3, Description: "bug", Action: "ask-user"}),
 		})
-		got, err := store.ListCases(context.Background(), "diversified")
+		got, err := store.ListCases(t.Context(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,14 +81,14 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 			changedFiles:  []string{"main.go"},
 			roundFindings: findingsJSON(findingSpec{ID: "c", Severity: "error", File: "main.go", Line: 1, Description: "c", Action: "ask-user"}),
 		})
-		div, err := store.ListCases(context.Background(), "diversified")
+		div, err := store.ListCases(t.Context(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if ids := caseIDs(div); len(ids) != 1 || ids[0] != pinned.ID {
 			t.Fatalf("diversified = %v, want official pin %s", ids, pinned.ID)
 		}
-		leftover, err := store.ListCases(context.Background(), "tune")
+		leftover, err := store.ListCases(t.Context(), "tune")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +107,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		writeGoldStratum(t, store, "repo-heavy", "error", 5, 10)
 		writeGoldStratum(t, store, "repo-mid", "warning", 3, 20)
 		writeGoldStratum(t, store, "repo-light", "info", 1, 30)
-		before, err := store.ListCases(context.Background(), "diversified")
+		before, err := store.ListCases(t.Context(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		beforeOut := summariesJSON(t, store)
 
 		store.SetDiversifiedSize(0)
-		after, err := store.ListCases(context.Background(), "diversified")
+		after, err := store.ListCases(t.Context(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -144,7 +144,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		writeGoldStratum(t, store, "repo-a", "error", 10, 10)
 		writeGoldStratum(t, store, "repo-b", "error", 10, 20)
 		writeGoldStratum(t, store, "repo-c", "info", 2, 30)
-		before, err := store.ListCases(context.Background(), "diversified")
+		before, err := store.ListCases(t.Context(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,7 +158,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		beforeOut := summariesJSON(t, store)
 
 		store.SetDiversifiedSize(5)
-		after, err := store.ListCases(context.Background(), "diversified")
+		after, err := store.ListCases(t.Context(), "diversified")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -201,9 +201,9 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 	})
 
 	t.Run("capture labels shipped-unfixed as FP and leaves an undecided round unlabeled", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		p, sourceDB, run, _, reviewRound := setupCapturedRun(t, ctx)
-		defer sourceDB.Close()
+		defer closers.Quiet(sourceDB)
 		if err := sourceDB.SetStepRoundSelection(reviewRound.ID, nil, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -239,7 +239,7 @@ func TestPhaseAUserFacingTranscripts(t *testing.T) {
 		// stays unlabeled: shipping unfixed is only evidence of a false positive
 		// when the human actually resolved the gate without selecting the finding.
 		p2, sourceDB2, run2, _, firstRound := setupCapturedRun(t, ctx)
-		defer sourceDB2.Close()
+		defer closers.Quiet(sourceDB2)
 		if err := sourceDB2.SetStepRoundSelection(firstRound.ID, nil, ""); err != nil {
 			t.Fatal(err)
 		}

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	toon "github.com/toon-format/toon-go"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -766,7 +766,7 @@ func TestRerunParamsIncludeSkipSteps(t *testing.T) {
 func TestPreflightGuardReportsWorkingTreeCheckError(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	guard := preflightGuard(context.Background(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
+	guard := preflightGuard(t.Context(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
 	if guard == nil {
 		t.Fatal("expected guard for failed working tree check")
 	}
@@ -789,23 +789,23 @@ func TestPreflightGuardDirtyTreeNamesUntrackedFiles(t *testing.T) {
 	run(t, dir, "git", "config", "user.name", "Test")
 	run(t, dir, "git", "commit", "--allow-empty", "-m", "initial")
 	run(t, dir, "git", "checkout", "-b", "feature/x")
-	if err := os.MkdirAll(filepath.Join(dir, "docs", "plans"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "plans"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "docs", "plans", "spec.md"), []byte("spec\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "docs", "plans", "spec.md"), []byte("spec\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("scratch/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("scratch/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "scratch"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "scratch"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "scratch", "notes.md"), []byte("scratch\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "scratch", "notes.md"), []byte("scratch\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	guard := preflightGuard(context.Background(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
+	guard := preflightGuard(t.Context(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
 	if guard == nil {
 		t.Fatal("expected guard for uncommitted changes")
 	}
@@ -839,17 +839,17 @@ func TestPreflightGuardDirtyTreeTrackedOnlyHasNoUntrackedList(t *testing.T) {
 	run(t, dir, "git", "init")
 	run(t, dir, "git", "config", "user.email", "test@test.com")
 	run(t, dir, "git", "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	run(t, dir, "git", "add", ".")
 	run(t, dir, "git", "commit", "-m", "initial")
 	run(t, dir, "git", "checkout", "-b", "feature/x")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# changed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# changed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	guard := preflightGuard(context.Background(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
+	guard := preflightGuard(t.Context(), &axiEnv{repo: &db.Repo{DefaultBranch: "main"}}, "feature/x")
 	if guard == nil {
 		t.Fatal("expected guard for uncommitted changes")
 	}
@@ -922,7 +922,7 @@ func TestAxiHomeStartsCurrentBranchWhenOtherBranchIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepoWithID("repo-1", rawRoot, "origin", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)
@@ -947,7 +947,7 @@ func TestAxiHomeStartsCurrentBranchWhenOtherBranchIsActive(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiHome(cmd); err != nil {
 		t.Fatalf("axi home: %v\n%s", err, out.String())
@@ -1005,7 +1005,7 @@ func TestAxiStatusEscapesControlBytesInAwaitingTestGate(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiStatus(cmd, dbRun.ID); err != nil {
 		t.Fatalf("axi status: %v\n%s", err, out.String())
@@ -1036,18 +1036,18 @@ func TestAxiLogsFullEscapesControlByteOutsideTailWithoutRewritingLog(t *testing.
 		t.Fatalf("mark run running: %v", err)
 	}
 	logDir := p.RunLogDir(dbRun.ID)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		t.Fatalf("mkdir log dir: %v", err)
 	}
 	raw := []byte("bad\x1fvalue\n" + strings.Repeat("later passing line\n", logTailLines+5))
 	logPath := filepath.Join(logDir, "test.log")
-	if err := os.WriteFile(logPath, raw, 0o644); err != nil {
+	if err := os.WriteFile(logPath, raw, 0o600); err != nil {
 		t.Fatalf("write test log: %v", err)
 	}
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiLogs(cmd, "test", dbRun.ID, true); err != nil {
 		t.Fatalf("axi logs --full: %v\n%s", err, out.String())
@@ -1086,14 +1086,14 @@ func TestAxiStatusIgnoresInvalidGlobalConfig(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatalf("ensure dirs: %v", err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o600); err != nil {
 		t.Fatalf("write invalid config: %v", err)
 	}
 	database, err := db.Open(p.DB())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	repo, err := database.InsertRepoWithID("repo-1", rawRoot, "origin", "main")
 	if err != nil {
 		t.Fatalf("insert repo: %v", err)
@@ -1115,7 +1115,7 @@ func TestAxiStatusIgnoresInvalidGlobalConfig(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiStatus(cmd, dbRun.ID); err != nil {
 		t.Fatalf("axi status should not fail on invalid global config: %v\n%s", err, out.String())
@@ -1149,21 +1149,21 @@ func TestAxiRunReportsInvalidGlobalConfig(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatalf("ensure dirs: %v", err)
 	}
-	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o600); err != nil {
 		t.Fatalf("write invalid config: %v", err)
 	}
 	database, err := db.Open(p.DB())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	if _, err := database.InsertRepoWithID("repo-1", rawRoot, "origin", "main"); err != nil {
 		t.Fatalf("insert repo: %v", err)
 	}
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiRun(cmd, false, nil, "user goal", ""); err == nil {
 		t.Fatalf("axi run should fail on invalid global config:\n%s", out.String())
@@ -1187,7 +1187,7 @@ func TestAxiAbortByRunIDNoOpWhenDaemonStopped(t *testing.T) {
 
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	cmd.SetOut(&out)
 	if err := runAxiAbortByRunID(cmd, "some-run-id"); err != nil {
 		t.Fatalf("abort by id: %v\n%s", err, out.String())

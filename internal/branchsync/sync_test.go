@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
@@ -30,7 +31,7 @@ type syncFixture struct {
 
 func newSyncFixture(t *testing.T) *syncFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	remote := filepath.Join(root, "upstream.git")
 	mustRun(t, root, "init", "--bare", remote)
@@ -60,7 +61,7 @@ func newSyncFixture(t *testing.T) *syncFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 	repo, err := database.InsertRepo(local, remote, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -329,6 +330,7 @@ func TestEquivalentButDivergedClassification(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := newSplitLocalSyncFixture(t)
 			rebuildPipelineHead(t, f, tc.commits)
 
@@ -491,6 +493,7 @@ func TestEquivalentDivergenceRefusesUnrepresentedEdgeDeletion(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncFixture(t)
 			mustWrite(t, filepath.Join(f.local, "edge.txt"), tc.base)
 			mustRun(t, f.local, "add", "edge.txt")
@@ -537,7 +540,7 @@ func TestApplyReportsHonestFinalStateWhenPostMergeHookMutatesWorktree(t *testing
 	hooks := filepath.Join(f.local, ".git", "hooks")
 	hook := filepath.Join(hooks, "post-merge")
 	mustWrite(t, hook, "#!/bin/sh\nprintf hook > hook-output.txt\nexit 1\n")
-	if err := os.Chmod(hook, 0o755); err != nil {
+	if err := os.Chmod(hook, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	state := f.service.Apply(f.ctx)
@@ -575,6 +578,7 @@ func TestDirtyClassesRefuseBeforeNetworkAndLeaveHeadIndexWorktree(t *testing.T) 
 	}
 	for name, prepare := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncFixture(t)
 			prepare(f)
 			beforeIndex, err := os.ReadFile(filepath.Join(f.local, ".git", "index"))
@@ -611,6 +615,7 @@ func TestOperationInProgressClassesRefuse(t *testing.T) {
 		{"rebase-merge/head-name", "blocked_rebase_in_progress"},
 	} {
 		t.Run(tc.marker, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncFixture(t)
 			gitPath := mustRun(t, f.local, "rev-parse", "--git-path", tc.marker)
 			if !filepath.IsAbs(gitPath) {
@@ -629,6 +634,7 @@ func TestLocalAheadAndDivergedRefuse(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ahead", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		if state := f.service.Apply(f.ctx); !state.Changed {
 			t.Fatal("setup sync failed")
@@ -642,6 +648,7 @@ func TestLocalAheadAndDivergedRefuse(t *testing.T) {
 		}
 	})
 	t.Run("diverged", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		mustWrite(t, filepath.Join(f.local, "followup.txt"), "diverged\n")
 		mustRun(t, f.local, "add", "followup.txt")
@@ -657,6 +664,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 	t.Parallel()
 
 	t.Run("advanced", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		writer := cloneRemoteBranch(t, f.remote)
 		mustWrite(t, filepath.Join(writer, "advanced.txt"), "advanced\n")
@@ -668,6 +676,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("rewritten", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		writer := cloneRemoteBranch(t, f.remote)
 		mustRun(t, writer, "checkout", "--orphan", "rewrite")
@@ -681,6 +690,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("missing open", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		if err := f.db.UpdateRunPRState(f.run.ID, "open"); err != nil {
 			t.Fatal(err)
@@ -691,6 +701,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("missing merged noop", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		if err := f.db.UpdateRunPRState(f.run.ID, "merged"); err != nil {
 			t.Fatal(err)
@@ -705,6 +716,7 @@ func TestRemoteDeviationMissingAndOfflineFailClosed(t *testing.T) {
 		}
 	})
 	t.Run("offline", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		if err := os.Rename(f.remote, f.remote+".offline"); err != nil {
 			t.Fatal(err)
@@ -722,6 +734,7 @@ func TestTargetChangeLegacyDetachedAndGenerationRaceRefuse(t *testing.T) {
 	t.Parallel()
 
 	t.Run("target changed", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		other := filepath.Join(t.TempDir(), "other.git")
 		mustRun(t, filepath.Dir(other), "init", "--bare", other)
@@ -735,6 +748,7 @@ func TestTargetChangeLegacyDetachedAndGenerationRaceRefuse(t *testing.T) {
 		}
 	})
 	t.Run("active run without push provenance", func(t *testing.T) {
+		t.Parallel()
 		// A newer active run with no push binding owns the branch: the refusal
 		// names pipeline custody (not a legacy-unbound misclassification) and
 		// points at the active run.
@@ -755,6 +769,7 @@ func TestTargetChangeLegacyDetachedAndGenerationRaceRefuse(t *testing.T) {
 		}
 	})
 	t.Run("detached", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		mustRun(t, f.local, "checkout", "--detach", f.old)
 		if state := f.service.Apply(f.ctx); state.State != StateAmbiguousContext {
@@ -762,6 +777,7 @@ func TestTargetChangeLegacyDetachedAndGenerationRaceRefuse(t *testing.T) {
 		}
 	})
 	t.Run("generation race", func(t *testing.T) {
+		t.Parallel()
 		f := newSyncFixture(t)
 		f.service.beforeApply = func() {
 			if err := f.db.UpdateRunPushBinding(f.run.ID, db.PushBinding{HeadSHA: f.pushed, TargetKind: "upstream", TargetFingerprint: TargetFingerprint(f.remote), Ref: "refs/heads/feature/sync"}); err != nil {
@@ -866,7 +882,7 @@ func TestRefreshSlowSuccessfulLsRemoteDoesNotStealFetchBudget(t *testing.T) {
 		// deadline-isolation test depend on platform-specific subprocess
 		// startup time. On Windows, starting the process can legitimately
 		// consume this deliberately tiny test budget even when it is fresh.
-		return gitpkg.FetchRemoteBranchToPrivateRef(context.Background(), dir, remote, branch, localRef)
+		return gitpkg.FetchRemoteBranchToPrivateRef(t.Context(), dir, remote, branch, localRef)
 	}
 
 	state := f.service.Refresh(f.ctx)
@@ -1011,7 +1027,7 @@ func TestRefreshParentCancellationStopsFetchAfterLsRemoteSucceeds(t *testing.T) 
 	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.old {
 		t.Fatal("HEAD changed despite a cancelled parent context")
 	}
-	if _, err := gitpkg.Run(context.Background(), f.local, "show-ref", "--verify", "refs/no-mistakes/sync/"+f.run.ID); err == nil {
+	if _, err := gitpkg.Run(t.Context(), f.local, "show-ref", "--verify", "refs/no-mistakes/sync/"+f.run.ID); err == nil {
 		t.Fatal("cancelled refresh created a private fetch ref")
 	}
 }
@@ -1039,7 +1055,7 @@ func configureIdentity(t *testing.T, dir string) {
 
 func mustRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := gitpkg.Run(context.Background(), dir, args...)
+	out, err := gitpkg.Run(t.Context(), dir, args...)
 	if err != nil {
 		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
 	}
@@ -1048,10 +1064,10 @@ func mustRun(t *testing.T, dir string, args ...string) string {
 
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -32,7 +33,7 @@ func piReviewReply(t *testing.T, review string) string {
 func installFakePiSequence(t *testing.T, fakeDir string, replies ...string) {
 	t.Helper()
 	for i, reply := range replies {
-		if err := os.WriteFile(filepath.Join(fakeDir, fmt.Sprintf("reply-%d.jsonl", i+1)), []byte(reply), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(fakeDir, fmt.Sprintf("reply-%d.jsonl", i+1)), []byte(reply), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -44,7 +45,7 @@ n=$((n + 1))
 printf '%%s' "$n" > "$dir/calls"
 cat "$dir/reply-$n.jsonl"
 `, fakeDir)
-	if err := os.WriteFile(filepath.Join(fakeDir, "pi"), []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(fakeDir, "pi"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -78,9 +79,9 @@ func TestReplayTokensCoverEveryReviewAttempt(t *testing.T) {
 		{name: "two attempts that both report usage", first: blankRationale, wantReported: true, wantInput: 200, wantOutput: 40, wantFresh: 140},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-			defer sourceDB.Close()
+			defer closers.Quiet(sourceDB)
 
 			fakeDir := t.TempDir()
 			installFakePiSequence(t, fakeDir, piReviewReply(t, tc.first), piReviewReply(t, valid))
@@ -90,7 +91,7 @@ func TestReplayTokensCoverEveryReviewAttempt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer store.Close()
+			defer closers.Quiet(store)
 			if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -172,7 +173,7 @@ func TestObservedAgentCountsEveryAdapterAttempt(t *testing.T) {
 		},
 		err: errors.New("claude structured output rejected"),
 	}}
-	if _, err := observed.Run(context.Background(), agent.RunOpts{}); err == nil {
+	if _, err := observed.Run(t.Context(), agent.RunOpts{}); err == nil {
 		t.Fatal("expected the exhausted turn's error to surface")
 	}
 	if observed.usageMissing {
@@ -192,7 +193,7 @@ func TestObservedAgentMarksUsageIncompleteWhenAnAttemptLacksIt(t *testing.T) {
 		attempts: []*agent.Result{reportedUsage(50_000, 100, 5_000), nil},
 		err:      errors.New("claude exited: status 1"),
 	}}
-	if _, err := observed.Run(context.Background(), agent.RunOpts{}); err == nil {
+	if _, err := observed.Run(t.Context(), agent.RunOpts{}); err == nil {
 		t.Fatal("expected the failed turn's error to surface")
 	}
 	if !observed.usageMissing {
@@ -204,7 +205,7 @@ func TestObservedAgentMarksUsageIncompleteWhenAnAttemptLacksIt(t *testing.T) {
 // no attempts at all, where the returned result is the whole turn.
 func TestObservedAgentSumsASucceedingTurnsUsage(t *testing.T) {
 	observed := &observedAgent{inner: &fixedResultAgent{result: reportedUsage(100, 20, 30)}}
-	if _, err := observed.Run(context.Background(), agent.RunOpts{}); err != nil {
+	if _, err := observed.Run(t.Context(), agent.RunOpts{}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if observed.usageMissing {

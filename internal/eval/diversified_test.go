@@ -446,7 +446,7 @@ func writeGoldStratum(t *testing.T, store *Store, fingerprint, severity string, 
 func writeSyntheticCase(t *testing.T, store *Store, spec syntheticCaseSpec) Case {
 	t.Helper()
 	dir := store.caseDir(spec.id)
-	if err := os.MkdirAll(filepath.Join(dir, "original"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "original"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	changedFiles := spec.changedFiles

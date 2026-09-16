@@ -316,7 +316,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.reconcilePending {
 			return m, nil
 		}
-		return m, m.startResubscribe()
+		// The command is built first: it mutates m, and the mutation has to be
+		// in the model this returns.
+		cmd := m.startResubscribe()
+		return m, cmd
 
 	case resubscribeMsg:
 		if msg.subscriptionID != m.subscriptionID {
@@ -399,7 +402,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.done || m.quitting {
 			return m, nil
 		}
-		return m, m.startSpinnerIfNeeded()
+		cmd := m.startSpinnerIfNeeded()
+		return m, cmd
 
 	case errMsg:
 		m.err = msg.err

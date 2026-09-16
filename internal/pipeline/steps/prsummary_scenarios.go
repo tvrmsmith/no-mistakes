@@ -10,15 +10,6 @@ import (
 
 // This file owns how the Test step's live-validation contract - the derived
 // scenarios and the run's verdict - reaches a human reviewer.
-//
-// The contract exists because "tests passed" answered a question nobody asked:
-// a reviewer wants to know which end-user scenarios were driven against the
-// real product, which were only asserted against stubs, and which could not be
-// driven here at all. So every surface renders the same three facts per
-// scenario (what was exercised, what happened, whether it was live) plus the
-// step's own verdict, and the machine-readable half of the same answer rides
-// the PR attestation as live_validation for a consumer that must decide
-// whether this change was live validated without reading prose.
 
 // collectTestingScenarios returns the scenarios recorded for the test step,
 // reading the same findings payload the rest of the Testing section reads so a
@@ -61,6 +52,15 @@ func collectTestingVerdict(sr *db.StepResult, rounds []*db.StepRound) string {
 // renderLiveValidationLine is the one-line answer to "was this live
 // validated": the verdict plus how much of the scenario list was actually
 // driven against the product. It returns "" when neither is recorded.
+//
+// The contract exists because "tests passed" answered a question nobody asked:
+// a reviewer wants to know which end-user scenarios were driven against the
+// real product, which were only asserted against stubs, and which could not be
+// driven here at all. So every surface renders the same three facts per
+// scenario (what was exercised, what happened, whether it was live) plus the
+// step's own verdict, and the machine-readable half of the same answer rides
+// the PR attestation as live_validation for a consumer that must decide whether
+// this change was live validated without reading prose.
 func renderLiveValidationLine(scenarios []types.TestScenario, verdict string) string {
 	live, total := types.LiveScenarioCounts(scenarios)
 	if !types.IsKnownTestVerdict(verdict) && total == 0 {
@@ -76,7 +76,7 @@ func renderLiveValidationLine(scenarios []types.TestScenario, verdict string) st
 		b.WriteString("no verdict recorded")
 	}
 	if total > 0 {
-		b.WriteString(fmt.Sprintf(" - %d of %d scenarios driven live against the product", live, total))
+		fmt.Fprintf(&b, " - %d of %d scenarios driven live against the product", live, total)
 	}
 	return b.String()
 }
@@ -133,13 +133,13 @@ func renderScenarioTable(scenarios []types.TestScenario, flavor prBodyFlavor) st
 		if result == types.ScenarioResultUntested && strings.TrimSpace(scenario.Reason) != "" {
 			basis = strings.TrimSpace(scenario.Reason)
 		}
-		b.WriteString(fmt.Sprintf("| %s | %s %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %s %s | %s | %s |\n",
 			name,
 			scenarioResultEmoji(result),
 			result,
 			live,
 			scenarioCell(basis, flavor),
-		))
+		)
 		rows++
 	}
 	if rows == 0 {

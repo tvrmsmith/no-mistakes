@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -33,7 +34,7 @@ func shortTempRoot(t *testing.T) *paths.Paths {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { removeTempRoot(t, dir) })
 	p := paths.WithRoot(dir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -124,7 +125,7 @@ func TestRegisterHandlers_HealthReportsProtocolVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { removeTempRoot(t, dir) })
 	sock := filepath.Join(dir, "s")
 
 	if err := srv.Listen(sock); err != nil {
@@ -139,7 +140,7 @@ func TestRegisterHandlers_HealthReportsProtocolVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.HealthResult
 	if err := client.Call(ipc.MethodHealth, &ipc.HealthParams{}, &result); err != nil {
@@ -504,7 +505,7 @@ func TestHookRepliesCarryTheProtocolVersionStamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var admit ipc.AdmitPushResult
 	if err := client.Call(ipc.MethodAdmitPush, &ipc.AdmitPushParams{Gate: p.RepoDir("hook-stamp-repo")}, &admit); err != nil {

@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/spf13/cobra"
 )
 
@@ -209,7 +211,7 @@ func mkdirAllNoSymlink(root, target string) error {
 			if !os.IsNotExist(err) {
 				return fmt.Errorf("stat %s: %w", current, err)
 			}
-			if err := os.Mkdir(current, 0755); err != nil {
+			if err := os.Mkdir(current, 0750); err != nil {
 				return fmt.Errorf("create %s: %w", current, err)
 			}
 			continue
@@ -251,14 +253,21 @@ func writeFileNoSymlink(path string, data []byte, force bool) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+	// Discards the staging file on any way out that did not rename it. A
+	// successful rename leaves nothing here to remove.
+	renamed := false
+	defer func() {
+		if !renamed {
+			scratch.Remove(tmpPath)
+		}
+	}()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		closers.Quiet(tmp)
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	if err := tmp.Chmod(0644); err != nil {
-		tmp.Close()
+		closers.Quiet(tmp)
 		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -267,5 +276,6 @@ func writeFileNoSymlink(path string, data []byte, force bool) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename temp file into place: %w", err)
 	}
+	renamed = true
 	return nil
 }

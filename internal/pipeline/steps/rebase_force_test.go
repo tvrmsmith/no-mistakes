@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,27 +25,27 @@ func TestRebaseStep_ForcePushSkipsOriginBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	gitCmd(t, dir, "push", "origin", "main")
 
 	// Advance main with another commit
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\nmain-update\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\nmain-update\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "main update")
 	gitCmd(t, dir, "push", "origin", "main")
 
 	// Create feature branch with user's original commit
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("user-change\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "user-change\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "user commit")
 	userCommitSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	// Simulate a prior pipeline run that added autofix commits on top and pushed
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("autofix-overwrote-user\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "autofix-overwrote-user\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "no-mistakes(review): autofix commit")
 	autofixSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -100,18 +99,18 @@ func TestRebaseStep_ForcePushOnDefaultBranchSkipsRemoteSync(t *testing.T) {
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	gitCmd(t, dir, "push", "origin", "main")
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\nuser-change\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\nuser-change\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "user commit")
 	userCommitSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "main")
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\nautofix\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\nautofix\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "no-mistakes(review): autofix commit")
 	autofixSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -158,18 +157,18 @@ func TestRebaseStep_ForcePushOnDefaultBranchAllowsRewrittenRemoteHead(t *testing
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	gitCmd(t, dir, "push", "origin", "main")
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\nuser-change\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\nuser-change\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "user commit")
 	userCommitSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "main")
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\nautofix\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\nautofix\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "no-mistakes(review): autofix commit")
 	autofixSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -215,18 +214,18 @@ func TestRebaseStep_ForcePushOnDefaultBranchStopsWhenRemoteAdvanced(t *testing.T
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	gitCmd(t, dir, "push", "origin", "main")
 
-	os.WriteFile(filepath.Join(dir, "user.txt"), []byte("user-change\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "user.txt"), "user-change\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "user commit")
 	userCommitSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "main")
 
-	os.WriteFile(filepath.Join(dir, "autofix.txt"), []byte("autofix\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "autofix.txt"), "autofix\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "no-mistakes(review): autofix commit")
 	autofixSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -239,7 +238,7 @@ func TestRebaseStep_ForcePushOnDefaultBranchStopsWhenRemoteAdvanced(t *testing.T
 	gitCmd(t, other, "config", "user.name", "test")
 	gitCmd(t, other, "config", "user.email", "test@test.com")
 	gitCmd(t, other, "checkout", "main")
-	os.WriteFile(filepath.Join(other, "remote.txt"), []byte("remote update\n"), 0o644)
+	writeFile(t, filepath.Join(other, "remote.txt"), "remote update\n")
 	gitCmd(t, other, "add", "-A")
 	gitCmd(t, other, "commit", "-m", "remote update")
 	gitCmd(t, other, "push", "origin", "main")
@@ -277,7 +276,7 @@ func TestRebaseStep_NormalPushSyncsOriginBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -285,13 +284,13 @@ func TestRebaseStep_NormalPushSyncsOriginBranch(t *testing.T) {
 
 	// Create feature branch with one commit
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("v1\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "v1\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature v1")
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	// Simulate another commit on origin/feature (e.g. from a prior pipeline run)
-	os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("extra\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "extra.txt"), "extra\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "extra commit on feature")
 	gitCmd(t, dir, "push", "origin", "feature")
@@ -328,11 +327,11 @@ func TestIsForcePush_IgnoresMergeBaseLookupErrors(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 
-	if isForcePush(context.Background(), dir, "", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef") {
+	if isForcePush(t.Context(), dir, "", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef") {
 		t.Fatal("expected missing base SHA lookup error to not be treated as force push")
 	}
 }
@@ -349,20 +348,20 @@ func TestIsForcePush_RerunAfterNormalRebaseIsNotForcePush(t *testing.T) {
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("v1\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "v1\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature v1")
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\nmain update\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\nmain update\n")
 	gitCmd(t, dir, "checkout", "main")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "main update")
@@ -372,7 +371,7 @@ func TestIsForcePush_RerunAfterNormalRebaseIsNotForcePush(t *testing.T) {
 	gitCmd(t, dir, "rebase", "origin/main")
 	gitCmd(t, dir, "push", "origin", "feature", "--force-with-lease")
 
-	if isForcePush(context.Background(), dir, "feature", baseSHA) {
+	if isForcePush(t.Context(), dir, "feature", baseSHA) {
 		t.Fatal("expected rerun after normal rebase to not be treated as force push")
 	}
 }
@@ -389,20 +388,20 @@ func TestIsForcePush_RerunWithoutLocalRemoteRefIsNotForcePush(t *testing.T) {
 	gitCmd(t, originRepo, "checkout", "-b", "main")
 	gitCmd(t, originRepo, "remote", "add", "origin", upstream)
 
-	os.WriteFile(filepath.Join(originRepo, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(originRepo, "app.txt"), "base\n")
 	gitCmd(t, originRepo, "add", "-A")
 	gitCmd(t, originRepo, "commit", "-m", "base commit")
 	gitCmd(t, originRepo, "push", "origin", "main")
 
 	gitCmd(t, originRepo, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(originRepo, "feature.txt"), []byte("v1\n"), 0o644)
+	writeFile(t, filepath.Join(originRepo, "feature.txt"), "v1\n")
 	gitCmd(t, originRepo, "add", "-A")
 	gitCmd(t, originRepo, "commit", "-m", "feature v1")
 	gitCmd(t, originRepo, "push", "origin", "feature")
 	baseSHA := gitCmd(t, originRepo, "rev-parse", "HEAD")
 
 	gitCmd(t, originRepo, "checkout", "main")
-	os.WriteFile(filepath.Join(originRepo, "app.txt"), []byte("base\nmain update\n"), 0o644)
+	writeFile(t, filepath.Join(originRepo, "app.txt"), "base\nmain update\n")
 	gitCmd(t, originRepo, "add", "-A")
 	gitCmd(t, originRepo, "commit", "-m", "main update")
 	gitCmd(t, originRepo, "push", "origin", "main")
@@ -421,7 +420,7 @@ func TestIsForcePush_RerunWithoutLocalRemoteRefIsNotForcePush(t *testing.T) {
 	gitCmd(t, worktree, "checkout", "--detach", "refs/tmp/feature")
 	gitCmd(t, worktree, "update-ref", "-d", "refs/tmp/feature")
 
-	if isForcePush(context.Background(), worktree, "feature", baseSHA) {
+	if isForcePush(t.Context(), worktree, "feature", baseSHA) {
 		t.Fatal("expected rerun without local origin/feature ref to not be treated as force push")
 	}
 }
@@ -438,13 +437,13 @@ func TestIsForcePush_StaleLocalRemoteRefUsesAuthoritativeRemoteTip(t *testing.T)
 	gitCmd(t, originRepo, "checkout", "-b", "main")
 	gitCmd(t, originRepo, "remote", "add", "origin", upstream)
 
-	os.WriteFile(filepath.Join(originRepo, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(originRepo, "app.txt"), "base\n")
 	gitCmd(t, originRepo, "add", "-A")
 	gitCmd(t, originRepo, "commit", "-m", "base commit")
 	gitCmd(t, originRepo, "push", "origin", "main")
 
 	gitCmd(t, originRepo, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(originRepo, "feature.txt"), []byte("ancestor\n"), 0o644)
+	writeFile(t, filepath.Join(originRepo, "feature.txt"), "ancestor\n")
 	gitCmd(t, originRepo, "add", "-A")
 	gitCmd(t, originRepo, "commit", "-m", "feature ancestor")
 	ancestorSHA := gitCmd(t, originRepo, "rev-parse", "HEAD")
@@ -459,7 +458,7 @@ func TestIsForcePush_StaleLocalRemoteRefUsesAuthoritativeRemoteTip(t *testing.T)
 	gitCmd(t, worktree, "fetch", "--no-tags", "origin", "+refs/heads/feature:refs/remotes/origin/feature")
 	gitCmd(t, worktree, "checkout", "--detach", ancestorSHA)
 
-	os.WriteFile(filepath.Join(originRepo, "feature.txt"), []byte("remote tip\n"), 0o644)
+	writeFile(t, filepath.Join(originRepo, "feature.txt"), "remote tip\n")
 	gitCmd(t, originRepo, "add", "-A")
 	gitCmd(t, originRepo, "commit", "-m", "remote tip")
 	baseSHA := gitCmd(t, originRepo, "rev-parse", "HEAD")
@@ -467,11 +466,11 @@ func TestIsForcePush_StaleLocalRemoteRefUsesAuthoritativeRemoteTip(t *testing.T)
 	gitCmd(t, worktree, "fetch", "--no-tags", "origin", "+refs/heads/feature:refs/tmp/base")
 	gitCmd(t, worktree, "update-ref", "-d", "refs/tmp/base")
 
-	os.WriteFile(filepath.Join(worktree, "feature.txt"), []byte("rewritten tip\n"), 0o644)
+	writeFile(t, filepath.Join(worktree, "feature.txt"), "rewritten tip\n")
 	gitCmd(t, worktree, "add", "-A")
 	gitCmd(t, worktree, "commit", "-m", "rewritten tip")
 
-	if !isForcePush(context.Background(), worktree, "feature", baseSHA) {
+	if !isForcePush(t.Context(), worktree, "feature", baseSHA) {
 		t.Fatal("expected stale local origin/feature ref to defer to authoritative remote tip")
 	}
 }
@@ -485,17 +484,17 @@ func TestIsForcePush_LsRemoteFailureIsNotForcePush(t *testing.T) {
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
-	os.WriteFile(filepath.Join(dir, "app.txt"), []byte("rewritten\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "app.txt"), "rewritten\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "rewritten commit")
 	gitCmd(t, dir, "reset", "--hard", "HEAD~1")
 
-	if isForcePush(context.Background(), dir, "main", baseSHA) {
+	if isForcePush(t.Context(), dir, "main", baseSHA) {
 		t.Fatal("expected ls-remote failure to not be treated as force push")
 	}
 }
@@ -512,13 +511,13 @@ func TestIsForcePush_MissingRemoteObjectIsNotForcePush(t *testing.T) {
 	gitCmd(t, originRepo, "checkout", "-b", "main")
 	gitCmd(t, originRepo, "remote", "add", "origin", upstream)
 
-	os.WriteFile(filepath.Join(originRepo, "app.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(originRepo, "app.txt"), "base\n")
 	gitCmd(t, originRepo, "add", "-A")
 	gitCmd(t, originRepo, "commit", "-m", "base commit")
 	gitCmd(t, originRepo, "push", "origin", "main")
 
 	gitCmd(t, originRepo, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(originRepo, "feature.txt"), []byte("remote feature\n"), 0o644)
+	writeFile(t, filepath.Join(originRepo, "feature.txt"), "remote feature\n")
 	gitCmd(t, originRepo, "add", "-A")
 	gitCmd(t, originRepo, "commit", "-m", "feature commit")
 	gitCmd(t, originRepo, "push", "origin", "feature")
@@ -531,13 +530,13 @@ func TestIsForcePush_MissingRemoteObjectIsNotForcePush(t *testing.T) {
 	gitCmd(t, worktree, "fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main")
 	gitCmd(t, worktree, "checkout", "--detach", "origin/main")
 
-	os.WriteFile(filepath.Join(worktree, "local.txt"), []byte("local only\n"), 0o644)
+	writeFile(t, filepath.Join(worktree, "local.txt"), "local only\n")
 	gitCmd(t, worktree, "add", "-A")
 	gitCmd(t, worktree, "commit", "-m", "local commit")
 	baseSHA := gitCmd(t, worktree, "rev-parse", "HEAD")
 	gitCmd(t, worktree, "checkout", "--detach", "origin/main")
 
-	if isForcePush(context.Background(), worktree, "feature", baseSHA) {
+	if isForcePush(t.Context(), worktree, "feature", baseSHA) {
 		t.Fatal("expected missing remote tip object to not be treated as force push")
 	}
 }

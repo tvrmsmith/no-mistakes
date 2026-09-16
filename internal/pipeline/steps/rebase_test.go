@@ -27,8 +27,8 @@ func TestRebaseStep_ConflictTriesAllTargets(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("base\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "other.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "base\n")
+	writeFile(t, filepath.Join(dir, "other.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -36,21 +36,21 @@ func TestRebaseStep_ConflictTriesAllTargets(t *testing.T) {
 
 	// Create feature branch, push it to origin
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("feature-origin\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "feature-origin\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature origin change")
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	// Diverge local feature from origin/feature (conflicting change to shared.txt)
 	gitCmd(t, dir, "reset", "--soft", "HEAD~1")
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("feature-local\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "feature-local\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature local change")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	// Advance main with a non-conflicting change, push
 	gitCmd(t, dir, "checkout", "main")
-	os.WriteFile(filepath.Join(dir, "other.txt"), []byte("main update\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "other.txt"), "main update\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "main non-conflicting update")
 	gitCmd(t, dir, "push", "origin", "main")
@@ -105,14 +105,14 @@ func TestRebaseStep_UsesConfiguredPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base")
 	gitCmd(t, dir, "push", "origin", "main")
 
-	if err := os.WriteFile(filepath.Join(dir, "main.txt"), []byte("main\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "main.txt"), []byte("main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -120,7 +120,7 @@ func TestRebaseStep_UsesConfiguredPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "develop", "HEAD~1")
-	if err := os.WriteFile(filepath.Join(dir, "develop.txt"), []byte("develop\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "develop.txt"), []byte("develop\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -129,7 +129,7 @@ func TestRebaseStep_UsesConfiguredPRBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "develop")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -167,20 +167,20 @@ func TestRebaseStep_FixModeCallsAgent(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("base content\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "base content\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("feature change\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "feature change\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature change")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	gitCmd(t, dir, "checkout", "main")
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("main change\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "main change\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "main conflict")
 	gitCmd(t, dir, "push", "origin", "main")
@@ -191,7 +191,7 @@ func TestRebaseStep_FixModeCallsAgent(t *testing.T) {
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			// Resolve the conflict by writing the merged content
-			os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("resolved content\n"), 0o644)
+			writeFile(t, filepath.Join(dir, "shared.txt"), "resolved content\n")
 			cmd := exec.Command("git", "add", "shared.txt")
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(),
@@ -269,7 +269,7 @@ func TestRebaseStep_ForkSyncsPushBranchBeforeDefaultBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", parent)
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -282,7 +282,7 @@ func TestRebaseStep_ForkSyncsPushBranchBeforeDefaultBranch(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "feature")
 	gitCmd(t, dir, "push", fork, "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "fork.txt"), []byte("fork\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "fork.txt"), []byte("fork\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -291,7 +291,7 @@ func TestRebaseStep_ForkSyncsPushBranchBeforeDefaultBranch(t *testing.T) {
 	gitCmd(t, dir, "push", fork, "feature")
 
 	gitCmd(t, dir, "reset", "--hard", baseSHA)
-	if err := os.WriteFile(filepath.Join(dir, "local.txt"), []byte("local\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "local.txt"), []byte("local\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -334,28 +334,28 @@ func TestRebaseStep_FixModeNonConflictFailureReturnsError(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "a.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("feature\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "b.txt"), "feature\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature change")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	// Advance main so rebase is needed
 	gitCmd(t, dir, "checkout", "main")
-	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("main\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "c.txt"), "main\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "main advance")
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "checkout", "feature")
 
 	// Dirty the working tree so rebase fails without conflict
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("dirty\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "b.txt"), "dirty\n")
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
@@ -384,28 +384,28 @@ func TestRebaseStep_NonConflictFailureWithRebaseMetadataReturnsError(t *testing.
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "a.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("feature\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "b.txt"), "feature\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature change")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 
 	gitCmd(t, dir, "checkout", "main")
-	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("main\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "c.txt"), "main\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "main advance")
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "checkout", "feature")
 
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("dirty\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "b.txt"), "dirty\n")
 	rebaseMergeDir := gitCmd(t, dir, "rev-parse", "--git-path", "rebase-merge")
-	if err := os.MkdirAll(rebaseMergeDir, 0o755); err != nil {
+	if err := os.MkdirAll(rebaseMergeDir, 0o750); err != nil {
 		t.Fatalf("mkdir rebase metadata: %v", err)
 	}
 
@@ -441,7 +441,7 @@ func TestRebaseStep_LogFileNotVisibleToUser(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("content\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "f.txt"), "content\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "init")
 	sha := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -449,7 +449,7 @@ func TestRebaseStep_LogFileNotVisibleToUser(t *testing.T) {
 
 	// Feature branch with no upstream ref (will trigger fetch warning)
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "f2.txt"), []byte("feature\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "f2.txt"), "feature\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -498,25 +498,25 @@ func TestRebaseStep_RemapsUncertifiedRangeWhenHeadRewritten(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "base.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "author.txt"), []byte("author\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "author.txt"), "author\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "author")
 	fromSHA := gitCmd(t, dir, "rev-parse", "HEAD")
-	os.WriteFile(filepath.Join(dir, "fixer.txt"), []byte("fixer\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "fixer.txt"), "fixer\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "fixer")
 	toSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	gitCmd(t, dir, "checkout", "main")
-	os.WriteFile(filepath.Join(dir, "other.txt"), []byte("main update\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "other.txt"), "main update\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "main non-conflicting update")
 	gitCmd(t, dir, "push", "origin", "main")
@@ -573,20 +573,20 @@ func TestRebaseStep_HangingConflictAgentFailsAfterTimeout(t *testing.T) {
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("base\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "base\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "base commit")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "main")
 
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("feature-origin\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "feature-origin\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature origin change")
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	gitCmd(t, dir, "reset", "--soft", "HEAD~1")
-	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("feature-local\n"), 0o644)
+	writeFile(t, filepath.Join(dir, "shared.txt"), "feature-local\n")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature local change")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")

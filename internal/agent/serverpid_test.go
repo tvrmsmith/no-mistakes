@@ -70,7 +70,7 @@ func TestWriteServerPIDFile_CreatesMissingDir(t *testing.T) {
 func TestRemoveServerPIDFile_DeletesAndIgnoresMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.json")
-	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -231,7 +231,7 @@ func TestReadPIDFileUntilStopped_RequiresUpdatedRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 

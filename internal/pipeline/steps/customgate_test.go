@@ -121,7 +121,7 @@ func TestCustomGateStep_CommandGateFixRoundRepairsThenReChecks(t *testing.T) {
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 	ag := &mockAgent{name: "mock", runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(dir, "gate-satisfied.txt"), []byte("ok"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "gate-satisfied.txt"), []byte("ok"), 0o600); err != nil {
 			return nil, err
 		}
 		return &agent.Result{Output: json.RawMessage(`{"summary":"satisfy mutation budget"}`)}, nil
@@ -172,7 +172,7 @@ func TestCustomGateStep_CommandGateFixRoundThatDoesNotSatisfyTheGateReParks(t *t
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 	ag := &mockAgent{name: "mock", runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(dir, "unrelated.txt"), []byte("nope"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "unrelated.txt"), []byte("nope"), 0o600); err != nil {
 			return nil, err
 		}
 		return &agent.Result{Output: json.RawMessage(`{"summary":"attempt gate repair"}`)}, nil
@@ -212,7 +212,7 @@ func TestCustomGateStep_WithoutFixAuthorizationRunsNoFixTurn(t *testing.T) {
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
 	ag := &mockAgent{name: "mock", runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if err := os.WriteFile(filepath.Join(dir, "gate-satisfied.txt"), []byte("ok"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "gate-satisfied.txt"), []byte("ok"), 0o600); err != nil {
 			return nil, err
 		}
 		return &agent.Result{Output: json.RawMessage(`{"summary":"should not run"}`)}, nil

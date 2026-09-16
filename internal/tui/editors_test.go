@@ -295,10 +295,10 @@ func TestActionBar_SelectionOrder_EditAddBeforeAllNone(t *testing.T) {
 	if eIdx < 0 || plusIdx < 0 || aIdx < 0 || nIdx < 0 {
 		t.Fatalf("expected all selection actions visible, got:\n%s", plain)
 	}
-	if !(eIdx < aIdx && plusIdx < aIdx) {
+	if eIdx >= aIdx || plusIdx >= aIdx {
 		t.Errorf("expected 'e edit' and '+ add' to appear before 'A all'; got e@%d + @%d A@%d", eIdx, plusIdx, aIdx)
 	}
-	if !(plusIdx < nIdx) {
+	if plusIdx >= nIdx {
 		t.Errorf("expected '+ add' before 'N none'; got + @%d N@%d", plusIdx, nIdx)
 	}
 }

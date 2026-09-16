@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -169,7 +168,7 @@ func TestACPAgentRunReportsJSONRPCErrorMessage(t *testing.T) {
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"not authenticated"}}'
 exit 1
 `
-	if err := os.WriteFile(script, []byte(contents), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
@@ -177,7 +176,7 @@ exit 1
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	_, err = a.Run(context.Background(), RunOpts{Prompt: "do work", CWD: dir})
+	_, err = a.Run(t.Context(), RunOpts{Prompt: "do work", CWD: dir})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -194,7 +193,7 @@ func TestParseAcpxJSONEventsParsesUsageFields(t *testing.T) {
 	}, "\n") + "\n"
 	var usage TokenUsage
 
-	text, stdoutErr, err := parseAcpxJSONEvents(context.Background(), strings.NewReader(events), nil, &usage)
+	text, stdoutErr, err := parseAcpxJSONEvents(t.Context(), strings.NewReader(events), nil, &usage)
 	if err != nil {
 		t.Fatalf("parseAcpxJSONEvents() error = %v", err)
 	}
@@ -214,7 +213,7 @@ func TestParseAcpxJSONEventsParsesCacheWriteUsageFields(t *testing.T) {
 	events := `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","input_tokens":5,"output_tokens":3,"cache_write_tokens":7}}}` + "\n"
 	var usage TokenUsage
 
-	_, _, err := parseAcpxJSONEvents(context.Background(), strings.NewReader(events), nil, &usage)
+	_, _, err := parseAcpxJSONEvents(t.Context(), strings.NewReader(events), nil, &usage)
 	if err != nil {
 		t.Fatalf("parseAcpxJSONEvents() error = %v", err)
 	}
@@ -227,7 +226,7 @@ func TestParseAcpxJSONEventsParsesNormalizedCachedUsageFields(t *testing.T) {
 	events := `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","inputTokens":5,"outputTokens":3,"cachedReadTokens":11,"cachedWriteTokens":13}}}` + "\n"
 	var usage TokenUsage
 
-	_, _, err := parseAcpxJSONEvents(context.Background(), strings.NewReader(events), nil, &usage)
+	_, _, err := parseAcpxJSONEvents(t.Context(), strings.NewReader(events), nil, &usage)
 	if err != nil {
 		t.Fatalf("parseAcpxJSONEvents() error = %v", err)
 	}
@@ -241,7 +240,7 @@ func TestParseAcpxJSONEventsParsesResultUsage(t *testing.T) {
 	events := `{"jsonrpc":"2.0","id":1,"result":{"usage":{"input_tokens":21,"output_tokens":8,"cachedReadTokens":5,"cachedWriteTokens":2}}}` + "\n"
 	var usage TokenUsage
 
-	_, _, err := parseAcpxJSONEvents(context.Background(), strings.NewReader(events), nil, &usage)
+	_, _, err := parseAcpxJSONEvents(t.Context(), strings.NewReader(events), nil, &usage)
 	if err != nil {
 		t.Fatalf("parseAcpxJSONEvents() error = %v", err)
 	}
@@ -267,7 +266,7 @@ cat > "$STDIN_LOG"
 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":123,"size":1000}}}'
 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{\"done\":true}"}}}}'
 `
-	if err := os.WriteFile(script, []byte(contents), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
@@ -277,7 +276,7 @@ printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"s
 	}
 	var chunks []string
 	schema := json.RawMessage(`{"type":"object"}`)
-	result, err := a.Run(context.Background(), RunOpts{
+	result, err := a.Run(t.Context(), RunOpts{
 		Prompt:     "do work",
 		CWD:        dir,
 		JSONSchema: schema,

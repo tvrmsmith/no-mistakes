@@ -25,7 +25,7 @@ func TestExecutionContextPromptSection_TaskNeutral(t *testing.T) {
 	// The injected workDir is a t.TempDir path whose name embeds this test's
 	// own name; neutrality applies to the static template, so scan without it.
 	dir := t.TempDir()
-	got := strings.Replace(executionContextPromptSection(dir), dir, "<WORKDIR>", -1)
+	got := strings.ReplaceAll(executionContextPromptSection(dir), dir, "<WORKDIR>")
 	for _, banned := range []string{
 		"reviewed",
 		"review",

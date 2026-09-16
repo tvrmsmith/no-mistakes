@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -37,7 +38,7 @@ func newAbortQuiescenceFixtureWithCancel(t *testing.T, getRun func(context.Conte
 	cliGit(t, root, "init", "-b", "main", local)
 	cliGit(t, local, "config", "user.name", "Test")
 	cliGit(t, local, "config", "user.email", "test@example.com")
-	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "file.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cliGit(t, local, "add", "file.txt")
@@ -109,7 +110,7 @@ func newAbortQuiescenceFixtureWithCancel(t *testing.T, getRun func(context.Conte
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if client, dialErr := ipc.Dial(p.Socket()); dialErr == nil {
-			client.Close()
+			closers.Quiet(client)
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -256,7 +257,7 @@ func TestAxiAbortCancelledWaitRefusesSuccess(t *testing.T) {
 		{name: "explicit run", args: []string{"axi", "abort", "--run", "run-quiesce"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			newAbortQuiescenceFixture(t, runningRunForever, cancel)
 			out, err := executeCmdWithContext(ctx, tc.args...)
 			t.Logf("%s cancelled-wait CLI output:\n%s", tc.name, out)
@@ -393,7 +394,7 @@ func newDaemonDownAbortFixture(t *testing.T, status *types.RunStatus) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	if status == nil {
 		return ""
 	}

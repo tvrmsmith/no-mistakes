@@ -122,7 +122,7 @@ const maxSubscribersPerRun = 32
 // NewRunManager creates a RunManager. Pass nil for stepFactory to use default steps.
 func NewRunManager(database *db.DB, p *paths.Paths, stepFactory StepFactory) *RunManager {
 	if stepFactory == nil {
-		stepFactory = func() []pipeline.Step { return steps.AllSteps() }
+		stepFactory = steps.AllSteps
 	}
 	return &RunManager{
 		executors:     make(map[string]*pipeline.Executor),
@@ -479,6 +479,15 @@ func (m *RunManager) recordRejectionReason(run *db.Run, status types.RunStatus, 
 	}
 }
 
+// setRunSkippedSteps records the EFFECTIVE skip set, the same union the
+// executor runs with, so a run preserved across a clean daemon stop resumes
+// with the scope it started under. Both sources reach delivery steps: --skip
+// accepts push, pr and ci, and the trusted repo config's skip_steps is the
+// standing form of the same selection. Persisting only the run argument leaves
+// a resumed run free to push a branch and open a PR the repository itself
+// excluded, because config skips are applied lazily inside the execution loop
+// and post-gate step rows are still pending at park. The write is
+// authoritative: a run that cannot record its scope does not start.
 func (m *RunManager) setRunSkippedSteps(runID string, skipSteps []types.StepName) error {
 	if m.persistSkippedSteps != nil {
 		return m.persistSkippedSteps(runID, skipSteps)
@@ -826,11 +835,15 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 	}
 	runCtx, cancel := context.WithCancelCause(context.Background())
 	executor := pipeline.NewExecutor(m.db, m.paths, plan.cfg, plan.agent, plan.steps, m.broadcast)
-	executor.SetOnPRMerged(func(_ context.Context, runID string) {
+	executor.SetOnPRMerged(func(ctx context.Context, runID string) {
+		// Keeps what the merge's context carries but not its cancellation:
+		// the step returns as soon as the merge lands, and the relabel that
+		// follows it is held open by m.wg instead, so a drain waits for it.
+		relabelCtx := context.WithoutCancel(ctx)
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			m.relabelEvalRun(context.Background(), plan.cfg, runID)
+			m.relabelEvalRun(relabelCtx, plan.cfg, runID)
 		}()
 	})
 	executor.SetForgeContext(plan.forge)
@@ -1714,6 +1727,19 @@ func (m *RunManager) withBranchLock(repoID, branch string, action func() (string
 	return action()
 }
 
+// recordRunError stores on the run row why setup failed, for the caller that is already
+// returning that failure to its own caller.
+//
+// A write failure is logged rather than returned. The row is where an operator reads the
+// reason, so dropping the write leaves a failed run with no explanation; but the error the
+// caller returns is the one that matters, and replacing it with a database error would hide the
+// cause behind its own bookkeeping. Same position as the step-plan write further down.
+func (m *RunManager) recordRunError(runID, message string) {
+	if err := m.db.UpdateRunError(runID, message); err != nil {
+		slog.Warn("failed to record the run error on the run", "run_id", runID, "run_error", message, "error", err)
+	}
+}
+
 // startRunWithIntentSourceLocked performs run creation while the caller owns
 // the repository/branch lock. Proof fields are empty for ordinary launches.
 func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent, source, launchNonce, validationGeneration, intentDigest, prBaseBranch, inheritedPRURL string) (string, error) {
@@ -1774,7 +1800,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	if inherited := strings.TrimSpace(inheritedPRURL); inherited != "" {
 		if err := m.db.UpdateRunPRURL(run.ID, inherited); err != nil {
-			m.db.UpdateRunError(run.ID, fmt.Sprintf("inherit PR URL: %s", err))
+			m.recordRunError(run.ID, fmt.Sprintf("inherit PR URL: %s", err))
 			trackStartFailure("inherit_pr_url")
 			return "", fmt.Errorf("inherit PR URL: %w", err)
 		}
@@ -1783,7 +1809,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 
 	globalCfg, err := config.LoadGlobal(m.paths.ConfigFile())
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("load config: %s", err))
 		trackStartFailure("load_global_config")
 		return "", fmt.Errorf("load global config: %w", err)
 	}
@@ -1798,23 +1824,23 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	layout := worktrees.New(m.paths, globalCfg.WorktreeRoots)
 	checkouts, err := registeredCheckouts(m.db)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("list registered checkouts: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("list registered checkouts: %s", err))
 		trackStartFailure("list_registered_checkouts")
 		return "", fmt.Errorf("list registered checkouts: %w", err)
 	}
 	if err := layout.ValidateCheckout(repo.WorkingPath, checkouts...); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("worktree placement: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("worktree placement: %s", err))
 		trackStartFailure("invalid_worktree_placement")
 		return "", fmt.Errorf("worktree placement: %w", err)
 	}
 	wtDir := layout.Dir(repo.ID, repo.WorkingPath, run.ID)
 	if err := m.db.SetRunWorktreeDir(run.ID, wtDir); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("record worktree placement: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("record worktree placement: %s", err))
 		trackStartFailure("record_worktree_placement")
 		return "", fmt.Errorf("record worktree placement: %w", err)
 	}
 	if err := git.WorktreeAdd(ctx, gateDir, wtDir, headSHA); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("create worktree: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("create worktree: %s", err))
 		trackStartFailure("create_worktree")
 		return "", fmt.Errorf("create worktree: %w", err)
 	}
@@ -1832,13 +1858,13 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}()
 
 	if err := git.CopyLocalUserIdentity(ctx, repo.WorkingPath, wtDir); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("configure worktree git identity: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("configure worktree git identity: %s", err))
 		trackStartFailure("configure_worktree_identity")
 		return "", fmt.Errorf("configure worktree git identity: %w", err)
 	}
 	if storedPRBaseBranch != "" {
 		if err := steps.VerifyRemoteBranchExists(ctx, wtDir, storedPRBaseBranch); err != nil {
-			m.db.UpdateRunError(run.ID, err.Error())
+			m.recordRunError(run.ID, err.Error())
 			trackStartFailure("pr_base_branch_missing")
 			return "", err
 		}
@@ -1873,35 +1899,24 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// shared config, where it would outlive the setting.
 	if !globalCfg.SignCommits {
 		if err := git.DisableCommitSigning(ctx, wtDir); err != nil {
-			m.db.UpdateRunError(run.ID, fmt.Sprintf("disable commit signing: %s", err))
+			m.recordRunError(run.ID, fmt.Sprintf("disable commit signing: %s", err))
 			trackStartFailure("disable_commit_signing")
 			return "", fmt.Errorf("disable commit signing: %w", err)
 		}
 	}
 	repoCfg, err := config.LoadRepo(wtDir)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("load config: %s", err))
 		trackStartFailure("load_repo_config")
 		return "", fmt.Errorf("load repo config: %w", err)
 	}
-	// SECURITY: load the code-executing selection fields (commands.* and
-	// agent) from the trusted default-branch copy of .no-mistakes.yaml rather
-	// than the pushed SHA. The worktree is checked out at headSHA (the
-	// contributor's branch), so reading repoCfg above would honor a
-	// contributor's commands/agent and let any pushed SHA run arbitrary shell
-	// (sh -c) or pick the launched agent (incl. acp: targets) on the daemon
-	// host with the maintainer's env (GH_TOKEN, SSH agent, ...).
-	// EffectiveRepoConfig replaces commands + agent with the trusted
-	// default-branch values unless the maintainer has explicitly opted in.
-	//
-	// allow_repo_commands is itself read ONLY from the trusted copy: a
-	// contributor cannot self-enable it from the pushed branch. A readable
-	// trusted tree with no config leaves the opt-in false and forces
-	// commands/agent empty. An unreadable trusted tree aborts below.
-	// SECURITY: a trusted-config fetch failure must abort, not silently disable
-	// the disable_project_settings opt-out (see assertGateTrustedConfigReadable).
+	// SECURITY: the worktree is checked out at the contributor's branch, so
+	// the code-executing selection fields come from the trusted default-branch
+	// copy instead of repoCfg. config.EffectiveRepoConfig owns that rule and
+	// assertGateTrustedConfigReadable owns why an unreadable trusted tree has
+	// to abort rather than fall back.
 	if err := assertGateTrustedConfigReadable(ctx, wtDir, repo.DefaultBranch, trustedSHA); err != nil {
-		m.db.UpdateRunError(run.ID, err.Error())
+		m.recordRunError(run.ID, err.Error())
 		trackStartFailure("trusted_config_unreadable")
 		return "", err
 	}
@@ -1917,28 +1932,20 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	cfg := config.Merge(globalCfg, effectiveRepoCfg)
 	if err := m.paths.ValidateEvidenceRoot(cfg.Test.Evidence.LocalRoot); err != nil {
-		m.db.UpdateRunError(run.ID, err.Error())
+		m.recordRunError(run.ID, err.Error())
 		trackStartFailure("evidence_root")
 		return "", err
 	}
 	cfg.TrustedConfigSHA = trustedSHA
 
-	// Persist the EFFECTIVE skip set, the same union the executor runs with,
-	// so a run preserved across a clean daemon stop resumes with the scope it
-	// started under. Both sources reach delivery steps: --skip accepts push,
-	// pr and ci, and the trusted repo config's skip_steps is the standing form
-	// of the same selection. Persisting only the run argument leaves a resumed
-	// run free to push a branch and open a PR the repository itself excluded,
-	// because config skips are applied lazily inside the execution loop and
-	// post-gate step rows are still pending at park. Resolving it here rather
-	// than at the executor keeps one owner for what the run is scoped to. The
-	// write is authoritative: the run does not start at all rather than start
-	// with a scope that cannot survive a stop.
+	// The union is resolved here, where the config is final, so one owner
+	// answers what the run is scoped to. setRunSkippedSteps owns why it is
+	// persisted and why the write is authoritative.
 	effectiveSkips := cfg.SkippedSteps(skipSteps)
 	if len(effectiveSkips) > 0 {
 		run.SkippedSteps = effectiveSkips
 		if err := m.setRunSkippedSteps(run.ID, effectiveSkips); err != nil {
-			m.db.UpdateRunError(run.ID, fmt.Sprintf("persist run skip set: %s", err))
+			m.recordRunError(run.ID, fmt.Sprintf("persist run skip set: %s", err))
 			trackStartFailure("persist_skip_set")
 			return "", fmt.Errorf("persist run skip set: %w", err)
 		}
@@ -1946,14 +1953,14 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 
 	if globalCfg.Eval.CaptureProvenance {
 		if err := cfg.EnableEvalProvenance(globalCfg, effectiveRepoCfg); err != nil {
-			m.db.UpdateRunError(run.ID, err.Error())
+			m.recordRunError(run.ID, err.Error())
 			trackStartFailure("eval_provenance")
 			return "", err
 		}
 	}
 	forgeCtx, err := forgecontext.Resolve(ctx, cfg.ForgeProfiles, repo.UpstreamURL, repo.ForkURL)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("resolve forge profile: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("resolve forge profile: %s", err))
 		trackStartFailure("resolve_forge_profile")
 		return "", fmt.Errorf("resolve forge profile: %w", err)
 	}
@@ -1963,7 +1970,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// fail-closed check.
 	ag, err := newPipelineAgent(ctx, cfg, m.paths.EvidenceRoot(cfg.Test.Evidence.LocalRoot), exec.LookPath, forgeEnvironment(forgeCtx))
 	if err != nil {
-		m.db.UpdateRunError(run.ID, err.Error())
+		m.recordRunError(run.ID, err.Error())
 		trackStartFailure("create_agent")
 		return "", err
 	}
@@ -1976,12 +1983,12 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// its resume at a step sequence it never executed.
 	pinnedGates, err := config.MarshalGates(cfg.Gates)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("record gates: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("record gates: %s", err))
 		trackStartFailure("record_gates")
 		return "", fmt.Errorf("record gates: %w", err)
 	}
 	if err := m.db.SetRunGates(run.ID, pinnedGates); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("record gates: %s", err))
+		m.recordRunError(run.ID, fmt.Sprintf("record gates: %s", err))
 		trackStartFailure("record_gates")
 		return "", fmt.Errorf("record gates: %w", err)
 	}
@@ -2011,11 +2018,15 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	executor := pipeline.NewExecutor(m.db, m.paths, cfg, ag, execSteps, m.broadcast)
 	executor.SetForgeContext(forgeCtx)
 	executor.SetSkippedSteps(effectiveSkips)
-	executor.SetOnPRMerged(func(_ context.Context, runID string) {
+	executor.SetOnPRMerged(func(ctx context.Context, runID string) {
+		// Keeps what the merge's context carries but not its cancellation:
+		// the step returns as soon as the merge lands, and the relabel that
+		// follows it is held open by m.wg instead, so a drain waits for it.
+		relabelCtx := context.WithoutCancel(ctx)
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			m.relabelEvalRun(context.Background(), cfg, runID)
+			m.relabelEvalRun(relabelCtx, cfg, runID)
 		}()
 	})
 
@@ -2249,7 +2260,14 @@ func (m *RunManager) relabelEvalRun(ctx context.Context, cfg *config.Config, run
 		slog.Warn("failed to open eval store for relabel", "run_id", runID, "error", err)
 		return
 	}
-	defer store.Close()
+	defer func() {
+		// The store is written to, so a close failure can mean the relabel never reached disk.
+		// Warned about for the same reason every other failure in this function is: the caller
+		// is a background goroutine with nowhere to return to.
+		if err := store.Close(); err != nil {
+			slog.Warn("failed to close the eval store after relabel", "run_id", runID, "error", err)
+		}
+	}()
 	if cfg != nil {
 		store.SetDiversifiedSize(cfg.Eval.DiversifiedSize)
 	}
@@ -2418,7 +2436,7 @@ func (m *RunManager) registerActiveRun(runID string, executor *pipeline.Executor
 func (m *RunManager) refuseStartedRun(runID string, ag agent.Agent, cancel context.CancelCauseFunc, refusal error) {
 	cancel(refusal)
 	if ag != nil {
-		ag.Close()
+		_ = ag.Close()
 	}
 	m.closeSubscribers(runID)
 	if err := m.db.UpdateRunErrorStatus(runID, refusal.Error(), types.RunCancelled); err != nil {
@@ -2438,6 +2456,22 @@ func (m *RunManager) runPreservedByShutdown(runID string) bool {
 		return false
 	}
 	return m.atAPreservedResumePoint(run)
+}
+
+// runFinishedUncredited reports whether a run's done channel has closed even
+// though the wait loop never credited it, which means the run really did
+// finish. select picks uniformly among ready cases, and the funnel goroutine
+// may not have delivered yet either, so the channel itself is the authority
+// rather than what the wait loop happened to observe. An exempt entry is the
+// other route to an uncredited close: its finishedCh message is never consumed,
+// because the wait it was released from can end without ever reading it.
+func runFinishedUncredited(done chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
 }
 
 // drainWaitEntry is one run Drain is waiting on: its done channel, branch (for
@@ -2462,6 +2496,18 @@ type drainWaitEntry struct {
 // afterwards, and it signals every run with pipeline.ErrDaemonShutdown, a
 // cause a gate park and a live CI monitor both keep their row and worktree
 // through so the next start resumes them.
+//
+// Shutdown's signal, closed before it cancels anything, is what the wait loop
+// reacts to, so a stop racing a drain aborts the drain outright rather than
+// waiting out its deadline, and reports those runs as stopped mid-flight
+// rather than as finished. That is intentional. Since CancelCauseFunc keeps
+// only the first cause, a run the drain meant to classify as a cut CI monitor
+// can then land as a plain shutdown-cancelled failure, an accepted tradeoff of
+// a signal racing a drain. The RPC handler's ctx arrives too late to matter:
+// the server cancels it on Close(), by which point Shutdown has already
+// cancelled the runs the drain was waiting on. A caller that hangs up
+// mid-drain is not observed at all, because ipc/server.go detects a closed
+// peer only on the stream path, so that drain runs to its own deadline.
 func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainReport {
 	// Set first, unconditionally, before any classification: there is no
 	// un-drain path, and startRun's shuttingDown check must see this
@@ -2516,9 +2562,7 @@ func (m *RunManager) Drain(ctx context.Context, timeout time.Duration) DrainRepo
 		order = append(order, id)
 	}
 	sort.Strings(order)
-	for _, id := range order {
-		report.Waited = append(report.Waited, id)
-	}
+	report.Waited = append(report.Waited, order...)
 
 	// Fan every done channel into one funnel so the deadline/ctx race can be
 	// expressed as a single select, without reflect.Select over a dynamic set.
@@ -2685,25 +2729,12 @@ waitLoop:
 	waited := report.Waited[:0]
 	for _, id := range order {
 		e := entries[id]
-		if !finished[id] && !endedByShutdown {
-			// A run whose done channel closed without the wait loop crediting
-			// it really did finish. select picks uniformly among ready cases,
-			// and the funnel goroutine may not have delivered yet either, so
-			// the channel itself is the authority here rather than what the
-			// wait loop happened to observe. An exempt entry is the other
-			// route to an uncredited close: its finishedCh message is never
-			// consumed, because the wait it was released from can end without
-			// ever reading it.
-			//
-			// Skipped only when the daemon's own shutdown ended the wait,
-			// where a done channel closing right afterwards is shutdown
-			// killing the run, and crediting that as finished is exactly the
-			// claim the shutdown reason exists to avoid.
-			select {
-			case <-e.done:
-				finished[id] = true
-			default:
-			}
+		// Not asked when the daemon's own shutdown ended the wait: there a done
+		// channel closing right afterwards is shutdown killing the run, and
+		// crediting that as finished is the claim the shutdown reason exists to
+		// avoid.
+		if !finished[id] && !endedByShutdown && runFinishedUncredited(e.done) {
+			finished[id] = true
 		}
 		if !finished[id] && m.runPreservedByShutdown(id) {
 			// Preserved: Shutdown's ErrDaemonShutdown cause keeps the row and

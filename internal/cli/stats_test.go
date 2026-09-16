@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -22,7 +23,7 @@ func TestStatsCommandRendersAllRepoDashboard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 
 	repoA, _ := database.InsertRepo("/work/alpha", "git@example.com:alpha.git", "main")
 	repoB, _ := database.InsertRepo("/work/beta", "git@example.com:beta.git", "main")

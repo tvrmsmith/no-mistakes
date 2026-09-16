@@ -1,7 +1,6 @@
 package git
 
 import (
-	"context"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -33,7 +32,7 @@ func commitFile(t *testing.T, dir, name string) error {
 }
 
 func TestDisableCommitSigning_LetsUnattendedCommitsSucceedUnderForcedSigning(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := initTestRepo(t)
 	forceSigningWithBrokenSigner(t, dir)
 
@@ -61,7 +60,7 @@ func TestDisableCommitSigning_LetsUnattendedCommitsSucceedUnderForcedSigning(t *
 // shared config and two concurrent runs race on <bare>/config.lock (the same
 // hazard CopyLocalUserIdentity documents).
 func TestDisableCommitSigning_WritesPerWorktreeScopeOnGateWorktrees(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := t.TempDir()
 	run(t, bare, "git", "init", "--bare", ".")
 	seed := initTestRepo(t)
@@ -101,7 +100,7 @@ func TestDisableCommitSigning_WritesPerWorktreeScopeOnGateWorktrees(t *testing.T
 // shared config, where commit.gpgsign=false becomes permanent gate state that
 // outlives the sign_commits setting with nothing that ever unsets it.
 func TestDisableCommitSigning_RefusesSharedConfigFallback(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bare := t.TempDir()
 	run(t, bare, "git", "init", "--bare", ".")
 	seed := initTestRepo(t)

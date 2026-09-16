@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -270,7 +271,7 @@ func (d *DB) ActiveRunWorktrees() ([]RunWorktree, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get active run worktrees: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var out []RunWorktree
 	for rows.Next() {
 		var wt RunWorktree
@@ -285,13 +286,18 @@ func (d *DB) ActiveRunWorktrees() ([]RunWorktree, error) {
 // hasColumn reports whether a table currently has a column. It reads the live
 // schema rather than assuming this binary's migrations have been applied, which
 // is what lets a read-only caller work against an older database.
+//
+// QueryRow, not Query: the absent-column answer is then sql.ErrNoRows and a
+// failed read is a different error, where a *sql.Rows makes both of them one
+// Next that returned false. Only ErrNoRows says the column is missing. A read
+// that failed is reported as absent too, which is safe rather than silent: the
+// callers use the answer to pick columns for a query they are about to run
+// against the same database, and that query reports the real fault with the
+// context this check does not have.
 func (d *DB) hasColumn(table, column string) bool {
-	rows, err := d.sql.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	return rows.Next()
+	var present int
+	err := d.sql.QueryRow(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&present)
+	return err == nil
 }
 
 // RunWorktreesOutside returns every run whose recorded worktree directory is
@@ -345,7 +351,7 @@ func (d *DB) runWorktreesOutside(prefix, statusClause string) ([]RunWorktree, er
 	if err != nil {
 		return nil, fmt.Errorf("get run worktrees outside %s: %w", prefix, err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var out []RunWorktree
 	for rows.Next() {
 		var wt RunWorktree
@@ -361,7 +367,7 @@ func (d *DB) runWorktreesOutside(prefix, statusClause string) ([]RunWorktree, er
 func (d *DB) GetRun(id string) (*Run, error) {
 	r := &Run{}
 	err := scanRun(d.sql.QueryRow(`SELECT `+runColumns+` FROM runs WHERE id = ?`, id), r)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -432,7 +438,7 @@ func (d *DB) GetRunsByRepo(repoID string) ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get runs by repo: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var runs []*Run
 	for rows.Next() {
 		r := &Run{}
@@ -456,7 +462,7 @@ func (d *DB) GetRunsByRepoHead(repoID, branch, headSHA string) ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get runs by repo head: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var runs []*Run
 	for rows.Next() {
 		r := &Run{}
@@ -485,7 +491,7 @@ func (d *DB) GetActiveRun(repoID, branch string) (*Run, error) {
 			`SELECT `+runColumns+` FROM runs WHERE repo_id = ? AND branch = ? AND status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1`, repoID, branch,
 		), r)
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -503,7 +509,7 @@ func (d *DB) GetActiveRuns() ([]*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get active runs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 
 	var runs []*Run
 	for rows.Next() {
@@ -591,7 +597,7 @@ func (d *DB) SetRunsCustodyReturned(ids []string) error {
 	if err != nil {
 		return fmt.Errorf("set runs custody returned: begin: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 	ts := now()
 	for _, id := range ids {
 		if _, err := tx.Exec(`UPDATE runs SET custody_returned_at = COALESCE(custody_returned_at, ?), updated_at = ? WHERE id = ?`, ts, ts, id); err != nil {
@@ -626,11 +632,11 @@ func (d *DB) UpdateRunPRState(id, state string) error {
 	if err != nil {
 		return fmt.Errorf("update run PR state: begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 
 	var current sql.NullString
 	if err := tx.QueryRow(`SELECT pr_state FROM runs WHERE id = ?`, id).Scan(&current); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return fmt.Errorf("update run PR state: read current state: %w", err)
@@ -660,26 +666,11 @@ func (d *DB) ReconcileTerminalPRRuns() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("reconcile terminal PR runs: begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 
-	rows, err := tx.Query(`SELECT id FROM runs WHERE status IN (?, ?) AND pr_state IN ('merged', 'closed')`, types.RunPending, types.RunRunning)
+	ids, err := terminalPRRunIDs(tx)
 	if err != nil {
-		return 0, fmt.Errorf("reconcile terminal PR runs: list runs: %w", err)
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return 0, fmt.Errorf("reconcile terminal PR runs: scan run: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, fmt.Errorf("reconcile terminal PR runs: close rows: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("reconcile terminal PR runs: list runs: %w", err)
+		return 0, fmt.Errorf("reconcile terminal PR runs: %w", err)
 	}
 
 	for _, id := range ids {
@@ -691,6 +682,34 @@ func (d *DB) ReconcileTerminalPRRuns() (int, error) {
 		return 0, fmt.Errorf("reconcile terminal PR runs: commit: %w", err)
 	}
 	return len(ids), nil
+}
+
+// terminalPRRunIDs lists the still-active runs whose PR has already merged or
+// closed. It reads inside tx and is a function of its own so the rows handle is
+// closed by the time it returns: its caller writes through the same
+// transaction, and a read left open across those writes is what deadlocks
+// SQLite.
+func terminalPRRunIDs(tx *sql.Tx) (ids []string, err error) {
+	rows, err := tx.Query(`SELECT id FROM runs WHERE status IN (?, ?) AND pr_state IN ('merged', 'closed')`, types.RunPending, types.RunRunning)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close rows: %w", closeErr)
+		}
+	}()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	return ids, nil
 }
 
 func monotonicPRState(current, observed string) string {
@@ -1030,7 +1049,7 @@ func (d *DB) failActiveRuns(errMsg string, status types.RunStatus, scope string,
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer discardTx(tx)
 
 	var ciCount int64
 	if recoverCIMonitors {

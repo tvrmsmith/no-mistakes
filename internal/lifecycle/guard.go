@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -153,7 +154,7 @@ func Decide(p *paths.Paths, resumeSteps []pipeline.Step, resuming ResumingBinary
 	if database == nil {
 		return GuardDecision{binarySwap: resuming == ReplacementBinary}, nil
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 
 	runs, stepsByRun, err := activeRunsWithSteps(database)
 	if err != nil {
@@ -197,7 +198,7 @@ func ActiveRuns(p *paths.Paths) ([]*db.Run, error) {
 	if err != nil || database == nil {
 		return nil, err
 	}
-	defer database.Close()
+	defer closers.Quiet(database)
 	return database.GetActiveRuns()
 }
 

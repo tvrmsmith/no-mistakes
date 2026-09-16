@@ -391,7 +391,9 @@ func TestNullableFieldsOmitted(t *testing.T) {
 	}
 	data, _ := json.Marshal(info)
 	var raw map[string]interface{}
-	json.Unmarshal(data, &raw)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal run info: %v", err)
+	}
 	if _, ok := raw["pr_url"]; ok {
 		t.Error("pr_url should be omitted when nil")
 	}

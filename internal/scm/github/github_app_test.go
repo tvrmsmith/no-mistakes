@@ -1,7 +1,6 @@
 package github
 
 import (
-	"context"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/scm"
@@ -29,7 +28,7 @@ func TestGetChecksCarriesCheckSuiteAppSlug(t *testing.T) {
 		},
 	}), nil, "", "test/repo")
 
-	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
 	if err != nil {
 		t.Fatalf("GetChecks() error = %v", err)
 	}

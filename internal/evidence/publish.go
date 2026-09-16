@@ -11,6 +11,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 )
 
 const (
@@ -138,7 +139,7 @@ func publishOnce(ctx context.Context, req Request, branch, dir string, files []c
 	if err != nil {
 		return nil, fmt.Errorf("create evidence index: %w", err)
 	}
-	defer os.RemoveAll(indexDir)
+	defer scratch.RemoveAll(indexDir)
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(indexDir, "index")}
 
 	if tip != "" {
@@ -223,7 +224,7 @@ func assertEvidenceBranch(ctx context.Context, repoDir, tip, branch string) erro
 
 func addMarker(ctx context.Context, repoDir string, env []string, indexDir string) error {
 	markerFile := filepath.Join(indexDir, "marker")
-	if err := os.WriteFile(markerFile, []byte(MarkerContent), 0o644); err != nil {
+	if err := os.WriteFile(markerFile, []byte(MarkerContent), 0o600); err != nil {
 		return fmt.Errorf("write evidence marker: %w", err)
 	}
 	blob, err := git.RunWithEnv(ctx, repoDir, env, "hash-object", "-w", "--", markerFile)
@@ -315,7 +316,15 @@ func collectFiles(root string) ([]collectedFile, error) {
 		}
 		info, err := d.Info()
 		if err != nil {
-			return nil
+			if os.IsNotExist(err) {
+				// The entry went away between the directory read and the stat,
+				// the same race the walk error above tolerates.
+				return nil
+			}
+			// Any other stat failure would otherwise drop the file from a
+			// publication that still reports success, so the PR would show
+			// evidence with a hole in it and nothing saying so.
+			return fmt.Errorf("stat evidence file %s: %w", p, err)
 		}
 		if info.Size() > maxFileBytes {
 			return fmt.Errorf("evidence file %s is %d bytes, over the %d byte limit", d.Name(), info.Size(), maxFileBytes)
@@ -324,9 +333,9 @@ func collectFiles(root string) ([]collectedFile, error) {
 		if total > maxTotalBytes {
 			return fmt.Errorf("evidence exceeds the %d byte publication limit", maxTotalBytes)
 		}
-		rel, relErr := filepath.Rel(root, p)
-		if relErr != nil {
-			return nil
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return fmt.Errorf("relativize evidence file %s against %s: %w", p, root, err)
 		}
 		slashed := filepath.ToSlash(rel)
 		if !safeInBranchPath(slashed) {

@@ -63,7 +63,7 @@ func TestValidateUserAsset(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "dot.png")
-	if err := os.WriteFile(png, []byte("png-bytes"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("png-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	asset, err := ValidateUserAsset(png)
@@ -75,7 +75,7 @@ func TestValidateUserAsset(t *testing.T) {
 	}
 
 	txt := filepath.Join(dir, "notes.txt")
-	if err := os.WriteFile(txt, []byte("hello"), 0o644); err != nil {
+	if err := os.WriteFile(txt, []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ValidateUserAsset(txt); err == nil || !strings.Contains(err.Error(), "not a supported file type") {
@@ -83,7 +83,7 @@ func TestValidateUserAsset(t *testing.T) {
 	}
 
 	empty := filepath.Join(dir, "empty.png")
-	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ValidateUserAsset(empty); err == nil || !strings.Contains(err.Error(), "empty") {
@@ -91,7 +91,7 @@ func TestValidateUserAsset(t *testing.T) {
 	}
 
 	oversize := filepath.Join(dir, "oversize.png")
-	if err := os.WriteFile(oversize, make([]byte, maxUserAssetImageBytes+1), 0o644); err != nil {
+	if err := os.WriteFile(oversize, make([]byte, maxUserAssetImageBytes+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ValidateUserAsset(oversize); err == nil || !strings.Contains(err.Error(), "images must be at most") {
@@ -99,7 +99,7 @@ func TestValidateUserAsset(t *testing.T) {
 	}
 
 	mp4 := filepath.Join(dir, "clip.MP4")
-	if err := os.WriteFile(mp4, []byte("ftyp"), 0o644); err != nil {
+	if err := os.WriteFile(mp4, []byte("ftyp"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	video, err := ValidateUserAsset(mp4)
@@ -116,7 +116,7 @@ func TestUserAssetClientUploadFile(t *testing.T) {
 	dir := t.TempDir()
 	png := filepath.Join(dir, "checkout.png")
 	body := []byte("fake-png")
-	if err := os.WriteFile(png, body, 0o644); err != nil {
+	if err := os.WriteFile(png, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	asset, err := ValidateUserAsset(png)
@@ -141,7 +141,7 @@ func TestUserAssetClientUploadFile(t *testing.T) {
 		RepositoryID: 1354199749,
 		acceptedHost: "github.com",
 	}
-	url, err := client.UploadFile(context.Background(), asset)
+	url, err := client.UploadFile(t.Context(), asset)
 	if err != nil {
 		t.Fatalf("UploadFile: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestUserAssetClientUploadFileRejectsReplacedFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "checkout.png")
-	if err := os.WriteFile(png, []byte("safe-png"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("safe-png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	asset, err := ValidateUserAsset(png)
@@ -184,7 +184,7 @@ func TestUserAssetClientUploadFileRejectsReplacedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := filepath.Join(dir, "other.png")
-	if err := os.WriteFile(other, []byte("private!"), 0o644); err != nil {
+	if err := os.WriteFile(other, []byte("private!"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(png); err != nil {
@@ -208,7 +208,7 @@ func TestUserAssetClientUploadFileRejectsReplacedFile(t *testing.T) {
 		RepositoryID: 1,
 		acceptedHost: "github.com",
 	}
-	if _, err := client.UploadFile(context.Background(), asset); err == nil || !strings.Contains(err.Error(), "changed after attachment validation") {
+	if _, err := client.UploadFile(t.Context(), asset); err == nil || !strings.Contains(err.Error(), "changed after attachment validation") {
 		t.Fatalf("error = %v, want replaced-file refusal", err)
 	}
 	if requests != 0 {
@@ -220,7 +220,7 @@ func TestUserAssetClientUploadFileRejectsUnexpectedURL(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "dot.png")
-	if err := os.WriteFile(png, []byte("png"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	asset, err := ValidateUserAsset(png)
@@ -239,7 +239,7 @@ func TestUserAssetClientUploadFileRejectsUnexpectedURL(t *testing.T) {
 		RepositoryID: 1,
 		acceptedHost: "github.com",
 	}
-	if _, err := client.UploadFile(context.Background(), asset); err == nil {
+	if _, err := client.UploadFile(t.Context(), asset); err == nil {
 		t.Fatal("expected unexpected URL to fail closed")
 	}
 }
@@ -250,7 +250,7 @@ func TestHostUploadUserAssetSkipsGHES(t *testing.T) {
 		t.Fatalf("GHES must not call %s %s", name, strings.Join(args, " "))
 		return exec.CommandContext(ctx, "false")
 	}, func() bool { return true }, "ghe.example.com", "ghe.example.com/test/repo")
-	if _, err := host.UploadUserAsset(context.Background(), "dot.png"); err == nil || !strings.Contains(err.Error(), "Enterprise Server") {
+	if _, err := host.UploadUserAsset(t.Context(), "dot.png"); err == nil || !strings.Contains(err.Error(), "Enterprise Server") {
 		t.Fatalf("error = %v, want GHES refusal", err)
 	}
 }
@@ -259,13 +259,13 @@ func TestHostUploadUserAssetSkipsInstallationToken(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "dot.png")
-	if err := os.WriteFile(png, []byte("png"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
 		"gh auth token --hostname github.com": {stdout: "ghs_installation\n"},
 	}), func() bool { return true }, "github.com", "test/repo")
-	_, err := host.UploadUserAsset(context.Background(), png)
+	_, err := host.UploadUserAsset(t.Context(), png)
 	if err == nil || !strings.Contains(err.Error(), "installation") {
 		t.Fatalf("error = %v, want installation-token refusal", err)
 	}
@@ -275,7 +275,7 @@ func TestHostUploadUserAssetUploadsWithOAuthToken(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	png := filepath.Join(dir, "dot.png")
-	if err := os.WriteFile(png, []byte("png"), 0o644); err != nil {
+	if err := os.WriteFile(png, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +302,7 @@ func TestHostUploadUserAssetUploadsWithOAuthToken(t *testing.T) {
 	host.assetHTTP = server.Client()
 	host.assetUploadPrefix = server.URL + "/"
 
-	url, err := host.UploadUserAsset(context.Background(), png)
+	url, err := host.UploadUserAsset(t.Context(), png)
 	if err != nil {
 		t.Fatalf("UploadUserAsset: %v", err)
 	}
@@ -326,11 +326,6 @@ func TestGH2990IssueCreateHelpDocumentsAttach(t *testing.T) {
 			t.Errorf("gh 2.99.0 issue create help missing %q", want)
 		}
 	}
-	if strings.Contains(help, "GitHub Enterprise Server is not supported") {
-		// Help for issue create does not need to repeat the GHES trap; the
-		// upload client owns that. This assertion documents that we do not
-		// treat help prose as the GHES contract.
-	}
 	version, err := exec.Command(gh, "--version").CombinedOutput()
 	if err != nil {
 		t.Fatalf("gh --version: %v", err)
@@ -350,7 +345,7 @@ func localGH2990() string {
 	if !ok {
 		return ""
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../.."))
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	p := filepath.Join(root, ".scratch-gh", "gh_2.99.0_macOS_arm64", "bin", "gh")
 	if st, err := os.Stat(p); err == nil && !st.IsDir() {
 		return p

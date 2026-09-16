@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -43,7 +44,7 @@ func TestStatsAgentsReportsLocalPerformanceTelemetry(t *testing.T) {
 	if err := d.AddRunParkedDuration(run.ID, 90_000); err != nil {
 		t.Fatal(err)
 	}
-	d.Close()
+	closers.Quiet(d)
 
 	out, err := executeCmd("stats", "--agents")
 	if err != nil {
@@ -110,7 +111,7 @@ func TestStatsRendersPopulatedFidelityMetrics(t *testing.T) {
 	if _, err := d.InsertAgentInvocation(inv); err != nil {
 		t.Fatal(err)
 	}
-	d.Close()
+	closers.Quiet(d)
 
 	out, err := executeCmd("stats", "--agents")
 	if err != nil {
@@ -172,7 +173,7 @@ func TestStatsDistinguishesUnreportedTokensFromReportedZero(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	d.Close()
+	closers.Quiet(d)
 
 	perRun, err := executeCmd("stats", "--run", run.ID)
 	if err != nil {

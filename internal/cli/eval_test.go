@@ -47,7 +47,7 @@ func TestEvalSetsIsLocalOnlyAndEmitsNoTelemetry(t *testing.T) {
 }
 
 func TestEvalCaptureAndSetsSpeakInFindingGoldTerms(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -91,7 +91,7 @@ func TestEvalCaptureAndSetsSpeakInFindingGoldTerms(t *testing.T) {
 }
 
 func TestEvalMissIngestLabelsFalseNegativeGold(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -146,7 +146,7 @@ func TestEvalMissIngestLabelsFalseNegativeGold(t *testing.T) {
 // additive by design and is covered separately; eval miss ingest's duplicate
 // no-op is covered above.)
 func TestEvalCaptureSetsReportAndRelabelAreIdempotentAtTheCLI(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -188,7 +188,7 @@ func TestEvalCaptureSetsReportAndRelabelAreIdempotentAtTheCLI(t *testing.T) {
 }
 
 func TestEvalRunRendersProgressAndScoreDashboard(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -285,7 +285,7 @@ func installFakeCLIReviewAgent(t *testing.T, root, findingsJSON string) {
 	} else {
 		script = "#!/bin/sh\n[ \"$NM_HOME\" = \"" + root + "\" ] && touch \"" + root + "/shared-home-used\"\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(fake)+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -305,7 +305,7 @@ func mustCLIGit(t *testing.T, ctx context.Context, dir string, args ...string) s
 // resolved from the locally registered repositories, since a case stores only
 // the fingerprint of its upstream URL.
 func TestEvalSetsNamesTheRepositoryAndTablesTheConfusionMatrix(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
@@ -516,7 +516,7 @@ func setupEvalCLIFixtureNamed(t *testing.T, ctx context.Context, root, name, fin
 	mustCLIGit(t, ctx, root, "clone", gateDir, workDir)
 	mustCLIGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
 	mustCLIGit(t, ctx, workDir, "config", "user.name", "Eval Test")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustCLIGit(t, ctx, workDir, "add", ".")
@@ -525,7 +525,7 @@ func setupEvalCLIFixtureNamed(t *testing.T, ctx context.Context, root, name, fin
 	mustCLIGit(t, ctx, workDir, "push", "origin", "main")
 	baseSHA := mustCLIGit(t, ctx, workDir, "rev-parse", "HEAD")
 	mustCLIGit(t, ctx, workDir, "checkout", "-b", "feature/eval")
-	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package sample\n\nfunc Changed() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustCLIGit(t, ctx, workDir, "add", "main.go")
@@ -1013,7 +1013,7 @@ func TestEvalDisplayCommandsDoNotCreateThePipelineDatabase(t *testing.T) {
 // A pre-existing pipeline database still resolves repository names: opening it
 // read-only removes the side effect, not the feature.
 func TestEvalSetsStillNamesRepositoriesFromAnExistingDatabase(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())

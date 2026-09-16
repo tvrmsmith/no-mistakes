@@ -58,7 +58,7 @@ func TestGlobalConfig_RejectsReviewPathInstructions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := "review:\n  narrow_after_round: 3\n  path_instructions:\n    - path: internal/**\n      instructions: be strict\n"
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -75,7 +75,7 @@ func TestGlobalConfig_RejectsReviewPathInstructions(t *testing.T) {
 func TestGlobalConfig_AcceptsReviewNarrowAfterRound(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("review:\n  narrow_after_round: 3\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("review:\n  narrow_after_round: 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

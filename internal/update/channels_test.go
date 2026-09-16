@@ -1,9 +1,7 @@
 package update
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -120,7 +118,7 @@ func TestFetchLatestRelease_ManifestPathDoesNotCallGitHubRESTAPI(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "" {
 			t.Fatalf("manifest fetch sent Authorization %q, want anonymous", got)
 		}
-		fmt.Fprint(w, `{
+		writeStub(t, w, `{
 			"schema_version":1,
 			"stable":{"tag_name":"v1.2.3","prerelease":false,"assets":[{"name":"checksums.txt","browser_download_url":"https://example.com/stable"}]},
 			"beta":{"tag_name":"v1.3.0-beta.2","prerelease":true,"assets":[{"name":"checksums.txt","browser_download_url":"https://example.com/beta"}]}
@@ -137,7 +135,7 @@ func TestFetchLatestRelease_ManifestPathDoesNotCallGitHubRESTAPI(t *testing.T) {
 		httpClient:     server.Client(),
 	}
 
-	stable, err := u.fetchLatestRelease(context.Background())
+	stable, err := u.fetchLatestRelease(t.Context())
 	if err != nil {
 		t.Fatalf("stable fetchLatestRelease error = %v", err)
 	}
@@ -146,7 +144,7 @@ func TestFetchLatestRelease_ManifestPathDoesNotCallGitHubRESTAPI(t *testing.T) {
 	}
 
 	u.includePrereleases = true
-	beta, err := u.fetchLatestRelease(context.Background())
+	beta, err := u.fetchLatestRelease(t.Context())
 	if err != nil {
 		t.Fatalf("beta fetchLatestRelease error = %v", err)
 	}
@@ -167,7 +165,7 @@ func TestFetchLatestRelease_ManifestSucceedsWhenRESTAPIReturns403(t *testing.T) 
 			http.Error(w, "API rate limit exceeded", http.StatusForbidden)
 			return
 		}
-		fmt.Fprint(w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[]},"beta":{"tag_name":"v1.3.0-beta.1","assets":[]}}`)
+		writeStub(t, w, `{"schema_version":1,"stable":{"tag_name":"v1.2.3","assets":[]},"beta":{"tag_name":"v1.3.0-beta.1","assets":[]}}`)
 	}))
 	defer server.Close()
 
@@ -175,7 +173,7 @@ func TestFetchLatestRelease_ManifestSucceedsWhenRESTAPIReturns403(t *testing.T) 
 		manifestURL: server.URL + "/releases/download/channels/channels.json",
 		httpClient:  server.Client(),
 	}
-	release, err := u.fetchLatestRelease(context.Background())
+	release, err := u.fetchLatestRelease(t.Context())
 	if err != nil {
 		t.Fatalf("fetchLatestRelease should ignore REST 403 when the manifest is reachable, error = %v", err)
 	}
@@ -192,7 +190,7 @@ func TestFetchLatestRelease_DoesNotUseRESTWhenManifestMissing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/repos/") {
 			apiHits++
-			fmt.Fprint(w, `{"tag_name":"v1.2.3","assets":[]}`)
+			writeStub(t, w, `{"tag_name":"v1.2.3","assets":[]}`)
 			return
 		}
 		http.NotFound(w, r)
@@ -203,7 +201,7 @@ func TestFetchLatestRelease_DoesNotUseRESTWhenManifestMissing(t *testing.T) {
 		manifestURL: server.URL + "/releases/download/channels/channels.json",
 		httpClient:  server.Client(),
 	}
-	if _, err := u.fetchLatestRelease(context.Background()); err == nil || !strings.Contains(err.Error(), "channel manifest") {
+	if _, err := u.fetchLatestRelease(t.Context()); err == nil || !strings.Contains(err.Error(), "channel manifest") {
 		t.Fatalf("fetchLatestRelease error = %v, want channel manifest failure", err)
 	}
 	if apiHits != 0 {
@@ -274,7 +272,7 @@ func TestCheckLatest_ManifestStableAndBetaSelectDifferentHeads(t *testing.T) {
 		httpClient:     server.Client(),
 	}
 
-	stablePlan, err := base.checkLatest(context.Background())
+	stablePlan, err := base.checkLatest(t.Context())
 	if err != nil {
 		t.Fatalf("stable checkLatest error = %v", err)
 	}
@@ -286,7 +284,7 @@ func TestCheckLatest_ManifestStableAndBetaSelectDifferentHeads(t *testing.T) {
 	}
 
 	base.includePrereleases = true
-	betaPlan, err := base.checkLatest(context.Background())
+	betaPlan, err := base.checkLatest(t.Context())
 	if err != nil {
 		t.Fatalf("beta checkLatest error = %v", err)
 	}

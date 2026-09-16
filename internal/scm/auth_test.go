@@ -39,7 +39,7 @@ func TestCLIAvailable(t *testing.T) {
 			name += ".exe"
 		}
 		path := filepath.Join(binDir, name)
-		if err := os.WriteFile(path, []byte(""), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(""), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}

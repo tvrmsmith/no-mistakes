@@ -19,6 +19,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 	"gopkg.in/yaml.v3"
 )
@@ -290,24 +291,6 @@ func effectiveReplayBase(ctx context.Context, gateDir, recordedBase, head, trust
 	return "", fmt.Errorf("derive replay base: reviewed head and trusted default branch have no readable merge base")
 }
 
-func repoConfigAt(ctx context.Context, gateDir, sha string) (*config.RepoConfig, error) {
-	if _, err := git.ResolveRef(ctx, gateDir, sha); err != nil {
-		return nil, err
-	}
-	entry, err := git.Run(ctx, gateDir, "ls-tree", sha, "--", ".no-mistakes.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("inspect repository config: %w", err)
-	}
-	if strings.TrimSpace(entry) == "" {
-		return &config.RepoConfig{}, nil
-	}
-	content, err := git.ShowFile(ctx, gateDir, sha, ".no-mistakes.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("read repository config: %w", err)
-	}
-	return config.LoadRepoFromBytes([]byte(content))
-}
-
 func agentNeutralGlobalConfig(data []byte) ([]byte, error) {
 	if _, err := config.LoadGlobalFromBytes(data); err != nil {
 		return nil, fmt.Errorf("read pinned global config for capture: %w", err)
@@ -338,9 +321,9 @@ func writeCase(ctx context.Context, store *Store, gateDir string, c Case, global
 	if err != nil {
 		return fmt.Errorf("create temporary case: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer scratch.RemoveAll(tmp)
 	for _, dir := range []string{filepath.Join(tmp, "config"), filepath.Join(tmp, "original"), filepath.Join(tmp, "evals")} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
 	}
@@ -360,10 +343,10 @@ func writeCase(ctx context.Context, store *Store, gateDir string, c Case, global
 			_ = dropCaseObjects(ctx, store.poolDir(c.RepoFingerprint), c.ID)
 		}
 	}()
-	if err := os.WriteFile(filepath.Join(tmp, "config", "global.yaml"), globalConfig, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "config", "global.yaml"), globalConfig, 0o600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(tmp, "config", "repo-config.yaml"), repoConfig, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "config", "repo-config.yaml"), repoConfig, 0o600); err != nil {
 		return err
 	}
 	for _, item := range []struct {

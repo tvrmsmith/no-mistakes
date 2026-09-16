@@ -1,7 +1,6 @@
 package eval
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -12,9 +11,9 @@ import (
 // registered repositories the same way capture did.
 func TestRepoDisplayNamesKeyResolvedNamesByCaptureFingerprint(t *testing.T) {
 	repos := []*db.Repo{
-		{ID: "a", WorkingPath: filepath.Join("/tmp", "clone-a"), UpstreamURL: "https://github.com/kunchenguid/no-mistakes.git"},
-		{ID: "b", WorkingPath: filepath.Join("/tmp", "clone-b"), UpstreamURL: "git@example.test:org/other.git"},
-		{ID: "c", WorkingPath: filepath.Join("/tmp", "clone-c"), UpstreamURL: "https://example.test/single-segment"},
+		{ID: "a", WorkingPath: "/tmp/clone-a", UpstreamURL: "https://github.com/kunchenguid/no-mistakes.git"},
+		{ID: "b", WorkingPath: "/tmp/clone-b", UpstreamURL: "git@example.test:org/other.git"},
+		{ID: "c", WorkingPath: "/tmp/clone-c", UpstreamURL: "https://example.test/single-segment"},
 		{ID: "d"},
 		nil,
 	}
@@ -58,7 +57,7 @@ func TestRepoDisplayNameFallsBackFromSlugToPathToID(t *testing.T) {
 		{"nested GitLab path", &db.Repo{ID: "id", UpstreamURL: "https://gitlab.example.com/group/sub/project.git"}, "group/sub/project"},
 		{"Azure project and repository", &db.Repo{ID: "id", UpstreamURL: "https://dev.azure.com/org/project/_git/repo"}, "project/repo"},
 		{"Azure SSH project and repository", &db.Repo{ID: "id", UpstreamURL: "git@ssh.dev.azure.com:v3/org/project/repo"}, "project/repo"},
-		{"working path", &db.Repo{ID: "id", WorkingPath: filepath.Join("/tmp", "clone")}, "clone"},
+		{"working path", &db.Repo{ID: "id", WorkingPath: "/tmp/clone"}, "clone"},
 		{"id", &db.Repo{ID: "id"}, "id"},
 		{"nil", nil, ""},
 	}

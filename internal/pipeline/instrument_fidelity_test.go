@@ -105,7 +105,7 @@ func TestPerfRecording_UsagelessRoundDoesNotResetTheSessionPrior(t *testing.T) {
 	}
 	for r := 1; r <= 3; r++ {
 		roundNum = r
-		_, _ = wrapped.Run(context.Background(), agent.RunOpts{
+		_, _ = wrapped.Run(t.Context(), agent.RunOpts{
 			Purpose: "review",
 			Session: &agent.SessionRef{ID: "sess-gap"},
 		})
@@ -152,7 +152,7 @@ func TestPerfRecording_ResumedSessionRecordsPerRoundDeltas(t *testing.T) {
 			Purpose:  "review",
 			Workload: &agent.InvocationWorkload{Files: 4, Lines: 120},
 		}
-		if _, err := sessions.Run(context.Background(), wrapped, SessionRoleReviewer, opts, nil); err != nil {
+		if _, err := sessions.Run(t.Context(), wrapped, SessionRoleReviewer, opts, nil); err != nil {
 			t.Fatalf("round %d: %v", r, err)
 		}
 	}
@@ -256,7 +256,7 @@ func TestPerfRecording_FallbackRecordsReason(t *testing.T) {
 
 	for r := 1; r <= 2; r++ {
 		roundNum = r
-		if _, err := sessions.Run(context.Background(), wrapped, SessionRoleFixer, agent.RunOpts{Purpose: "review-fix"}, nil); err != nil {
+		if _, err := sessions.Run(t.Context(), wrapped, SessionRoleFixer, agent.RunOpts{Purpose: "review-fix"}, nil); err != nil {
 			t.Fatalf("round %d: %v", r, err)
 		}
 	}
@@ -299,7 +299,7 @@ func TestPerfRecording_MissingProviderUsageIsUnknown(t *testing.T) {
 		stepName: types.StepTest,
 		round:    func() int { return 1 },
 	}
-	if _, err := wrapped.Run(context.Background(), agent.RunOpts{Purpose: "test-evidence"}); err != nil {
+	if _, err := wrapped.Run(t.Context(), agent.RunOpts{Purpose: "test-evidence"}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	invs, err := database.GetAgentInvocationsByRun(run.ID)
@@ -367,7 +367,7 @@ func (a failedNoUsageAgent) Run(context.Context, agent.RunOpts) (*agent.Result, 
 }
 
 func TestPerfRecording_SchemaRejectedInvocationRecordsReportedUsage(t *testing.T) {
-	inv := recordOneInvocation(t, &schemaRejectedUsageAgent{}, context.Background())
+	inv := recordOneInvocation(t, &schemaRejectedUsageAgent{}, t.Context())
 	if inv.ExitStatus != "error" || inv.FailureCategory != "parse" {
 		t.Fatalf("exit = %s/%s, want error/parse", inv.ExitStatus, inv.FailureCategory)
 	}
@@ -391,7 +391,7 @@ func TestPerfRecording_FailedResumedInvocationStaysResumed(t *testing.T) {
 		stepName: types.StepReview,
 		round:    func() int { return 2 },
 	}
-	_, _ = wrapped.Run(context.Background(), agent.RunOpts{
+	_, _ = wrapped.Run(t.Context(), agent.RunOpts{
 		Purpose: "review-fix",
 		Session: &agent.SessionRef{ID: "sess-xyz"},
 	})
@@ -437,7 +437,7 @@ func TestPerfRecording_FailedTurnInADifferentSessionRecordsFallback(t *testing.T
 		stepName: types.StepReview,
 		round:    func() int { return 2 },
 	}
-	_, _ = wrapped.Run(context.Background(), agent.RunOpts{
+	_, _ = wrapped.Run(t.Context(), agent.RunOpts{
 		Purpose: "review",
 		Session: &agent.SessionRef{ID: "conversation-A"},
 	})
@@ -456,7 +456,7 @@ func TestPerfRecording_FailedTurnInADifferentSessionRecordsFallback(t *testing.T
 }
 
 func TestPerfRecording_FailedInvocationWithoutUsageIsUnknown(t *testing.T) {
-	inv := recordOneInvocation(t, failedNoUsageAgent{err: errors.New("pi exited: status 1")}, context.Background())
+	inv := recordOneInvocation(t, failedNoUsageAgent{err: errors.New("pi exited: status 1")}, t.Context())
 	if inv.ExitStatus != "error" {
 		t.Fatalf("exit = %s, want error", inv.ExitStatus)
 	}
@@ -464,7 +464,7 @@ func TestPerfRecording_FailedInvocationWithoutUsageIsUnknown(t *testing.T) {
 }
 
 func TestPerfRecording_CancelledInvocationWithoutUsageIsUnknown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	inv := recordOneInvocation(t, failedNoUsageAgent{err: context.Canceled}, ctx)
 	if inv.ExitStatus != "cancelled" {
@@ -474,7 +474,7 @@ func TestPerfRecording_CancelledInvocationWithoutUsageIsUnknown(t *testing.T) {
 }
 
 func TestPerfRecording_ReportedZeroTokensAreZeroNotUnknown(t *testing.T) {
-	inv := recordOneInvocation(t, &zeroUsageAgent{}, context.Background())
+	inv := recordOneInvocation(t, &zeroUsageAgent{}, t.Context())
 	if inv.ExitStatus != "ok" {
 		t.Fatalf("exit = %s, want ok", inv.ExitStatus)
 	}

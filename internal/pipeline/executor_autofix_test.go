@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,7 +43,7 @@ func TestExecutor_AutoFixTriggersWithoutApproval(t *testing.T) {
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -87,7 +86,7 @@ func TestExecutor_AutoFixCarriesUnselectedFindingsSeparately(t *testing.T) {
 	}}
 
 	exec := NewExecutor(database, p, &config.Config{AutoFix: config.AutoFix{CI: 1}}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 }
@@ -105,7 +104,7 @@ func TestExecutor_PersistsEffectiveAutoFixLimit(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -155,7 +154,7 @@ func TestExecutor_AutoFixRespectsMaxAttempts(t *testing.T) {
 	}
 
 	// Now approve manually to finish
-	exec.Respond(types.StepLint, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepLint, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -188,7 +187,7 @@ func TestExecutor_AutoFixDisabledWithZero(t *testing.T) {
 		t.Errorf("expected 1 call (no auto-fix), got %d", callCount)
 	}
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -219,7 +218,7 @@ func TestExecutor_AutoFixNilConfigUsesDefaults(t *testing.T) {
 		t.Errorf("expected 1 call (nil config, no auto-fix), got %d", callCount)
 	}
 
-	exec.Respond(types.StepReview, types.ActionAbort, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionAbort, nil)
 	<-done
 }
 
@@ -248,7 +247,7 @@ func TestExecutor_AutoFixEmitsEvents(t *testing.T) {
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 	events := collectEvents(exec)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -322,7 +321,7 @@ func TestExecutor_AutoFixInfoFindings(t *testing.T) {
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -362,7 +361,7 @@ func TestExecutor_AutoFixSkipsHumanReviewFindings(t *testing.T) {
 		t.Fatalf("expected 1 call (no auto-fix for ask-user findings), got %d", callCount)
 	}
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -386,7 +385,7 @@ func TestExecutor_HumanReviewFindingsRequireApprovalWithoutNeedsApprovalFlag(t *
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -443,7 +442,7 @@ func TestExecutor_AutoFixMixedFindings(t *testing.T) {
 		t.Errorf("expected 2 calls (initial + 1 auto-fix), got %d", callCount)
 	}
 
-	exec.Respond(types.StepReview, types.ActionApprove, nil)
+	respondOrFail(t, exec, types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
 }
 
@@ -510,7 +509,7 @@ func TestExecutor_DefaultMinSeverityKeepsInfoFindingsOutOfAutoFix(t *testing.T) 
 	}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -551,7 +550,7 @@ func TestExecutor_MinSeverityFloorStillAutoFixesQualifyingFindings(t *testing.T)
 	}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	if callCount != 2 {

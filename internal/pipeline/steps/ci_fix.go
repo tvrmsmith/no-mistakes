@@ -339,7 +339,8 @@ func boundedCILogEvidence(label, raw string, retrievalErr error, maxBytes int) s
 	}
 	content := strings.TrimSpace(raw)
 	budget := maxBytes - len(header)
-	if retrievalErr != nil {
+	switch {
+	case retrievalErr != nil:
 		markerBudget := budget
 		if content != "" && markerBudget > budget/2 {
 			markerBudget = budget / 2
@@ -354,9 +355,9 @@ func boundedCILogEvidence(label, raw string, retrievalErr error, maxBytes int) s
 			content += "\n"
 		}
 		content += marker
-	} else if content == "" {
+	case content == "":
 		content = truncateCILogContent("[no log output returned]", budget)
-	} else {
+	default:
 		content = truncateCILogContent(content, budget)
 	}
 	return header + content
@@ -717,7 +718,7 @@ func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, headSHA string) (
 func (s *CIStep) publishRepair(sctx *pipeline.StepContext, headSHA string) (ciRepairResult, error) {
 	if err := publishRunHead(sctx, headSHA, headSHA, nil); err != nil {
 		if errors.Is(err, errAttestationWriteFailed) {
-			return ciRepairResult{}, fmt.Errorf("%w at %s: %v", errCIAttestationUnsettled, shortObjectID(headSHA), err)
+			return ciRepairResult{}, fmt.Errorf("%w at %s: %w", errCIAttestationUnsettled, shortObjectID(headSHA), err)
 		}
 		return ciRepairResult{}, err
 	}
@@ -776,17 +777,17 @@ func attestHeadBeforePush(sctx *pipeline.StepContext, headSHA string, steps []*d
 	}
 	discovered, err := host.FindPR(sctx.Ctx, branch, "")
 	if err != nil {
-		return fmt.Errorf("%w: find pull request: %v", errAttestationWriteFailed, err)
+		return fmt.Errorf("%w: find pull request: %w", errAttestationWriteFailed, err)
 	}
 	pr, err := bindExistingPR(sctx, host, discovered)
 	if err != nil {
-		return fmt.Errorf("%w: resolve pull request: %v", errAttestationWriteFailed, err)
+		return fmt.Errorf("%w: resolve pull request: %w", errAttestationWriteFailed, err)
 	}
 	if pr == nil {
 		return nil
 	}
 	if err := restampPRAttestationWithSteps(sctx.Ctx, host, pr, headSHA, steps, sctx.Log, attestationPolicyFrom(sctx)); err != nil {
-		return fmt.Errorf("%w: %v", errAttestationWriteFailed, err)
+		return fmt.Errorf("%w: %w", errAttestationWriteFailed, err)
 	}
 	return nil
 }

@@ -37,16 +37,16 @@ func MaxPRBodyChars(p Provider) int {
 	}
 }
 
-// ClampPRBody truncates body to at most max PRBodyLen units, cutting on a rune
-// boundary and appending a truncation marker (kept inside the budget) when it
-// cuts. max <= 0 means unlimited and returns body unchanged. This is the
+// ClampPRBody truncates body to at most maxLen PRBodyLen units, cutting on a
+// rune boundary and appending a truncation marker (kept inside the budget) when
+// it cuts. maxLen <= 0 means unlimited and returns body unchanged. This is the
 // last-resort backstop: callers that can shed whole sections to fit a budget
 // should do so before relying on a blind clamp.
-func ClampPRBody(body string, max int) string {
-	if max <= 0 || PRBodyLen(body) <= max {
+func ClampPRBody(body string, maxLen int) string {
+	if maxLen <= 0 || PRBodyLen(body) <= maxLen {
 		return body
 	}
-	budget := max - PRBodyLen(prBodyTruncationMarker)
+	budget := maxLen - PRBodyLen(prBodyTruncationMarker)
 	if budget < 0 {
 		budget = 0
 	}

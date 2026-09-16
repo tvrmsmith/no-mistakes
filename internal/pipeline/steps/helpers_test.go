@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -41,6 +42,18 @@ func (m *mockAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Result,
 }
 
 func (m *mockAgent) Close() error { return nil }
+
+// writeStub wires stepstest.WriteStub into this package's short-helper idiom.
+func writeStub(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+	stepstest.WriteStub(t, w, body)
+}
+
+// writeFile wires stepstest.WriteFile into this package's short-helper idiom.
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	stepstest.WriteFile(t, path, content)
+}
 
 func gitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -142,13 +155,13 @@ func ensureGitRepoTemplate(t *testing.T) {
 		run("config", "commit.gpgsign", "false")
 		run("checkout", "-b", "main")
 
-		os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base content"), 0o644)
+		writeFile(t, filepath.Join(dir, "base.txt"), "base content")
 		run("add", "-A")
 		run("commit", "-m", "base commit")
 		gitRepoTemplate.baseSHA = run("rev-parse", "HEAD")
 
 		run("checkout", "-b", "feature")
-		os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature code\n"), 0o644)
+		writeFile(t, filepath.Join(dir, "feature.txt"), "feature code\n")
 		run("add", "-A")
 		run("commit", "-m", "add feature")
 		gitRepoTemplate.headSHA = run("rev-parse", "HEAD")
@@ -196,10 +209,10 @@ func newTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	return &pipeline.StepContext{
-		Ctx:  context.Background(),
+		Ctx:  t.Context(),
 		Run:  &db.Run{ID: "run-1", RepoID: "repo-1", Branch: "refs/heads/feature", HeadSHA: headSHA, BaseSHA: baseSHA},
 		Repo: &db.Repo{ID: "repo-1", WorkingPath: workDir, UpstreamURL: "https://github.com/test/repo", DefaultBranch: "main"},
 		// The executor resolves this from the app root in production. Tests get
@@ -318,15 +331,15 @@ func newFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			api.listCalls++
 			w.Header().Set("Content-Type", "application/json")
 			if api.existingPRID == 0 {
-				fmt.Fprint(w, `{"values":[]}`)
+				writeStub(t, w, `{"values":[]}`)
 				return
 			}
-			fmt.Fprintf(w, `{"values":[{"id":%d,"links":{"html":{"href":%q}}}]}`,
+			writeStub(t, w, fmt.Sprintf(`{"values":[{"id":%d,"links":{"html":{"href":%q}}}]}`,
 				api.existingPRID,
 				api.existingPRURL,
-			)
+			))
 		case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/2.0/repositories/test/repo/pullrequests/%d", api.existingPRID):
-			fmt.Fprintf(w, `{"id":%d,"title":"Existing title","summary":{"raw":"Existing unconfigured description"}}`, api.existingPRID)
+			writeStub(t, w, fmt.Sprintf(`{"id":%d,"title":"Existing title","summary":{"raw":"Existing unconfigured description"}}`, api.existingPRID))
 		case r.Method == http.MethodPost && r.URL.Path == "/2.0/repositories/test/repo/pullrequests":
 			api.createCalls++
 			body, err := io.ReadAll(r.Body)
@@ -336,9 +349,9 @@ func newFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			api.lastCreateBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprintf(w, `{"id":99,"links":{"html":{"href":%q}}}`,
+			writeStub(t, w, fmt.Sprintf(`{"id":99,"links":{"html":{"href":%q}}}`,
 				api.createdPRURL,
-			)
+			))
 		case r.Method == http.MethodPut && r.URL.Path == fmt.Sprintf("/2.0/repositories/test/repo/pullrequests/%d", api.existingPRID):
 			api.updateCalls++
 			body, err := io.ReadAll(r.Body)
@@ -347,10 +360,10 @@ func newFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 			}
 			api.lastUpdateBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"id":%d,"links":{"html":{"href":%q}}}`,
+			writeStub(t, w, fmt.Sprintf(`{"id":%d,"links":{"html":{"href":%q}}}`,
 				api.existingPRID,
 				api.existingPRURL,
-			)
+			))
 		default:
 			t.Fatalf("unexpected Bitbucket PR API request: %s %s", r.Method, r.URL.String())
 		}
@@ -403,31 +416,31 @@ func newFakeBitbucketCIAPI(t *testing.T, prState, statusesJSON string) *fakeBitb
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pullrequests/42":
 			api.prStateCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"id":42,"state":%q,"source":{"commit":{"hash":%q}}}`, api.prState, api.prSourceSHA)
+			writeStub(t, w, fmt.Sprintf(`{"id":42,"state":%q,"source":{"commit":{"hash":%q}}}`, api.prState, api.prSourceSHA))
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pullrequests/42/statuses":
 			api.statusesCalls++
 			api.lastStatusesQ = r.URL.Query().Get("q")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.statusesJSON)
+			writeStub(t, w, api.statusesJSON)
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines" && api.pipelinesJSON != "":
 			api.pipelinesCalls++
 			api.lastPipelineQ = r.URL.Query().Get("target.commit.hash")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.pipelinesJSON)
+			writeStub(t, w, api.pipelinesJSON)
 		case r.Method == http.MethodGet && api.stepsByPath[r.URL.Path] != "":
 			api.stepsCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.stepsByPath[r.URL.Path])
+			writeStub(t, w, api.stepsByPath[r.URL.Path])
 		case r.Method == http.MethodGet && api.stepLogsByPath[r.URL.Path] != "":
 			api.stepLogCalls++
-			fmt.Fprint(w, api.stepLogsByPath[r.URL.Path])
+			writeStub(t, w, api.stepLogsByPath[r.URL.Path])
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines/{pipeline-1}/steps" && api.stepsJSON != "":
 			api.stepsCalls++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, api.stepsJSON)
+			writeStub(t, w, api.stepsJSON)
 		case r.Method == http.MethodGet && r.URL.Path == "/2.0/repositories/test/repo/pipelines/{pipeline-1}/steps/{step-1}/log" && api.stepLog != "":
 			api.stepLogCalls++
-			fmt.Fprint(w, api.stepLog)
+			writeStub(t, w, api.stepLog)
 		default:
 			t.Fatalf("unexpected Bitbucket CI API request: %s %s", r.Method, r.URL.String())
 		}
@@ -506,44 +519,6 @@ func fakeCIGHMergeable(t *testing.T, state, checksJSON, mergeable string) []stri
 	})
 }
 
-func fakeCIGHMergeableError(t *testing.T, state, checksJSON, mergeableErr string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "gh")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":          "ci-gh",
-		"FAKE_CLI_STATE":         state,
-		"FAKE_CLI_CHECKS":        checksJSON,
-		"FAKE_CLI_MERGEABLE_ERR": mergeableErr,
-		"FAKE_CLI_PR_HEAD_SHA":   "deadbeef",
-	})
-}
-
-func fakeCIGHStateError(t *testing.T, stateErr, checksJSON string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "gh")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":        "ci-gh",
-		"FAKE_CLI_STATE_ERR":   stateErr,
-		"FAKE_CLI_CHECKS":      checksJSON,
-		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
-	})
-}
-
-func fakeCIGHChecksError(t *testing.T, state, mergeable, checksErr string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "gh")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":        "ci-gh",
-		"FAKE_CLI_STATE":       state,
-		"FAKE_CLI_MERGEABLE":   mergeable,
-		"FAKE_CLI_CHECKS_ERR":  checksErr,
-		"FAKE_CLI_PR_HEAD_SHA": "deadbeef",
-	})
-}
-
 func fakeCIGHSequenceMergeable(t *testing.T, state string, checks []string, mergeable string) []string {
 	t.Helper()
 	binDir := fakeCLIBinDir(t)
@@ -552,10 +527,10 @@ func fakeCIGHSequenceMergeable(t *testing.T, state string, checks []string, merg
 	checksPath := filepath.Join(t.TempDir(), "checks.txt")
 	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
 
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o600); err != nil {
 		t.Fatalf("write checks sequence: %v", err)
 	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("write checks index: %v", err)
 	}
 
@@ -577,10 +552,10 @@ func fakeCIGHSequence(t *testing.T, state string, checks []string) []string {
 	checksPath := filepath.Join(t.TempDir(), "checks.txt")
 	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
 
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o600); err != nil {
 		t.Fatalf("write checks sequence: %v", err)
 	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("write checks index: %v", err)
 	}
 
@@ -591,39 +566,6 @@ func fakeCIGHSequence(t *testing.T, state string, checks []string) []string {
 		"FAKE_CLI_CHECKS_INDEX_PATH": indexPath,
 		"FAKE_CLI_PR_HEAD_SHA":       "deadbeef",
 	})
-}
-
-// fakeCIGHLoggedSequence is fakeCIGHSequence with a recorded argv log, so tests
-// can assert which gh commands the CI monitor issued (for example whether it
-// asked for a check rerun). mergeable overrides the reported mergeable state
-// ("" reports MERGEABLE); rerunErr, when set, makes `gh run rerun` fail.
-func fakeCIGHLoggedSequence(t *testing.T, state string, checks []string, mergeable, rerunErr string) (env []string, logFile string) {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "gh")
-
-	tempDir := t.TempDir()
-	checksPath := filepath.Join(tempDir, "checks.txt")
-	indexPath := filepath.Join(tempDir, "checks-index.txt")
-	logFile = filepath.Join(tempDir, "gh.log")
-
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
-		t.Fatalf("write checks sequence: %v", err)
-	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
-		t.Fatalf("write checks index: %v", err)
-	}
-
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":              "ci-gh-seq",
-		"FAKE_CLI_STATE":             state,
-		"FAKE_CLI_CHECKS_PATH":       checksPath,
-		"FAKE_CLI_CHECKS_INDEX_PATH": indexPath,
-		"FAKE_CLI_MERGEABLE":         mergeable,
-		"FAKE_CLI_LOG":               logFile,
-		"FAKE_CLI_RERUN_ERR":         rerunErr,
-		"FAKE_CLI_PR_HEAD_SHA":       "deadbeef",
-	}), logFile
 }
 
 func fakeCIGHNoChecks(t *testing.T) []string {
@@ -636,71 +578,6 @@ func fakeCIGHNoChecks(t *testing.T) []string {
 	})
 }
 
-// fakeCIGlab creates a fake glab binary that serves the CI monitoring endpoints.
-// state is the MR state ("opened", "merged", "closed"); checksJSON is a JSON
-// array of jobs for `glab ci status` / `glab ci get`.
-func fakeCIGlab(t *testing.T, state, checksJSON string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "glab")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":   "ci-glab",
-		"FAKE_CLI_STATE":  state,
-		"FAKE_CLI_CHECKS": checksJSON,
-	})
-}
-
-func fakeCIGlabConflict(t *testing.T, state, checksJSON string, conflict bool) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "glab")
-	conflicts := "false"
-	if conflict {
-		conflicts = "true"
-	}
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":         "ci-glab",
-		"FAKE_CLI_STATE":        state,
-		"FAKE_CLI_CHECKS":       checksJSON,
-		"FAKE_CLI_MR_CONFLICTS": conflicts,
-	})
-}
-
-func fakeCIGlabWithTrace(t *testing.T, state, checksJSON, trace string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "glab")
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":   "ci-glab",
-		"FAKE_CLI_STATE":  state,
-		"FAKE_CLI_CHECKS": checksJSON,
-		"FAKE_CLI_TRACE":  trace,
-	})
-}
-
-func fakeCIGlabSequence(t *testing.T, state string, checks []string) []string {
-	t.Helper()
-	binDir := fakeCLIBinDir(t)
-	linkTestBinary(t, binDir, "glab")
-
-	checksPath := filepath.Join(t.TempDir(), "checks.txt")
-	indexPath := filepath.Join(t.TempDir(), "checks-index.txt")
-
-	if err := os.WriteFile(checksPath, []byte(strings.Join(checks, "\n")), 0o644); err != nil {
-		t.Fatalf("write checks sequence: %v", err)
-	}
-	if err := os.WriteFile(indexPath, []byte("0"), 0o644); err != nil {
-		t.Fatalf("write checks index: %v", err)
-	}
-
-	return fakeCLIEnv(binDir, map[string]string{
-		"FAKE_CLI_MODE":              "ci-glab-seq",
-		"FAKE_CLI_STATE":             state,
-		"FAKE_CLI_CHECKS_PATH":       checksPath,
-		"FAKE_CLI_CHECKS_INDEX_PATH": indexPath,
-	})
-}
-
 // runGitDirect runs git without any of the repository's step helpers, so a test
 // can observe what a plain, hook-verified git invocation does in dir.
 func runGitDirect(dir string, args ...string) (string, error) {
@@ -708,4 +585,15 @@ func runGitDirect(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// removeEvidenceDir deletes a run's evidence directory and fails the test when
+// it cannot. Evidence is collected outside the worktree, so t.TempDir does not
+// reclaim it and a leaked directory would leave the next run's evidence mixed
+// with this one's.
+func removeEvidenceDir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("remove evidence dir %s: %v", dir, err)
+	}
 }

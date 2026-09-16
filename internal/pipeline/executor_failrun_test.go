@@ -35,7 +35,7 @@ func TestExecutor_FailRunMapsCancelCauseToStatus(t *testing.T) {
 			database, p, run, repo := setupTest(t)
 			exec := NewExecutor(database, p, nil, nil, []Step{newPassStep(types.StepReview)}, nil)
 
-			ctx, cancel := context.WithCancelCause(context.Background())
+			ctx, cancel := context.WithCancelCause(t.Context())
 			cancel(errors.New(tt.cause))
 
 			workDir := t.TempDir()

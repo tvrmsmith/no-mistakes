@@ -365,14 +365,14 @@ func (m Model) applySyncCmd() tea.Cmd {
 }
 
 func (m Model) applyRecoverCmd() tea.Cmd {
-	recover := m.syncRecover
-	if recover == nil {
+	recoverFn := m.syncRecover
+	if recoverFn == nil {
 		return nil
 	}
 	keepLocal := m.branchSync != nil && m.branchSync.Recovery != nil && m.branchSync.Recovery.KeepLocal
 	return func() tea.Msg {
 		started := time.Now()
-		state := recover(keepLocal)
+		state := recoverFn(keepLocal)
 		result := "refused"
 		if state.Recovered && state.Changed {
 			result = "applied"

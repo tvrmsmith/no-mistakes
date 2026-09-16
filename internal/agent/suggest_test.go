@@ -33,7 +33,7 @@ func TestSuggestBranchName(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"name":"feat/onboarding-wizard"}`),
 	}}
-	name, err := SuggestBranchName(context.Background(), ag, "/tmp/repo")
+	name, err := SuggestBranchName(t.Context(), ag, "/tmp/repo")
 	if err != nil {
 		t.Fatalf("SuggestBranchName failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestSuggestBranchNameSanitizes(t *testing.T) {
 			ag := &stubAgent{result: &Result{
 				Output: json.RawMessage(`{"name":` + jsonQuote(tc.raw) + `}`),
 			}}
-			got, err := SuggestBranchName(context.Background(), ag, "/tmp")
+			got, err := SuggestBranchName(t.Context(), ag, "/tmp")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -96,7 +96,7 @@ func TestSuggestBranchNameRejectsInvalidGitRefs(t *testing.T) {
 			ag := &stubAgent{result: &Result{
 				Output: json.RawMessage(`{"name":` + jsonQuote(tc.raw) + `}`),
 			}}
-			if _, err := SuggestBranchName(context.Background(), ag, "/tmp"); err == nil {
+			if _, err := SuggestBranchName(t.Context(), ag, "/tmp"); err == nil {
 				t.Fatalf("expected invalid ref %q to be rejected", tc.raw)
 			}
 		})
@@ -108,7 +108,7 @@ func TestSuggestBranchNameLengthCapped(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"name":` + jsonQuote(long) + `}`),
 	}}
-	got, err := SuggestBranchName(context.Background(), ag, "/tmp")
+	got, err := SuggestBranchName(t.Context(), ag, "/tmp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestSuggestBranchNameEmpty(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"name":""}`),
 	}}
-	_, err := SuggestBranchName(context.Background(), ag, "/tmp")
+	_, err := SuggestBranchName(t.Context(), ag, "/tmp")
 	if err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -131,7 +131,7 @@ func TestSuggestBranchNameOnlyInvalidChars(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"name":"!@#$%"}`),
 	}}
-	_, err := SuggestBranchName(context.Background(), ag, "/tmp")
+	_, err := SuggestBranchName(t.Context(), ag, "/tmp")
 	if err == nil {
 		t.Fatal("expected error when all chars are stripped")
 	}
@@ -139,7 +139,7 @@ func TestSuggestBranchNameOnlyInvalidChars(t *testing.T) {
 
 func TestSuggestBranchNameAgentError(t *testing.T) {
 	ag := &stubAgent{err: errors.New("boom")}
-	_, err := SuggestBranchName(context.Background(), ag, "/tmp")
+	_, err := SuggestBranchName(t.Context(), ag, "/tmp")
 	if err == nil {
 		t.Fatal("expected error from agent failure")
 	}
@@ -149,7 +149,7 @@ func TestSuggestCommitMessage(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"subject":"feat(cli): add onboarding wizard"}`),
 	}}
-	got, err := SuggestCommitMessage(context.Background(), ag, "/tmp")
+	got, err := SuggestCommitMessage(t.Context(), ag, "/tmp")
 	if err != nil {
 		t.Fatalf("SuggestCommitMessage failed: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestSuggestCommitMessageTrimsNewlines(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"subject":"fix: thing\n\nbody"}`),
 	}}
-	got, err := SuggestCommitMessage(context.Background(), ag, "/tmp")
+	got, err := SuggestCommitMessage(t.Context(), ag, "/tmp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestSuggestCommitMessageKeepsConventionalNonReleaseType(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"subject":"refactor: improve CLI output"}`),
 	}}
-	got, err := SuggestCommitMessage(context.Background(), ag, "/tmp")
+	got, err := SuggestCommitMessage(t.Context(), ag, "/tmp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSuggestCommitMessagePromptRequiresReleaseTypesForProductImpact(t *testi
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"subject":"fix: improve CLI output"}`),
 	}}
-	if _, err := SuggestCommitMessage(context.Background(), ag, "/tmp"); err != nil {
+	if _, err := SuggestCommitMessage(t.Context(), ag, "/tmp"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(ag.gotPrompt, "user-facing product impact") {
@@ -203,7 +203,7 @@ func TestSuggestCommitMessageEmpty(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"subject":"   "}`),
 	}}
-	_, err := SuggestCommitMessage(context.Background(), ag, "/tmp")
+	_, err := SuggestCommitMessage(t.Context(), ag, "/tmp")
 	if err == nil {
 		t.Fatal("expected error for empty subject")
 	}
@@ -213,7 +213,7 @@ func TestSuggestBranchAndCommit(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"branch":"feat/onboarding-wizard","subject":"feat(cli): add onboarding wizard"}`),
 	}}
-	branch, subject, err := SuggestBranchAndCommit(context.Background(), ag, "/tmp/repo")
+	branch, subject, err := SuggestBranchAndCommit(t.Context(), ag, "/tmp/repo")
 	if err != nil {
 		t.Fatalf("SuggestBranchAndCommit failed: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestSuggestBranchAndCommitSanitizes(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"branch":"FEAT/New Thing","subject":"feat(cli): clean up thing\n\nbody paragraph"}`),
 	}}
-	branch, subject, err := SuggestBranchAndCommit(context.Background(), ag, "/tmp")
+	branch, subject, err := SuggestBranchAndCommit(t.Context(), ag, "/tmp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestSuggestBranchAndCommitEmptyBranchErrors(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"branch":"","subject":"feat: something"}`),
 	}}
-	if _, _, err := SuggestBranchAndCommit(context.Background(), ag, "/tmp"); err == nil {
+	if _, _, err := SuggestBranchAndCommit(t.Context(), ag, "/tmp"); err == nil {
 		t.Fatal("expected error when branch is empty")
 	}
 }
@@ -265,7 +265,7 @@ func TestSuggestBranchAndCommitEmptySubjectReturnsBranch(t *testing.T) {
 	ag := &stubAgent{result: &Result{
 		Output: json.RawMessage(`{"branch":"fix/bug","subject":""}`),
 	}}
-	branch, subject, err := SuggestBranchAndCommit(context.Background(), ag, "/tmp")
+	branch, subject, err := SuggestBranchAndCommit(t.Context(), ag, "/tmp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSuggestBranchAndCommitEmptySubjectReturnsBranch(t *testing.T) {
 
 func TestSuggestBranchAndCommitAgentError(t *testing.T) {
 	ag := &stubAgent{err: errors.New("boom")}
-	if _, _, err := SuggestBranchAndCommit(context.Background(), ag, "/tmp"); err == nil {
+	if _, _, err := SuggestBranchAndCommit(t.Context(), ag, "/tmp"); err == nil {
 		t.Fatal("expected error from agent failure")
 	}
 }

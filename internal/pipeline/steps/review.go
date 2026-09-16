@@ -111,9 +111,6 @@ func reviewSkillMandateSatisfied(result *agent.Result) bool {
 // mandated skill was not invoked.
 const reviewMandateAttempts = 2
 
-// runReviewTurn runs one reviewer turn and reports whether it satisfied the
-// required-skill mandate. Every turn - initial and retry - goes through here so
-// the run options, the error wrap, and the mandate check cannot diverge.
 // runReviewSatisfyingMandate runs one review turn and insists it actually
 // invoked the mandated skill.
 //
@@ -157,6 +154,21 @@ func (s *ReviewStep) runReviewSatisfyingMandate(sctx *pipeline.StepContext, runO
 		requiredReviewSkill, result.SkillsUsed)
 }
 
+// runReviewTurn runs one reviewer turn and reports whether it satisfied the
+// required-skill mandate. Every turn - initial and retry - goes through here so
+// the run options, the error wrap, and the mandate check cannot diverge.
+//
+// Every review turn - the initial review and every post-fix rereview -
+// deliberately runs session-free (the empty session argument below). Round N's
+// fixes implement round N-1's review findings, so resuming any prior review
+// turn's session would seat the prescriber of those fixes as their certifier:
+// the rereview then verifies that its own prescription was implemented instead
+// of judging whether the pipeline-authored code is correct (the mechanism behind
+// a real shipped defect where one fix round wrote both wrong code and the test
+// blessing it, and the resumed reviewer session passed them). The cross-round
+// context a rereview legitimately needs travels in the explicit sanitized
+// round-history section of the prompt; only the fixer keeps a durable session
+// (executeFixMode), because it certifies nothing.
 func (s *ReviewStep) runReviewTurn(sctx *pipeline.StepContext, runOpts agent.RunOpts) (*agent.Result, bool, error) {
 	result, err := s.runReviewAgent(sctx, "agent review", "", runOpts)
 	if err != nil {
@@ -257,87 +269,12 @@ func (s *ReviewStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 	// Best-effort: a diff-stat failure leaves the workload unknown.
 	workload := reviewWorkload(ctx, sctx.WorkDir, baseSHA, sctx.Run.HeadSHA)
 
-	// In fix mode, ask the agent to fix issues first.
-	//
-	// The verification-discipline rules below (apply all fixes first, then one
-	// focused verification of the changed area, and never run the whole repo
-	// test/lint suite in the fixer round) exist for wall-clock reasons: a
-	// forensic audit of a real multi-round run measured the fixer re-running the
-	// entire test+lint suite ~5x per round (27 runs across 5 rounds, ~784s of
-	// the 2419s review step), plus the model round-trips that poll those long
-	// subprocesses. Review runs before the dedicated Test and Lint steps
-	// (pipeline order in common.go), which are the authoritative test and lint
-	// gates; their coverage may be focused when the repository has no configured
-	// commands. The fixer prohibition stays universal because the fixer only
-	// needs to confirm its own edits hold, not re-gate the whole repository. This
-	// mirrors the same "relevant"-scoped, cross-tool-forbidden discipline the
-	// test and lint fix prompts already carry. The instruction is a contract,
-	// not an enforced sandbox - the agent has free shell access - so the pinned
-	// regression tests guard the wording, not the runtime.
-	//
-	// The narrow-instance rule is the same audit's second finding: fix rounds
-	// that were told to reach "the deepest practical cause" answered symptoms
-	// with new machinery, which the next rereview then found defects in, which
-	// bred more machinery. Depth is still wanted - the preceding rule keeps the
-	// local-defect-vs-deeper-flaw diagnosis - but the sanctioned way to reach it
-	// is simplifying an architectural reason, never bolting on handling for the
-	// symptoms. Remedies that must EXTEND the change instead of correcting it
-	// belong to the human at the review gate, which is what the reviewer's
-	// remedy-scope classification rule below routes them to.
-	//
-	// The removal rule is the complement the anti-revert guard was missing.
-	// That guard told the fixer to fix intentional code forward, and "the
-	// author wrote it on purpose" is true of every unrequired branch, so a
-	// finding inside one was always answered by hardening it (backpass PR #107:
-	// six rounds patched around an any-existing-file acceptance branch that one
-	// deleted line would have closed, and still missed). The guard now protects
-	// only code the intent requires; a path the intent does not strictly
-	// require is fixed by removing it. The intent is the arbiter for both, and
-	// genuine doubt still leaves the code alone and reports the finding
-	// unresolved.
 	rounds := stepRounds(sctx)
 
+	// In fix mode, ask the agent to fix issues first.
 	var fixSummary string
 	if sctx.Fixing && !sctx.SkipFixExecution {
-		previousFindings := sanitizedPreviousFindingsForPrompt(sctx.PreviousFindings)
-		historySection := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSectionFor(rounds) + userIntentPromptSection(sctx) + testguidance.Rule
-		fixPrompt := fmt.Sprintf(
-			`Investigate previous review findings and address legitimate ones.
-
-Examine the relevant code yourself and apply fixes directly.
-
-Context:
-- branch: %s
-- base commit: %s
-- target commit: %s
-- review scope: %s
-- default branch: %s
-- ignore patterns: %s
-
-Rules:
-- Always start with double checking whether the findings are legitimate.
-- Before changing code, identify whether each finding is a local defect or a symptom of a deeper design, abstraction, validation, ownership, or test-coverage flaw. Prefer the smallest correct root-cause fix within the changed area over patching only the reported line.
-- Fix the reported instance narrowly. Prefer doing so by addressing a deeper architectural reason and simplifying it, than introducing machinery to handle the symptoms.
-- Avoid resolving a finding by removing or reverting the author's intentional code in their original 1st commit when the intent requires that code. If the original change introduced something the intent requires, fix it forward (e.g. add validation, handle edge cases, tighten logic) rather than deleting it. Similarly, if the original change intentionally deleted or simplified code, do not restore or re-add the removed code unless the finding is a legitimate correctness, reliability, or security issue and the smallest reasonable fix happens to reintroduce a small amount of previously deleted logic. When in doubt about whether the intent requires the code, leave it and report the finding as unresolved.
-- Do not add code comments explaining your fixes.
-- Apply all the fixes you intend to make first; do not run any verification in between individual fixes.
-- After all fixes are applied, run one focused verification limited to the changed area (the specific package, file, or test you touched) at the end of the fix round to confirm the fixes hold.
-- Do NOT run the complete repository test suite or lint suite during this fix round. The pipeline has dedicated test and lint steps after review that are the authoritative test and lint gates; their coverage may itself be focused on the changed area when the repository has no configured test or lint commands.
-- Return JSON with a single "summary" field when you are done.
-- The summary must be one concise sentence fragment suitable for a git commit subject.
-- Keep the summary under 10 words.%s
-
-Previous review findings to address:
-%s`,
-			branch,
-			baseSHA,
-			sctx.Run.HeadSHA,
-			reviewScope,
-			sctx.Repo.DefaultBranch,
-			ignorePatterns,
-			historySection,
-			previousFindings,
-		)
+		fixPrompt := buildReviewFixPrompt(sctx, rounds, branch, baseSHA, reviewScope, ignorePatterns)
 		// Every logical agent turn owns a fresh hard wall-clock limit. The
 		// fixer keeps the step parent for synchronous preparation and commit
 		// work, so the independent rereviewer cannot inherit its spent
@@ -398,19 +335,12 @@ Previous review findings to address:
 	// session-free turn's review_agent_timeout allowance.
 	sctx.Log("reviewing changes...")
 
-	// The review turn (initial and every post-fix rereview) carries the intent
-	// conformance obligation: when the intent is authoritative acceptance
-	// criteria (explicit --intent), a change that contradicts it must park via
-	// an ask-user finding. The clause is empty for inferred intent, leaving the
-	// prompt unchanged. This is what makes a fixer round that removed a
-	// required behavior park instead of silently completing.
-	//
-	// Review is always pre-push (StepReview.Order < StepPush/PR/CI). The phase
-	// clause and the post-parse strip below keep pipeline-owned delivery
-	// outcomes (remote branch, PR, CI for this run) out of source-review
-	// findings; later steps own those. External / pre-existing lifecycle
-	// requirements stay in scope.
-	//
+	// Two clauses below carry the review turn's obligations and own their own
+	// contracts: intentConformanceReviewClause parks a change that contradicts
+	// authoritative criteria, and pipelineDeliveryPhaseClause keeps this run's
+	// own push, PR, and CI outcomes out of source findings. The post-parse strip
+	// further down enforces the delivery half.
+
 	// TODO(intent-conformance-C, HELD): add the deterministic, zero-LLM
 	// net-deleted-author-lines git-diff backstop for the removal-of-required
 	// class - a fixer round that net-deletes author-added lines parks
@@ -436,44 +366,105 @@ Previous review findings to address:
 	// for a fresh full sweep of ground the branch already covered.
 	breadth := reviewBreadthForRound(reviewBreadthRoundFor(sctx, rounds), sctx.Config.Review.NarrowAfterRound)
 
-	// The authorization/privacy obligation below specializes the existing
-	// concrete-state trace only when changed behavior crosses a potentially
-	// protected resource or user-data boundary. The repository still owns access
-	// policy through project instructions and trusted path instructions; the
-	// generic prompt owns only the tracing method and source-evidence threshold.
-	// Material policy ambiguity uses the existing ask-user action, while a
-	// source-proven routine defect retains the existing auto-fix semantics.
+	prompt := buildReviewPrompt(sctx, branch, baseSHA, reviewScope, ignorePatterns, historySection, pathInstructions, breadth)
+
+	// These options drive runReviewTurn, which owns the session-free rule every
+	// review turn runs under.
 	//
-	// The action vocabulary below also classifies by remedy as well as by topic:
-	// a finding whose smallest honest remedy would extend the change (durable
-	// state, a schema change, background/retry/persistence machinery, a new
-	// subsystem) parks at the existing ask-user gate even when the defect reads
-	// as mechanical, because the authorization needed is for the remedy, not the
-	// defect. This deliberately adds no field, detector, or second reviewer - a
-	// scope verifier would be exactly the machinery being prevented - and it
-	// runs with the grain of ActionOrDefault, which already fails an
-	// unclassified finding closed to ask-user.
-	//
-	// Findings also require an intended-usage sequence. A rare but real path
-	// those callers actually take still qualifies; a hypothetical unused
-	// execution does not. This is an evidence threshold for what counts as a
-	// finding, not a general instruction to emit fewer of them.
-	//
-	// The dedicated Simplification section asks a different question from the
-	// defect pass: not "is this component correct" but "does the intent
-	// require this component at all". A reviewed spiral (backpass PR #107)
-	// showed why the defect pass alone cannot catch over-engineering: a
-	// permissive resolver with seven acceptance branches and a second,
-	// skill-only budget semantics each yielded a concrete, intended-usage
-	// defect per round, so every finding cleared the evidence threshold and
-	// every fix hardened the unrequired path instead of removing it, across
-	// thirteen rounds that never converged. The section reports the unrequired
-	// component itself as an ask-user warning whose remedy is removal, and asks
-	// defect findings inside such a component to name removal too, so the
-	// fixer's removal rule has something to act on. It stays ask-user because
-	// whether extra surface is wanted is the author's call; the section
-	// deliberately adds no schema field or second reviewer.
-	prompt := fmt.Sprintf(
+	// A review whose final JSON fails validation is a formatting slip, not a
+	// verdict, so it is rerun as a fresh session-free review of the same
+	// prompt, told only the validation error, up to reviewAnalyzerMaxAttempts.
+	// Findings come only from the attempt that validates. Every other failure
+	// returns at once, and so does a rejection from a turn its deadline or a
+	// cancellation cut short.
+	opts := agent.RunOpts{
+		Prompt:     prompt,
+		CWD:        sctx.WorkDir,
+		Env:        sctx.Env,
+		JSONSchema: reviewFindingsSchema,
+		OnChunk:    sctx.LogChunk,
+		Purpose:    "review",
+		Workload:   workload,
+	}
+	var findings Findings
+	for attempt := 1; ; attempt++ {
+		result, err := s.runReviewSatisfyingMandate(sctx, opts)
+		if err == nil {
+			findings, err = parseReviewAnalyzerOutput(result)
+			if err == nil {
+				break
+			}
+		} else if !agent.IsStructuredOutputRejected(err) || sctx.Ctx.Err() != nil || errors.Is(err, errReviewAgentTimeout) {
+			return nil, err
+		}
+		if attempt == reviewAnalyzerMaxAttempts {
+			return nil, fmt.Errorf("validate review analyzer findings after %d attempts: %w", reviewAnalyzerMaxAttempts, err)
+		}
+		sctx.Log(fmt.Sprintf("review analyzer findings rejected (%s); rerunning the review (attempt %d of %d)", strings.ReplaceAll(err.Error(), "\n", "; "), attempt+1, reviewAnalyzerMaxAttempts))
+		opts.Prompt = prompt + reviewRetryNote(err)
+	}
+
+	// Phase ownership boundary: drop findings that only claim later pipeline-
+	// owned delivery (push/PR/CI for this run) has not happened yet. Prompt
+	// guidance alone is not enough - models still emit these under
+	// authoritative intent criteria like "Open PR A unmerged".
+	if stripped, n := stripDeferredPipelineOwnedDeliveryFindings(findings); n > 0 {
+		sctx.Log(fmt.Sprintf("dropped %d deferred pipeline-owned delivery finding(s) (owned by later push/PR/CI steps)", n))
+		findings = stripped
+	}
+
+	needsApproval := hasBlockingFindings(findings.Items)
+	findingsJSON, _ := json.Marshal(findings)
+
+	return approvedReviewOutcome(reviewTargetSHA, &pipeline.StepOutcome{
+		NeedsApproval: needsApproval,
+		AutoFixable:   len(findings.Items) > 0,
+		Findings:      string(findingsJSON),
+		FixSummary:    fixSummary,
+	})
+}
+
+// buildReviewPrompt writes the review turn's prompt.
+//
+// The authorization/privacy obligation below specializes the existing
+// concrete-state trace only when changed behavior crosses a potentially
+// protected resource or user-data boundary. The repository still owns access
+// policy through project instructions and trusted path instructions; the
+// generic prompt owns only the tracing method and source-evidence threshold.
+// Material policy ambiguity uses the existing ask-user action, while a
+// source-proven routine defect retains the existing auto-fix semantics.
+//
+// The action vocabulary below also classifies by remedy as well as by topic:
+// a finding whose smallest honest remedy would extend the change (durable
+// state, a schema change, background/retry/persistence machinery, a new
+// subsystem) parks at the existing ask-user gate even when the defect reads
+// as mechanical, because the authorization needed is for the remedy, not the
+// defect. This deliberately adds no field, detector, or second reviewer - a
+// scope verifier would be exactly the machinery being prevented - and it
+// runs with the grain of ActionOrDefault, which already fails an
+// unclassified finding closed to ask-user.
+//
+// Findings also require an intended-usage sequence. A rare but real path
+// those callers actually take still qualifies; a hypothetical unused
+// execution does not. This is an evidence threshold for what counts as a
+// finding, not a general instruction to emit fewer of them.
+//
+// The dedicated Simplification section asks a different question from the
+// defect pass: not "is this component correct" but "does the intent
+// require this component at all". A reviewed spiral (backpass PR #107)
+// showed why the defect pass alone cannot catch over-engineering: a
+// permissive resolver with seven acceptance branches and a second,
+// skill-only budget semantics each yielded a concrete, intended-usage
+// defect per round, so every finding cleared the evidence threshold and
+// every fix hardened the unrequired path instead of removing it, across
+// thirteen rounds that never converged. The section reports the unrequired
+// component itself as an ask-user warning whose remedy is removal, and asks
+// defect findings inside such a component to name removal too, so the
+// fixer's removal rule has something to act on. It stays ask-user because
+// whether extra surface is wanted is the author's call; the section
+// deliberately adds no schema field or second reviewer.
+func buildReviewPrompt(sctx *pipeline.StepContext, branch, baseSHA, reviewScope, ignorePatterns, historySection, pathInstructions string, breadth reviewBreadth) string {
+	return fmt.Sprintf(
 		`Review the code changes and return structured findings with a risk assessment.
 
 Context:
@@ -545,70 +536,85 @@ Risk assessment (after listing all findings):
 		historySection,
 		pathInstructions,
 	)
+}
 
-	// Every review turn - the initial review and every post-fix rereview -
-	// deliberately runs session-free. Round N's fixes implement round N-1's
-	// review findings, so resuming any prior review turn's session would seat
-	// the prescriber of those fixes as their certifier: the rereview then
-	// verifies that its own prescription was implemented instead of judging
-	// whether the pipeline-authored code is correct (the mechanism behind a
-	// real shipped defect where one fix round wrote both wrong code and the
-	// test blessing it, and the resumed reviewer session passed them). The
-	// cross-round context a rereview legitimately needs travels in the
-	// explicit sanitized round-history section above; only the fixer keeps a
-	// durable session (executeFixMode), because it certifies nothing.
-	//
-	// A review whose final JSON fails validation is a formatting slip, not a
-	// verdict, so it is rerun as a fresh session-free review of the same
-	// prompt, told only the validation error, up to reviewAnalyzerMaxAttempts.
-	// Findings come only from the attempt that validates. Every other failure
-	// returns at once, and so does a rejection from a turn its deadline or a
-	// cancellation cut short.
-	opts := agent.RunOpts{
-		Prompt:     prompt,
-		CWD:        sctx.WorkDir,
-		Env:        sctx.Env,
-		JSONSchema: reviewFindingsSchema,
-		OnChunk:    sctx.LogChunk,
-		Purpose:    "review",
-		Workload:   workload,
-	}
-	var findings Findings
-	for attempt := 1; ; attempt++ {
-		result, err := s.runReviewSatisfyingMandate(sctx, opts)
-		if err == nil {
-			findings, err = parseReviewAnalyzerOutput(result)
-			if err == nil {
-				break
-			}
-		} else if !agent.IsStructuredOutputRejected(err) || sctx.Ctx.Err() != nil || errors.Is(err, errReviewAgentTimeout) {
-			return nil, err
-		}
-		if attempt == reviewAnalyzerMaxAttempts {
-			return nil, fmt.Errorf("validate review analyzer findings after %d attempts: %w", reviewAnalyzerMaxAttempts, err)
-		}
-		sctx.Log(fmt.Sprintf("review analyzer findings rejected (%s); rerunning the review (attempt %d of %d)", strings.ReplaceAll(err.Error(), "\n", "; "), attempt+1, reviewAnalyzerMaxAttempts))
-		opts.Prompt = prompt + reviewRetryNote(err)
-	}
+// buildReviewFixPrompt writes the fixer turn's prompt.
+//
+// The verification-discipline rules (apply all fixes first, then one focused
+// verification of the changed area, and never run the whole repo test/lint
+// suite in the fixer round) exist for wall-clock reasons: a forensic audit of a
+// real multi-round run measured the fixer re-running the entire test+lint suite
+// ~5x per round (27 runs across 5 rounds, ~784s of the 2419s review step), plus
+// the model round-trips that poll those long subprocesses. Review runs before
+// the dedicated Test and Lint steps (pipeline order in common.go), which are the
+// authoritative test and lint gates; their coverage may be focused when the
+// repository has no configured commands. The fixer prohibition stays universal
+// because the fixer only needs to confirm its own edits hold, not re-gate the
+// whole repository. This mirrors the same "relevant"-scoped,
+// cross-tool-forbidden discipline the test and lint fix prompts already carry.
+// The instruction is a contract, not an enforced sandbox - the agent has free
+// shell access - so the pinned regression tests guard the wording, not the
+// runtime.
+//
+// The narrow-instance rule is the same audit's second finding: fix rounds that
+// were told to reach "the deepest practical cause" answered symptoms with new
+// machinery, which the next rereview then found defects in, which bred more
+// machinery. Depth is still wanted - the preceding rule keeps the
+// local-defect-vs-deeper-flaw diagnosis - but the sanctioned way to reach it is
+// simplifying an architectural reason, never bolting on handling for the
+// symptoms. Remedies that must EXTEND the change instead of correcting it belong
+// to the human at the review gate, which is what the reviewer's remedy-scope
+// classification rule routes them to.
+//
+// The removal rule is the complement the anti-revert guard was missing. That
+// guard told the fixer to fix intentional code forward, and "the author wrote it
+// on purpose" is true of every unrequired branch, so a finding inside one was
+// always answered by hardening it (backpass PR #107: six rounds patched around
+// an any-existing-file acceptance branch that one deleted line would have
+// closed, and still missed). The guard now protects only code the intent
+// requires; a path the intent does not strictly require is fixed by removing it.
+// The intent is the arbiter for both, and genuine doubt still leaves the code
+// alone and reports the finding unresolved.
+func buildReviewFixPrompt(sctx *pipeline.StepContext, rounds []*db.StepRound, branch, baseSHA, reviewScope, ignorePatterns string) string {
+	previousFindings := sanitizedPreviousFindingsForPrompt(sctx.PreviousFindings)
+	historySection := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSectionFor(rounds) + userIntentPromptSection(sctx) + testguidance.Rule
+	return fmt.Sprintf(
+		`Investigate previous review findings and address legitimate ones.
 
-	// Phase ownership boundary: drop findings that only claim later pipeline-
-	// owned delivery (push/PR/CI for this run) has not happened yet. Prompt
-	// guidance alone is not enough - models still emit these under
-	// authoritative intent criteria like "Open PR A unmerged".
-	if stripped, n := stripDeferredPipelineOwnedDeliveryFindings(findings); n > 0 {
-		sctx.Log(fmt.Sprintf("dropped %d deferred pipeline-owned delivery finding(s) (owned by later push/PR/CI steps)", n))
-		findings = stripped
-	}
+Examine the relevant code yourself and apply fixes directly.
 
-	needsApproval := hasBlockingFindings(findings.Items)
-	findingsJSON, _ := json.Marshal(findings)
+Context:
+- branch: %s
+- base commit: %s
+- target commit: %s
+- review scope: %s
+- default branch: %s
+- ignore patterns: %s
 
-	return approvedReviewOutcome(reviewTargetSHA, &pipeline.StepOutcome{
-		NeedsApproval: needsApproval,
-		AutoFixable:   len(findings.Items) > 0,
-		Findings:      string(findingsJSON),
-		FixSummary:    fixSummary,
-	})
+Rules:
+- Always start with double checking whether the findings are legitimate.
+- Before changing code, identify whether each finding is a local defect or a symptom of a deeper design, abstraction, validation, ownership, or test-coverage flaw. Prefer the smallest correct root-cause fix within the changed area over patching only the reported line.
+- Fix the reported instance narrowly. Prefer doing so by addressing a deeper architectural reason and simplifying it, than introducing machinery to handle the symptoms.
+- Avoid resolving a finding by removing or reverting the author's intentional code in their original 1st commit when the intent requires that code. If the original change introduced something the intent requires, fix it forward (e.g. add validation, handle edge cases, tighten logic) rather than deleting it. Similarly, if the original change intentionally deleted or simplified code, do not restore or re-add the removed code unless the finding is a legitimate correctness, reliability, or security issue and the smallest reasonable fix happens to reintroduce a small amount of previously deleted logic. When in doubt about whether the intent requires the code, leave it and report the finding as unresolved.
+- Do not add code comments explaining your fixes.
+- Apply all the fixes you intend to make first; do not run any verification in between individual fixes.
+- After all fixes are applied, run one focused verification limited to the changed area (the specific package, file, or test you touched) at the end of the fix round to confirm the fixes hold.
+- Do NOT run the complete repository test suite or lint suite during this fix round. The pipeline has dedicated test and lint steps after review that are the authoritative test and lint gates; their coverage may itself be focused on the changed area when the repository has no configured test or lint commands.
+- Return JSON with a single "summary" field when you are done.
+- The summary must be one concise sentence fragment suitable for a git commit subject.
+- Keep the summary under 10 words.%s
+
+Previous review findings to address:
+%s`,
+		branch,
+		baseSHA,
+		sctx.Run.HeadSHA,
+		reviewScope,
+		sctx.Repo.DefaultBranch,
+		ignorePatterns,
+		historySection,
+		previousFindings,
+	)
 }
 
 // reviewAnalyzerMaxAttempts bounds the review turns one Execute spends on

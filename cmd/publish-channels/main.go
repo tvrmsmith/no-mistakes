@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/update"
 )
 
@@ -55,7 +56,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
-	defer os.RemoveAll(dir)
+	defer scratch.RemoveAll(dir)
 	path := filepath.Join(dir, channelsAsset)
 	if err := os.WriteFile(path, manifest, 0o600); err != nil {
 		return fmt.Errorf("write temp manifest: %w", err)

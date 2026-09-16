@@ -49,7 +49,7 @@ func run() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := os.MkdirAll(out, 0o755); err != nil {
+	if err := os.MkdirAll(out, 0o750); err != nil {
 		fmt.Fprintf(os.Stderr, "mkdir %s: %v\n", out, err)
 		return 1
 	}

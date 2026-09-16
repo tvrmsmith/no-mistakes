@@ -41,7 +41,7 @@ func TestMirrorSettlementFailureRestoresArchivedBranch(t *testing.T) {
 			// Reject the selected operation using Git's real transaction hook.
 			// Archival, deletion, and restoration of the old head remain valid.
 			script := "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\nwhile read old new ref; do\n" + condition + "\ndone\nexit 0\n"
-			if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+			if err := os.WriteFile(hook, []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			err = updateGateMirrorAfterPush(sctx.Ctx, sctx, "refs/heads/feature", reviewed, plan)

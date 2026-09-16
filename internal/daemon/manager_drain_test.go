@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
@@ -34,7 +35,7 @@ func newDrainTestManager(t *testing.T) (*RunManager, *db.DB, *db.Repo) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	repo, err := database.InsertRepo(filepath.Join(t.TempDir(), "repo"), "https://example.com/repo.git", "main")
 	if err != nil {
@@ -62,7 +63,7 @@ func registerFakeRun(t *testing.T, m *RunManager, database *db.DB, repo *db.Repo
 	}
 	run.Status = types.RunRunning
 	seedRunWorktree(t, m, database, run)
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan struct{})
 	m.mu.Lock()
 	m.cancels[run.ID] = cancelCause(cancel)
@@ -79,10 +80,10 @@ func registerFakeRun(t *testing.T, m *RunManager, database *db.DB, repo *db.Repo
 func seedRunWorktree(t *testing.T, m *RunManager, database *db.DB, run *db.Run) {
 	t.Helper()
 	dir := m.paths.WorktreeDir(run.RepoID, run.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("run head\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("run head\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "init", "-b", "main")
@@ -196,12 +197,12 @@ func findInterrupted(interrupted []ipc.DrainInterruptedRun, id string) (ipc.Drai
 func TestDrain_RefusesNewRunsImmediately(t *testing.T) {
 	m, database, repo := newDrainTestManager(t)
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 	if len(report.Waited) != 0 {
 		t.Fatalf("Waited = %v, want empty (no runs registered)", report.Waited)
 	}
 
-	_, err := m.startRun(context.Background(), repo, "main", "deadbeef", "cafef00d", "push", nil, "", "")
+	_, err := m.startRun(t.Context(), repo, "main", "deadbeef", "cafef00d", "push", nil, "", "")
 	if err == nil {
 		t.Fatal("startRun after Drain: got nil error, want refusal")
 	}
@@ -228,7 +229,7 @@ func TestDrain_GateParkedRunDoesNotHoldUpDrain(t *testing.T) {
 	parkRunAwaitingAgent(t, database, run)
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 	elapsed := time.Since(start)
 
 	if elapsed >= 2*time.Second {
@@ -253,7 +254,7 @@ func TestDrain_CIMonitorIsExemptNotCut(t *testing.T) {
 	// done is never closed: the monitor keeps polling until Shutdown preserves it.
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 	elapsed := time.Since(start)
 	if elapsed >= 2*time.Second {
 		t.Fatalf("Drain took %v, want it released once rather than waiting out the deadline", elapsed)
@@ -298,7 +299,7 @@ func TestDrain_CIMonitorHoldingAnAgentPIDIsWaitedOnNotExempt(t *testing.T) {
 		close(done)
 	}()
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if cause := context.Cause(ctx); cause != nil {
 		t.Fatalf("cancel cause = %v, want nil: a live CI repair is waited on, not cut", cause)
@@ -341,7 +342,7 @@ func TestDrainReadmitsARunThatStopsMonitoringCI(t *testing.T) {
 		stopErr <- nil
 	}()
 
-	report := m.Drain(context.Background(), time.Second)
+	report := m.Drain(t.Context(), time.Second)
 
 	if err := <-stopErr; err != nil {
 		t.Fatalf("end the ci monitor mid-drain: %v", err)
@@ -376,7 +377,7 @@ func TestDrainReportDoesNotClaimItInterruptedAPreservedCIMonitor(t *testing.T) {
 		markErr <- markCIMonitorActiveErr(database, run)
 	})
 
-	report := m.Drain(context.Background(), 100*time.Millisecond)
+	report := m.Drain(t.Context(), 100*time.Millisecond)
 
 	if err := <-markErr; err != nil {
 		t.Fatalf("mark run as a CI monitor mid-drain: %v", err)
@@ -399,7 +400,7 @@ func TestDrain_NormalInFlightRunIsWaitedFor(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 	elapsed := time.Since(start)
 
 	if elapsed < 200*time.Millisecond {
@@ -423,7 +424,7 @@ func TestDrain_DeadlineExpiresWithRunStillInFlight(t *testing.T) {
 	// done is never closed: the run never exits on its own.
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 100*time.Millisecond)
+	report := m.Drain(t.Context(), 100*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if elapsed >= 2*time.Second {
@@ -467,7 +468,7 @@ func TestDrain_ConcurrentDeregistrationIsNotAPhantomRun(t *testing.T) {
 		close(deregistered)
 	}()
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 	<-deregistered
 
 	_, interrupted := findInterrupted(report.Interrupted, run.ID)
@@ -524,7 +525,7 @@ func TestDrain_ActiveCIStepWithoutPRURLIsNotCut(t *testing.T) {
 		close(done)
 	}()
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if context.Cause(ctx) != nil {
 		t.Fatalf("cancel cause = %v, want nil: a CI step with no PR URL is not a CI monitor", context.Cause(ctx))
@@ -552,7 +553,7 @@ func TestDrain_ParkedCIGateWinsOverCIMonitorClassification(t *testing.T) {
 	parkRunAwaitingAgent(t, database, run)
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 10*time.Second)
+	report := m.Drain(t.Context(), 10*time.Second)
 
 	if elapsed := time.Since(start); elapsed >= 5*time.Second {
 		t.Fatalf("Drain took %v, want it to skip the parked run immediately", elapsed)
@@ -588,7 +589,7 @@ func TestDrain_RunFinishingAtTheDeadlineIsNotReportedInterrupted(t *testing.T) {
 		run, _, done := registerFakeRun(t, m, database, repo, fmt.Sprintf("feature-%d", i))
 		close(done)
 
-		report := m.Drain(context.Background(), time.Nanosecond)
+		report := m.Drain(t.Context(), time.Nanosecond)
 
 		if _, ok := findInterrupted(report.Interrupted, run.ID); ok {
 			t.Fatalf("attempt %d: Interrupted = %v, want empty: run %s finished before the deadline", i, report.Interrupted, run.ID)
@@ -629,7 +630,7 @@ func TestDrain_ShutdownSignalReportsRunsAsStoppedNotFinished(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 60*time.Second)
+	report := m.Drain(t.Context(), 60*time.Second)
 
 	if elapsed := time.Since(start); elapsed >= 10*time.Second {
 		t.Fatalf("Drain took %v, want it ended by the shutdown rather than the 60s deadline", elapsed)
@@ -717,7 +718,7 @@ func TestDrain_ExemptRunThatUnparksIsWaitedOnAgain(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(context.Background(), deadline)
+	report := m.Drain(t.Context(), deadline)
 	elapsed := time.Since(start)
 
 	if err := <-gateErr; err != nil {
@@ -768,7 +769,7 @@ func TestDrain_InitiallyParkedRunThatUnparksIsWaitedOn(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(context.Background(), deadline)
+	report := m.Drain(t.Context(), deadline)
 	elapsed := time.Since(start)
 
 	if err := <-unparkErr; err != nil {
@@ -825,7 +826,7 @@ func TestDrain_GateAnsweredWithNothingLeftToWaitOnIsNotAbandoned(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(context.Background(), deadline)
+	report := m.Drain(t.Context(), deadline)
 	elapsed := time.Since(start)
 
 	if err := <-unparkErr; err != nil {
@@ -866,7 +867,7 @@ func TestDrain_RunThatParksAfterTheLastTickIsNotReportedAsCut(t *testing.T) {
 		parkErr <- parkRunAwaitingAgentErr(database, run)
 	}()
 
-	report := m.Drain(context.Background(), time.Second)
+	report := m.Drain(t.Context(), time.Second)
 
 	if err := <-parkErr; err != nil {
 		t.Fatalf("park the run: %v", err)
@@ -917,7 +918,7 @@ func TestDrain_CompletionsAlreadyDeliveredWhenTheDaemonStopsAreCredited(t *testi
 	)
 
 	reports := make(chan DrainReport, 1)
-	go func() { reports <- m.Drain(context.Background(), 30*time.Second) }()
+	go func() { reports <- m.Drain(t.Context(), 30*time.Second) }()
 
 	// The wait loop is held before its first pass, so nothing has consumed a
 	// completion yet; waiting on the delivery hook proves all three are in the
@@ -973,7 +974,7 @@ func TestDrain_JustApprovedCIGateIsNotCutAsAMonitor(t *testing.T) {
 		close(done)
 	}()
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if cause := context.Cause(ctx); cause != nil {
 		t.Fatalf("cancel cause = %v, want nil: an approval being applied is live work, not an idle CI monitor", cause)
@@ -999,7 +1000,7 @@ func TestStartRun_RegisteringAfterTheDrainSnapshotIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.Drain(context.Background(), time.Millisecond)
+	m.Drain(t.Context(), time.Millisecond)
 
 	registered := m.registerActiveRun(run.ID, nil, func(error) {}, make(chan struct{}))
 	if registered {
@@ -1034,7 +1035,7 @@ func TestDrain_CIStepMidAutoFixRepairIsWaitedOnNotCut(t *testing.T) {
 		close(done)
 	}()
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if cause := context.Cause(ctx); cause != nil {
 		t.Fatalf("cancel cause = %v, want nil: a CI auto-fix repair is waited on, not cut", cause)
@@ -1063,7 +1064,7 @@ func TestDrain_RunThatParksMidDrainIsReleased(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 10*time.Second)
+	report := m.Drain(t.Context(), 10*time.Second)
 	elapsed := time.Since(start)
 
 	if err := <-parkErr; err != nil {
@@ -1099,7 +1100,7 @@ func TestDrain_RunThatReachesCIMidDrainIsExempted(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(context.Background(), 10*time.Second)
+	report := m.Drain(t.Context(), 10*time.Second)
 	elapsed := time.Since(start)
 
 	if err := <-markErr; err != nil {
@@ -1129,7 +1130,7 @@ func TestDrain_CancelledContextAbortsTheWait(t *testing.T) {
 	run, _, _ := registerFakeRun(t, m, database, repo, "feature")
 	// done is never closed: only ctx can end this wait.
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
@@ -1184,7 +1185,7 @@ func TestDrain_RunWithAnotherActiveStepBesidesCIIsNotCut(t *testing.T) {
 		close(done)
 	}()
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if context.Cause(ctx) != nil {
 		t.Fatalf("cancel cause = %v, want nil: a run with another running step is not a CI monitor", context.Cause(ctx))
@@ -1229,7 +1230,7 @@ func TestDrain_ExemptRunThatFinishesIsReportedFinished(t *testing.T) {
 	})
 	close(workingDone)
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if context.Cause(parkedCtx) != nil {
 		t.Fatalf("cancel cause = %v, want nil: the drain never cancels a run it merely stopped waiting on", context.Cause(parkedCtx))
@@ -1272,7 +1273,7 @@ func TestRefuseStartedRun_ReleasesEverythingTheRunAlreadyBuilt(t *testing.T) {
 	defer sub.Close()
 
 	ag := &closeRecordingAgent{Agent: agent.NewNoop()}
-	_, cancel := context.WithCancelCause(context.Background())
+	_, cancel := context.WithCancelCause(t.Context())
 	refusal := fmt.Errorf("daemon is shutting down")
 
 	m.refuseStartedRun(run.ID, ag, cancel, refusal)
@@ -1280,7 +1281,7 @@ func TestRefuseStartedRun_ReleasesEverythingTheRunAlreadyBuilt(t *testing.T) {
 	if !ag.closed.Load() {
 		t.Fatal("the refused run's agent was never closed, so its subprocesses outlive the run")
 	}
-	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, stop := context.WithTimeout(t.Context(), 5*time.Second)
 	defer stop()
 	for {
 		event, ok := sub.Next(ctx)
@@ -1339,12 +1340,12 @@ func TestDrain_CIMonitorWithUncommittedWorkIsWaitedOnNotExempt(t *testing.T) {
 	run, ctx, done := registerFakeRun(t, m, database, repo, "feature")
 	markCIMonitorActive(t, database, run)
 	dirty := filepath.Join(m.paths.WorktreeDir(run.RepoID, run.ID), "half-written.go")
-	if err := os.WriteFile(dirty, []byte("package broken\n"), 0o644); err != nil {
+	if err := os.WriteFile(dirty, []byte("package broken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	close(done)
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if cause := context.Cause(ctx); cause != nil {
 		t.Fatalf("cancel cause = %v, want nil: Drain waits a run out rather than cutting it", cause)
@@ -1370,7 +1371,7 @@ func TestDrain_CIMonitorWhoseWorktreeIsGoneIsWaitedOnNotExempt(t *testing.T) {
 	}
 	close(done)
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if !containsRunID(report.Waited, run.ID) {
 		t.Fatalf("Waited = %v, want the monitor %s whose worktree is gone", report.Waited, run.ID)
@@ -1397,7 +1398,7 @@ func TestDrain_StaleAwaitingMarkerWithoutAGateRowIsWaitedOn(t *testing.T) {
 	}
 	close(done)
 
-	report := m.Drain(context.Background(), 5*time.Second)
+	report := m.Drain(t.Context(), 5*time.Second)
 
 	if !containsRunID(report.Waited, run.ID) {
 		t.Fatalf("Waited = %v, want the working run %s: a stale marker is not a gate", report.Waited, run.ID)

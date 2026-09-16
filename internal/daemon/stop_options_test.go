@@ -25,7 +25,7 @@ func stopOptionsRoot(t *testing.T) *paths.Paths {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() { removeTempRoot(t, dir) })
 	p := paths.WithRoot(dir)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -81,10 +81,10 @@ func installFakeManagedService(t *testing.T, p *paths.Paths) *[]string {
 	home := t.TempDir()
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	unit := systemdUserServicePath(p)
-	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(unit), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unit, []byte("[Service]\nExecStart=/x daemon run\n"), 0o644); err != nil {
+	if err := os.WriteFile(unit, []byte("[Service]\nExecStart=/x daemon run\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex

@@ -1,7 +1,6 @@
 package azuredevops
 
 import (
-	"context"
 	"encoding/json"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"strings"
@@ -15,7 +14,7 @@ func TestPRRawContentAndBodyOnlyUpdate(t *testing.T) {
 		var calls []capturedCmd
 		h := newCapturingHost(&calls, azdoTestResponse{stdout: string(raw)})
 		pr := &scm.PR{Number: "7"}
-		got, err := h.GetPRContent(context.Background(), pr)
+		got, err := h.GetPRContent(t.Context(), pr)
 		if err != nil || got.Body != body || got.Title != "Human title" {
 			t.Fatalf("content=%+v err=%v", got, err)
 		}
@@ -23,7 +22,7 @@ func TestPRRawContentAndBodyOnlyUpdate(t *testing.T) {
 			t.Fatalf("wrong read: %+v", calls)
 		}
 		calls = nil
-		if _, err := h.UpdatePR(context.Background(), pr, scm.PRContent{Body: body}); err != nil {
+		if _, err := h.UpdatePR(t.Context(), pr, scm.PRContent{Body: body}); err != nil {
 			t.Fatal(err)
 		}
 		if body != "" {
@@ -43,13 +42,13 @@ func TestPRRawContentRejectsUnprovenResponses(t *testing.T) {
 	for _, raw := range []string{"", "null", "{}", `{"pullRequestId":7,"title":"T"}`, `{"pullRequestId":7,"title":"T","description":null}`, `{"pullRequestId":7,"title":"T","description":42}`, `{"pullRequestId":8,"title":"T","description":""}`} {
 		var calls []capturedCmd
 		h := newCapturingHost(&calls, azdoTestResponse{stdout: raw})
-		if _, err := h.GetPRContent(context.Background(), &scm.PR{Number: "7"}); err == nil {
+		if _, err := h.GetPRContent(t.Context(), &scm.PR{Number: "7"}); err == nil {
 			t.Errorf("accepted %q", raw)
 		}
 	}
 	var calls []capturedCmd
 	h := newCapturingHost(&calls, azdoTestResponse{code: 1})
-	if _, err := h.GetPRContent(context.Background(), &scm.PR{Number: "7"}); err == nil {
+	if _, err := h.GetPRContent(t.Context(), &scm.PR{Number: "7"}); err == nil {
 		t.Fatal("accepted failed transport")
 	}
 }

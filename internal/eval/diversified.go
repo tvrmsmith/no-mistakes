@@ -158,7 +158,7 @@ func splitPreservedPins(existing []diversifiedPin, preserve map[string]bool) (ca
 	return carried, plannable
 }
 
-func planReadableDiversified(gold []Case, cap int, existing []diversifiedPin) []diversifiedPin {
+func planReadableDiversified(gold []Case, limit int, existing []diversifiedPin) []diversifiedPin {
 	grouped, keys := rankedStrata(gold)
 	byID := map[string]Case{}
 	for _, c := range gold {
@@ -200,7 +200,7 @@ func planReadableDiversified(gold []Case, cap int, existing []diversifiedPin) []
 		return out
 	}
 
-	if cap == 0 {
+	if limit == 0 {
 		kept = onePinPerStratum(kept)
 		pinned = pinSet(kept)
 		for _, key := range keys {
@@ -220,16 +220,16 @@ func planReadableDiversified(gold []Case, cap int, existing []diversifiedPin) []
 	}
 
 	collapsed := false
-	if len(kept) > cap {
+	if len(kept) > limit {
 		kept = onePinPerStratum(kept)
-		if len(kept) > cap {
-			kept = append([]diversifiedPin(nil), kept[:cap]...)
+		if len(kept) > limit {
+			kept = append([]diversifiedPin(nil), kept[:limit]...)
 		}
 		pinned = pinSet(kept)
 		collapsed = true
 	}
 
-	remaining := cap - len(kept)
+	remaining := limit - len(kept)
 	if remaining <= 0 {
 		return kept
 	}
@@ -290,10 +290,10 @@ func pinSet(pins []diversifiedPin) map[string]bool {
 	return out
 }
 
-func hamiltonSeats(weights []int, cap int, capacities []int) []int {
+func hamiltonSeats(weights []int, totalSeats int, capacities []int) []int {
 	n := len(weights)
 	seats := make([]int, n)
-	if cap <= 0 || n == 0 {
+	if totalSeats <= 0 || n == 0 {
 		return seats
 	}
 	total := 0
@@ -311,7 +311,7 @@ func hamiltonSeats(weights []int, cap int, capacities []int) []int {
 	allocated := 0
 	remainders := make([]remainder, 0, n)
 	for i, w := range weights {
-		quota := float64(cap) * float64(w) / float64(total)
+		quota := float64(totalSeats) * float64(w) / float64(total)
 		floor := int(quota)
 		if floor > capacities[i] {
 			floor = capacities[i]
@@ -329,10 +329,10 @@ func hamiltonSeats(weights []int, cap int, capacities []int) []int {
 		}
 		return remainders[a].key < remainders[b].key
 	})
-	for allocated < cap {
+	for allocated < totalSeats {
 		progressed := false
 		for _, rem := range remainders {
-			if allocated >= cap {
+			if allocated >= totalSeats {
 				break
 			}
 			if seats[rem.i] >= capacities[rem.i] {

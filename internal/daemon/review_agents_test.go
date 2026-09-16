@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -25,7 +25,7 @@ func TestPipelineReviewRolesUseIndependentPiProfiles(t *testing.T) {
 		bin += ".cmd"
 		script = "@echo off\r\necho %* > pi-argv.txt\r\nmore > nul\r\necho " + response + "\r\n"
 	}
-	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	global, err := config.LoadGlobalFromBytes([]byte(`agent: pi
@@ -41,18 +41,18 @@ review_agents:
 	cfg := config.Merge(global, &config.RepoConfig{})
 	cfg.AgentPathOverride = map[string]string{"pi": bin}
 	cfg.DisableProjectSettings = true
-	ag, err := newPipelineAgent(context.Background(), cfg, t.TempDir(), fakeLookPath, runenv.Overlay{})
+	ag, err := newPipelineAgent(t.Context(), cfg, t.TempDir(), fakeLookPath, runenv.Overlay{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ag.Close()
+	defer closers.Quiet(ag)
 	for _, tc := range []struct{ purpose, model, effort string }{
 		{"review", "anthropic-vertex/claude-opus-4-8", "max"},
 		{"review-fix", "google-vertex/gemini-3.8-flash", "max"},
 		{"review", "anthropic-vertex/claude-opus-4-8", "max"},
 		{"test-evidence", "default-model", "high"},
 	} {
-		_, err := ag.Run(context.Background(), agent.RunOpts{Purpose: tc.purpose, Prompt: "hello", CWD: dir})
+		_, err := ag.Run(t.Context(), agent.RunOpts{Purpose: tc.purpose, Prompt: "hello", CWD: dir})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +71,7 @@ review_agents:
 func TestPipelineReviewRoleFailsClosed(t *testing.T) {
 	cfg := &config.Config{Agent: types.AgentPi, DisableProjectSettings: true,
 		ReviewAgents: map[string]config.ReviewAgent{"reviewer": {Agent: types.AgentAntigravity}}}
-	_, err := newPipelineAgent(context.Background(), cfg, t.TempDir(), fakeLookPath, runenv.Overlay{})
+	_, err := newPipelineAgent(t.Context(), cfg, t.TempDir(), fakeLookPath, runenv.Overlay{})
 	if err == nil || !strings.Contains(err.Error(), "review_agents.reviewer") || !strings.Contains(err.Error(), "does not neutralize") {
 		t.Fatalf("unsafe reviewer error = %v", err)
 	}
@@ -106,7 +106,7 @@ func writeCapturingPiAgent(t *testing.T, dir, capturePath string) string {
 		bin += ".cmd"
 		script = "@echo off\r\necho %* >> \"" + capturePath + "\"\r\nmore > nul\r\necho " + response + "\r\n"
 	}
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return bin
@@ -132,7 +132,7 @@ func TestPushReceivedRoutesReviewRolesToIndependentProfiles(t *testing.T) {
 		"review_agents:\n" +
 		"  reviewer: {agent: pi, model: anthropic-vertex/claude-opus-4-8, effort: max}\n" +
 		"  fixer: {agent: pi, model: google-vertex/gemini-3.8-flash, effort: max}\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,7 +142,7 @@ func TestPushReceivedRoutesReviewRolesToIndependentProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{

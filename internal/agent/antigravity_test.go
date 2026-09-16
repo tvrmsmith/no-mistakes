@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -108,7 +107,7 @@ func TestAntigravityParser(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	err := p.parse(context.Background(), buf)
+	err := p.parse(t.Context(), buf)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +145,7 @@ func TestAntigravityParser_ToolCallArrayDeltas(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -162,7 +161,7 @@ func TestAntigravityParser_StringToolInfoParametersUsedVerbatim(t *testing.T) {
 	stream := `{"event": "step_update", "step_update": {"tool_info": {"parameters": "--flag value"}}}` + "\n"
 	var chunks []string
 	p := &antigravityParser{onChunk: func(text string) { chunks = append(chunks, text) }}
-	if err := p.parse(context.Background(), bytes.NewBufferString(stream)); err != nil {
+	if err := p.parse(t.Context(), bytes.NewBufferString(stream)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -175,7 +174,7 @@ func TestAntigravityParser_StructuredSubagentInfoCompacted(t *testing.T) {
 	stream := `{"event": "step_update", "step_update": {"subagent_info": {"task": "review", "depth": 2}}}` + "\n"
 	var chunks []string
 	p := &antigravityParser{onChunk: func(text string) { chunks = append(chunks, text) }}
-	if err := p.parse(context.Background(), bytes.NewBufferString(stream)); err != nil {
+	if err := p.parse(t.Context(), bytes.NewBufferString(stream)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -192,7 +191,7 @@ not json at all
 {"event": "step_update", "step_update": {"text_delta": "kept"}}
 `
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), bytes.NewBufferString(stream)); err != nil {
+	if err := p.parse(t.Context(), bytes.NewBufferString(stream)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -208,7 +207,7 @@ func TestAntigravityParser_StructuredOutputOverride(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	err := p.parse(context.Background(), buf)
+	err := p.parse(t.Context(), buf)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,7 +226,7 @@ func TestAntigravityParser_ErrorStatus(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	err := p.parse(context.Background(), buf)
+	err := p.parse(t.Context(), buf)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,7 +243,7 @@ func TestAntigravityParser_CapturesConversationID(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The terminal result event names the conversation that actually served
@@ -261,7 +260,7 @@ func TestAntigravityParser_MapsThinkingTokensToReasoning(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -284,7 +283,7 @@ func TestAntigravityParser_ThinkingTokensAbsentLeavesReasoningUnreported(t *test
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -303,7 +302,7 @@ func TestAntigravityParser_PartialUsagePayloadDoesNotZeroEarlierFields(t *testin
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -326,7 +325,7 @@ func TestAntigravityParser_CacheCreationPresenceAndStepPath(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stepStream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -344,7 +343,7 @@ func TestAntigravityParser_CacheCreationGenuineZeroOnResultIsReported(t *testing
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -366,7 +365,7 @@ func TestAntigravityParser_ResponseWinsOverStreamDeltas(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -382,7 +381,7 @@ func TestAntigravityParser_StructuredOutputWinsOverResponse(t *testing.T) {
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -399,7 +398,7 @@ func TestAntigravityParser_ExplicitNullStructuredOutputFallsThroughToResponse(t 
 `
 	buf := bytes.NewBufferString(stream)
 	p := &antigravityParser{}
-	if err := p.parse(context.Background(), buf); err != nil {
+	if err := p.parse(t.Context(), buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -437,7 +436,7 @@ func writeFakeAgy(t *testing.T, dir string, jsonlLines []string, exitCode int) s
 		lines = append(lines, "exit "+itoa(exitCode))
 		script = strings.Join(lines, "\n") + "\n"
 	}
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake agy: %v", err)
 	}
 	return bin
@@ -452,7 +451,7 @@ func TestAntigravityAgent_RunParsesJSONOutput(t *testing.T) {
 
 	var chunks []string
 	ca := &antigravityAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{
+	result, err := ca.Run(t.Context(), RunOpts{
 		Prompt:     "do work",
 		CWD:        t.TempDir(),
 		JSONSchema: json.RawMessage(`{"type":"object"}`),
@@ -480,7 +479,7 @@ func TestAntigravityAgent_RunReportsErrorOnNonZeroExit(t *testing.T) {
 	}, 0) // exit with 0 so waitErr is nil, falling through to errorMessage check
 
 	ca := &antigravityAgent{bin: bin}
-	_, err := ca.Run(context.Background(), RunOpts{
+	_, err := ca.Run(t.Context(), RunOpts{
 		Prompt: "do work",
 		CWD:    t.TempDir(),
 	})
@@ -509,7 +508,7 @@ func TestAntigravityAgent_RunReportsSchemaMiss(t *testing.T) {
 	}`)
 
 	ca := &antigravityAgent{bin: bin}
-	_, err := ca.Run(context.Background(), RunOpts{
+	_, err := ca.Run(t.Context(), RunOpts{
 		Prompt:     "summarize",
 		CWD:        t.TempDir(),
 		JSONSchema: schema,
@@ -552,7 +551,7 @@ func writeFakeAgyRecordingArgs(t *testing.T, dir string, jsonlLines []string) st
 		lines = append(lines, "exit 0")
 		script = strings.Join(lines, "\n") + "\n"
 	}
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake agy: %v", err)
 	}
 	return bin
@@ -566,7 +565,7 @@ func TestAntigravityAgent_RunReportsSessionIdentity(t *testing.T) {
 	}, 0)
 
 	ca := &antigravityAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{Prompt: "do work", CWD: t.TempDir()})
+	result, err := ca.Run(t.Context(), RunOpts{Prompt: "do work", CWD: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -590,7 +589,7 @@ func TestAntigravityAgent_RunResumesRecordedConversation(t *testing.T) {
 	})
 
 	ca := &antigravityAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{
+	result, err := ca.Run(t.Context(), RunOpts{
 		Prompt: "continue",
 		CWD:    t.TempDir(),
 		Session: &SessionRef{
@@ -627,7 +626,7 @@ func TestAntigravityAgent_RunDefaultAndCustomPrintTimeout(t *testing.T) {
 		})
 
 		ca := &antigravityAgent{bin: bin}
-		_, err := ca.Run(context.Background(), RunOpts{
+		_, err := ca.Run(t.Context(), RunOpts{
 			Prompt: "work",
 			CWD:    t.TempDir(),
 		})
@@ -653,7 +652,7 @@ func TestAntigravityAgent_RunDefaultAndCustomPrintTimeout(t *testing.T) {
 		})
 
 		ca := &antigravityAgent{bin: bin, extraArgs: []string{"-t=15m"}}
-		_, err := ca.Run(context.Background(), RunOpts{
+		_, err := ca.Run(t.Context(), RunOpts{
 			Prompt: "work",
 			CWD:    t.TempDir(),
 		})
@@ -682,7 +681,7 @@ func TestAntigravityAgent_RunStaleConversationStartsFreshWithoutClaimingResume(t
 	}, 0)
 
 	ca := &antigravityAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{
+	result, err := ca.Run(t.Context(), RunOpts{
 		Prompt: "continue",
 		CWD:    t.TempDir(),
 		Session: &SessionRef{
@@ -711,7 +710,7 @@ func TestAntigravityAgent_RunCarriesUsageAndResponsePrecedence(t *testing.T) {
 
 	var chunks []string
 	ca := &antigravityAgent{bin: bin}
-	result, err := ca.Run(context.Background(), RunOpts{
+	result, err := ca.Run(t.Context(), RunOpts{
 		Prompt:  "do work",
 		CWD:     t.TempDir(),
 		OnChunk: func(text string) { chunks = append(chunks, text) },
@@ -745,7 +744,7 @@ func TestAntigravityAgent_FailedTurnReportsTheConversationAgyServed(t *testing.T
 		`{"event": "init", "conversation_id": "conv-new-9"}`,
 	}, 1)
 
-	result, err := (&antigravityAgent{bin: bin}).Run(context.Background(), RunOpts{
+	result, err := (&antigravityAgent{bin: bin}).Run(t.Context(), RunOpts{
 		Prompt:  "continue",
 		CWD:     t.TempDir(),
 		Session: &SessionRef{ID: "conv-pruned", Agent: "antigravity"},

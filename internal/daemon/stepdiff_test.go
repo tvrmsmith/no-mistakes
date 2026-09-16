@@ -1,13 +1,13 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -30,7 +30,7 @@ func stepDiffFixture(t *testing.T, contents string) (*RunManager, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { closers.Quiet(database) })
 
 	repo, err := database.InsertRepoWithID("testrepo", filepath.Join(root, "clone"), "https://example.test/repo", "main")
 	if err != nil {
@@ -42,18 +42,18 @@ func stepDiffFixture(t *testing.T, contents string) (*RunManager, string) {
 	}
 
 	worktree := p.WorktreeDir(repo.ID, run.ID)
-	if err := os.MkdirAll(worktree, 0o755); err != nil {
+	if err := os.MkdirAll(worktree, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, worktree, "init")
 	runGit(t, worktree, "config", "user.email", "test@example.com")
 	runGit(t, worktree, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, worktree, "add", "tracked.txt")
 	runGit(t, worktree, "commit", "-m", "base")
-	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,7 +73,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 func TestStepDiff_ReturnsTheWorktreeDiffOnDemand(t *testing.T) {
 	m, runID := stepDiffFixture(t, "agent fix\n")
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestStepDiff_BoundsAnOversizedDiff(t *testing.T) {
 	huge := strings.Repeat("a very long changed line that repeats\n", 60_000)
 	m, runID := stepDiffFixture(t, huge)
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestStepDiff_ShowsTheExitCommitWhenTheWorktreeIsClean(t *testing.T) {
 	runGit(t, worktree, "commit", "-m", "step exit commit")
 	parkStepAtGate(t, m, runID, types.StepDocument, startingHead)
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestStepDiff_StepThatCommittedNothingGetsNoDiff(t *testing.T) {
 	// The parked step then runs and changes nothing.
 	parkStepAtGate(t, m, runID, types.StepTest, headSHA(t, worktree))
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestStepDiff_NonValidationStepGetsNoCommitRange(t *testing.T) {
 	runGit(t, worktree, "commit", "-m", "commit the rebase picked up")
 	parkStepAtGate(t, m, runID, types.StepRebase, startingHead)
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestStepDiff_NonValidationStepGetsNoCommitRange(t *testing.T) {
 
 func TestStepDiff_UnknownRunFailsClosed(t *testing.T) {
 	m, _ := stepDiffFixture(t, "agent fix\n")
-	if _, _, err := m.StepDiff(context.Background(), "01NOSUCHRUN"); err == nil {
+	if _, _, err := m.StepDiff(t.Context(), "01NOSUCHRUN"); err == nil {
 		t.Fatal("expected an error for an unknown run")
 	}
 }
@@ -242,11 +242,11 @@ func TestStepDiff_UnknownRunFailsClosed(t *testing.T) {
 // the run.
 func TestStepDiff_ServesTheDiffWhileTheGlobalConfigIsUnreadable(t *testing.T) {
 	m, runID := stepDiffFixture(t, "agent fix\n")
-	if err := os.WriteFile(m.paths.ConfigFile(), []byte("worktree_roots: [not, a, mapping\n"), 0o644); err != nil {
+	if err := os.WriteFile(m.paths.ConfigFile(), []byte("worktree_roots: [not, a, mapping\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	diff, truncated, err := m.StepDiff(context.Background(), runID)
+	diff, truncated, err := m.StepDiff(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("step diff with an unreadable global config: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/termout"
 )
 
 const (
@@ -51,6 +52,8 @@ type updater struct {
 	stdin              io.Reader
 	stdout             io.Writer
 	stderr             io.Writer
+	outPrinter         *termout.Printer
+	errPrinter         *termout.Printer
 	now                func() time.Time
 	spawnBackground    func(currentVersion string) error
 	resetDaemon        func() error
@@ -166,7 +169,9 @@ func (u *updater) maybeNotifyAndCheck(args []string) {
 	if cache != nil {
 		cmp, err := compareVersions(u.currentVersion, cache.LatestVersion)
 		if err == nil && cmp < 0 {
-			fmt.Fprintf(u.stderrWriter(), "%sA new version of %s is available: %s -> %s\nRun \"%s update\" to update%s\n", u.yellow(), u.appName, u.currentVersion, cache.LatestVersion, u.appName, u.reset())
+			// A notice on an ordinary command must stay innocuous (#401), so a
+			// failed write is recorded rather than raised.
+			u.errOut().Printf("%sA new version of %s is available: %s -> %s\nRun \"%s update\" to update%s\n", u.yellow(), u.appName, u.currentVersion, cache.LatestVersion, u.appName, u.reset())
 		}
 	}
 	if cacheStale(cache, u.currentVersion, u.now()) && u.spawnBackground != nil {
@@ -191,8 +196,8 @@ func (u *updater) cachedLatestVersion() string {
 
 func (u *updater) run(ctx context.Context) error {
 	if isDevVersion(u.currentVersion) {
-		fmt.Fprintf(u.stdoutWriter(), "self-update unavailable for development builds (%s)\n", u.currentVersion)
-		return nil
+		u.out().Printf("self-update unavailable for development builds (%s)\n", u.currentVersion)
+		return u.writeErr()
 	}
 	plan, err := u.checkLatest(ctx)
 	if err != nil {
@@ -202,8 +207,8 @@ func (u *updater) run(ctx context.Context) error {
 		return err
 	}
 	if !plan.UpdateAvailable {
-		fmt.Fprintf(u.stdoutWriter(), "%s is already up to date (%s)\n", u.appName, u.currentVersion)
-		return nil
+		u.out().Printf("%s is already up to date (%s)\n", u.appName, u.currentVersion)
+		return u.writeErr()
 	}
 	if err := u.confirmActiveRunsBeforeUpdate(); err != nil {
 		return err
@@ -249,24 +254,41 @@ func (u *updater) run(ctx context.Context) error {
 		}
 		// The daemon really was stopped and restarted, so the preservation
 		// promise is finally true for this invocation.
-		fmt.Fprint(u.stderrWriter(), parkedNotice)
+		u.errOut().Print(parkedNotice)
 	}
-	fmt.Fprintf(u.stdoutWriter(), "updated %s from %s to %s\n", u.appName, u.currentVersion, plan.LatestVersion)
-	return nil
+	u.out().Printf("updated %s from %s to %s\n", u.appName, u.currentVersion, plan.LatestVersion)
+	return u.writeErr()
 }
 
-func (u *updater) stdoutWriter() io.Writer {
-	if u.stdout == nil {
-		return io.Discard
+// out and errOut are the update's two output streams, latched so a failed
+// write reaches run's return value instead of leaving the command reporting a
+// completed update the operator never read. Each is built once, because the
+// latch has to accumulate across every line the update prints.
+func (u *updater) out() *termout.Printer {
+	if u.outPrinter == nil {
+		w := io.Writer(io.Discard)
+		if u.stdout != nil {
+			w = u.stdout
+		}
+		u.outPrinter = termout.New(w)
 	}
-	return u.stdout
+	return u.outPrinter
 }
 
-func (u *updater) stderrWriter() io.Writer {
-	if u.stderr == nil {
-		return io.Discard
+func (u *updater) errOut() *termout.Printer {
+	if u.errPrinter == nil {
+		w := io.Writer(io.Discard)
+		if u.stderr != nil {
+			w = u.stderr
+		}
+		u.errPrinter = termout.New(w)
 	}
-	return u.stderr
+	return u.errPrinter
+}
+
+// writeErr reports the first failed write on either stream.
+func (u *updater) writeErr() error {
+	return errors.Join(u.out().Err(), u.errOut().Err())
 }
 
 func (u *updater) yellow() string {

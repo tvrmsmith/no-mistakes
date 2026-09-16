@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
@@ -41,10 +42,10 @@ var runWizardAuto = func(ctx context.Context, p *paths.Paths, state *repoState, 
 }
 
 type wizardAgentSuggester struct {
-	cfg     *config.Config
-	workDir string
-	resolve func(context.Context, *config.Config) error
-	new     func(types.AgentName, string, []string, agent.Options) (agent.Agent, error)
+	cfg      *config.Config
+	workDir  string
+	resolve  func(context.Context, *config.Config) error
+	newAgent func(types.AgentName, string, []string, agent.Options) (agent.Agent, error)
 
 	once sync.Once
 	ag   agent.Agent
@@ -57,14 +58,14 @@ type wizardAgentSuggester struct {
 	cachedCommit string
 }
 
-func newWizardAgentSuggester(cfg *config.Config, workDir string, resolve func(context.Context, *config.Config) error, new func(types.AgentName, string, []string, agent.Options) (agent.Agent, error)) *wizardAgentSuggester {
+func newWizardAgentSuggester(cfg *config.Config, workDir string, resolve func(context.Context, *config.Config) error, newAgent func(types.AgentName, string, []string, agent.Options) (agent.Agent, error)) *wizardAgentSuggester {
 	if resolve == nil {
 		resolve = resolveWizardAgent
 	}
-	if new == nil {
-		new = newWizardAgent
+	if newAgent == nil {
+		newAgent = newWizardAgent
 	}
-	return &wizardAgentSuggester{cfg: cfg, workDir: workDir, resolve: resolve, new: new}
+	return &wizardAgentSuggester{cfg: cfg, workDir: workDir, resolve: resolve, newAgent: newAgent}
 }
 
 func (s *wizardAgentSuggester) ensure(ctx context.Context) error {
@@ -73,7 +74,7 @@ func (s *wizardAgentSuggester) ensure(ctx context.Context) error {
 			s.err = fmt.Errorf("resolve agent: %w", err)
 			return
 		}
-		ag, err := s.new(s.cfg.Agent, s.cfg.AgentPath(), s.cfg.AgentArgs(), agent.Options{
+		ag, err := s.newAgent(s.cfg.Agent, s.cfg.AgentPath(), s.cfg.AgentArgs(), agent.Options{
 			ACPRegistryOverrides: s.cfg.ACPRegistryOverrides,
 			Profile:              s.cfg.AgentProfile(),
 		})
@@ -221,7 +222,7 @@ func runWizardWithMode(ctx context.Context, p *paths.Paths, state *repoState, sk
 	defer agent.SetServerPIDsDirForOwner("", "")
 
 	suggester := newWizardAgentSuggester(cfg, workDir, nil, nil)
-	defer suggester.Close()
+	defer closers.Quiet(suggester)
 
 	wizCfg := wizard.Config{
 		Context:       ctx,
@@ -293,9 +294,9 @@ func runWizardWithMode(ctx context.Context, p *paths.Paths, state *repoState, sk
 // cleanup. Failing to open the log file is not fatal — we fall back to
 // io.Discard to avoid corrupting the alt-screen.
 func captureAgentServerOutput(p *paths.Paths) func() {
-	_ = os.MkdirAll(p.LogsDir(), 0o755)
+	_ = os.MkdirAll(p.LogsDir(), 0o750)
 	logPath := filepath.Join(p.LogsDir(), "wizard-agent.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		agent.SetManagedServerOutput(discardWriter{})
 		return func() { agent.SetManagedServerOutput(nil) }
@@ -303,7 +304,7 @@ func captureAgentServerOutput(p *paths.Paths) func() {
 	agent.SetManagedServerOutput(f)
 	return func() {
 		agent.SetManagedServerOutput(nil)
-		f.Close()
+		closers.Quiet(f)
 	}
 }
 
@@ -323,7 +324,7 @@ func awaitDaemonRunRegistration(ctx context.Context, client *ipc.Client, repoID,
 		return err
 	}
 	if run == nil {
-		logPath := filepath.Join("~/.no-mistakes", "repos", repoID+".git", "notify-push.log")
+		logPath := filepath.Join("~", ".no-mistakes", "repos", repoID+".git", "notify-push.log")
 		if p, pathErr := paths.New(); pathErr == nil {
 			logPath = filepath.Join(p.RepoDir(repoID), "notify-push.log")
 		}

@@ -242,7 +242,7 @@ func TestLoadGlobal_CommitFixMessage(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	const source = "chore(no-mistakes-{{.Step}}): {{.Summary}}"
 	data := []byte("commit:\n  fix_message: '" + source + "'\n")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -299,7 +299,7 @@ func TestLoadGlobal_RejectsInvalidCommitFixMessage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -317,7 +317,7 @@ func TestLoadRepo_CommitFixMessage(t *testing.T) {
 	path := filepath.Join(dir, ".no-mistakes.yaml")
 	const source = "{{.Summary}}"
 	data := []byte("commit:\n  fix_message: '" + source + "'\n")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -331,6 +331,7 @@ func TestLoadRepo_CommitFixMessage(t *testing.T) {
 }
 
 func TestLoadRepo_RejectsInvalidCommitFixMessage(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"unknown variable":         "commit:\n  fix_message: '{{.Unknown}}'\n",
 		"escape control":           "commit:\n  fix_message: \"chore:\\u001b {{.Summary}}\"\n",
@@ -387,6 +388,7 @@ func TestMerge_CommitBranchReplacementIsGlobalOnly(t *testing.T) {
 	repoPattern := `([A-Z]+-[0-9]+)`
 
 	t.Run("global replacement applies", func(t *testing.T) {
+		t.Parallel()
 		cfg := Merge(
 			&GlobalConfig{Commit: GlobalCommitRaw{CommitRaw: CommitRaw{BranchPattern: &globalPattern}, BranchReplacement: &globalReplacement}},
 			&RepoConfig{},
@@ -401,6 +403,7 @@ func TestMerge_CommitBranchReplacementIsGlobalOnly(t *testing.T) {
 	})
 
 	t.Run("repo pattern disables global replacement", func(t *testing.T) {
+		t.Parallel()
 		cfg := Merge(
 			&GlobalConfig{Commit: GlobalCommitRaw{CommitRaw: CommitRaw{BranchPattern: &globalPattern}, BranchReplacement: &globalReplacement}},
 			&RepoConfig{Commit: CommitRaw{BranchPattern: &repoPattern}},

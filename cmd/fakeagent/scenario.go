@@ -249,13 +249,13 @@ func applyEditsInDir(wd string, edits []Edit) error {
 			continue
 		}
 		if e.Old == "" {
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 				err = fmt.Errorf("mkdir %s: %w", e.Path, err)
 				fmt.Fprintf(os.Stderr, "fakeagent: %v\n", err)
 				errs = append(errs, err)
 				continue
 			}
-			if err := os.WriteFile(path, []byte(e.New), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(e.New), 0o600); err != nil {
 				err = fmt.Errorf("write %s: %w", e.Path, err)
 				fmt.Fprintf(os.Stderr, "fakeagent: %v\n", err)
 				errs = append(errs, err)
@@ -276,7 +276,7 @@ func applyEditsInDir(wd string, edits []Edit) error {
 			continue
 		}
 		updated := strings.Replace(string(data), e.Old, e.New, 1)
-		if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
 			err = fmt.Errorf("write %s: %w", e.Path, err)
 			fmt.Fprintf(os.Stderr, "fakeagent: %v\n", err)
 			errs = append(errs, err)

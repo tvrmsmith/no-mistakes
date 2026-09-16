@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -34,7 +34,7 @@ func TestProtectedPathRefusalCancellationCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			var result ipc.PushReceivedResult
 			push := &ipc.PushReceivedParams{Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main", Old: strings.Repeat("0", 40), New: head}
 			if err := client.Call(ipc.MethodPushReceived, push, &result); err != nil {
@@ -128,7 +128,7 @@ func TestProtectedPathRefusalSurvivesShutdownCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main", Old: strings.Repeat("0", 40), New: head,
@@ -152,7 +152,7 @@ func TestProtectedPathRefusalSurvivesShutdownCleanup(t *testing.T) {
 	if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	client.Close()
+	closers.Quiet(client)
 	deadline = time.Now().Add(15 * time.Second)
 	for {
 		if _, err := os.Stat(p.Socket()); os.IsNotExist(err) {
@@ -180,14 +180,14 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			repo, head := setupTestGitRepo(t, p, database, "protected-crash")
 			run, err := database.InsertRun(repo.ID, "main", head, head)
 			if err != nil {
 				t.Fatal(err)
 			}
 			workDir := p.WorktreeDir(repo.ID, run.ID)
-			if err := git.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), workDir, head); err != nil {
+			if err := git.WorktreeAdd(t.Context(), p.RepoDir(repo.ID), workDir, head); err != nil {
 				t.Fatal(err)
 			}
 			if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
@@ -205,7 +205,7 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 			if err := database.StartStep(sr.ID); err != nil {
 				t.Fatal(err)
 			}
-			sctx := &pipeline.StepContext{Ctx: context.Background(), WorkDir: workDir, Run: run, Repo: repo, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
+			sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir, Run: run, Repo: repo, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
 			_, refusal := (protectedPathCommitStep{step: &steps.FormatStep{}}).Execute(sctx)
 			outcome := pipeline.ProtectedPathOutcome(refusal)
 			if outcome == nil {
@@ -228,7 +228,7 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := mgr.prepareRecoveredRun(context.Background(), run); err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
+			if _, err := mgr.prepareRecoveredRun(t.Context(), run); err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
 				t.Fatalf("recovery must fail closed at trusted config: %v", err)
 			}
 			layout, err := validatedWorktreeLayout(database, p, config.DefaultGlobalConfig())
@@ -290,23 +290,23 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	p, database := startTestDaemonWithSteps(t, func() []pipeline.Step {
 		return []pipeline.Step{&protectedPathRefusalRetryStep{}, &steps.PushStep{}}
 	})
-	repo, headSHA := setupTestGitRepo(t, p, database, "protected-publication")
+	repo, _ := setupTestGitRepo(t, p, database, "protected-publication")
 	// Exercise the manager's real trusted-config fetch: the pushed branch tries
 	// to remove protection even though the trusted branch opts into repo commands.
 	configFile := filepath.Join(repo.WorkingPath, ".no-mistakes.yaml")
-	if err := os.WriteFile(configFile, []byte("protected_paths: ['*.txt']\nallow_repo_commands: true\n"), 0o644); err != nil {
+	if err := os.WriteFile(configFile, []byte("protected_paths: ['*.txt']\nallow_repo_commands: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, repo.WorkingPath, "add", ".no-mistakes.yaml")
 	gitCmd(t, repo.WorkingPath, "commit", "-m", "protect text files on trusted main")
 	gitCmd(t, repo.WorkingPath, "push", "gate", "HEAD:refs/heads/main")
-	if err := os.WriteFile(configFile, []byte("protected_paths: []\n"), 0o644); err != nil {
+	if err := os.WriteFile(configFile, []byte("protected_paths: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, repo.WorkingPath, "add", ".no-mistakes.yaml")
 	gitCmd(t, repo.WorkingPath, "commit", "-m", "try to remove protection on feature")
 	gitCmd(t, repo.WorkingPath, "push", "gate", "HEAD:refs/heads/feature")
-	headSHA = gitOutput(t, repo.WorkingPath, "rev-parse", "HEAD")
+	headSHA := gitOutput(t, repo.WorkingPath, "rev-parse", "HEAD")
 	t.Logf("trusted main config:\n%s\npushed feature config:\n%s", gitOutput(t, p.RepoDir(repo.ID), "show", "refs/heads/main:.no-mistakes.yaml"), gitOutput(t, p.RepoDir(repo.ID), "show", "refs/heads/feature:.no-mistakes.yaml"))
 	publicationDir := filepath.Join(t.TempDir(), "published.git")
 	gitCmd(t, "", "init", "--bare", publicationDir)
@@ -317,7 +317,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result ipc.PushReceivedResult
 	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/feature",
@@ -353,7 +353,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		_, publicationErr := git.Run(context.Background(), publicationDir, "show-ref", "--verify", "refs/heads/feature")
+		_, publicationErr := git.Run(t.Context(), publicationDir, "show-ref", "--verify", "refs/heads/feature")
 		_, worktreeErr := os.Stat(workDir)
 		t.Fatalf("approval bypassed refused Push: run=%s published=%v worktree_exists=%v", run.Status, publicationErr == nil, worktreeErr == nil)
 	}
@@ -367,7 +367,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	if got, err := os.ReadFile(filepath.Join(workDir, "test.txt")); err != nil || string(got) != "unstaged edit\n" {
 		t.Fatalf("approval changed working files: %q, %v", got, err)
 	}
-	if _, err := git.Run(context.Background(), publicationDir, "show-ref", "--verify", "refs/heads/feature"); err == nil {
+	if _, err := git.Run(t.Context(), publicationDir, "show-ref", "--verify", "refs/heads/feature"); err == nil {
 		t.Fatal("unresolved protected edit was published")
 	}
 	assertProtectedWorktreePreserved(t, workDir, headSHA)
@@ -415,13 +415,13 @@ func (s protectedPathCommitStep) Name() types.StepName { return s.step.Name() }
 func (s protectedPathCommitStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	sctx.Config.ProtectedPaths = []string{"*.txt"}
 	file := filepath.Join(sctx.WorkDir, "test.txt")
-	if err := os.WriteFile(file, []byte("staged edit\n"), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte("staged edit\n"), 0o600); err != nil {
 		return nil, err
 	}
 	if _, err := git.Run(sctx.Ctx, sctx.WorkDir, "add", "test.txt"); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(file, []byte("unstaged edit\n"), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte("unstaged edit\n"), 0o600); err != nil {
 		return nil, err
 	}
 	if s.Name() == types.StepTest {
@@ -442,7 +442,7 @@ func TestProtectedPathRefusalParksBeforeManagerCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close()
+			defer closers.Quiet(client)
 			var result ipc.PushReceivedResult
 			if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 				Gate: p.RepoDir("protected-paths"), Ref: "refs/heads/main",

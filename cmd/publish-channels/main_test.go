@@ -30,14 +30,14 @@ func TestRunPublishesHighestSemverBetaAndGitHubLatestStable(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "gh.log")
 	latestPath := filepath.Join(t.TempDir(), "latest.json")
 	allPath := filepath.Join(t.TempDir(), "all.json")
-	if err := os.WriteFile(latestPath, []byte(`{"tag_name":"v1.2.3","draft":false,"prerelease":false,"assets":[{"name":"checksums.txt","browser_download_url":"https://github.com/example/stable"}]}`), 0o644); err != nil {
+	if err := os.WriteFile(latestPath, []byte(`{"tag_name":"v1.2.3","draft":false,"prerelease":false,"assets":[{"name":"checksums.txt","browser_download_url":"https://github.com/example/stable"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(allPath, []byte(`[
 		{"tag_name":"v1.3.0-beta.2","draft":false,"prerelease":true,"assets":[{"name":"checksums.txt","browser_download_url":"https://github.com/example/beta"}]},
 		{"tag_name":"v1.2.3","draft":false,"prerelease":false,"assets":[{"name":"checksums.txt","browser_download_url":"https://github.com/example/stable"}]},
 		{"tag_name":"v1.3.0-beta.1","draft":false,"prerelease":true,"assets":[]}
-	]`), 0o644); err != nil {
+	]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,7 +78,7 @@ echo "unexpected gh args: $*" >&2
 exit 1
 `
 	ghPath := filepath.Join(fakeBin, "gh")
-	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(ghPath, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 

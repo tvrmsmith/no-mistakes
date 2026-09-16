@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,7 +53,7 @@ func runVerifyPy(t *testing.T, body, headSHA string) (conclusion, output string)
 	t.Helper()
 	python := pythonInterpreterForVerify(t)
 	outputFile := filepath.Join(t.TempDir(), "github_output")
-	if err := os.WriteFile(outputFile, nil, 0o644); err != nil {
+	if err := os.WriteFile(outputFile, nil, 0o600); err != nil {
 		t.Fatalf("seed GITHUB_OUTPUT: %v", err)
 	}
 	cmd := exec.Command(python, verifyPyRelPath)
@@ -66,11 +67,12 @@ func runVerifyPy(t *testing.T, body, headSHA string) (conclusion, output string)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	err := cmd.Run()
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		return "success", buf.String()
 	default:
-		if _, ok := err.(*exec.ExitError); !ok {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
 			t.Fatalf("execute verify.py: %v\n%s", err, buf.String())
 		}
 		return "failure", buf.String()
@@ -231,7 +233,7 @@ func TestRestampPRAttestation_RebindsExistingAndSkipsMissing(t *testing.T) {
 	t.Run("existing_attestation_is_rebound", func(t *testing.T) {
 		t.Parallel()
 		host := &attestationTestHost{title: "fix: ci", body: compliantPipelineBody(t, originalHead)}
-		if err := restampPRAttestation(context.Background(), host, pr, repairHead, nil); err != nil {
+		if err := restampPRAttestation(t.Context(), host, pr, repairHead, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.updates != 1 {
@@ -245,7 +247,7 @@ func TestRestampPRAttestation_RebindsExistingAndSkipsMissing(t *testing.T) {
 		}
 
 		secondHead := strings.Repeat("ef", 20)
-		if err := restampPRAttestation(context.Background(), host, pr, secondHead, nil); err != nil {
+		if err := restampPRAttestation(t.Context(), host, pr, secondHead, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.updates != 2 {
@@ -266,7 +268,7 @@ func TestRestampPRAttestation_RebindsExistingAndSkipsMissing(t *testing.T) {
 		t.Parallel()
 		const foreign = "a regular pull request with no pipeline section"
 		host := &attestationTestHost{title: "feat: hand rolled", body: foreign}
-		if err := restampPRAttestation(context.Background(), host, pr, repairHead, nil); err != nil {
+		if err := restampPRAttestation(t.Context(), host, pr, repairHead, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.updates != 0 {
@@ -293,7 +295,7 @@ func TestRestampPRAttestation_PreservesContentEditedWhilePreparingRewrite(t *tes
 		bodyAfterFirstRead: concurrentBody,
 	}
 
-	if err := restampPRAttestation(context.Background(), host, &scm.PR{Number: "42"}, repairHead, nil); err != nil {
+	if err := restampPRAttestation(t.Context(), host, &scm.PR{Number: "42"}, repairHead, nil); err != nil {
 		t.Fatal(err)
 	}
 	if host.reads < 4 {
@@ -322,12 +324,13 @@ func TestRestampPRAttestation_RetriesAndRequiresSettlement(t *testing.T) {
 	repairHead := strings.Repeat("12", 20)
 
 	t.Run("transient_failure_settles", func(t *testing.T) {
+		t.Parallel()
 		host := &attestationTestHost{
 			title:       "fix: ci",
 			body:        compliantPipelineBody(t, testPipelineHeadSHA),
 			failUpdates: 2,
 		}
-		if err := restampPRAttestation(context.Background(), host, pr, repairHead, nil); err != nil {
+		if err := restampPRAttestation(t.Context(), host, pr, repairHead, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.updates != 3 {
@@ -339,12 +342,13 @@ func TestRestampPRAttestation_RetriesAndRequiresSettlement(t *testing.T) {
 	})
 
 	t.Run("persistent_failure_is_returned", func(t *testing.T) {
+		t.Parallel()
 		host := &attestationTestHost{
 			title:       "fix: ci",
 			body:        compliantPipelineBody(t, testPipelineHeadSHA),
 			failUpdates: 3,
 		}
-		err := restampPRAttestation(context.Background(), host, pr, repairHead, nil)
+		err := restampPRAttestation(t.Context(), host, pr, repairHead, nil)
 		if err == nil || !strings.Contains(err.Error(), "failed after 3 attempts") {
 			t.Fatalf("restamp error = %v, want exhausted settlement error", err)
 		}
@@ -363,7 +367,7 @@ func TestRestampPRAttestation_MissingReaderIsSkipped(t *testing.T) {
 	t.Parallel()
 	pr := &scm.PR{Number: "42", URL: "https://bitbucket.org/test/repo/pull-requests/42"}
 	var logs []string
-	err := restampPRAttestation(context.Background(), &readerlessHost{}, pr, strings.Repeat("ab", 20), func(s string) {
+	err := restampPRAttestation(t.Context(), &readerlessHost{}, pr, strings.Repeat("ab", 20), func(s string) {
 		logs = append(logs, s)
 	})
 	if err != nil {
@@ -378,20 +382,21 @@ func TestCIStep_PublishRepairRebindsAttestationAcrossRepairPushes(t *testing.T) 
 	f := newCIRepairFixture(t, false, writeCIFix)
 	original := compliantPipelineBody(t, f.headSHA)
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(original), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
 	f.sctx.Repo.UpstreamURL = "https://github.com/test/repo.git"
 	env := fakeCIGH(t, "OPEN", `[{"name":"test","state":"FAILURE","bucket":"fail"}]`)
-	f.sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=fix: ci",
 		"FAKE_CLI_LOG="+logFile,
 	)
-	f.sctx.Ctx = context.Background()
-	writeCIFix(f.dir)
+	f.sctx.Env = env
+	f.sctx.Ctx = t.Context()
+	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 	if err != nil {
@@ -420,7 +425,7 @@ func TestCIStep_PublishRepairRebindsAttestationAcrossRepairPushes(t *testing.T) 
 func TestCIStep_UnsettledRepairPushParksImmediately(t *testing.T) {
 	f := newCIRepairFixture(t, false, writeCIFix)
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, f.headSHA)), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, f.headSHA)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.sctx.Repo.UpstreamURL = "https://github.com/test/repo.git"
@@ -452,7 +457,7 @@ func TestCIStep_UnsettledRepairPushParksImmediately(t *testing.T) {
 func TestCIStep_PublishRepairFailsWhenAttestationCannotSettle(t *testing.T) {
 	f := newCIRepairFixture(t, false, writeCIFix)
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, f.headSHA)), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, f.headSHA)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.sctx.Repo.UpstreamURL = "https://github.com/test/repo.git"
@@ -462,8 +467,8 @@ func TestCIStep_PublishRepairFailsWhenAttestationCannotSettle(t *testing.T) {
 		"FAKE_CLI_PR_TITLE=fix: ci",
 		"FAKE_CLI_PR_EDIT_ERR=provider unavailable",
 	)
-	f.sctx.Ctx = context.Background()
-	writeCIFix(f.dir)
+	f.sctx.Ctx = t.Context()
+	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 	if err == nil || !strings.Contains(err.Error(), "failed after 3 attempts") {
@@ -493,7 +498,7 @@ func TestCIStep_PublishRepairSkipsAttestationForNonGitHubProvider(t *testing.T) 
 	gitlabPR := "https://gitlab.com/test/repo/-/merge_requests/42"
 	f.sctx.Repo.UpstreamURL = "https://gitlab.com/test/repo.git"
 	f.sctx.Run.PRURL = &gitlabPR
-	writeCIFix(f.dir)
+	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 	if err != nil {
@@ -511,20 +516,21 @@ func TestCIStep_PublishRepairDoesNotMintAttestation(t *testing.T) {
 	f := newCIRepairFixture(t, false, writeCIFix)
 	const foreign = "a regular pull request with no pipeline section"
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(foreign), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(foreign), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
 	f.sctx.Repo.UpstreamURL = "https://github.com/test/repo.git"
 	env := fakeCIGH(t, "OPEN", `[{"name":"test","state":"FAILURE","bucket":"fail"}]`)
-	f.sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=feat: hand rolled",
 		"FAKE_CLI_LOG="+logFile,
 	)
-	f.sctx.Ctx = context.Background()
-	writeCIFix(f.dir)
+	f.sctx.Env = env
+	f.sctx.Ctx = t.Context()
+	writeCIFix(t, f.dir)
 
 	repair, err := (&CIStep{}).commitRepair(f.sctx, "repair the failing check")
 	if err != nil {
@@ -561,7 +567,7 @@ func TestPushStep_AttestsHeadBeforePush(t *testing.T) {
 
 	priorAttestedBody := compliantPipelineBody(t, priorHead)
 
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -587,17 +593,18 @@ func TestPushStep_AttestsHeadBeforePush(t *testing.T) {
 	}
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
 	env := fakeCIGH(t, "OPEN", `[]`)
-	sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=fix: existing pr",
 		"FAKE_CLI_LOG="+logFile,
 	)
+	sctx.Env = env
 
 	if _, err := (&PushStep{}).Execute(sctx); err != nil {
 		t.Fatalf("push step failed: %v", err)
@@ -634,7 +641,7 @@ func TestPushStep_UnavailableSCMLeavesStaleAttestationFailingClosed(t *testing.T
 	gitCmd(t, dir, "push", "origin", "feature")
 
 	priorAttestedBody := compliantPipelineBody(t, priorHead)
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -650,7 +657,7 @@ func TestPushStep_UnavailableSCMLeavesStaleAttestationFailingClosed(t *testing.T
 	recordReviewApproval(t, sctx, newHead)
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
@@ -701,7 +708,7 @@ func TestPushStep_AttestationWriteFailureAbortsBeforePush(t *testing.T) {
 
 	priorAttestedBody := compliantPipelineBody(t, priorHead)
 
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -717,16 +724,17 @@ func TestPushStep_AttestationWriteFailureAbortsBeforePush(t *testing.T) {
 	recordReviewApproval(t, sctx, newHead)
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeCIGH(t, "OPEN", `[]`)
-	sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=fix: existing pr",
 		"FAKE_CLI_PR_EDIT_ERR=provider unavailable",
 	)
+	sctx.Env = env
 
 	_, err := (&PushStep{}).Execute(sctx)
 	if err == nil || !strings.Contains(err.Error(), "pipeline attestation write failed") {
@@ -765,13 +773,13 @@ func TestPushStep_PushFailureAfterAttestationLeavesBodyAhead(t *testing.T) {
 	gitCmd(t, other, "config", "user.name", "other")
 	gitCmd(t, other, "config", "user.email", "other@test.com")
 	gitCmd(t, other, "checkout", "feature")
-	if err := os.WriteFile(filepath.Join(other, "intervening.txt"), []byte("intervening\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "intervening.txt"), []byte("intervening\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, other, "add", "-A")
 	gitCmd(t, other, "commit", "-m", "intervening commit")
 
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -795,7 +803,7 @@ func TestPushStep_PushFailureAfterAttestationLeavesBodyAhead(t *testing.T) {
 	recordReviewApproval(t, sctx, newHead)
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(priorAttestedBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -848,7 +856,7 @@ func TestPushStep_DoesNotMintAttestation(t *testing.T) {
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -865,17 +873,18 @@ func TestPushStep_DoesNotMintAttestation(t *testing.T) {
 	recordReviewApproval(t, sctx, newHead)
 
 	bodyFile := filepath.Join(t.TempDir(), "pr-body.md")
-	if err := os.WriteFile(bodyFile, []byte(foreign), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(foreign), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gh.log")
 	env := fakeCIGH(t, "OPEN", `[]`)
-	sctx.Env = append(env,
+	env = append(env,
 		"FAKE_CLI_PR_LIST_JSON=[{\"number\":42,\"url\":\"https://github.com/test/repo/pull/42\",\"baseRefName\":\"main\"}]",
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 		"FAKE_CLI_PR_TITLE=feat: hand rolled",
 		"FAKE_CLI_LOG="+logFile,
 	)
+	sctx.Env = env
 
 	if _, err := (&PushStep{}).Execute(sctx); err != nil {
 		t.Fatalf("push step failed: %v", err)
@@ -910,7 +919,7 @@ func TestPushStep_SkipsGhOnBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
@@ -919,7 +928,7 @@ func TestPushStep_SkipsGhOnBaseBranch(t *testing.T) {
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 
-	if err := os.WriteFile(filepath.Join(dir, "direct.txt"), []byte("direct change\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "direct.txt"), []byte("direct change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")

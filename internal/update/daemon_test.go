@@ -85,7 +85,7 @@ func TestDefaultResetDaemonReportsOfflineWhenRestartFails(t *testing.T) {
 
 func TestRunningDaemonExecutablePathUsesPIDFile(t *testing.T) {
 	p := paths.WithRoot(t.TempDir())
-	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,7 +122,7 @@ func TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces(t *testing.
 	}
 
 	dir := filepath.Join(t.TempDir(), "dir with spaces")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	copyPath := filepath.Join(dir, "no mistakes test binary"+filepath.Ext(originalPath))
@@ -141,7 +141,7 @@ func TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces(t *testing.
 	})
 
 	p := paths.WithRoot(t.TempDir())
-	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0o644); err != nil {
+	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -262,7 +262,7 @@ func TestDefaultResetDaemonRecoversWhenDaemonArtifactsRemain(t *testing.T) {
 	})
 
 	p := paths.WithRoot(t.TempDir())
-	if err := os.WriteFile(p.Socket(), []byte("stale"), 0o644); err != nil {
+	if err := os.WriteFile(p.Socket(), []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

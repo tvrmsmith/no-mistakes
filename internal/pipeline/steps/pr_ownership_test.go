@@ -57,6 +57,7 @@ func TestPROwnershipRejectsAmbiguityAndEdits(t *testing.T) {
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := parsePROwnedBody(body); err == nil {
 				t.Fatal("ambiguous/editable content was claimed as generated")
 			}
@@ -146,7 +147,7 @@ func TestPROwnershipUpdateMergesLatestAuthorEdits(t *testing.T) {
 		}
 		return nil
 	}}
-	sctx := &pipeline.StepContext{Ctx: context.Background()}
+	sctx := &pipeline.StepContext{Ctx: t.Context()}
 	if err := updateOwnedPR(sctx, host, &scm.PR{Number: "42"}, scm.PRContent(content), "", "", appendix+"\nNew recorded fact.", 0); err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +161,7 @@ func TestPROwnershipUpdateFailuresNeverReadAsSuccess(t *testing.T) {
 	content, appendix := ownedFixture(t)
 	for _, mode := range []string{"read-error", "write-error", "verify-error", "verify-divergence", "keeps-changing", "edited-owned", "legacy", "size"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			host := &ownershipRaceHost{body: content.Body}
 			initial := content
 			wantWrites := 0
@@ -189,7 +191,7 @@ func TestPROwnershipUpdateFailuresNeverReadAsSuccess(t *testing.T) {
 			case "size":
 				initial.Body = strings.Repeat("Author content\n", maxPullRequestBodyBytes)
 			}
-			err := updateOwnedPR(&pipeline.StepContext{Ctx: context.Background()}, host, &scm.PR{Number: "42"}, scm.PRContent(initial), "", "", appendix+"\nNew fact", 0)
+			err := updateOwnedPR(&pipeline.StepContext{Ctx: t.Context()}, host, &scm.PR{Number: "42"}, scm.PRContent(initial), "", "", appendix+"\nNew fact", 0)
 			if err == nil || host.writes != wantWrites {
 				t.Fatalf("err=%v, writes=%d want %d", err, host.writes, wantWrites)
 			}
@@ -207,7 +209,7 @@ func TestPROwnershipRestampPreservesAuthorsAndConsumerContract(t *testing.T) {
 	}
 	newHead := strings.Repeat("ab", 20)
 	host := &attestationTestHost{body: content.Body, title: "Author's title"}
-	if err := restampPRAttestation(context.Background(), host, &scm.PR{Number: "42"}, newHead, nil); err != nil {
+	if err := restampPRAttestation(t.Context(), host, &scm.PR{Number: "42"}, newHead, nil); err != nil {
 		t.Fatal(err)
 	}
 	rebound, err := parsePROwnedBody(host.body)
@@ -222,7 +224,7 @@ func TestPROwnershipRestampPreservesAuthorsAndConsumerContract(t *testing.T) {
 	}
 	host.body = strings.Replace(host.body, "Low recorded risk.", "Human note inside evidence", 1)
 	host.updates = 0
-	if err := restampPRAttestation(context.Background(), host, &scm.PR{Number: "42"}, testPipelineHeadSHA, nil); err == nil || host.updates != 0 {
+	if err := restampPRAttestation(t.Context(), host, &scm.PR{Number: "42"}, testPipelineHeadSHA, nil); err == nil || host.updates != 0 {
 		t.Fatalf("edited evidence overwritten during restamp: err=%v, writes=%d", err, host.updates)
 	}
 }

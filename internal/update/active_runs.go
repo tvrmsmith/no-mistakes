@@ -31,7 +31,7 @@ func (u *updater) confirmActiveRunsBeforeUpdate() error {
 	u.writeActiveRunWarning(blocking)
 	runWord, verb := lifecycle.RunCountWords(len(blocking))
 	if u.force {
-		fmt.Fprintln(u.stderrWriter(), "FORCE: continuing update and daemon restart despite active pipeline runs")
+		u.errOut().Println("FORCE: continuing update and daemon restart despite active pipeline runs")
 		return nil
 	}
 
@@ -60,9 +60,9 @@ func (u *updater) guardDecision() (lifecycle.GuardDecision, error) {
 
 func (u *updater) writeActiveRunWarning(runs []*db.Run) {
 	runWord, verb := lifecycle.RunCountWords(len(runs))
-	fmt.Fprintf(u.stderrWriter(), "warning: update will restart the daemon while %d active pipeline %s %s in progress\n", len(runs), runWord, verb)
-	fmt.Fprint(u.stderrWriter(), lifecycle.RunList(runs))
-	fmt.Fprintln(u.stderrWriter(), "continuing can cause these pipelines to fail")
+	u.errOut().Printf("warning: update will restart the daemon while %d active pipeline %s %s in progress\n", len(runs), runWord, verb)
+	u.errOut().Print(lifecycle.RunList(runs))
+	u.errOut().Println("continuing can cause these pipelines to fail")
 }
 
 func readYes(input io.Reader) bool {

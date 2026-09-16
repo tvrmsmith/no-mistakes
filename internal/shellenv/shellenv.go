@@ -325,18 +325,26 @@ func parseEnvEntry(part string) (string, bool) {
 	return "", false
 }
 
+// isEnvKeyLeadRune reports whether r may start an environment variable name.
+// Every later position also accepts a digit.
+func isEnvKeyLeadRune(r rune) bool {
+	return r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+}
+
+func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }
+
 func validEnvKey(key string) bool {
 	if key == "" {
 		return false
 	}
 	for i, r := range key {
 		if i == 0 {
-			if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '_') {
+			if !isEnvKeyLeadRune(r) {
 				return false
 			}
 			continue
 		}
-		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_') {
+		if !isEnvKeyLeadRune(r) && !isASCIIDigit(r) {
 			return false
 		}
 	}

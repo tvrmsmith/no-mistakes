@@ -419,11 +419,12 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 	timeoutOutcome := func() (*pipeline.StepOutcome, error) {
 		sctx.Log("CI timeout reached")
 		var outcome *pipeline.StepOutcome
-		if len(timeoutFailingChecks) > 0 || timeoutMergeConflict {
+		switch {
+		case len(timeoutFailingChecks) > 0 || timeoutMergeConflict:
 			outcome = ciFailureOutcome(timeoutFailingChecks, timeoutMergeConflict, "CI timed out with known failures still present")
-		} else if mergeabilityBlockedReason != "" {
+		case mergeabilityBlockedReason != "":
 			outcome = ciMergeabilityOutcome("mergeability check timed out", mergeabilityBlockedReason)
-		} else {
+		default:
 			outcome = ciMonitoringTimeoutOutcome()
 		}
 		return ciTerminalRepairOutcome(outcome, Findings{}, sctx.DeferredFindings), nil
@@ -494,25 +495,28 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 		if err != nil {
 			sctx.Log(fmt.Sprintf("warning: could not check PR state: %v", err))
 			prStateKnown = false
-		} else if state == scm.PRStateMerged {
-			if err := verifyMergedProof(ctx, host, pr, sctx.Run.HeadSHA); err != nil {
-				return nil, err
-			}
-			if err := sctx.DB.UpdateRunPRState(sctx.Run.ID, "merged"); err != nil {
-				return nil, err
-			}
-			notifyPRMerged(sctx)
-			sctx.Log("PR has been merged!")
-			return &pipeline.StepOutcome{}, nil
-		} else if state == scm.PRStateClosed {
-			if err := sctx.DB.UpdateRunPRState(sctx.Run.ID, "closed"); err != nil {
-				return nil, err
-			}
-			sctx.Log("PR has been closed")
-			return &pipeline.StepOutcome{}, nil
-		} else if state == scm.PRStateOpen {
-			if err := sctx.DB.UpdateRunPRState(sctx.Run.ID, "open"); err != nil {
-				return nil, err
+		} else {
+			switch state {
+			case scm.PRStateMerged:
+				if err := verifyMergedProof(ctx, host, pr, sctx.Run.HeadSHA); err != nil {
+					return nil, err
+				}
+				if err := sctx.DB.UpdateRunPRState(sctx.Run.ID, "merged"); err != nil {
+					return nil, err
+				}
+				notifyPRMerged(sctx)
+				sctx.Log("PR has been merged!")
+				return &pipeline.StepOutcome{}, nil
+			case scm.PRStateClosed:
+				if err := sctx.DB.UpdateRunPRState(sctx.Run.ID, "closed"); err != nil {
+					return nil, err
+				}
+				sctx.Log("PR has been closed")
+				return &pipeline.StepOutcome{}, nil
+			case scm.PRStateOpen:
+				if err := sctx.DB.UpdateRunPRState(sctx.Run.ID, "open"); err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -620,23 +624,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 			var unresolvedCancelled, awaitingRerun []string
 			if !rerunIssued {
 				unresolvedCancelled, awaitingRerun = s.transientReruns.cancelledAfterRerun(checks)
-				// A cancelled check this run never re-ran is just as unresolved,
-				// and just as final: the provider published a conclusion for it,
-				// and with no rerun outstanding nothing this run is waiting on
-				// will ever replace it. It has to reach the same gate, or a
-				// repository on the default rerun budget of 0 polls a rollup
-				// that has already stopped moving until its idle timeout.
-				// Checks that can still finish on their own are excluded, so a
-				// cancellation observed alongside a running check keeps waiting.
-				// Beyond that there is no settling window, for the same reason
-				// a genuine failure gets none: a status rollup is per commit,
-				// so a cancellation in it belongs to the commit under test and
-				// cannot be a leftover from a head this run already replaced.
-				//
-				// Only the cancel bucket qualifies. A check whose state this
-				// version does not recognize is not known to be terminal, so it
-				// stays on the wait-then-timeout path rather than being
-				// escalated as a conclusion the provider never reported.
+				// Only asked once nothing can still finish on its own, so a
+				// cancellation observed alongside a running check keeps
+				// waiting. cancelledWithoutRerun owns the rest of the rule.
 				if !checksPending {
 					unresolvedCancelled = mergeCheckNames(unresolvedCancelled, s.transientReruns.cancelledWithoutRerun(checks))
 				}
@@ -656,14 +646,15 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 					return nil, err
 				}
 			}
-			if rerunIssued || (!hasIssues && len(awaitingRerun) > 0) {
+			switch {
+			case rerunIssued || (!hasIssues && len(awaitingRerun) > 0):
 				// The re-run checks are running again for the same commit, so
 				// the monitor waits rather than escalating. This also clears any
 				// previous passed-checks signal, which matters for a cancelled
 				// check: it never counted as a failing check, so nothing above
 				// cleared it.
 				lastMonitorLog = logCIMonitorStatus(sctx, ciChecksRunningMsg, lastMonitorLog)
-			} else if hasIssues && checksPending {
+			case hasIssues && checksPending:
 				// Issue handling waits only for checks that can still complete on
 				// their own. A cancelled check whose rerun budget is exhausted must
 				// reach the approval gate instead of waiting forever.
@@ -673,7 +664,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 					s.lastFixedCompletedAt = nil
 				}
 				sctx.Log("issues detected but checks still pending, waiting for all checks to complete...")
-			} else if hasIssues {
+			case hasIssues:
 				lastMonitorLog = ""
 				if s.lastRepairStillUnverified(checks, mergeConflict) {
 					// The provider has not re-run the checks the last
@@ -707,7 +698,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 					sctx.Log(fmt.Sprintf("issues detected: %s", findings.Summary))
 					return ciObservationOutcome(findings), nil
 				}
-			} else {
+			default:
 				s.lastFixedChecks = ""
 				s.lastFixedCompletedAt = nil
 				switch {

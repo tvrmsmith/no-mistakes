@@ -3,7 +3,6 @@
 package daemon
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -40,7 +40,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer database.Close()
+			defer closers.Quiet(database)
 			repo, head := setupTestGitRepo(t, p, database, "protected-reaping")
 			run, err := database.InsertRun(repo.ID, "main", head, head)
 			if err != nil {
@@ -53,7 +53,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err := database.SetRunWorktreeDir(run.ID, workDir); err != nil {
 				t.Fatal(err)
 			}
-			if err := git.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), workDir, head); err != nil {
+			if err := git.WorktreeAdd(t.Context(), p.RepoDir(repo.ID), workDir, head); err != nil {
 				t.Fatal(err)
 			}
 			if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
@@ -66,7 +66,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err := database.StartStep(sr.ID); err != nil {
 				t.Fatal(err)
 			}
-			sctx := &pipeline.StepContext{Ctx: context.Background(), WorkDir: workDir, Run: run, Repo: repo, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
+			sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir, Run: run, Repo: repo, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
 			_, refusal := (protectedPathCommitStep{step: &steps.FormatStep{}}).Execute(sctx)
 			outcome := pipeline.ProtectedPathOutcome(refusal)
 			if outcome == nil {
@@ -79,10 +79,10 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 				t.Fatal(err)
 			}
 			evidenceDir := filepath.Join(p.EvidenceRoot(""), run.ID)
-			if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+			if err := os.MkdirAll(evidenceDir, 0o750); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(evidenceDir, "output.txt"), []byte("test output"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(evidenceDir, "output.txt"), []byte("test output"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			expired := time.Now().Add(-config.DefaultEvidenceRetention - time.Hour)
@@ -96,7 +96,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := mgr.prepareRecoveredRun(context.Background(), run); err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
+			if _, err := mgr.prepareRecoveredRun(t.Context(), run); err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
 				t.Fatalf("recovery must fail closed at trusted config: %v", err)
 			}
 			layout, err := validatedWorktreeLayout(database, p, config.DefaultGlobalConfig())
@@ -143,7 +143,7 @@ func TestSweepOrphanRunProcessesReapsFinishedRunAndSparesActiveOne(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", "/nonexistent/work", "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -198,7 +198,7 @@ func TestSweepOrphanRunProcessesReachesRecordedWorktreeAndSparesUnclaimedOnes(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -329,7 +329,7 @@ func TestResumeRecoveredRunSweepsWorktreeProcessesBeforeRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepoWithID("repo1", filepath.Join(t.TempDir(), "checkout"), "https://example.com/owner/repo1", "main")
 	if err != nil {
@@ -390,7 +390,7 @@ func TestRemoveRunWorktreeSweepsBeforeRemoving(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 	_, headSHA := setupTestGitRepo(t, p, d, "repo1")
 
 	root := filepath.Join(t.TempDir(), "repo-runs")
@@ -431,11 +431,11 @@ func TestRunSetupFailureSweepsTheWorktreeItRemoves(t *testing.T) {
 	// it, and leaves a process standing there whose parent exits immediately.
 	pidFile := filepath.Join(t.TempDir(), "orphan.pid")
 	gateHooks := filepath.Join(p.RepoDir("setup-failure-repo"), "hooks")
-	if err := os.MkdirAll(gateHooks, 0o755); err != nil {
+	if err := os.MkdirAll(gateHooks, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	hook := "#!/bin/sh\nsleep 300 >/dev/null 2>&1 &\necho $! > " + pidFile + "\n"
-	if err := os.WriteFile(filepath.Join(gateHooks, "post-checkout"), []byte(hook), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(gateHooks, "post-checkout"), []byte(hook), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -447,7 +447,7 @@ func TestRunSetupFailureSweepsTheWorktreeItRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	var result ipc.PushReceivedResult
 	pushErr := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate: p.RepoDir("setup-failure-repo"),
@@ -472,7 +472,7 @@ func TestRunSetupFailureSweepsTheWorktreeItRemoves(t *testing.T) {
 // parsed, which fails run setup after the worktree has been created.
 func commitInvalidRepoConfig(t *testing.T, workDir string) string {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", ".no-mistakes.yaml")
@@ -503,7 +503,7 @@ func readOrphanPID(t *testing.T, pidFile string) int {
 // child has by the time anyone notices it.
 func startOrphanInWorktree(t *testing.T, dir string) int {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("create worktree dir: %v", err)
 	}
 	cmd := exec.Command("/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!")

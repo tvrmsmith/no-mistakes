@@ -391,11 +391,11 @@ func buildHomePathLeakPRContentWithLimit(t *testing.T, tc homePathLeakCase, body
 
 	testFindings := tc.testFindings
 	if len(tc.evidenceFiles) > 0 {
-		if err := os.MkdirAll(sctx.EvidenceDir, 0o755); err != nil {
+		if err := os.MkdirAll(sctx.EvidenceDir, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		for name, contents := range tc.evidenceFiles {
-			if err := os.WriteFile(filepath.Join(sctx.EvidenceDir, name), []byte(contents), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(sctx.EvidenceDir, name), []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}

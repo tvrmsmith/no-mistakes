@@ -112,8 +112,8 @@ func cloneSessionRef(session *SessionRef) *SessionRef {
 	if session == nil {
 		return nil
 	}
-	copy := *session
-	return &copy
+	clone := *session
+	return &clone
 }
 
 // claudeRetryClassifier retries both transient API errors and the

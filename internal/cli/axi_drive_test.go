@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -77,12 +78,12 @@ func TestDriveRun_HealthyWaitStaysWithinRequestBudget(t *testing.T) {
 	if client == nil {
 		t.Fatal("IPC server did not become ready")
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 900*time.Millisecond)
 	defer cancel()
 	_, _, err := driveRun(ctx, io.Discard, client, socketPath, "run-1", false)
-	if err == nil || err != context.DeadlineExceeded {
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("driveRun error = %v, want context deadline", err)
 	}
 	if got := getRunCalls.Load(); got != 1 {
@@ -105,14 +106,14 @@ func TestRunReconciler_SubscribeFirstAndCoalescesDuplicateDelayedEvents(t *testi
 	reconciler := newRunReconciler(source, "run-1")
 	defer reconciler.Close()
 
-	first, err := reconciler.Next(context.Background())
+	first, err := reconciler.Next(t.Context())
 	if err != nil || first.Status != types.RunRunning {
 		t.Fatalf("initial Next = %#v, %v", first, err)
 	}
 	events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"}
 	events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"}    // duplicate
 	events <- ipc.Event{Type: ipc.EventStepCompleted, RunID: "run-1"} // delayed old transition
-	terminal, err := reconciler.Next(context.Background())
+	terminal, err := reconciler.Next(t.Context())
 	if err != nil || terminal.Status != types.RunCompleted {
 		t.Fatalf("event Next = %#v, %v", terminal, err)
 	}
@@ -137,7 +138,7 @@ func TestDriveRunDetectsTerminalStateAfterReconnect(t *testing.T) {
 	reconciler := newRunReconciler(source, "run-1")
 	defer reconciler.Close()
 
-	run, ciReady, err := driveRunWithReconciler(context.Background(), io.Discard, nil, reconciler, "run-1", false)
+	run, ciReady, err := driveRunWithReconciler(t.Context(), io.Discard, nil, reconciler, "run-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,12 +159,12 @@ func TestRunReconciler_ReconnectsBeforeReconcilingDisconnectedTransition(t *test
 	}
 	reconciler := newRunReconciler(source, "run-1")
 	defer reconciler.Close()
-	if _, err := reconciler.Next(context.Background()); err != nil {
+	if _, err := reconciler.Next(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	close(firstEvents)
 
-	run, err := reconciler.Next(context.Background())
+	run, err := reconciler.Next(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,10 +187,10 @@ func TestRunReconciler_LogWakeupDoesNotSpendDatabaseRequest(t *testing.T) {
 	}
 	reconciler := newRunReconciler(source, "run-1")
 	defer reconciler.Close()
-	if _, err := reconciler.Next(context.Background()); err != nil {
+	if _, err := reconciler.Next(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reconciler.Next(context.Background()); err != nil {
+	if _, err := reconciler.Next(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -212,12 +213,12 @@ func TestRunReconciler_HeartbeatRecoversMissedTerminalEvent(t *testing.T) {
 	reconciler := newRunReconciler(source, "run-1")
 	reconciler.heartbeatInterval = 10 * time.Millisecond
 	defer reconciler.Close()
-	if _, err := reconciler.Next(context.Background()); err != nil {
+	if _, err := reconciler.Next(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
 	started := time.Now()
-	run, err := reconciler.Next(context.Background())
+	run, err := reconciler.Next(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,11 +245,11 @@ func TestRunReconciler_ReconnectAndReconcileFailuresStayVisible(t *testing.T) {
 		reconciler.reconnectInterval = time.Millisecond
 		reconciler.reconnectTimeout = 3 * time.Millisecond
 		defer reconciler.Close()
-		if _, err := reconciler.Next(context.Background()); err != nil {
+		if _, err := reconciler.Next(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 		close(events)
-		_, err := reconciler.Next(context.Background())
+		_, err := reconciler.Next(t.Context())
 		if err == nil || !strings.Contains(err.Error(), "socket unavailable") {
 			t.Fatalf("reconnect error = %v, want actionable socket failure", err)
 		}
@@ -261,7 +262,7 @@ func TestRunReconciler_ReconnectAndReconcileFailuresStayVisible(t *testing.T) {
 		}
 		reconciler := newRunReconciler(source, "run-1")
 		defer reconciler.Close()
-		_, err := reconciler.Next(context.Background())
+		_, err := reconciler.Next(t.Context())
 		if err == nil || !strings.Contains(err.Error(), "database unavailable") {
 			t.Fatalf("reconcile error = %v, want actionable database failure", err)
 		}
@@ -282,7 +283,7 @@ func TestRunReconciler_ProtocolSkewAbortsReconnectImmediately(t *testing.T) {
 	defer reconciler.Close()
 
 	started := time.Now()
-	_, err := reconciler.Next(context.Background())
+	_, err := reconciler.Next(t.Context())
 	elapsed := time.Since(started)
 
 	if !ipc.IsVersionMismatch(err) {
@@ -437,7 +438,7 @@ func TestDriveRun_YesLeavesProtectedPathRefusalAwaitingResponse(t *testing.T) {
 	if client == nil {
 		t.Fatal("IPC server did not become ready")
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 
 	refusal := pipeline.ProtectedPathOutcome(&pipeline.ProtectedPathError{Path: "package.lock", Rule: "*.lock"})
 	for _, status := range []types.StepStatus{types.StepStatusAwaitingApproval, types.StepStatusFixReview} {
@@ -452,7 +453,7 @@ func TestDriveRun_YesLeavesProtectedPathRefusalAwaitingResponse(t *testing.T) {
 			}
 			reconciler := newRunReconciler(source, parked.ID)
 			defer reconciler.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			var progress bytes.Buffer
 			run, ciReady, err := driveRunWithReconciler(ctx, &progress, client, reconciler, parked.ID, true)
@@ -790,7 +791,7 @@ func TestRunReconciler_StreamGapForcesOneAuthoritativeRead(t *testing.T) {
 	// reconciler; otherwise the heartbeat would mask a missing gap route.
 	reconciler.heartbeatInterval = time.Hour
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	first, err := reconciler.Next(ctx)
 	if err != nil || first.Status != types.RunRunning {
@@ -826,7 +827,7 @@ func TestRunReconciler_UnknownEventTypeIsTreatedAsStateBearing(t *testing.T) {
 	defer reconciler.Close()
 	reconciler.heartbeatInterval = time.Hour
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	if _, err := reconciler.Next(ctx); err != nil {
 		t.Fatal(err)

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -27,12 +28,6 @@ import (
 // tests here own the CALLER: its pin, its exemptions, its triggers, its
 // concurrency identity, its fork boundary, and the fact that its wiring
 // actually reaches a verdict.
-//
-// The published workflow pins an immutable upstream SHA, but these tests run
-// the action from the WORKING TREE. That asymmetry is deliberate and is what
-// makes the pin a self-certification guard: a pull request that edits the
-// action is fully tested here on its own head, while the required check that
-// judges it keeps running the published pinned copy.
 
 // requiredWorkflowTestHeadSHA is the commit the generated pipeline summary
 // attestation binds to. Tests that execute the gate pass the same value as the
@@ -488,21 +483,12 @@ func runRequiredWorkflowCheckJob(t *testing.T, workflow requiredWorkflow, event 
 		t.Fatalf("marshal event payload: %v", err)
 	}
 	eventPath := filepath.Join(t.TempDir(), "event.json")
-	if err := os.WriteFile(eventPath, raw, 0o644); err != nil {
+	if err := os.WriteFile(eventPath, raw, 0o600); err != nil {
 		t.Fatalf("write event payload: %v", err)
 	}
 
-	// This workflow forwards no explicit pr-body/pr-head-sha (the ordinary
-	// pull_request-triggered caller, see the workflow's own comment on
-	// PR_BODY/PR_HEAD_SHA), so verify.py now requires the live lookup to
-	// reach any verdict at all - a lookup failure fails the whole gate closed
-	// rather than falling back to the event payload (the fix this test suite
-	// exercises for the wiring surface; the verdict surface itself is owned
-	// by require_no_mistakes_action_test.go). Stub the live API to echo back
-	// this same event's body/head, so these wiring tests keep exercising the
-	// identical verdict logic they always have, just reached via the live
-	// path instead of the archived one - matching what a real runner with
-	// this workflow's `permissions: pull-requests: read` actually does.
+	// The stub echoes this same event's body and head, so the wiring tests
+	// exercise the identical verdict logic through the live path.
 	requiredWorkflowTestRepo := "kunchenguid/no-mistakes"
 	liveServer := stubPullsAPI(t, requiredWorkflowTestRepo, strconv.FormatInt(prNumber, 10), http.StatusOK, event.Body, headSHA)
 
@@ -554,7 +540,7 @@ func runRequiredWorkflowCheckJob(t *testing.T, workflow requiredWorkflow, event 
 		t.Fatalf("resolve composite action path: %v", err)
 	}
 	outputPath := filepath.Join(t.TempDir(), "github_output")
-	if err := os.WriteFile(outputPath, nil, 0o644); err != nil {
+	if err := os.WriteFile(outputPath, nil, 0o600); err != nil {
 		t.Fatalf("seed GITHUB_OUTPUT: %v", err)
 	}
 
@@ -583,7 +569,8 @@ func runRequiredWorkflowCheckJob(t *testing.T, workflow requiredWorkflow, event 
 	if err == nil {
 		return "success", buf.String()
 	}
-	if _, ok := err.(*exec.ExitError); !ok {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
 		t.Fatalf("execute composite action: %v\n%s", err, buf.String())
 	}
 	return "failure", buf.String()

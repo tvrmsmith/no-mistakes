@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -129,11 +130,6 @@ func (d *DB) aggregateRunStats(runID string, stepStats map[types.StepName]*StepS
 	return runReported, runFixed, nil
 }
 
-func stepFindingCounts(step *StepResult, rounds []*StepRound) (reported int, final int) {
-	stats := stepFindingStats(step, rounds)
-	return stats.ReportedFindings, stats.ReportedFindings - stats.FixedFindings
-}
-
 func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 	stats := StepStats{StepName: step.StepName}
 	if len(rounds) == 0 {
@@ -250,7 +246,7 @@ func (d *DB) getRepos() ([]*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get repos: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 
 	var repos []*Repo
 	for rows.Next() {

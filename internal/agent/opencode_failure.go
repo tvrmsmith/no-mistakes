@@ -27,6 +27,15 @@ type opencodeMessageFailure struct {
 	toolActivity bool
 }
 
+// newOpencodeMessageFailure surfaces the cause opencode reported on info.error
+// rather than letting the turn fall through to its streamed text. opencode
+// leaves no usable text behind a failed turn, so falling through reports the
+// undiagnosable "opencode returned no text output" and hides causes such as a
+// provider rejecting the forced tool_choice that json_schema output requires,
+// or an expired provider credential. Any prose streamed before the failure is
+// reasoning, not an answer. This covers the StructuredOutputError case too: it
+// renders with the same wording and decodes the nested error payload the flat
+// fields never carried.
 func newOpencodeMessageFailure(e *opencodeMessageError, toolActivity bool) error {
 	if e == nil {
 		return nil

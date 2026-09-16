@@ -1,7 +1,6 @@
 package intent
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"os/exec"
@@ -9,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	_ "modernc.org/sqlite"
 )
 
@@ -16,7 +16,7 @@ func buildOpenCodeDB(t *testing.T, sessionDir string) string {
 	t.Helper()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".local", "share", "opencode")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	dbPath := filepath.Join(dir, "opencode.db")
@@ -25,7 +25,7 @@ func buildOpenCodeDB(t *testing.T, sessionDir string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer closers.Quiet(db)
 	statements := []string{
 		`CREATE TABLE session (
 			id TEXT PRIMARY KEY,
@@ -95,7 +95,7 @@ func TestOpenCodeReader_DiscoverAndLoad(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 
 	r := NewOpenCodeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   repoCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -109,7 +109,7 @@ func TestOpenCodeReader_DiscoverAndLoad(t *testing.T) {
 	}
 	s := sessions[0]
 
-	if err := r.Load(context.Background(), s); err != nil {
+	if err := r.Load(t.Context(), s); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(s.Messages) != 2 {
@@ -152,7 +152,7 @@ func TestOpenCodeReader_DiscoverAcceptsSameRemoteDifferentCheckout(t *testing.T)
 	t.Setenv("XDG_DATA_HOME", "")
 
 	r := NewOpenCodeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{
 		HomeDir:     home,
 		OriginCWD:   originCWD,
 		WindowStart: time.Now().Add(-time.Hour),
@@ -171,7 +171,7 @@ func TestOpenCodeReader_DiscoverAcceptsSameRemoteDifferentCheckout(t *testing.T)
 
 func TestOpenCodeReader_NoDB(t *testing.T) {
 	r := NewOpenCodeReader()
-	sessions, err := r.Discover(context.Background(), DiscoverOpts{HomeDir: t.TempDir()})
+	sessions, err := r.Discover(t.Context(), DiscoverOpts{HomeDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestOpenCodeReader_NoDB(t *testing.T) {
 
 func initGitRepoWithRemote(t *testing.T, dir, remote string) string {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{

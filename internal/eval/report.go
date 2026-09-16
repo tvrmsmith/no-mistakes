@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"math"
 	"sort"
 	"strings"
@@ -99,7 +100,7 @@ func (s *Store) evaluations() ([]Evaluation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list eval results: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var result []Evaluation
 	for rows.Next() {
 		var path string

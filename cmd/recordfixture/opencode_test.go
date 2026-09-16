@@ -25,7 +25,7 @@ func TestStreamSSEReturnsHTTPStatusError(t *testing.T) {
 	defer server.Close()
 
 	ready := make(chan struct{})
-	err := streamSSE(context.Background(), server.URL, io.Discard, ready)
+	err := streamSSE(t.Context(), server.URL, io.Discard, ready)
 	if err == nil {
 		t.Fatal("expected streamSSE to fail on non-200 response")
 	}
@@ -66,7 +66,7 @@ func TestCaptureOpencodeFlavourRequiresSessionIdle(t *testing.T) {
 	defer server.Close()
 
 	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	err := captureOpencodeFlavour(ctx, server.URL, dir, "hi", "")
@@ -132,7 +132,7 @@ func TestCaptureOpencodeFlavourWaitsForSSESubscription(t *testing.T) {
 	defer server.Close()
 
 	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	if err := captureOpencodeFlavour(ctx, server.URL, dir, "hi", ""); err != nil {
@@ -156,7 +156,7 @@ func TestWaitHealthReturnsContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := waitHealth(ctx, server.URL)

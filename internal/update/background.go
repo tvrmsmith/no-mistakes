@@ -2,6 +2,7 @@ package update
 
 import (
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"os"
 	"os/exec"
 )
@@ -15,7 +16,7 @@ func defaultSpawnBackground(currentVersion string) error {
 	if err != nil {
 		return fmt.Errorf("open null device: %w", err)
 	}
-	defer devNull.Close()
+	defer closers.Quiet(devNull)
 
 	cmd := exec.Command(execPath, backgroundFlag, currentVersion)
 	cmd.Env = append(os.Environ(), noUpdateCheckEnv+"=1")

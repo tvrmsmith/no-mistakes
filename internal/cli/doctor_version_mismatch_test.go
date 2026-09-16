@@ -28,7 +28,7 @@ func TestDoctorReportsVersionMismatchInsteadOfStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(nmHome)
+	defer removeTempRoot(t, nmHome)
 	t.Setenv("NM_HOME", nmHome)
 
 	binDir := t.TempDir()

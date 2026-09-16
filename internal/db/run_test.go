@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -603,8 +604,12 @@ func TestRunGetNotFound(t *testing.T) {
 func TestRunsByRepo(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
-	d.InsertRun(repo.ID, "feature-1", "aaa", "bbb")
-	d.InsertRun(repo.ID, "feature-2", "ccc", "ddd")
+	if _, err := d.InsertRun(repo.ID, "feature-1", "aaa", "bbb"); err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if _, err := d.InsertRun(repo.ID, "feature-2", "ccc", "ddd"); err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
 
 	runs, err := d.GetRunsByRepo(repo.ID)
 	if err != nil {
@@ -624,8 +629,12 @@ func TestRunsByRepoHead(t *testing.T) {
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
 
 	older, _ := d.InsertRun(repo.ID, "feature", "head-1", "base")
-	d.InsertRun(repo.ID, "feature", "head-2", "base") // same branch, other head
-	d.InsertRun(repo.ID, "other", "head-1", "base")   // same head, other branch
+	if _, err := d.InsertRun(repo.ID, "feature", "head-2", "base"); err != nil {
+		t.Fatalf("insert run on the same branch at another head: %v", err)
+	}
+	if _, err := d.InsertRun(repo.ID, "other", "head-1", "base"); err != nil {
+		t.Fatalf("insert run at the same head on another branch: %v", err)
+	}
 	newer, _ := d.InsertRun(repo.ID, "feature", "head-1", "base")
 
 	runs, err := d.GetRunsByRepoHead(repo.ID, "feature", "head-1")
@@ -669,7 +678,7 @@ func TestActiveRun(t *testing.T) {
 	}
 
 	// after completing, no active run
-	d.UpdateRunStatus(run.ID, types.RunCompleted)
+	mustSetup(t, d.UpdateRunStatus(run.ID, types.RunCompleted))
 	active, _ = d.GetActiveRun(repo.ID, "")
 	if active != nil {
 		t.Fatal("expected nil after completing run")
@@ -1213,9 +1222,9 @@ func TestRecoverStaleRunsMarksRunsFailed(t *testing.T) {
 	// Create runs in various statuses.
 	pendingRun, _ := d.InsertRun(repo.ID, "feat-a", "aaa", "bbb")
 	runningRun, _ := d.InsertRun(repo.ID, "feat-b", "ccc", "ddd")
-	d.UpdateRunStatus(runningRun.ID, types.RunRunning)
+	mustSetup(t, d.UpdateRunStatus(runningRun.ID, types.RunRunning))
 	completedRun, _ := d.InsertRun(repo.ID, "feat-c", "eee", "fff")
-	d.UpdateRunStatus(completedRun.ID, types.RunCompleted)
+	mustSetup(t, d.UpdateRunStatus(completedRun.ID, types.RunCompleted))
 
 	count, err := d.RecoverStaleRuns("daemon crashed")
 	if err != nil {
@@ -1534,7 +1543,7 @@ func TestEndActiveRunWithStatus_AlsoEndsTheRunsInProgressSteps(t *testing.T) {
 		t.Fatal(err)
 	}
 	step, _ := d.InsertStepResult(run.ID, types.StepReview)
-	d.StartStep(step.ID)
+	mustSetup(t, d.StartStep(step.ID))
 
 	if _, err := d.EndActiveRunWithStatus(run.ID, types.RunCIMonitorInterrupted, "worktree is missing"); err != nil {
 		t.Fatal(err)
@@ -1592,7 +1601,7 @@ func TestEndActiveRunWithStatus_DoesNotReclassifyTheRunAsAnInterruptedCIMonitor(
 		t.Fatal(err)
 	}
 	ciStep, _ := d.InsertStepResult(run.ID, types.StepCI)
-	d.StartStep(ciStep.ID)
+	mustSetup(t, d.StartStep(ciStep.ID))
 
 	ended, err := d.EndActiveRunWithStatus(run.ID, types.RunFailed, "step plan drifted")
 	if err != nil {
@@ -1665,13 +1674,13 @@ func TestRecoverStaleRunsMarksStepsFailed(t *testing.T) {
 
 	// Create steps in various statuses.
 	runningStep, _ := d.InsertStepResult(run.ID, types.StepReview)
-	d.StartStep(runningStep.ID)
+	mustSetup(t, d.StartStep(runningStep.ID))
 	awaitingStep, _ := d.InsertStepResult(run.ID, types.StepTest)
-	d.UpdateStepStatus(awaitingStep.ID, types.StepStatusAwaitingApproval)
+	mustSetup(t, d.UpdateStepStatus(awaitingStep.ID, types.StepStatusAwaitingApproval))
 	fixingStep, _ := d.InsertStepResult(run.ID, types.StepLint)
-	d.UpdateStepStatus(fixingStep.ID, types.StepStatusFixing)
+	mustSetup(t, d.UpdateStepStatus(fixingStep.ID, types.StepStatusFixing))
 	completedStep, _ := d.InsertStepResult(run.ID, types.StepPush)
-	d.CompleteStep(completedStep.ID, 0, 100, "/tmp/log")
+	mustSetup(t, d.CompleteStep(completedStep.ID, 0, 100, "/tmp/log"))
 	pendingStep, _ := d.InsertStepResult(run.ID, types.StepPR)
 
 	_, err := d.RecoverStaleRuns("daemon crashed")
@@ -1704,7 +1713,7 @@ func TestRecoverStaleRunsNoStaleRuns(t *testing.T) {
 
 	// Only completed runs.
 	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
-	d.UpdateRunStatus(run.ID, types.RunCompleted)
+	mustSetup(t, d.UpdateRunStatus(run.ID, types.RunCompleted))
 
 	count, err := d.RecoverStaleRuns("daemon crashed")
 	if err != nil {
@@ -1804,7 +1813,7 @@ func TestRunGatesArePinnedAndDefaultToNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen db: %v", err)
 	}
-	t.Cleanup(func() { reopened.Close() })
+	t.Cleanup(func() { closers.Quiet(reopened) })
 	pinned, err = reopened.GetRunGates(run.ID)
 	if err != nil {
 		t.Fatalf("get run gates after restart: %v", err)

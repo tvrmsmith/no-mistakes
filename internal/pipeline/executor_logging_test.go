@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -44,7 +45,9 @@ func TestExecutor_LogCallback(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, onEvent)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -80,7 +83,7 @@ func TestExecutor_LogCallbackTouchesStepActivity(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 }
@@ -93,7 +96,7 @@ func TestExecutor_LogChunkThrottlesStepActivityWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open counter db: %v", err)
 	}
-	defer counterDB.Close()
+	defer closers.Quiet(counterDB)
 	if _, err := counterDB.Exec(`
 		CREATE TABLE step_activity_update_count (n INTEGER NOT NULL);
 		INSERT INTO step_activity_update_count (n) VALUES (0);
@@ -119,7 +122,7 @@ func TestExecutor_LogChunkThrottlesStepActivityWrites(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -198,7 +201,7 @@ func TestExecutor_AgentLifecycleLoggedAndClearsPID(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, lifecycleTestAgent{}, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -253,7 +256,9 @@ func TestExecutor_LogVsLogChunk(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, onEvent)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -279,7 +284,9 @@ func TestExecutor_RunLogDir(t *testing.T) {
 	workDir := t.TempDir()
 
 	exec := NewExecutor(database, p, nil, nil, []Step{newPassStep(types.StepReview)}, nil)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	// Verify log dir was created
 	logDir := p.RunLogDir(run.ID)
@@ -312,7 +319,9 @@ func TestExecutor_LogFileWritten(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	// Verify log file exists and contains the log messages
 	logPath := filepath.Join(p.RunLogDir(run.ID), "review.log")
@@ -339,7 +348,7 @@ func TestExecutor_LogFileWritten_OnStepError(t *testing.T) {
 	// starting but never why it failed.
 	stepErr := fmt.Errorf("push to upstream: git push: exit status 1: remote rejected: file exceeds 100.00 MB")
 	exec := NewExecutor(database, p, nil, nil, []Step{newFailStep(types.StepPush, stepErr)}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err == nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err == nil {
 		t.Fatal("expected error from failing step")
 	}
 
@@ -366,7 +375,7 @@ func TestExecutor_StepErrorRedactsCredentialURL(t *testing.T) {
 
 	ec := &eventCollector{}
 	exec := NewExecutor(database, p, nil, nil, []Step{newFailStep(types.StepPush, stepErr)}, ec.handler)
-	err := exec.Execute(context.Background(), run, repo, workDir)
+	err := exec.Execute(t.Context(), run, repo, workDir)
 	if err == nil {
 		t.Fatal("expected error from failing step")
 	}
@@ -433,7 +442,9 @@ func TestExecutor_LogFileMultipleSteps(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step1, step2}, nil)
-	exec.Execute(context.Background(), run, repo, workDir)
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
 
 	// Each step should have its own log file
 	reviewLog, err := os.ReadFile(filepath.Join(p.RunLogDir(run.ID), "review.log"))
@@ -501,7 +512,7 @@ func TestExecutor_SubprocessLivenessUpdatesActivityWithoutFloodingTheStepLog(t *
 	}
 
 	exec := NewExecutor(database, p, nil, livenessAgent, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+	if err := exec.Execute(t.Context(), run, repo, workDir); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 

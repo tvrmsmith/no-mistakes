@@ -338,13 +338,14 @@ func renderFindingsRange(f *findings, width int, cursor int, selected map[string
 	// Scroll footer for the box border - combines up and down indicators.
 	scrollFooter := ""
 	remaining := len(f.Items) - end
-	if start > 0 && remaining > 0 {
+	switch {
+	case start > 0 && remaining > 0:
 		scrollFooter = fmt.Sprintf("↑ %d above  ↓ %d more below (j/k)", start, remaining)
-	} else if remaining > 0 {
+	case remaining > 0:
 		scrollFooter = fmt.Sprintf("↓ %d more below (j/k)", remaining)
-	} else if start > 0 {
+	case start > 0:
 		scrollFooter = fmt.Sprintf("↑ %d above (j/k)", start)
-	} else if len(f.Items) > 1 {
+	case len(f.Items) > 1:
 		scrollFooter = "(j/k)"
 	}
 
@@ -393,14 +394,6 @@ func trimRenderedLines(s string, maxLines int) string {
 		return s
 	}
 	return strings.Join(lines[:maxLines], "\n")
-}
-
-func renderFindingsWithSelectionHeight(raw string, width int, cursor int, selected map[string]bool, maxLines int) (string, string) {
-	f, err := parseFindings(raw)
-	if err != nil || f == nil {
-		return "", ""
-	}
-	return renderParsedFindingsHeight(f, width, cursor, selected, maxLines)
 }
 
 func renderParsedFindingsHeight(f *findings, width int, cursor int, selected map[string]bool, maxLines int) (string, string) {

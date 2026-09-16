@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -382,14 +381,14 @@ func TestCIStep_MixedGreptileAndTestFailureRoutesOnlyTheTestToAutoFix(t *testing
 	gitCmd(t, dir, "config", "user.name", "test")
 	gitCmd(t, dir, "config", "user.email", "test@test.com")
 	gitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	writeFile(t, filepath.Join(dir, "init.txt"), "init")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	writeFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -402,7 +401,7 @@ func TestCIStep_MixedGreptileAndTestFailureRoutesOnlyTheTestToAutoFix(t *testing
 	var prompts []string
 	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
 		prompts = append(prompts, opts.Prompt)
-		os.WriteFile(filepath.Join(opts.CWD, "fix.txt"), []byte("fixed"), 0o644)
+		writeFile(t, filepath.Join(opts.CWD, "fix.txt"), "fixed")
 		return &agent.Result{Output: json.RawMessage(`{"summary":"repair the failing test","code_change_needed":true}`)}, nil
 	}}
 	prURL := "https://github.com/test/repo/pull/42"

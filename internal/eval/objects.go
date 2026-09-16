@@ -11,6 +11,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/kunchenguid/no-mistakes/internal/scratch"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
@@ -95,7 +96,7 @@ func (s *Store) storeCaseObjects(ctx context.Context, gateDir, repoFingerprint, 
 	if err != nil {
 		return fmt.Errorf("create temporary capture directory: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer scratch.RemoveAll(tmp)
 
 	clone := filepath.Join(tmp, "source.git")
 	cmd := exec.CommandContext(ctx, "git", "clone", "--bare", "--quiet", gateDir, clone)

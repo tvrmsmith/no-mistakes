@@ -208,7 +208,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
-		return m, m.scheduleSpinner()
+		cmd := m.scheduleSpinner()
+		return m, cmd
 
 	case autoAdvanceMsg:
 		return m.handleAutoAdvance()
@@ -376,8 +377,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := m.activeStep()
-	switch msg.String() {
-	case "enter":
+	if msg.String() == "enter" {
 		value := strings.TrimSpace(m.input.Value())
 		if value == "" {
 			// Agent suggestion path.
@@ -410,8 +410,7 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleFailedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "r":
+	if msg.String() == "r" {
 		s := m.activeStep()
 		s.status = statPending
 		s.errMsg = ""

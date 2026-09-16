@@ -73,7 +73,7 @@ func newMergeFixture(t *testing.T, conflicting bool) mergeFixture {
 
 func writeFixtureFile(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -200,7 +200,7 @@ func TestRebaseStep_MergeStrategyResolvesConflictAdditively(t *testing.T) {
 	if !strings.Contains(resolved, "feature line") || !strings.Contains(resolved, "main line") {
 		t.Fatalf("resolution dropped a side: %q", resolved)
 	}
-	if mergeInProgress(context.Background(), f.dir) {
+	if mergeInProgress(t.Context(), f.dir) {
 		t.Fatal("merge left in progress after the resolution")
 	}
 }
@@ -231,7 +231,7 @@ func TestRebaseStep_MergeStrategyUnconcludedMergeIsAbortedAndFails(t *testing.T)
 	} else if !strings.Contains(err.Error(), "did not complete the merge") {
 		t.Fatalf("error = %v, want it to name the unconcluded merge", err)
 	}
-	if mergeInProgress(context.Background(), f.dir) {
+	if mergeInProgress(t.Context(), f.dir) {
 		t.Fatal("merge left in progress; it should have been aborted")
 	}
 	if head := gitCmd(t, f.dir, "rev-parse", "HEAD"); head != f.headSHA {
@@ -287,7 +287,7 @@ func TestRebaseStep_MergeStrategyPublishesAsAFastForwardWithoutForce(t *testing.
 	}
 	head := gitCmd(t, f.dir, "rev-parse", "HEAD")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	gitRun := func(args ...string) (string, error) { return git.Run(ctx, f.dir, args...) }
 	decision, err := resolveForcePushDecision(gitRun, f.upstream, "refs/heads/feature", head, f.headSHA, f.baseSHA)
 	if err != nil {
@@ -316,7 +316,7 @@ func TestRebaseStep_DefaultStrategyStillRebasesUnchanged(t *testing.T) {
 		return gitCmd(t, f.dir, "rev-parse", "HEAD^{tree}"),
 			gitCmd(t, f.dir, "log", "--format=%s", f.baseSHA+"..HEAD"),
 			len(parents(t, f.dir, head)),
-			isAncestor(context.Background(), f.dir, f.headSHA, head)
+			isAncestor(t.Context(), f.dir, f.headSHA, head)
 	}
 
 	unsetTree, unsetSubjects, unsetParents, unsetKept := shape("")
@@ -382,7 +382,7 @@ func TestRebaseStep_MergeStrategyAbortedMergeFails(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "did not merge") {
 		t.Fatalf("error = %v, want it to name the un-integrated target", err)
 	}
-	if mergeInProgress(context.Background(), f.dir) {
+	if mergeInProgress(t.Context(), f.dir) {
 		t.Fatal("merge left in progress after the abort")
 	}
 	assertRestoredToReviewedHead(t, f.dir, f.headSHA)
@@ -425,7 +425,7 @@ func TestRebaseStep_MergeStrategyRebasedInsteadOfMergedFails(t *testing.T) {
 	if got := parents(t, f.dir, rebasedHead); len(got) != 1 {
 		t.Fatalf("fixture no longer produces a rebase-shaped head: parents %v", got)
 	}
-	if !isAncestor(context.Background(), f.dir, f.mainSHA, rebasedHead) {
+	if !isAncestor(t.Context(), f.dir, f.mainSHA, rebasedHead) {
 		t.Fatal("fixture no longer satisfies plain ancestry; the test proves nothing")
 	}
 	assertRestoredToReviewedHead(t, f.dir, f.headSHA)
@@ -463,7 +463,7 @@ func TestRebaseStep_MergeStrategyFollowUpCommitAfterTheMergeIsAccepted(t *testin
 	if got := parents(t, f.dir, mergeCommit); len(got) != 2 || got[0] != f.headSHA || got[1] != f.mainSHA {
 		t.Fatalf("merge commit %s parents = %v, want [%s %s]", mergeCommit, got, f.headSHA, f.mainSHA)
 	}
-	if !isAncestor(context.Background(), f.dir, f.headSHA, head) {
+	if !isAncestor(t.Context(), f.dir, f.headSHA, head) {
 		t.Fatalf("reviewed head %s is not in %s", f.headSHA, head)
 	}
 }
@@ -508,10 +508,10 @@ func TestRebaseStep_MergeStrategyUnrelatedCommitInsteadOfMergeFails(t *testing.T
 	if unrelatedHead == f.headSHA {
 		t.Fatal("fixture left HEAD unmoved; the moved-head check would reject this instead")
 	}
-	if !isAncestor(context.Background(), f.dir, f.headSHA, unrelatedHead) {
+	if !isAncestor(t.Context(), f.dir, f.headSHA, unrelatedHead) {
 		t.Fatal("fixture dropped the reviewed head; the reviewed-head check would reject this instead")
 	}
-	if isAncestor(context.Background(), f.dir, f.mainSHA, unrelatedHead) {
+	if isAncestor(t.Context(), f.dir, f.mainSHA, unrelatedHead) {
 		t.Fatal("fixture integrated the target after all; the test proves nothing")
 	}
 	assertRestoredToReviewedHead(t, f.dir, f.headSHA)
@@ -550,7 +550,7 @@ func TestRebaseStep_MergeStrategyResetOntoTargetFails(t *testing.T) {
 	if resetHead != f.mainSHA {
 		t.Fatalf("fixture head = %s, want the target %s; the reset did not happen", resetHead, f.mainSHA)
 	}
-	if isAncestor(context.Background(), f.dir, f.headSHA, resetHead) {
+	if isAncestor(t.Context(), f.dir, f.headSHA, resetHead) {
 		t.Fatal("fixture kept the reviewed head; the test proves nothing about the reviewed-head check")
 	}
 	assertRestoredToReviewedHead(t, f.dir, f.headSHA)
@@ -597,7 +597,7 @@ func TestRebaseStep_MergeStrategyConflictedRebaseLeftInProgressIsAbortedAndFails
 		t.Fatalf("error = %v, want it to name the missing merge", err)
 	}
 
-	if rebaseInProgress(context.Background(), f.dir) {
+	if rebaseInProgress(t.Context(), f.dir) {
 		t.Fatal("rebase left in progress after the rejection")
 	}
 	if ref := gitCmd(t, f.dir, "rev-parse", "refs/heads/feature"); ref != f.headSHA {

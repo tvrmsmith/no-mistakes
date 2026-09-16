@@ -246,7 +246,7 @@ func TestLoadRepo_AllowRepoCommands(t *testing.T) {
 	data := `agent: claude
 allow_repo_commands: true
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadRepo(dir)
@@ -261,7 +261,7 @@ allow_repo_commands: true
 func TestLoadRepo_AllowRepoCommandsDefaultsFalse(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")
-	if err := os.WriteFile(path, []byte("agent: claude\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("agent: claude\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadRepo(dir)
@@ -291,7 +291,7 @@ func TestLoadRepoFromBytes_AllowRepoCommands(t *testing.T) {
 func TestLoadGlobal_RejectsAllowRepoCommands(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("agent: claude\nallow_repo_commands: true\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("agent: claude\nallow_repo_commands: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadGlobal(path); err == nil {

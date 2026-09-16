@@ -54,6 +54,7 @@ func TestRebaseStrategy_GlobalAndProjectPrecedence(t *testing.T) {
 		{"repo opts in over global rebase", rebase, merge, RebaseStrategyMerge, "an explicit repo value wins in both directions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := resolveRebaseStrategy(t, tc.global, tc.trusted, unset); got != tc.want {
 				t.Fatalf("Rebase.Strategy = %q, want %q: %s", got, tc.want, tc.why)
 			}

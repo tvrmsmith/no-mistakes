@@ -2154,11 +2154,11 @@ func EnsureDefaultGlobalConfig(path string) {
 		slog.Debug("failed to stat config path", "path", path, "error", err)
 		return
 	}
-	if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(filepath.Dir(path), 0o750); mkErr != nil {
 		slog.Debug("failed to create config directory", "path", filepath.Dir(path), "error", mkErr)
 		return
 	}
-	if wErr := os.WriteFile(path, []byte(defaultConfigYAML), 0o644); wErr != nil {
+	if wErr := os.WriteFile(path, []byte(defaultConfigYAML), 0o600); wErr != nil {
 		slog.Debug("failed to write default config", "path", path, "error", wErr)
 	}
 }

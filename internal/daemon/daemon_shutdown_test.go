@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -40,7 +41,7 @@ func TestShutdownRefusesActiveAgentPeer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	defer client.Close()
+	defer closers.Quiet(client)
 	err = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, &ipc.ShutdownResult{})
 	if err == nil || !strings.Contains(err.Error(), gatecontext.ErrorCode) {
 		t.Fatalf("shutdown error = %v, want %s refusal", err, gatecontext.ErrorCode)

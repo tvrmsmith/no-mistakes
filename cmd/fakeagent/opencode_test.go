@@ -35,10 +35,10 @@ func TestFakeOpencodeServerUnsubscribeLeavesCopiedSubscriberSafe(t *testing.T) {
 func TestFakeOpencodeServerConfiguredFixtureLoadFailureIsNotSilent(t *testing.T) {
 	t.Setenv("FAKEAGENT_FIXTURE", t.TempDir())
 	fixtureDir := filepath.Join(os.Getenv("FAKEAGENT_FIXTURE"), "opencode", "structured")
-	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
+	if err := os.MkdirAll(fixtureDir, 0o750); err != nil {
 		t.Fatalf("mkdir fixture dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(fixtureDir, "session.json"), []byte(`{"id":"sess-123"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(fixtureDir, "session.json"), []byte(`{"id":"sess-123"}`), 0o600); err != nil {
 		t.Fatalf("write session fixture: %v", err)
 	}
 
@@ -284,7 +284,7 @@ func TestFakeOpencodeServerAppliesEditsInSessionDirectory(t *testing.T) {
 
 	wd := t.TempDir()
 	dir := filepath.Join(wd, "session-dir")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
 	t.Chdir(wd)

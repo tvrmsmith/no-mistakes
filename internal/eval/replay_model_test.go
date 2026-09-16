@@ -1,13 +1,13 @@
 package eval
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -22,9 +22,9 @@ const piServedMuseReply = `{"type":"message_end","message":{"role":"assistant","
 `
 
 func TestReplayPiModelIdentityComparison(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	fakeDir := t.TempDir()
 	installFakePiJSONL(t, fakeDir, piServedGrok46Reply)
@@ -34,7 +34,7 @@ func TestReplayPiModelIdentityComparison(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -79,9 +79,9 @@ func TestReplayPiModelIdentityComparison(t *testing.T) {
 }
 
 func TestReplayPiAcceptsRequestedModelWithDifferentProviderSidecar(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p, sourceDB, run, _, _ := setupCapturedRun(t, ctx)
-	defer sourceDB.Close()
+	defer closers.Quiet(sourceDB)
 
 	fakeDir := t.TempDir()
 	installFakePiJSONL(t, fakeDir, piServedMuseReply)
@@ -91,7 +91,7 @@ func TestReplayPiAcceptsRequestedModelWithDifferentProviderSidecar(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closers.Quiet(store)
 	if _, err := Capture(ctx, store, p, sourceDB, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func installFakePiJSONL(t *testing.T, fakeDir, reply string) {
 	} else {
 		script = "#!/bin/sh\ncat >/dev/null\ncat <<'EOF'\n" + reply + "EOF\n"
 	}
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,7 +34,7 @@ func TestCIStep_GitLabPassesWhenJobsPass(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -185,7 +184,7 @@ func TestCIStep_GitLabAutoFixIncludesJobTrace(t *testing.T) {
 	stepstest.GitCmd(t, dir, "config", "user.name", "test")
 	stepstest.GitCmd(t, dir, "config", "user.email", "test@test.com")
 	stepstest.GitCmd(t, dir, "checkout", "-b", "main")
-	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "init.txt"), "init")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "initial")
 	baseSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -193,7 +192,7 @@ func TestCIStep_GitLabAutoFixIncludesJobTrace(t *testing.T) {
 	stepstest.GitCmd(t, dir, "push", "origin", "main")
 
 	stepstest.GitCmd(t, dir, "checkout", "-b", "feature")
-	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature"), 0o644)
+	stepstest.WriteFile(t, filepath.Join(dir, "feature.txt"), "feature")
 	stepstest.GitCmd(t, dir, "add", "-A")
 	stepstest.GitCmd(t, dir, "commit", "-m", "feature")
 	headSHA := stepstest.GitCmd(t, dir, "rev-parse", "HEAD")
@@ -207,7 +206,7 @@ func TestCIStep_GitLabAutoFixIncludesJobTrace(t *testing.T) {
 		AgentName: "test",
 		RunFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			capturedPrompt = opts.Prompt
-			os.WriteFile(filepath.Join(opts.CWD, "gitlab-fix.txt"), []byte("fixed"), 0o644)
+			stepstest.WriteFile(t, filepath.Join(opts.CWD, "gitlab-fix.txt"), "fixed")
 			return &agent.Result{}, nil
 		},
 	}
@@ -222,7 +221,7 @@ func TestCIStep_GitLabAutoFixIncludesJobTrace(t *testing.T) {
 	sctx.Config.AutoFix = config.AutoFix{CI: 1}
 	sctx.Config.CI.RevalidateRepairs = true
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 
@@ -262,7 +261,7 @@ func TestCIStep_GitLabPendingChecksKeepMonitoringWhenDone(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sctx.Ctx = ctx
 

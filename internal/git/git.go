@@ -115,7 +115,7 @@ func runInDirWithEnvAndInputRaw(ctx context.Context, dir string, extraEnv []stri
 	out, err := shellenv.OutputShellCommand(cmd)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			err = fmt.Errorf("%w (%v)", ctxErr, err)
+			err = fmt.Errorf("%w (%w)", ctxErr, err)
 		}
 		return nil, fmt.Errorf("git %s: %w: %s", safeurl.RedactText(strings.Join(args, " ")), err, safeurl.RedactText(strings.TrimSpace(stderr.String())))
 	}
@@ -284,12 +284,7 @@ func FindGitRoot(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("not a git repository: %s", abs)
 	}
-	root := strings.TrimSpace(string(out))
-	resolved, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return root, nil
-	}
-	return resolved, nil
+	return resolveMainRoot(strings.TrimSpace(string(out))), nil
 }
 
 // FindMainRepoRoot returns the root of the main working tree for a git
@@ -335,7 +330,7 @@ func FindMainRepoRoot(path string) (string, error) {
 	// the main repo's <root>/.git, so the common dir's basename is still
 	// ".git" and its parent is the main working tree.
 	if filepath.Base(commonDir) == ".git" {
-		return resolveMainRoot(filepath.Dir(commonDir))
+		return resolveMainRoot(filepath.Dir(commonDir)), nil
 	}
 
 	// Branch 2: detached git dir (absorbed submodule). Ask the git dir
@@ -350,7 +345,7 @@ func FindMainRepoRoot(path string) (string, error) {
 			if !filepath.IsAbs(worktree) {
 				worktree = filepath.Join(commonDir, worktree)
 			}
-			return resolveMainRoot(worktree)
+			return resolveMainRoot(worktree), nil
 		}
 	}
 
@@ -363,17 +358,19 @@ func FindMainRepoRoot(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("not a git repository: %s", abs)
 	}
-	return resolveMainRoot(strings.TrimSpace(string(topOut)))
+	return resolveMainRoot(strings.TrimSpace(string(topOut))), nil
 }
 
 // resolveMainRoot applies filepath.EvalSymlinks to path, falling back to
-// the unresolved path when symlink resolution fails.
-func resolveMainRoot(path string) (string, error) {
+// the unresolved path when symlink resolution fails. A path that cannot be
+// resolved is still the answer the caller asked for, so this reports no
+// error: the fallback is the contract, not a failure to pass on.
+func resolveMainRoot(path string) string {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return path, nil
+		return path
 	}
-	return resolved, nil
+	return resolved
 }
 
 // Diff returns the unified diff between two commits.
@@ -471,7 +468,8 @@ func IsDetachedHEAD(ctx context.Context, dir string) (bool, error) {
 	cmd.Dir = dir
 	winproc.Harden(cmd)
 	if err := cmd.Run(); err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			// Exit 1 means HEAD is not a symbolic ref — detached.
 			if ee.ExitCode() == 1 {
 				return true, nil

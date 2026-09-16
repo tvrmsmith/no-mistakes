@@ -1,8 +1,8 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -34,7 +35,7 @@ func TestMain(m *testing.M) {
 	switch os.Getenv("NM_DAEMON_HELPER_PROCESS") {
 	case "1":
 		if capturePath := os.Getenv("NM_CAPTURE_NM_HOME_FILE"); capturePath != "" {
-			_ = os.WriteFile(capturePath, []byte(os.Getenv("NM_HOME")), 0o644)
+			_ = os.WriteFile(capturePath, []byte(os.Getenv("NM_HOME")), 0o600)
 		}
 		// Stay alive long enough for tests with a synthetic health transition
 		// to distinguish launch from readiness. The production exit regression
@@ -87,7 +88,12 @@ func TestMain(m *testing.M) {
 	// Agent harnesses inject git config (e.g. safe.bareRepository=explicit)
 	// via GIT_CONFIG_COUNT/KEY_n/VALUE_n; tests that need it re-set it with
 	// t.Setenv (issue #362).
-	os.Unsetenv("GIT_CONFIG_COUNT")
+	// Leaving it set would let that config reach every git call these tests
+	// make, which is the leak this drops.
+	if err := os.Unsetenv("GIT_CONFIG_COUNT"); err != nil {
+		fmt.Fprintf(os.Stderr, "unset GIT_CONFIG_COUNT: %v\n", err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
 }
 
@@ -101,7 +107,7 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -112,7 +118,7 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -141,8 +147,10 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 		// Ensure daemon stops.
 		client, err := ipc.Dial(p.Socket())
 		if err == nil {
-			client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
-			client.Close()
+			// Best effort: the test may have stopped the daemon
+			// already, and it is the wait below that proves it exited.
+			_ = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
+			closers.Quiet(client)
 		}
 		select {
 		case <-errCh:
@@ -256,7 +264,7 @@ func startTestDaemonInstance(t *testing.T, sf StepFactory) *testDaemonInstance {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { removeTempRoot(t, tmpDir) })
 
 	p := paths.WithRoot(tmpDir)
 	if err := p.EnsureDirs(); err != nil {
@@ -266,7 +274,7 @@ func startTestDaemonInstance(t *testing.T, sf StepFactory) *testDaemonInstance {
 	// Keep daemon tests hermetic now that the default config auto-detects agents.
 	mockClaude := writeMockClaude(t, t.TempDir())
 	configYAML := "agent: claude\nagent_path_override:\n  claude: " + mockClaude + "\n"
-	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -274,7 +282,7 @@ func startTestDaemonInstance(t *testing.T, sf StepFactory) *testDaemonInstance {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { closers.Quiet(d) })
 
 	return restartTestDaemonInstance(t, p, d, sf)
 }
@@ -328,11 +336,11 @@ func setupTestGitRepo(t *testing.T, p *paths.Paths, d *db.DB, repoID string) (*d
 // setting the default branch owns rather than one a run argument carries.
 func setupTestGitRepoWithConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, extraConfig string) (*db.Repo, string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a work repo with an initial commit.
 	workDir := filepath.Join(t.TempDir(), "work")
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
+	if err := os.MkdirAll(workDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "init")
@@ -343,12 +351,12 @@ func setupTestGitRepoWithConfig(t *testing.T, p *paths.Paths, d *db.DB, repoID, 
 	// that cannot answer turns a fast unit test into a minutes-long timeout.
 	gitCmd(t, workDir, "config", "commit.gpgsign", "false")
 	gitCmd(t, workDir, "config", "tag.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(workDir, "test.txt"), []byte("hello"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "test.txt"), []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Disable auto-fix so approval-based tests pause immediately.
 	repoConfig := "auto_fix:\n  lint: 0\n  test: 0\n  review: 0\n" + extraConfig
-	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte(repoConfig), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, ".no-mistakes.yaml"), []byte(repoConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, workDir, "add", ".")
@@ -435,7 +443,7 @@ func writeMockClaude(t *testing.T, dir string) string {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(dir, "claude.bat")
 		script := "@echo off\r\necho {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"structured_output\":{\"findings\":[],\"summary\":\"clean\"}}\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return path
@@ -444,7 +452,7 @@ func writeMockClaude(t *testing.T, dir string) string {
 	script := `#!/bin/sh
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"structured_output":{"findings":[],"summary":"clean"}}'
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -456,7 +464,7 @@ func writeMockGHState(t *testing.T, dir, state string) (string, string) {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(dir, "gh.bat")
 		script := "@echo off\r\nset TOKENSTATE=\r\nif defined GH_TOKEN set TOKENSTATE=set\r\necho env:%GH_CONFIG_DIR% token:%TOKENSTATE%>>\"" + logPath + "\"\r\necho %*>>\"" + logPath + "\"\r\necho %* | findstr /C:\"auth status\" >nul && exit /b 0\r\necho %* | findstr /C:\"pr view 42\" >nul && (echo " + state + "& exit /b 0)\r\nexit /b 1\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return dir, logPath
@@ -471,7 +479,7 @@ case "$*" in
 esac
 exit 1
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return dir, logPath
@@ -492,7 +500,7 @@ func writeMockGHNoPR(t *testing.T, dir string) string {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(dir, "gh.bat")
 		script := "@echo off\r\necho %* | findstr /C:\"auth status\" >nul && exit /b 0\r\necho %* | findstr /C:\"pr list\" >nul && (echo []& exit /b 0)\r\nexit /b 1\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return dir
@@ -505,7 +513,7 @@ case "$*" in
 esac
 exit 1
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -520,7 +528,7 @@ func writeSlowMockClaude(t *testing.T, dir string) string {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(dir, "claude.bat")
 		script := "@echo off\r\ntimeout /t 3 /nobreak >nul\r\necho {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"structured_output\":{\"summary\":\"slow intent\"}}\r\n"
-		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return path
@@ -530,7 +538,7 @@ func writeSlowMockClaude(t *testing.T, dir string) string {
 sleep 3
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"structured_output":{"summary":"slow intent"}}'
 `
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -601,10 +609,10 @@ func shutdownTestDaemonAndWaitForCleanup(t *testing.T, p *paths.Paths) {
 		t.Fatalf("dial daemon for shutdown: %v", err)
 	}
 	if err := client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil); err != nil {
-		client.Close()
+		closers.Quiet(client)
 		t.Fatalf("shut down daemon: %v", err)
 	}
-	client.Close()
+	closers.Quiet(client)
 
 	// Worktree removal is process-spawn-bound and runs before the socket
 	// disappears, so match the graceful-shutdown budget the run-goroutine
@@ -634,10 +642,22 @@ func breakTrustedRepoConfig(t *testing.T, gateDir string) {
 	gitCmd(t, clone, "config", "user.email", "test@test.com")
 	gitCmd(t, clone, "config", "user.name", "Test")
 	gitCmd(t, clone, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(clone, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(clone, ".no-mistakes.yaml"), []byte("auto_fix: [not, a, mapping\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, clone, "add", ".no-mistakes.yaml")
 	gitCmd(t, clone, "commit", "-m", "unparseable trusted config")
 	gitCmd(t, clone, "push", "origin", "HEAD:refs/heads/main")
+}
+
+// removeTempRoot deletes a test's temp root and fails the test when it cannot.
+// These roots are created with os.MkdirTemp rather than t.TempDir because a
+// unix socket path has a small OS limit (~104 bytes on macOS) and t.TempDir
+// embeds the full test name, so nothing else cleans them up. t.TempDir fails
+// the test on a removal it cannot make, and so does this.
+func removeTempRoot(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("remove temp root %s: %v", dir, err)
+	}
 }

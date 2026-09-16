@@ -38,7 +38,14 @@ func (u *updater) ensureDaemonUsesCurrentExecutable() error {
 	// than this update - exactly what this guard exists to catch - so it must
 	// reach the takeover prompt rather than skip it.
 	case ipc.IsVersionMismatch(err):
-	case err != nil, !alive:
+	// daemonIsRunning already answers a missing socket as (false, nil), so an
+	// error here is a probe that could not complete, not an absent daemon.
+	// Skipping the guard on it is the case it exists to prevent: the update
+	// would replace the binary a running daemon is executing from, having
+	// failed to look.
+	case err != nil:
+		return fmt.Errorf("cannot determine whether a daemon is running: %w", err)
+	case !alive:
 		return nil
 	}
 	runningPath, err := daemonExecutablePath(u.paths)
@@ -61,12 +68,12 @@ func (u *updater) ensureDaemonUsesCurrentExecutable() error {
 
 func (u *updater) confirmDaemonTakeover(runningPath, currentPath string) bool {
 	if u.assumeYes {
-		fmt.Fprintf(u.stderrWriter(), "daemon is running from %s, but update is running from %s; replacing the running daemon because -y was provided\n", runningPath, currentPath)
+		u.errOut().Printf("daemon is running from %s, but update is running from %s; replacing the running daemon because -y was provided\n", runningPath, currentPath)
 		return true
 	}
 
-	fmt.Fprintf(u.stderrWriter(), "daemon is running from %s, but update is running from %s\n", runningPath, currentPath)
-	fmt.Fprint(u.stderrWriter(), "Replace the running daemon with this binary? [y/N] ")
+	u.errOut().Printf("daemon is running from %s, but update is running from %s\n", runningPath, currentPath)
+	u.errOut().Print("Replace the running daemon with this binary? [y/N] ")
 	return readYes(u.stdin)
 }
 
@@ -127,7 +134,9 @@ func runningDaemonExecutablePath(p *paths.Paths) (string, error) {
 
 func executablePathForPID(pid int) (string, error) {
 	if currentGOOS == "linux" {
-		return os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+		// procfs is Linux-only and always slash-separated, so this is a literal
+		// path rather than a host-specific join.
+		return os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
 	}
 	if currentGOOS == "windows" {
 		return windowsExecutablePathForPID(pid)

@@ -1,13 +1,13 @@
 package pipeline
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -78,7 +78,7 @@ func TestExecutor_StateEventsAreEmittedAfterTheirDatabaseWrite(t *testing.T) {
 		newFailStep(types.StepLint, fmt.Errorf("lint blew up")),
 	}
 	exec := NewExecutor(database, p, nil, nil, steps, onEvent)
-	_ = exec.Execute(context.Background(), run, repo, workDir)
+	_ = exec.Execute(t.Context(), run, repo, workDir)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -121,7 +121,7 @@ func TestExecutor_SkippedStepEventsAlsoFollowTheirDatabaseWrite(t *testing.T) {
 		newPassStep(types.StepTest),
 	}, onEvent)
 	exec.SetSkippedSteps([]types.StepName{types.StepTest})
-	_ = exec.Execute(context.Background(), run, repo, workDir)
+	_ = exec.Execute(t.Context(), run, repo, workDir)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -143,7 +143,7 @@ func TestExecutor_ApprovalPersistenceFailureDoesNotPublishOrWaitAtGate(t *testin
 			SELECT RAISE(FAIL, 'findings write failed');
 		END
 	`); err != nil {
-		control.Close()
+		closers.Quiet(control)
 		t.Fatal(err)
 	}
 	if err := control.Close(); err != nil {
@@ -166,7 +166,7 @@ func TestExecutor_ApprovalPersistenceFailureDoesNotPublishOrWaitAtGate(t *testin
 		eventsMu.Unlock()
 	})
 
-	err = exec.Execute(context.Background(), run, repo, t.TempDir())
+	err = exec.Execute(t.Context(), run, repo, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "persist review approval gate") {
 		t.Fatalf("Execute error = %v, want approval persistence failure", err)
 	}

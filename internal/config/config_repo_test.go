@@ -46,7 +46,7 @@ ignore_patterns:
   - "*.generated.go"
   - "vendor/**"
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -87,7 +87,7 @@ func TestLoadRepo_BranchSyncRemoteTimeoutIsNotARepoSetting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")
 	data := `branch_sync_remote_timeout: "999s"`
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -108,7 +108,7 @@ func TestLoadRepo_AgentTimeoutIsNotARepoSetting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")
 	data := `agent_timeout: "999s"`
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,7 +130,7 @@ func TestLoadRepo_TestAgentTimeoutIsNotARepoSetting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")
 	data := `test_agent_timeout: "999s"`
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -152,7 +152,7 @@ func TestLoadRepo_GateReconcileTimingsAreNotRepoSettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")
 	data := "gate_reconcile_timeout: \"999s\"\ngate_reconcile_interval: \"999s\"\n"
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,7 +169,7 @@ func TestLoadRepo_AgentAcceptsList(t *testing.T) {
 	dir := t.TempDir()
 	data := `agent: [codex, claude]
 `
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -195,7 +195,7 @@ func TestLoadRepo_AgentStringPreservesSingleAgent(t *testing.T) {
 	dir := t.TempDir()
 	data := `agent: codex
 `
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -217,7 +217,7 @@ func TestLoadRepo_PartialCommands(t *testing.T) {
 	data := `commands:
   test: "make test"
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +239,7 @@ func TestLoadRepo_PartialCommands(t *testing.T) {
 func TestLoadRepo_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")
-	if err := os.WriteFile(path, []byte("{{invalid"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("{{invalid"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,7 +256,7 @@ func TestLoadRepo_AutoFixFromFile(t *testing.T) {
   review: 0
   ci: 2
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -294,7 +294,7 @@ func TestMerge_CIRerunTransientFromRepoConfig(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(tc.yaml), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(tc.yaml), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			repo, err := LoadRepo(dir)
@@ -333,7 +333,7 @@ func TestMerge_CIRerunTransientGlobalOverrideYieldsToTrustedRepoValue(t *testing
 func TestLoadGlobal_CIRerunTransientFromFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("ci:\n  rerun_transient: 0\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("ci:\n  rerun_transient: 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -490,7 +490,7 @@ func TestLoadRepo_ReviewPathInstructions(t *testing.T) {
     - path: "docs/**"
       instructions: "Prose changes only. Do not request test coverage."
 `
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -694,7 +694,7 @@ func TestReviewPathInstructionsBytes_CountsTheWholeSection(t *testing.T) {
 func TestLoadRepo_LegacyAutoFixBabysit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")
-	if err := os.WriteFile(path, []byte("auto_fix:\n  babysit: 0\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("auto_fix:\n  babysit: 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

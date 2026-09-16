@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,10 +24,10 @@ func templateTestContext(t *testing.T) (*pipeline.StepContext, *mockAgent, strin
 	t.Helper()
 	dir, base, _ := setupGitRepo(t)
 	name := ".github/pull_request_template.md"
-	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(testPRTemplate), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(testPRTemplate), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", ".github")
@@ -34,7 +35,7 @@ func templateTestContext(t *testing.T) (*pipeline.StepContext, *mockAgent, strin
 	trusted := gitCmd(t, dir, "rev-parse", "HEAD")
 	// Neither the current file nor a later committed pushed version may supply
 	// the PR agent's template. This also models config recovery with a pin.
-	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte("## CONTRIBUTOR TEMPLATE MUST NOT WIN\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte("## CONTRIBUTOR TEMPLATE MUST NOT WIN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", ".github")
@@ -87,7 +88,7 @@ func TestPRTemplateRejectsUnsafePinnedFiles(t *testing.T) {
 		"[literal].md": []byte("## Literal path\n"),
 	}
 	for name, data := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,16 +103,16 @@ func TestPRTemplateRejectsUnsafePinnedFiles(t *testing.T) {
 		if name == "[literal].md" {
 			continue
 		}
-		if _, err := loadPRTemplate(context.Background(), dir, pin, name); err == nil {
+		if _, err := loadPRTemplate(t.Context(), dir, pin, name); err == nil {
 			t.Errorf("unsafe %s accepted", name)
 		}
 	}
 	for _, name := range []string{"module", "module/file.md", "link.md/child.md"} {
-		if _, err := loadPRTemplate(context.Background(), dir, pin, name); err == nil {
+		if _, err := loadPRTemplate(t.Context(), dir, pin, name); err == nil {
 			t.Errorf("unsafe %s accepted", name)
 		}
 	}
-	if got, err := loadPRTemplate(context.Background(), dir, pin, "[literal].md"); err != nil || got != "## Literal path\n" {
+	if got, err := loadPRTemplate(t.Context(), dir, pin, "[literal].md"); err != nil || got != "## Literal path\n" {
 		t.Fatalf("literal path treated as glob: %q, %v", got, err)
 	}
 }
@@ -124,7 +125,7 @@ func TestPRTemplateCreateThroughFakeGitHubAndReadback(t *testing.T) {
 	sctx.UserIntent = "Complete reviewer context stays available."
 	env, _ := fakeGH(t, "")
 	bodyFile := filepath.Join(t.TempDir(), "body.md")
-	sctx.Env = append(env, "FAKE_CLI_PR_BODY_FILE="+bodyFile)
+	sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY_FILE="+bodyFile)
 	out, err := (&PRStep{}).Execute(sctx)
 	if err != nil || out == nil || out.PRURL == "" {
 		t.Fatalf("create: %+v, %v", out, err)
@@ -189,11 +190,11 @@ func TestPRTemplateUpdateAppliesConfiguredTitleFormat(t *testing.T) {
 	}
 	author := "## Overview\n\nHuman account.\n\nCloses https://github.com/test/repo/issues/7\n"
 	bodyFile := filepath.Join(t.TempDir(), "body.md")
-	if err := os.WriteFile(bodyFile, []byte(author), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(author), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-	sctx.Env = append(env, "FAKE_CLI_PR_BODY_FILE="+bodyFile, "FAKE_CLI_PR_TITLE=Author title")
+	sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY_FILE="+bodyFile, "FAKE_CLI_PR_TITLE=Author title")
 
 	if _, err := (&PRStep{}).Execute(sctx); err != nil {
 		t.Fatal(err)
@@ -225,11 +226,11 @@ func TestPRTemplateRegenerationPreservesAuthorsAndClosingReferences(t *testing.T
 	// without a model rewrite. Reserved-looking headings are not ownership.
 	author := "## Overview\n\nHuman account.\n\n## Tests\n\n- [x] Maintainer approves rollout\n\nCloses https://github.com/test/repo/issues/7\n"
 	bodyFile := filepath.Join(t.TempDir(), "body.md")
-	if err := os.WriteFile(bodyFile, []byte(author), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(author), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-	sctx.Env = append(env, "FAKE_CLI_PR_BODY_FILE="+bodyFile)
+	sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY_FILE="+bodyFile)
 	step := &PRStep{}
 	if _, err := step.Execute(sctx); err != nil {
 		t.Fatal(err)
@@ -241,7 +242,7 @@ func TestPRTemplateRegenerationPreservesAuthorsAndClosingReferences(t *testing.T
 	// Template removal must not make an already owned PR destructive again.
 	sctx.Config.PR.Template = ""
 	later := strings.Replace(string(first), "Human account.", "Human edited account.", 1) + "\n\nFixes test/other#9\n"
-	if err := os.WriteFile(bodyFile, []byte(later), 0o644); err != nil {
+	if err := os.WriteFile(bodyFile, []byte(later), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := step.Execute(sctx); err != nil {
@@ -263,6 +264,7 @@ func TestPRTemplateDraftFailureDoesNotFallBackOrPublish(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"agent-error", "missing", "nested-json", "missing-heading", "heading", "ownership", "fenced", "oversized"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			sctx, ag, _ := templateTestContext(t)
 			ag.runFn = func(context.Context, agent.RunOpts) (*agent.Result, error) {
 				body := filledPRTemplate
@@ -325,7 +327,7 @@ func TestPRTemplateUpdateErrorIsNotMaskedByLegacyWarning(t *testing.T) {
 	t.Parallel()
 	sctx, _, _ := templateTestContext(t)
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-	sctx.Env = append(env, "FAKE_CLI_PR_BODY=## Human description", "FAKE_CLI_PR_EDIT_ERR=permission denied")
+	sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY=## Human description", "FAKE_CLI_PR_EDIT_ERR=permission denied")
 	out, err := (&PRStep{}).Execute(sctx)
 	if err == nil || out != nil || !strings.Contains(err.Error(), "update templated PR") {
 		t.Fatalf("write failure became a clean success: %+v, %v", out, err)
@@ -348,7 +350,7 @@ func TestPRTemplateBarePinnedReadsUnderExplicitBarePolicy(t *testing.T) {
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "safe.bareRepository")
 	t.Setenv("GIT_CONFIG_VALUE_0", "explicit")
-	got, err := loadPRTemplate(context.Background(), bare, pin, sctx.Config.PR.Template)
+	got, err := loadPRTemplate(t.Context(), bare, pin, sctx.Config.PR.Template)
 	if err != nil || got != testPRTemplate {
 		t.Fatalf("bare pinned template = %q, %v", got, err)
 	}
@@ -372,14 +374,15 @@ func TestPRTemplateIncompleteGitHubReadsNeverOverwriteAuthor(t *testing.T) {
 	for _, payload := range []string{`{}`, `null`, `{"title":"Author title"}`, `{"title":"Author title","body":null}`, `{"title":"Author title","body":42}`} {
 		for _, phase := range []string{"initial", "pre-write"} {
 			t.Run(phase+"/"+payload, func(t *testing.T) {
+				t.Parallel()
 				sctx, ag, _ := templateTestContext(t)
 				author := "# Human description\n\n- [x] Approved\nCloses test/repo#7\n"
 				bodyFile := filepath.Join(t.TempDir(), "body.md")
-				if err := os.WriteFile(bodyFile, []byte(author), 0o644); err != nil {
+				if err := os.WriteFile(bodyFile, []byte(author), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-				sctx.Env = append(env, "FAKE_CLI_PR_BODY_FILE="+bodyFile, "FAKE_CLI_PR_TITLE=Author title", "FAKE_CLI_PR_CONTENT_JSON="+payload)
+				sctx.Env = append(slices.Clone(env), "FAKE_CLI_PR_BODY_FILE="+bodyFile, "FAKE_CLI_PR_TITLE=Author title", "FAKE_CLI_PR_CONTENT_JSON="+payload)
 				var err error
 				if phase == "initial" {
 					_, err = (&PRStep{}).Execute(sctx)

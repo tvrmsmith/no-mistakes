@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"io"
 	"os"
 	"path/filepath"
@@ -111,7 +112,7 @@ func resolveCodexModel(threadID string, now time.Time) (model, provider string) 
 	if err != nil {
 		return "", ""
 	}
-	defer f.Close()
+	defer closers.Quiet(f)
 	return parseCodexRolloutModel(f)
 }
 

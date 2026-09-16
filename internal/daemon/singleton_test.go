@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -27,7 +28,7 @@ func TestRunWithResources_SecondDaemonForSameRootFailsWithoutStealingSocket(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d2.Close()
+	defer closers.Quiet(d2)
 
 	err = RunWithResources(p2, d2)
 	if err == nil {

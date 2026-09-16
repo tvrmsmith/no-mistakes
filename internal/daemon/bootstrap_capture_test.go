@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/logstore"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 )
@@ -17,14 +18,14 @@ func TestBootstrapCaptureBoundsDirectProcessOutput(t *testing.T) {
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.DaemonBootstrapLog(), []byte("previous crash\n"), 0o644); err != nil {
+	if err := os.WriteFile(p.DaemonBootstrapLog(), []byte("previous crash\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	held, err := os.OpenFile(p.DaemonBootstrapLog(), os.O_WRONLY|os.O_APPEND, 0o644)
+	held, err := os.OpenFile(p.DaemonBootstrapLog(), os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close()
+	defer closers.Quiet(held)
 
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(),
@@ -63,7 +64,7 @@ func TestRunRejectsCompetingDaemonBeforeBootstrapCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	const existing = "active daemon output\n"
-	if err := os.WriteFile(p.DaemonBootstrapLog(), []byte(existing), 0o644); err != nil {
+	if err := os.WriteFile(p.DaemonBootstrapLog(), []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := acquireSingletonLock(p)

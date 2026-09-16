@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -13,7 +14,7 @@ func TestRunToInfoIncludesImmutableSubmittedHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
 	if err != nil {
@@ -98,7 +99,7 @@ func TestRunToInfoKeepsCIOverrideReasonCISpecific(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	run := &db.Run{ID: "run-1", Status: types.RunCompleted}
 	testReason := "configured test command failed"
@@ -119,7 +120,7 @@ func TestStepToInfoIncludesFixSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
 	if err != nil {
@@ -154,7 +155,7 @@ func TestStepToInfoNoFixSummariesWithoutFixRounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer d.Close()
+	defer closers.Quiet(d)
 
 	repo, err := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
 	if err != nil {

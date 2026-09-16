@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/kunchenguid/no-mistakes/internal/closers"
 )
 
 const (
@@ -300,7 +301,7 @@ func (d *DB) GetRoundsByStep(stepResultID string) ([]*StepRound, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get rounds by step: %w", err)
 	}
-	defer rows.Close()
+	defer func() { closers.Quiet(rows) }()
 	var rounds []*StepRound
 	for rows.Next() {
 		r := &StepRound{}
