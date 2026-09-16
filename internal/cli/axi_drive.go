@@ -578,7 +578,7 @@ func triggerRun(ctx context.Context, env *axiEnv, branch string, skipSteps []typ
 		restoreErr := gate.RestoreReconciledBranch(restoreCtx, env.p.RepoDir(env.repo.ID), branch, reconciliation)
 		cancel()
 		if restoreErr != nil {
-			return "", fmt.Errorf("push %q to gate: %v; restore reconciled branch: %w", branch, pushErr, restoreErr)
+			return "", fmt.Errorf("push %q to gate: %w; restore reconciled branch: %w", branch, pushErr, restoreErr)
 		}
 		// Close the inspection-to-push race: if the pipeline advanced ownership
 		// after the pre-push check, preserve the structured branch-sync refusal

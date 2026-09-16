@@ -674,11 +674,11 @@ Instructions:
 // never swallowed, so nothing is described as recovered that was not.
 func restorePreMergeHead(ctx context.Context, sctx *pipeline.StepContext, preMergeHead string, cause error) error {
 	if _, err := git.Run(ctx, sctx.WorkDir, "reset", "--hard", preMergeHead); err != nil {
-		return fmt.Errorf("%w; restoring the branch to %s failed, the worktree is left at the rejected head: %v", cause, preMergeHead, err)
+		return fmt.Errorf("%w; restoring the branch to %s failed, the worktree is left at the rejected head: %w", cause, preMergeHead, err)
 	}
 	head, err := git.HeadSHA(ctx, sctx.WorkDir)
 	if err != nil {
-		return fmt.Errorf("%w; restoring the branch to %s could not be verified: %v", cause, preMergeHead, err)
+		return fmt.Errorf("%w; restoring the branch to %s could not be verified: %w", cause, preMergeHead, err)
 	}
 	if head != preMergeHead {
 		return fmt.Errorf("%w; restoring the branch to %s left it at %s instead", cause, preMergeHead, head)
