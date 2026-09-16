@@ -230,6 +230,36 @@ done:
 	// The exact count depends on timing, but the channel MUST close.
 }
 
+// waitForRunClosedToSubscribers blocks until the run is completed *for
+// subscription purposes*. get_run cannot answer that: the executor writes the
+// terminal status, and only afterwards does the run goroutine finish its
+// post-run housekeeping and close the run's subscribers. Subscribing inside
+// that window still registers a live mailbox, so the stream stays open until
+// housekeeping ends - on Windows, longer than a caller's close budget.
+//
+// A subscription's own close is the daemon's signal for exactly this, so this
+// drains one to the end. Both orderings are safe: if the run is already done,
+// the subscription yields its gap and closes immediately.
+func waitForRunClosedToSubscribers(t *testing.T, socket, runID string) {
+	t.Helper()
+	warmup, cancelWarmup, err := ipc.Subscribe(socket, &ipc.SubscribeParams{RunID: runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelWarmup()
+	deadline := time.After(60 * time.Second)
+	for {
+		select {
+		case _, ok := <-warmup:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("run did not complete in time")
+		}
+	}
+}
+
 func TestSubscribeToCompletedRunYieldsOneGapThenCloses(t *testing.T) {
 	// Use a fast step so the run completes quickly.
 	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
@@ -255,31 +285,7 @@ func TestSubscribeToCompletedRunYieldsOneGapThenCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait until the run is completed *for subscription purposes*, which is
-	// what this test's precondition needs. get_run cannot answer that: the
-	// executor writes the terminal status, and only afterwards does the run
-	// goroutine finish its post-run housekeeping and close the run's
-	// subscribers. Subscribing inside that window still registers a live
-	// mailbox, so the stream stays open until housekeeping ends - on Windows,
-	// longer than the close budget below.
-	//
-	// A subscription's own close is the daemon's signal for exactly this, so
-	// drain one to the end first. Both orderings are safe: if the run is
-	// already done, this subscription yields its gap and closes immediately.
-	warmup, cancelWarmup, err := ipc.Subscribe(p.Socket(), &ipc.SubscribeParams{RunID: pushResult.RunID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cancelWarmup()
-	deadline := time.After(60 * time.Second)
-	for draining := true; draining; {
-		select {
-		case _, ok := <-warmup:
-			draining = ok
-		case <-deadline:
-			t.Fatal("run did not complete in time")
-		}
-	}
+	waitForRunClosedToSubscribers(t, p.Socket(), pushResult.RunID)
 
 	// Subscribe to the already-completed run. Every subscription opens with
 	// one stream-gap frame so the subscriber gets exactly one chance to
