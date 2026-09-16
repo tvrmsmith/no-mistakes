@@ -439,6 +439,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		Config:       e.config,
 		ForgeContext: e.forge,
 		DB:           e.db,
+		StepResultID: gate.stepResult.ID,
 		Agent:        e.agent,
 		Sessions:     e.sessions,
 		Shared:       e.shared,
@@ -510,7 +511,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	}
 
 	approvalFields := telemetry.Fields{
-		"step":       string(gate.step.Name()),
+		"step":       telemetry.StepName(gate.step.Name()),
 		"action":     string(response.action),
 		"fix_review": gate.stepResult.Status == types.StepStatusFixReview,
 	}
@@ -1471,7 +1472,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// change the wait below, but it is also the authoritative "this run
 		// survives a clean daemon stop" marker that startup recovery and
 		// lifecycle.ParkedAtGate read. Cleared once the wait ends.
-		if dbErr := e.db.ParkStepForApproval(run.ID, sr.ID, approvalStatus, executionMS, findingsPtr); dbErr != nil {
+		if dbErr := e.db.ParkStepForApproval(run.ID, sr.ID, approvalStatus, finalExitCode, executionMS, findingsPtr); dbErr != nil {
 			e.mu.Lock()
 			e.waiting = false
 			e.waitingStep = ""
@@ -1504,7 +1505,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 
 		approvalFields := telemetry.Fields{
-			"step":       string(stepName),
+			"step":       telemetry.StepName(stepName),
 			"action":     string(response.action),
 			"fix_review": sctx.Fixing,
 		}
@@ -1628,25 +1629,24 @@ done:
 // failed write degrades to today's behavior and must never fail the run.
 // applyApprovalOverride is the single place both ActionApprove sites (the
 // live wait in executeStep and the daemon-restart recovery path in Resume)
-// route through before completing a step on approval. If step raised its gate
-// over a live, re-checkable condition (ApprovalOverrideVerifier), this
-// re-checks it once and, only when it is still unresolved, records the
-// upcoming completion as an explicit override (db.SetStepOverrideReason)
-// instead of a silent plain pass - see ApprovalOverrideVerifier's doc for the
-// incident this exists to make impossible. It never blocks or changes the
-// approval itself: a human's ActionApprove always proceeds, and a step that
-// does not implement the interface (every step but CI today) is completely
-// unaffected. A verification error fails closed - it is recorded as an
-// unresolved condition, not silently treated as clear - but still never stops
+// route through before completing a step on approval. For a step implementing
+// ApprovalOverrideVerifier, this asks whether the completion needs an explicit
+// override (db.SetStepOverrideReason) instead of a silent plain pass. CI
+// re-checks its live condition; Test inspects the configured-command result
+// persisted when its gate parked. See ApprovalOverrideVerifier's doc for the
+// full contract. It never blocks or changes the approval itself: a human's
+// ActionApprove always proceeds, and a step that does not implement the
+// interface (today: every step but CI and Test) is completely unaffected. A
+// verification error fails closed - it is recorded as an unresolved condition,
+// not silently treated as clear - but still never stops
 // the approval, only what it gets recorded as.
 //
-// Persisting that override marker is itself fail-closed: every downstream
-// surface (outcomeForRun, the run_completed CIOverrideReason delta, the TUI
-// banner) derives override status solely from step_results.override_reason, so
-// a swallowed write failure would complete the step as an ordinary clean pass -
-// the exact false-green this feature exists to prevent. When the marker cannot
-// be written this returns the error so the caller fails the run closed instead
-// of recording that plain pass.
+// Persisting that override marker is itself fail-closed: downstream consumers
+// derive each step's override status solely from step_results.override_reason,
+// so a swallowed write failure would complete the step as an ordinary clean
+// pass - the exact false-green this feature exists to prevent. When the marker
+// cannot be written this returns the error so the caller fails the run closed
+// instead of recording that plain pass.
 func (e *Executor) applyApprovalOverride(step Step, sctx *StepContext, stepResultID string) error {
 	verifier, ok := step.(ApprovalOverrideVerifier)
 	if !ok {
@@ -2061,22 +2061,22 @@ func (e *Executor) emitRunEvent(eventType ipc.EventType, run *db.Run, repo *db.R
 	// Gated on the terminal status, not the event type: errorRun emits the same
 	// event for failed/cancelled runs, whose banner never reads it.
 	if run.Status == types.RunCompleted {
-		if reason := e.runOverrideReason(run.ID); reason != "" {
+		if reason := e.ciOverrideReason(run.ID); reason != "" {
 			event.CIOverrideReason = &reason
 		}
 	}
 	e.onEvent(event)
 }
 
-// runOverrideReason returns the first step OverrideReason recorded for the run,
+// ciOverrideReason returns the CI step's override reason for the run,
 // deriving the run-level CI override reason the same way daemon.runToInfo does.
-func (e *Executor) runOverrideReason(runID string) string {
+func (e *Executor) ciOverrideReason(runID string) string {
 	steps, err := e.db.GetStepsByRun(runID)
 	if err != nil {
 		return ""
 	}
 	for _, s := range steps {
-		if s.OverrideReason != nil && *s.OverrideReason != "" {
+		if s.StepName == types.StepCI && s.OverrideReason != nil && *s.OverrideReason != "" {
 			return *s.OverrideReason
 		}
 	}
@@ -2140,7 +2140,7 @@ func (e *Executor) emitStepEventWithFindingsAndError(eventType ipc.EventType, ru
 
 	fields := telemetry.Fields{
 		"event":  string(eventType),
-		"step":   string(stepName),
+		"step":   telemetry.StepName(stepName),
 		"status": status,
 	}
 	if agentName := e.telemetryAgentName(); agentName != "" {
@@ -2205,7 +2205,7 @@ func (e *Executor) telemetryAgentName() string {
 func (e *Executor) fixTelemetryFields(source string, stepName types.StepName, selectedCount int, attempt int) telemetry.Fields {
 	fields := telemetry.Fields{
 		"source":                  source,
-		"step":                    string(stepName),
+		"step":                    telemetry.StepName(stepName),
 		"selected_findings_count": selectedCount,
 	}
 	if agentName := e.telemetryAgentName(); agentName != "" {

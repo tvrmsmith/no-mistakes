@@ -6,14 +6,14 @@ description: All fields for .no-mistakes.yaml.
 Per-repo configuration lives in `.no-mistakes.yaml` at the root of your repository.
 
 :::caution[Security: gate-control fields are read from the default branch]
-`commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
+`commands.*` and `gates[].command` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.path_instructions`, `protected_paths`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), `test.instructions`, `test.evidence.branch`, and `auto_fix.min_severity` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.path_instructions`, `gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), `rebase.strategy`, `test.instructions`, `test.allow_approve_over_failure`, `test.evidence.branch`, `pr.template`, `pr.publish_intent`, and `auto_fix.min_severity` only from that trusted copy.
 `pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
-Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`, and `providers`) are still read from the pushed branch, with three exceptions: `test.evidence.branch`, which names a git ref the daemon pushes to, `test.instructions`, which steers the gate that validates the pushed branch, and `auto_fix.min_severity`. The retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise.
+Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`, `pr.title_format`, and `providers`) are still read from the pushed branch, with four exceptions: `test.evidence.branch`, which names a git ref the daemon pushes to, `test.instructions`, which steers the gate that validates the pushed branch, `test.allow_approve_over_failure`, which waives a required check, and `auto_fix.min_severity`. The retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise.
 
 If you genuinely want per-branch `commands` and `agent` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](#allow_repo_commands) in this same file on your default branch. This re-enables the previous behavior with eyes open. The switch is read only from the trusted default-branch copy, so a contributor cannot self-enable it from a pushed branch.
 
@@ -60,10 +60,12 @@ disable_project_settings: true
 # Read only from the trusted default branch. Defaults to false (CI expected).
 # no_ci: true
 
-# Optional PR target branch, read from the trusted default branch.
-# When unset, PRs target the repository's forge default branch.
+# Optional PR settings.
+# base_branch is read from the trusted default branch.
+# title_format is a repository convention and is read from this branch.
 pr:
   base_branch: develop
+  # title_format: "{{.Branch}}: {{.Title}}"
 
 auto_fix:
   rebase: 3
@@ -79,8 +81,16 @@ ci:
   rerun_transient: 0
   revalidate_repairs: false
 
+# How a base branch that moved under your branch is integrated.
+# Read only from the trusted default branch.
+rebase:
+  strategy: rebase # or: merge
+
 commit:
   fix_message: "chore(no-mistakes-{{.Step}}): {{.Summary}}"
+  # branch_pattern: '([A-Z]+-[0-9]+)'
+  # To use the captured identifier in the subject:
+  # fix_message: "{{.Branch}}: {{.Summary}}"
 
 intent:
   enabled: true
@@ -151,7 +161,7 @@ Opt in to honoring the code-executing selection fields (`commands.{prepare,test,
 | Type | `bool` |
 | Default | `false` |
 
-This field is itself read **only from the trusted default-branch copy** of `.no-mistakes.yaml`, never from the pushed SHA, so a contributor cannot self-enable it by setting it on a feature branch. By default the daemon reads `commands` and `agent` from your default branch (e.g. `origin/main`) so a pushed SHA cannot inject shell or pick the launched agent on the daemon host. This opt-in covers those two fields only; `document.instructions`, `review.path_instructions`, `test.instructions`, and `disable_project_settings` stay trusted-only either way. Leave this `false` for any repo that accepts contributions. Set it to `true` only for a single-developer environment where you trust every branch you push (for example, a personal repo gated by your own daemon).
+This field is itself read **only from the trusted default-branch copy** of `.no-mistakes.yaml`, never from the pushed SHA, so a contributor cannot self-enable it by setting it on a feature branch. By default the daemon reads `commands` and `agent` from your default branch (e.g. `origin/main`) so a pushed SHA cannot inject shell or pick the launched agent on the daemon host. The PR-target exception is documented under [`pr.base_branch`](#prbase_branch); `pr.template`, `pr.publish_intent`, and the other trusted-only fields listed above do not follow this opt-in. Leave this `false` for any repo that accepts contributions. Set it to `true` only for a single-developer environment where you trust every branch you push (for example, a personal repo gated by your own daemon).
 
 ### disable_project_settings
 
@@ -239,6 +249,94 @@ It is read from the trusted default-branch copy regardless of `allow_repo_comman
 The established explicit `allow_repo_commands: true` opt-in also applies to this setting for repositories that intentionally trust their pushed configuration, including a repository with no trusted default-branch copy of this file at all.
 An empty value is valid and means "fall back to the forge default branch"; a non-empty value that Git would reject as a branch name fails config parsing closed, naming `pr.base_branch` in the error.
 
+### pr.template
+
+Use a repository Markdown template for the public narrative, followed by no-mistakes' protected evidence appendix. Supported on **GitHub, GitLab, Gitea, Forgejo, Azure DevOps, and Bitbucket Cloud**, using each backend's authenticated raw-description transport. Forgejo requires `forgejo-axi` with the raw `api` command (contract verified against 1.3.0); an older CLI without it fails rather than using a preview. Self-hosted instances use the existing provider routing.
+
+| | |
+| --- | --- |
+| Type | `string` (literal repository-relative path) |
+| Default | Empty (existing generated narrative) |
+| Trust | Path and bytes from the pinned trusted default-branch commit, even under `allow_repo_commands: true`; no global setting |
+
+```yaml
+pr:
+  template: .github/pull_request_template.md
+  publish_intent: false # Optional; otherwise original Intent is still published.
+```
+
+For example, commit this template and the configuration to the default branch:
+
+```markdown
+## Overview
+
+<!-- Explain the final change for a later reader. -->
+
+## Rollout
+
+<!-- Describe rollout and rollback considerations. -->
+
+- [ ] Maintainer approves rollout
+```
+
+On a new or empty PR, the agent makes a best effort to follow template instructions and fill applicable sections from the final branch delta. Only top-level ATX `#` headings outside fenced examples are structurally required, with their trimmed text and order retained. Lower-level headings (`##`–`######`) and task lines are editable: the model may remove inapplicable sections/options, select supported choices, and fill checkbox rationale placeholders. It is instructed not to invent behavior/tests or falsely claim human signoff; human approval boxes must not be marked complete. Subordinate completion and factual correctness are best effort, not mechanically guaranteed. No fixed `What Changed` heading is imposed. This is ordinary Markdown, not a variable/loop/plugin language, and there is no implicit template discovery. Template headings such as `Testing` remain author narrative; recorded Risk, Testing and Pipeline content is still appended by code in its existing order. Extra evidence headings are intentional: this does **not** satisfy a policy requiring only the template's headings or bytes.
+
+The path is read as a literal Git tree entry, never through the pushed worktree filesystem. Absolute/Windows paths, traversal, ref expressions, symlinks, submodules, missing/unreadable files, empty/non-UTF-8/NUL-containing content, and files over 16 KiB fail rather than silently replacing the template with a generic summary. Raw no-mistakes ownership/attestation markers are reserved. Invalid agent output, missing/changed/reordered required H1 headings, and agent failure also fail template drafting rather than using the ordinary fallback. Templates without H1 headings have no structural heading requirements; they are not malformed for that reason. Matching retains the existing ordered-subsequence contract: extra headings are allowed. The structural guard is not a full Markdown parser, a visibility/uniqueness proof, or a template policy engine; it does not enforce subordinate sections, checkbox states, or placeholder completion.
+
+#### Author-preserving regeneration
+
+A templated PR contains one delimited, integrity-checked generated appendix. Later runs preserve live author text before and after it, including human checkbox choices and explicit issue-closing lines, and refresh only that appendix. They do not re-fill the narrative. An author's title is also preserved unless `pr.title_format` is configured; that explicit repository convention redrafts the bare title and applies the format on every managed update. Changing or removing `pr.template` does not regenerate an already owned narrative; edit it on the PR when it needs updating. The full intent remains available to reviewers. Removing the generated Intent section is controlled separately below.
+
+Ownership is never inferred from a heading's name. An existing author-only body can be adopted without model rewriting. **Legacy descriptions containing an unowned attestation require explicit author reconciliation** before template mode can adopt them: separate/remove their obsolete generated evidence while retaining the desired author text and closing references, then retry. Do not manufacture ownership markers by hand. An edited appendix, missing/duplicate/malformed markers, or a competing attestation fails rather than risking discarded author content. Put author additions outside the generated appendix. The integrity guard detects accidental edits; it is not authentication or a cryptographic signature by no-mistakes.
+
+Updates read the live raw body before deciding which publication path applies. Missing/null/malformed content is not treated as an empty description. Without `pr.title_format`, body-only updates omit title and draft flags rather than reading and resending a possibly stale author title. Template updates re-read immediately before writing and verify the body afterward; observed pre-write edits are retried from the latest body up to three times. Write/readback errors and body divergence fail visibly, without replaying a possibly applied write. This is **not atomic compare-and-swap**: an edit in the provider's final read/write gap can still be lost. New template creations are read back too; a created PR identity may be recorded even if verification then fails, so it remains discoverable for recovery.
+
+If the complete author text, closing references and rendered evidence cannot fit the publication budget, the step fails instead of truncating them. Evidence rendering retains its existing artifact presentation limits; this adds no body-level eviction to make a template fit. Pre-push and CI-repair restamping update the appendix's integrity guard together with its head-bound attestation, without changing author text.
+
+Unconfigured, unowned descriptions retain ordinary narrative/fallback/size behavior; existing owned bodies retain author-safe updates even after the setting is removed. Providers without a raw content contract reject configured templates.
+
+**Provider caveats:** Azure DevOps' 4,000-character budget is checked conservatively in UTF-16 units before every owned write, including pre-push/CI-repair restamping. Oversize fails; ordinary Azure truncation must never cut an ownership marker or author evidence. The 16 KiB source-template allowance does not imply a filled Azure description will fit. Bitbucket keeps Markdown evidence (no HTML folds) and carries the exact existing attestation in a visible text code fence; ownership comments may also be visible. Ordinary, unowned Bitbucket descriptions still omit attestation. These are presentation differences, not a new attestation protocol. The bundled enforcement action remains GitHub-specific; no native enforcement workflow for other providers is installed.
+
+Provider contract tests use fake CLI/API responses and local HTTP fixtures, not live server acceptance. Exact server byte roundtrips, rendering, consistency and instance-specific limits remain unverified; a differing body readback fails visibly rather than being normalized into success.
+
+### pr.publish_intent
+
+Control publication of the **generated `Intent` section**, independently of intent extraction and review input.
+
+| | |
+| --- | --- |
+| Type | `bool` |
+| Default | `true` (missing or `null` also preserves the default) |
+| Trust | Trusted default branch only, regardless of `allow_repo_commands`; no global setting |
+
+`false` suppresses that section in ordinary drafting, fallback output, and template appendices. It works without `pr.template` and does not otherwise enable template mode. It never removes full intent from review or PR-drafting context, changes evidence/attestation policy, or erases author-written sections named `Intent`. Unconfigured defaults remain unchanged.
+
+This is not a privacy filter: generated narrative and other evidence can still contain sensitive information, and LLM drafting is not a confidentiality guarantee. No caller-written public-body override is introduced by this setting.
+
+### pr.title_format
+
+Configure the title shape no-mistakes applies to newly created and updated pull requests.
+
+| | |
+| --- | --- |
+| Type | `string` template |
+| Default | Unset, which preserves conventional commit titles |
+| Trust | Pushed branch, like other non-executing repository conventions |
+
+The template supports literal text and `{{.Branch}}` and `{{.Title}}` placeholders.
+`{{.Branch}}` is the normalized branch identifier resolved by [`commit.branch_pattern`](#commitbranch_pattern) when configured; an inherited [global `commit.branch_replacement`](/no-mistakes/reference/global-config/#commitbranch_replacement) can transform its capture before use.
+`{{.Title}}` is the bare concise title text returned by the PR agent, or `update pull request` when ordinary drafting uses its deterministic fallback.
+For example, `title_format: "{{.Branch}}: {{.Title}}"` can render `PROJ-123: add widget` from a matching branch.
+The format is applied deterministically after drafting; its literal text is not sent to the agent as an instruction.
+
+The format is validated when configuration loads.
+It must be valid UTF-8, contain only the two documented placeholders and literal text, and contain no control or unsafe Unicode format characters.
+The template source is limited to 1,024 bytes and 16 placeholders, and the rendered title must be non-empty and no more than 4,096 bytes.
+Providers can impose lower publication limits. GitLab titles are checked at its publication boundary and may contain at most 255 Unicode characters, including a preserved or requested draft marker.
+If a format requires `{{.Branch}}` but the branch pattern finds no identifier, PR publication fails safely instead of publishing a malformed title.
+
+When this setting is omitted, no-mistakes keeps its default conventional commit title behavior, including release type guidance and title tightening.
+
 ### commands.prepare
 
 Optional dependency-preparation command for isolated run worktrees. Run via the platform shell - `sh -c` on POSIX, `cmd.exe /c` on Windows.
@@ -269,6 +367,7 @@ no-mistakes does not guess whether an arbitrary shell string is "too broad" - th
 
 When set, the test step runs this exact command first as the baseline and checks the exit code.
 Whether the baseline passes, fails, or is absent, the agent then derives targeted end-user scenarios and drives the product itself under the same targeted-validation contract.
+A non-zero exit parks the Test step. Approving that gate records an explicit override on the step and on the PR attestation; the [`require-no-mistakes`](/no-mistakes/reference/pipeline-steps/#pipeline-step-attestation) check treats that as non-compliant unless [`test.allow_approve_over_failure`](#testallow_approve_over_failure) is set.
 
 ### commands.lint
 
@@ -366,9 +465,67 @@ These checks run on whichever copy of the file is parsed, including the pushed b
 
 Like `document.instructions`, this field steers gate behavior, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of [`allow_repo_commands`](#allow_repo_commands): a value present only on a pushed branch is ignored, so a contributor cannot inject instructions into the review that gates them.
 
+### gates
+
+Extra repository-declared checks that run inside the pipeline, in addition to the core steps.
+
+| | |
+|---|---|
+| Type | `object[]` with `name` (`string`), `after` (`string`), and `command` (`string`) |
+| Default | Empty (core pipeline only) |
+
+Use this for a validation pass that does not fit an existing step - a mutation-testing budget, a complexity ceiling, an architectural fitness function - so it runs before the branch is pushed rather than only in remote CI:
+
+```yaml
+gates:
+  - name: mutation-budget
+    after: test
+    command: "make mutation"
+```
+
+A gate runs its command in the run worktree through the platform shell, `sh -c` on POSIX or `cmd.exe /c` on Windows, and passes on exit code 0. Gate commands report through their exit code and combined output; there is no structured findings-file protocol. Agent gates are not supported. An entry with `instructions` fails config parsing so it cannot be mistaken for a command gate.
+
+#### Placement
+
+`after` names the core step the gate runs immediately after. Valid anchors are `rebase`, `review`, `test`, `document`, and `lint`.
+
+The delivery tail (`push`, `pr`, `ci`) cannot be anchored: a gate that ran after push would be validating a branch the world can already see. `intent` cannot be anchored either, because it establishes the acceptance criteria the later gates check against.
+
+Gates are inserted into the run's step sequence and never replace, reorder, or remove a core step. Two gates sharing an anchor run in the order they appear in the file. A gate shares its anchor's step order, so a restart that resets from the anchor resets the gate with it.
+
+A run resolves this list once when it starts. Adding or removing a gate on the default branch therefore applies to later runs and never retargets a run already in flight. [Daemon crash recovery](/no-mistakes/concepts/daemon/#crash-recovery) owns how the recorded list is restored after a restart.
+
+#### Failure
+
+A failing gate parks the run for a decision instead of auto-fixing: a gate states a repository rule, so deciding that the change should be altered to satisfy it is the author's call, never the pipeline's.
+
+Answering that decision with `fix` is that authorization: the gate then runs a fix turn against the reported findings and the command that must exit `0`, then re-runs its check. The next verdict describes the repaired worktree. Answering `approve` accepts the change as it stands.
+
+Each gate keeps its own step log under the step name `gate.<anchor>.<name>`, so a gate declared as `name: mutation-budget` with `after: test` is read with `no-mistakes axi logs --step gate.test.mutation-budget`.
+
+Because a gate can only add a verdict, a repository that configures gates makes a pass mean *more* than the core pipeline, never less. There is no way to switch a core step off here; to skip one for a single run, use the per-run [`--skip`](/no-mistakes/reference/cli/) instead.
+
+A gate also cannot be pre-skipped: neither `--skip` nor the `no-mistakes.skip=` push option accepts a gate step name, so a pushed branch cannot switch off the maintainer's extra check before its own run starts. Answering a parked gate with `skip` stays available, like any other gate, as a decision made at the park.
+
+#### Limits and validation
+
+Leading and trailing whitespace is removed from `name`. The remaining name must be lowercase letters, digits, and inner hyphens, at most 40 characters, unique within the file, and not a core step name.
+
+At most 16 gates are allowed. Each entry must provide a non-empty `command`. The parser rejects `instructions` with an error that states agent gates are not supported.
+
+A malformed entry fails when the config is parsed, so the run aborts before any gate starts. These checks run on whichever copy of the file is parsed, including the pushed branch's, so a broken gate surfaces before it merges and becomes the trusted copy.
+
+#### Trust
+
+A gate executes shell on the daemon host, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of [`allow_repo_commands`](#allow_repo_commands).
+
+That opt-in deliberately does not extend here. It covers a pushed branch re-running its own suite through `commands.*`; a gate instead defines what validating the branch *means*, so a contributor must not be able to declare, retarget, or delete the check that clears them.
+
+What that boundary protects is the gate's *declaration*, not the repository files its command invokes. The command runs in the run worktree, which is checked out at the pushed head, so a contributor who can edit the script or make target it calls can still change what it checks. `commands.test` and `commands.lint` have the same property. When a contributor must not be able to weaken a gate, point `command` at logic that does not live in the repository.
+
 ### Command process lifetime
 
-All configured `commands.*` entries are scoped to their step.
+All configured `commands.*` entries and repository gate commands are scoped to their step.
 After no-mistakes starts one of these commands, it terminates any remaining child processes from that command when the command exits, fails, or the step is cancelled.
 Do not rely on a configured command to leave a background server or watcher running after it returns; keep that service inside the command lifetime or start it outside no-mistakes.
 
@@ -411,7 +568,7 @@ protected_paths:
 
 Patterns use the same syntax as [`ignore_patterns`](#ignore_patterns). Empty or malformed rules fail config loading. Commit this setting to the default branch to enable it; a pushed branch cannot add, remove, or replace the trusted policy for its own run.
 
-Before staging an automatic Review, Test, Document, Lint, CI repair, or Push leftover commit, the pipeline checks the index and worktree for dirty protected paths. This includes staged and unstaged modifications, deletions, both ends of renames, and individual untracked files inside new directories. A match refuses the entire commit and parks the step at an operator approval gate naming the path and rule. The index and all working files stay as they were; nothing is restored, unstaged, discarded, or partially committed. The Push check also covers formatter changes and residue from earlier steps. [Daemon & Worktrees](/no-mistakes/concepts/daemon/#what-it-does) owns retention across terminal cleanup and crash recovery.
+Before staging an automatic Review, Test, Document, Lint, or CI repair, an operator-authorized repository gate repair, or a Push leftover commit, the pipeline checks the index and worktree for dirty protected paths. This includes staged and unstaged modifications, deletions, both ends of renames, and individual untracked files inside new directories. A match refuses the entire commit and parks the step at an operator approval gate naming the path and rule. The index and all working files stay as they were; nothing is restored, unstaged, discarded, or partially committed. The Push check also covers formatter changes and residue from earlier steps. [Daemon & Worktrees](/no-mistakes/concepts/daemon/#what-it-does) owns retention across terminal cleanup and crash recovery.
 
 A protected-path refusal always requires an explicit response, including under AXI `--yes` and TUI yolo mode. CI does not retry its fixer, and automatic gate reconciliation cannot clear the refusal, even if the PR closes. Approval is rejected because it would skip unfinished work: inspect and resolve the reported edit, then use `no-mistakes axi respond --action fix` to retry the step, including its commit and publication. Deliberate skip and abort behavior is unchanged.
 
@@ -523,7 +680,7 @@ Continuity is proven when the repaired head is the run's durably review-approved
 
 `revalidate_repairs` sets the intent, identically on every path:
 
-- **`false` (default)** asks to publish when it is safe to. A repair that builds on the reviewed head - the ordinary case, where the fix agent adds a commit - is committed and published immediately through the same guarded path the [Push step](/no-mistakes/reference/pipeline-steps/#push) uses (review-approved-head continuity, the force-with-lease anchor, remote verification, and the durable push binding all still apply), and the CI monitor keeps watching the same run for the new head. One repair costs one agent round.
+- **`false` (default)** asks to publish when it is safe to. A repair that builds on the reviewed head - the ordinary case, where the fix agent adds a commit - is committed and published immediately through the same guarded path the [Push step](/no-mistakes/reference/pipeline-steps/#push) uses (review-approved-head continuity, that step's own remote-safety decision, remote verification, and the durable push binding all still apply), and the CI monitor keeps watching the same run for the new head. One repair costs one agent round.
 - **`true`** asks for revalidation outright: every repair is kept local, the run's review approval is revoked, and validation restarts at Review so the repaired head re-passes Review, Test, Document, and Lint before Push republishes it.
 
 CI repair publication uses the same settlement order as Push. The [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns the publication and retry behavior.
@@ -553,6 +710,47 @@ A pushed branch cannot turn a maintainer's revalidation requirement off for its 
 A value set here always wins over the operator's own [`ci.revalidate_repairs`](/no-mistakes/reference/global-config/#cirevalidate_repairs), in both directions: `true` here enables revalidation even when the global value is `false`, and an explicit `false` here opts out even when the global value is `true`.
 With no trusted copy of this file, the operator's global value applies, then the built-in default of `false`.
 
+### rebase.strategy
+
+How the [Rebase step](/no-mistakes/reference/pipeline-steps/#rebase) integrates a base branch that moved under the gated branch.
+
+| | |
+|---|---|
+| Type | `string` (`rebase` or `merge`) |
+| Default | `rebase` |
+| Trust | Read only from the trusted default branch |
+
+```yaml
+rebase:
+  strategy: merge
+```
+
+**Opting in.** Commit that block to your **default branch** (the same copy the daemon reads `commands` and `agent` from). It takes effect on the next run of every branch in the repository; a branch cannot opt itself in or out. The default stays `rebase` for every repository that does not ask, so upgrading no-mistakes never changes the shape of history under you.
+
+- **`rebase` (default)** replays the branch's commits on top of the new base. This is the historical behavior and is unchanged.
+- **`merge`** integrates the base with a `git merge --no-ff` commit whose **first parent** is the head the pipeline reviewed.
+
+The two differ in what survives the integration, which matters in three places:
+
+| | `rebase` (default) | `merge` |
+|---|---|---|
+| The reviewed head after integration | rewritten; no longer exists on the branch | still on the branch, as the first parent |
+| Publication | force-push; an open PR's head is rewritten | fast-forward; the PR's head is appended to |
+| Evidence of what a conflict resolution did | none; the result is just commits | the merge commit's two parents and their merge base |
+| Cost | none | one merge commit per integration |
+
+Integration publishes as a fast-forward under `merge`. A CI merge-conflict repair is the exception: it rebases onto the base branch whichever strategy is set, so that repair still force-pushes and still revalidates in full.
+
+**Continuity.** The CI step publishes a repair without a full revalidation cycle only when it can prove the repaired head continues the reviewed head (see [`ci.revalidate_repairs`](#cirevalidate_repairs)). Under `merge` that proof is plain ancestry, because the reviewed head is a parent. Under `rebase` there is nothing to prove it with.
+
+**Attestation.** A review attestation that binds to an exact commit SHA survives a merge, because the attested commit stays in the branch's history. A rebase rewrites every branch SHA, so the attested commit no longer exists on the branch.
+
+**Audit.** Whether a conflict resolution deleted content one side introduced is decidable from a merge commit alone - its two parents and their merge base are all the inputs - by anything, afterwards, from outside no-mistakes. A rebase leaves no such record, so the same question is unanswerable once the run ends. To match, the conflict resolver's prompt under `merge` requires an **additive** resolution: keep both sides' introduced content, and never delete what one side introduced merely to make the merge apply. Only genuinely mutually exclusive changes may supersede one another, and the agent must say which and why.
+
+**The cost is a merge commit per integration.** On a squash-merged default branch (one commit per PR) those commits collapse at landing and never reach it. On a merge-committed one they do, so the history is a graph rather than a line.
+
+This value is read only from the trusted default-branch copy of this file, regardless of [`allow_repo_commands`](#allow_repo_commands). It decides whether integrating a moved base leaves auditable evidence behind, so a pushed branch must not be able to change it in either direction. A value set here wins over the operator's own [`rebase.strategy`](/no-mistakes/reference/global-config/#rebasestrategy).
+
 ### commit.fix_message
 
 Override the auto-fix commit subject template for this repository.
@@ -564,9 +762,25 @@ Override the auto-fix commit subject template for this repository.
 
 The value follows the [global `commit.fix_message` template syntax and validation rules](/no-mistakes/reference/global-config/#commitfix_message).
 That includes the 1,024-byte template limit, 16-placeholder limit, 4,096-byte summary and rendered-subject limits, and rejection of bidi and invisible Unicode format characters.
-The setting applies to the Review, Test, Document, Lint, and CI repair paths, not commits created by the Rebase or Push steps.
+The setting applies to the Review, Test, Document, Lint, and CI repair paths, plus operator-authorized repository gate repairs. It does not apply to commits created by the Rebase or Push steps.
 
-This non-executing field is read from the pushed branch, so a branch can adopt its own commit convention without enabling `allow_repo_commands`.
+This non-executing field is read from the pushed branch, so a branch can adopt its own commit-subject convention without enabling `allow_repo_commands`.
+
+### commit.branch_pattern
+
+Override the branch-identifier extraction pattern for this repository.
+
+| | |
+| --- | --- |
+| Type | `string` regular expression |
+| Default | Inherits from global config; when unset there, `{{.Branch}}` is the normalized full branch name |
+
+The value follows the [global `commit.branch_pattern` syntax and validation rules](/no-mistakes/reference/global-config/#commitbranch_pattern).
+Its only capture group becomes `{{.Branch}}` in both `commit.fix_message` and `pr.title_format`.
+For example, `branch_pattern: '([A-Z]+-[0-9]+)'` extracts `PROJ-123` from `feature/PROJ-123-add-widget`.
+When either template uses `{{.Branch}}` and the pattern does not find a non-empty identifier, rendering fails safely instead of producing an empty prefix.
+
+This non-executing field is read from the pushed branch without enabling `allow_repo_commands`.
 
 ### intent
 
@@ -593,6 +807,19 @@ Repository-specific runbook for standing the product up during live validation.
 
 The Test step injects these instructions into its evidence prompt so the agent can start and drive the real product the way an end user would.
 Like `document.instructions`, this field steers its own gate, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`. A contributor's pushed branch cannot rewrite the runbook that validates that branch.
+
+### test.allow_approve_over_failure
+
+Recorded reason that opts this repository into letting the `PR must be raised via no-mistakes` check accept a Test step that was approved over a failing configured [`commands.test`](#commandstest).
+
+| | |
+| --- | --- |
+| Type | `string` |
+| Default | Empty (off) |
+
+Off by default. When a Test step is approved while `commands.test` exited non-zero, no-mistakes records that as an override on the step and copies it onto the PR attestation as `steps[].override_reason`. The required check then refuses that attestation unless this field is a non-empty reason, which is copied into the attestation as `allow_test_command_override`.
+
+Like `no_ci`, this field weakens a merge gate, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`. A contributor's pushed branch cannot waive the configured-test check that certifies it. The string is the recorded reason; whitespace-only is treated as unset.
 
 ### test.evidence
 

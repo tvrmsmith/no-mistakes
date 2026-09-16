@@ -108,6 +108,16 @@ func TestClassifyTransient_Positive(t *testing.T) {
 			errMsg:  `claude exited: exit status 1: API Error: Connection lost mid-response. The response above may be incomplete.`,
 			wantSub: "connection lost",
 		},
+		{
+			name:    "provider protocol residue after JSON",
+			errMsg:  `pi output parse: invalid character '<' after top-level value (output snippet: "{\"summary\":\"x\"}")`,
+			wantSub: "protocol residue",
+		},
+		{
+			name:    "unfused split bare JSON objects",
+			errMsg:  `pi output parse: split bare JSON objects could not be fused into one valid object`,
+			wantSub: "split",
+		},
 	}
 
 	for _, tc := range cases {
@@ -147,6 +157,10 @@ func TestClassifyTransient_Negative(t *testing.T) {
 		{
 			name:   "schema validation",
 			errMsg: `JSON output missing required field "summary"`,
+		},
+		{
+			name:   "competing verdicts",
+			errMsg: `pi output parse: multiple bare JSON objects found in output`,
 		},
 		{
 			name:   "free usage limit",

@@ -138,6 +138,10 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			reconciledPreviousHead, err := parseReconciledPreviousHeadPushOptions(pushOptions)
+			if err != nil {
+				return err
+			}
 			gatePath, err := normalizeNotifyGatePath(gate)
 			if err != nil {
 				return err
@@ -156,15 +160,16 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 
 			var result ipc.PushReceivedResult
 			if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
-				Gate:                 gatePath,
-				Ref:                  ref,
-				Old:                  oldSHA,
-				New:                  newSHA,
-				SkipSteps:            skipSteps,
-				Intent:               intent,
-				LaunchNonce:          launchNonce,
-				ValidationGeneration: validationGeneration,
-				PRBaseBranch:         prBaseBranch,
+				Gate:                   gatePath,
+				Ref:                    ref,
+				Old:                    oldSHA,
+				New:                    newSHA,
+				SkipSteps:              skipSteps,
+				Intent:                 intent,
+				LaunchNonce:            launchNonce,
+				ValidationGeneration:   validationGeneration,
+				PRBaseBranch:           prBaseBranch,
+				ReconciledPreviousHead: reconciledPreviousHead,
 			}, &result); err != nil {
 				return err
 			}
@@ -344,6 +349,54 @@ func parsePRBaseBranchPushOptions(options []string) (string, error) {
 	return branch, nil
 }
 
+// reconciledPreviousHeadPushOptionPrefix carries the pre-reconciliation private
+// mirror head through a git push. A reconciled branch is deleted and re-created
+// by that push, so the hook sees no previous head of its own.
+const reconciledPreviousHeadPushOptionPrefix = "no-mistakes.reconciled-previous-head="
+
+// formatReconciledPreviousHeadPushOption encodes the archived pre-reconciliation
+// head as a push option, or returns "" when nothing was reconciled.
+func formatReconciledPreviousHeadPushOption(head string) string {
+	head = strings.TrimSpace(head)
+	if head == "" {
+		return ""
+	}
+	return reconciledPreviousHeadPushOptionPrefix + head
+}
+
+// parseReconciledPreviousHeadPushOptions extracts the pre-reconciliation head
+// push option, if any. The last occurrence wins. The value is only a claim: the
+// daemon accepts it solely when the gate's own archive tag records it.
+func parseReconciledPreviousHeadPushOptions(options []string) (string, error) {
+	head := ""
+	for _, option := range options {
+		value, ok := strings.CutPrefix(option, reconciledPreviousHeadPushOptionPrefix)
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if !isHexCommitSHA(value) {
+			return "", fmt.Errorf("reconciled previous head push option must be a commit SHA")
+		}
+		head = value
+	}
+	return head, nil
+}
+
+func isHexCommitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func formatSkipPushOptions(steps []types.StepName) []string {
 	if len(steps) == 0 {
 		return nil
@@ -362,6 +415,15 @@ func validStep(step types.StepName) bool {
 		}
 	}
 	return false
+}
+
+// validReadableStep accepts everything a run can have recorded a step log for,
+// which includes the repository's own gates. Read-only surfaces use this;
+// validStep stays the stricter answer for anything that CHANGES what a run
+// does. In particular `no-mistakes.skip=` must never accept a gate name, or a
+// pushed branch could switch off the maintainer's extra check by push option.
+func validReadableStep(step types.StepName) bool {
+	return validStep(step) || step.IsCustomGate()
 }
 
 func dedupeSteps(steps []types.StepName) []types.StepName {

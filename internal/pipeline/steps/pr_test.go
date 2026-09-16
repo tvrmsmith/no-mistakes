@@ -32,9 +32,9 @@ func TestPRStep_GhNotAvailable(t *testing.T) {
 		t.Skip("gh is available, skipping unavailable test")
 	}
 
-	dir := t.TempDir()
+	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{name: "test"}
-	sctx := newTestContextWithDBRecords(t, ag, dir, "abc", "def", config.Commands{})
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	step := &PRStep{}
 	outcome, err := step.Execute(sctx)
@@ -262,6 +262,8 @@ func TestPRStep_BitbucketUpdatesExistingPRWithoutHTMLLink(t *testing.T) {
 				api.existingPRID,
 				api.existingPRURL,
 			))
+		case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/2.0/repositories/test/repo/pullrequests/%d", api.existingPRID):
+			writeStub(t, w, fmt.Sprintf(`{"id":%d,"title":"Existing title","summary":{"raw":"Existing unconfigured description"}}`, api.existingPRID))
 		case r.Method == http.MethodPut && r.URL.Path == fmt.Sprintf("/2.0/repositories/test/repo/pullrequests/%d", api.existingPRID):
 			api.updateCalls++
 			body, err := io.ReadAll(r.Body)
@@ -758,6 +760,43 @@ func TestPRStep_BitbucketUsesProcessEnvWhenStepEnvIsNil(t *testing.T) {
 	}
 	if api.createCalls != 1 {
 		t.Fatalf("expected Bitbucket PR create API to be called once, got %d", api.createCalls)
+	}
+}
+
+func TestPRStep_UsesConfiguredTitleFormat(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	env, logFile := fakeGH(t, "")
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if strings.Contains(opts.Prompt, "{{.Branch}}: {{.Title}}") {
+				t.Error("prompt exposed configured title format as agent instructions")
+			}
+			if !strings.Contains(opts.Prompt, "only the bare concise title text") {
+				t.Error("prompt did not request the bare title component")
+			}
+			payload := json.RawMessage(`{"title":"add widget","body":"## What Changed\n\n- add widget support"}`)
+			return &agent.Result{Output: payload}, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.Branch = "refs/heads/PROJ/123"
+	sctx.Config.Commit.BranchPattern = `^PROJ/([0-9]+)$`
+	sctx.Config.Commit.BranchReplacement = "PROJ-${1}"
+	sctx.Config.PR.TitleFormat = "{{.Branch}}: {{.Title}}"
+
+	if _, err := (&PRStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	logData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), "--title PROJ-123: add widget") {
+		t.Fatalf("expected configured PR title, got:\n%s", logData)
 	}
 }
 
@@ -1683,7 +1722,7 @@ func TestFallbackPRContentCapsBodyAfterPrependedIntent(t *testing.T) {
 		rounds = append(rounds, fmt.Sprintf("review round %03d - %s", i, strings.Repeat("x", 700)))
 	}
 
-	content := fallbackPRContent(
+	content, err := fallbackPRContent(
 		sctx,
 		"A\tinternal/pipeline/steps/pr.go",
 		"✅ Low: generated PR body length guard only",
@@ -1691,6 +1730,9 @@ func TestFallbackPRContentCapsBodyAfterPrependedIntent(t *testing.T) {
 		pipelineMarkdownForTest(rounds...),
 		0,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	assertGitHubBodyLimitForTest(t, content.Body)
 	for _, want := range []string{
@@ -2502,7 +2544,10 @@ func TestFallbackPRBodyAttestationDoesNotShadowTheRealOne(t *testing.T) {
 		pipelineAttestationCommentClosingToken
 
 	pipelineMD, riskLine, testingMD := (&PRStep{}).buildPipelineSection(sctx, scm.ProviderGitHub)
-	content := fallbackPRContent(sctx, "A\t"+embedded, riskLine, testingMD, pipelineMD, 0)
+	content, err := fallbackPRContent(sctx, "A\t"+embedded, riskLine, testingMD, pipelineMD, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	assertFirstAttestationBindsHead(t, content.Body, sctx.Run.HeadSHA)
 	if !strings.Contains(content.Body, escapedPipelineAttestationCommentPrefix) || !strings.Contains(content.Body, foreignSHA) {

@@ -2,7 +2,6 @@ package ipc_test
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -173,11 +172,7 @@ func TestStreamRequestsLogAtInfo(t *testing.T) {
 		}, nil
 	})
 
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	prev := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(prev)
+	logs := captureLogs(t, slog.LevelInfo)
 
 	rawConn := rawDial(t, sock)
 	defer closers.Quiet(rawConn)

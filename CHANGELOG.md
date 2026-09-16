@@ -1,5 +1,75 @@
 # Changelog
 
+## [1.76.0](https://github.com/kunchenguid/no-mistakes/compare/v1.75.3...v1.76.0) (2026-09-15)
+
+
+### Features
+
+* **config:** add branch capture replacements ([#1077](https://github.com/kunchenguid/no-mistakes/issues/1077)) ([2707071](https://github.com/kunchenguid/no-mistakes/commit/270707132de94f2dcffb9faab54ad1d197538234))
+
+## [1.75.3](https://github.com/kunchenguid/no-mistakes/compare/v1.75.2...v1.75.3) (2026-09-14)
+
+
+### Bug Fixes
+
+* **deps:** bump golang.org/x/text to v0.41.0 for CVE-2026-56852 ([#1073](https://github.com/kunchenguid/no-mistakes/issues/1073)) ([5173f42](https://github.com/kunchenguid/no-mistakes/commit/5173f42a9ef958f44476f7d7aac1d95815681fc5)), closes [#903](https://github.com/kunchenguid/no-mistakes/issues/903)
+* discover existing Azure DevOps PRs without repository webUrl ([#1076](https://github.com/kunchenguid/no-mistakes/issues/1076)) ([0eb367c](https://github.com/kunchenguid/no-mistakes/commit/0eb367ce8ec1b6f9f23bf5a42f5b7a23d8339c31)), closes [#1042](https://github.com/kunchenguid/no-mistakes/issues/1042)
+
+## [1.75.2](https://github.com/kunchenguid/no-mistakes/compare/v1.75.1...v1.75.2) (2026-09-14)
+
+
+### Bug Fixes
+
+* **pipeline:** attest approved test command failures ([#1070](https://github.com/kunchenguid/no-mistakes/issues/1070)) ([b3b818e](https://github.com/kunchenguid/no-mistakes/commit/b3b818e9e8f040c8257a4fbcd8adcbb0fa568bde))
+
+## [1.75.1](https://github.com/kunchenguid/no-mistakes/compare/v1.75.0...v1.75.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* **agent:** record honest token usage on failed and cancelled invocations ([#1059](https://github.com/kunchenguid/no-mistakes/issues/1059)) ([fb664f6](https://github.com/kunchenguid/no-mistakes/commit/fb664f6eb58e0b81f34bb570f95a91914fc0c9b2))
+
+## [1.75.0](https://github.com/kunchenguid/no-mistakes/compare/v1.74.0...v1.75.0) (2026-09-12)
+
+
+### Features
+
+* **config:** add ticket-aware commit and PR titles ([#1020](https://github.com/kunchenguid/no-mistakes/issues/1020)) ([9cf26b0](https://github.com/kunchenguid/no-mistakes/commit/9cf26b0b96cd1f35dc9070c8736e7c803adb21a6))
+* **pipeline:** support repository PR templates with author-preserving updates ([#1044](https://github.com/kunchenguid/no-mistakes/issues/1044)) ([36b9e2e](https://github.com/kunchenguid/no-mistakes/commit/36b9e2e98a0fb97aa896fc9555dbffd3c389bddf))
+
+
+### Bug Fixes
+
+* **agent:** tolerate provider residue and split objects in structured output ([#1050](https://github.com/kunchenguid/no-mistakes/issues/1050)) ([a12b0d5](https://github.com/kunchenguid/no-mistakes/commit/a12b0d5283f9469789f297cb1d6acff53c469a36))
+* **pipeline:** handle empty-index repairs and reconcile stale private mirrors ([#1046](https://github.com/kunchenguid/no-mistakes/issues/1046)) ([e94c7a0](https://github.com/kunchenguid/no-mistakes/commit/e94c7a069051a2d4fad1241c341205c42963d937))
+* **pipeline:** prevent fake TUI live-validation passes ([#1057](https://github.com/kunchenguid/no-mistakes/issues/1057)) ([bff827f](https://github.com/kunchenguid/no-mistakes/commit/bff827faa6e36d084f081e482e3d0e628d6aca88))
+* **pipeline:** rerun a fresh review when the reviewer's output fails schema validation ([#1051](https://github.com/kunchenguid/no-mistakes/issues/1051)) ([1a119a3](https://github.com/kunchenguid/no-mistakes/commit/1a119a3b2747b515dfebbdc2f98a0d5a92edd727))
+* **shellenv:** reliably resolve daemon login shell environment ([#1056](https://github.com/kunchenguid/no-mistakes/issues/1056)) ([975ed5b](https://github.com/kunchenguid/no-mistakes/commit/975ed5bfcbdb99f94c73a52f489c5db6ed59c02b))
+
+## [1.74.0](https://github.com/kunchenguid/no-mistakes/compare/v1.73.0...v1.74.0) (2026-09-10)
+
+
+### Features
+
+* **pipeline:** add repository command gates ([#1030](https://github.com/kunchenguid/no-mistakes/issues/1030)) ([74143ae](https://github.com/kunchenguid/no-mistakes/commit/74143aee1fa6f316491c9d5c105993198c895b8e))
+
+
+### Bug Fixes
+
+* **branchsync:** recover reviewed equal-tree rewrites ([#1037](https://github.com/kunchenguid/no-mistakes/issues/1037)) ([947c64c](https://github.com/kunchenguid/no-mistakes/commit/947c64c7046d47a924cdfb374887202edf560fc8))
+
+## [1.73.0](https://github.com/kunchenguid/no-mistakes/compare/v1.72.0...v1.73.0) (2026-09-09)
+
+
+### Features
+
+* **pipeline:** add opt-out for generated PR intent publication ([#1018](https://github.com/kunchenguid/no-mistakes/issues/1018)) ([2696771](https://github.com/kunchenguid/no-mistakes/commit/2696771d8fcb772708164b5e2e381b18b69b321b))
+
+
+### Bug Fixes
+
+* publish update channels after automated releases ([#1024](https://github.com/kunchenguid/no-mistakes/issues/1024)) ([53ceb81](https://github.com/kunchenguid/no-mistakes/commit/53ceb81ea6920e449684c2d0c275006e7ed99e8c))
+
 ## [1.72.0](https://github.com/kunchenguid/no-mistakes/compare/v1.71.0...v1.72.0) (2026-09-08)
 
 

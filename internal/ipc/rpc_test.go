@@ -1,7 +1,6 @@
 package ipc_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -227,11 +226,7 @@ func TestSuccessfulReadRequestsDoNotLogAtInfo(t *testing.T) {
 		})
 	}
 
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	prev := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(prev)
+	logs := captureLogs(t, slog.LevelInfo)
 
 	c, err := ipc.Dial(sock)
 	if err != nil {
@@ -257,11 +252,7 @@ func TestSuccessfulReadRequestsLogAtDebug(t *testing.T) {
 		return &ipc.GetRunResult{}, nil
 	})
 
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	prev := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(prev)
+	logs := captureLogs(t, slog.LevelDebug)
 
 	c, err := ipc.Dial(sock)
 	if err != nil {
@@ -287,11 +278,7 @@ func TestRequestLoggingKeepsMutationsAndFailuresVisible(t *testing.T) {
 		return nil, fmt.Errorf("database unavailable")
 	})
 
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	prev := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(prev)
+	logs := captureLogs(t, slog.LevelInfo)
 
 	c, err := ipc.Dial(sock)
 	if err != nil {

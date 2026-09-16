@@ -48,6 +48,15 @@ func RunRaw(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	return runInDirWithEnvRaw(ctx, dir, nil, args...)
 }
 
+// RunWithInput executes a git command with exact standard input and returns
+// trimmed stdout. It carries the same bare-repository handling as Run.
+func RunWithInput(ctx context.Context, dir, input string, args ...string) (string, error) {
+	if isBareGitDir(dir) {
+		return runInDirWithEnvAndInput(ctx, dir, nil, input, append([]string{"--git-dir=" + dir}, args...)...)
+	}
+	return runInDirWithEnvAndInput(ctx, dir, nil, input, args...)
+}
+
 // RunBare executes Git against exactly bareDir. Unlike Run, it never falls
 // back to cwd-based repository discovery when bareDir is malformed. Gate
 // recovery uses this after structural validation so an invalid directory under
@@ -77,14 +86,25 @@ func runInDir(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 func runInDirWithEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
-	out, err := runInDirWithEnvRaw(ctx, dir, extraEnv, args...)
+	return runInDirWithEnvAndInput(ctx, dir, extraEnv, "", args...)
+}
+
+func runInDirWithEnvAndInput(ctx context.Context, dir string, extraEnv []string, input string, args ...string) (string, error) {
+	out, err := runInDirWithEnvAndInputRaw(ctx, dir, extraEnv, input, args...)
 	return strings.TrimSpace(string(out)), err
 }
 
 func runInDirWithEnvRaw(ctx context.Context, dir string, extraEnv []string, args ...string) ([]byte, error) {
+	return runInDirWithEnvAndInputRaw(ctx, dir, extraEnv, "", args...)
+}
+
+func runInDirWithEnvAndInputRaw(ctx context.Context, dir string, extraEnv []string, input string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(nonInteractiveEnvForContext(ctx, dir), extraEnv...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	winproc.Harden(cmd)
 	// OutputShellCommand captures stdout only, so unlike cmd.Output it never
 	// fills ExitError.Stderr. Capture stderr explicitly or the git error text
@@ -100,6 +120,36 @@ func runInDirWithEnvRaw(ctx context.Context, dir string, extraEnv []string, args
 		return nil, fmt.Errorf("git %s: %w: %s", safeurl.RedactText(strings.Join(args, " ")), err, safeurl.RedactText(strings.TrimSpace(stderr.String())))
 	}
 	return out, nil
+}
+
+// StablePatchID returns Git's stable patch identity for one file between two
+// commits. The file path is part of the diff, so the same-shaped edit to a
+// different file cannot prove content preservation.
+//
+// The pathspec is explicitly literal: a wildcard or leading colon in a real
+// file name would otherwise be read as a glob or as pathspec magic and fold a
+// sibling file's diff into this file's identity.
+func StablePatchID(ctx context.Context, dir, from, to, path string) (string, error) {
+	diff, err := RunRaw(ctx, dir, "diff", "--no-ext-diff", "--binary", from, to, "--", ":(literal)"+path)
+	if err != nil {
+		return "", err
+	}
+	if len(diff) == 0 {
+		return "", nil
+	}
+	args := []string{"patch-id", "--stable"}
+	if isBareGitDir(dir) {
+		args = append([]string{"--git-dir=" + dir}, args...)
+	}
+	out, err := runInDirWithEnvAndInputRaw(ctx, dir, nil, string(diff), args...)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("git patch-id --stable returned no identity")
+	}
+	return fields[0], nil
 }
 
 // ValidateBareRepository verifies both the filesystem shape and Git's own bare
@@ -726,6 +776,35 @@ func ResolveRef(ctx context.Context, dir, ref string) (string, error) {
 		return "", fmt.Errorf("resolve ref %s: %w", ref, err)
 	}
 	return out, nil
+}
+
+func DirectRefTarget(ctx context.Context, dir, ref string) (string, bool, error) {
+	target, err := Run(ctx, dir, "symbolic-ref", "--quiet", "--no-recurse", ref)
+	if err == nil {
+		return "", false, fmt.Errorf("ref %s is symbolic (target %s)", ref, target)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		return "", false, err
+	}
+	out, err := Run(ctx, dir, "for-each-ref", "--format=%(refname) %(objectname) %(symref)", ref)
+	if err != nil {
+		return "", false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != ref {
+			continue
+		}
+		if len(fields) > 2 {
+			return "", false, fmt.Errorf("ref %s is symbolic (target %s)", ref, fields[2])
+		}
+		if len(fields) != 2 {
+			return "", false, fmt.Errorf("ref %s has no direct object target", ref)
+		}
+		return fields[1], true, nil
+	}
+	return "", false, nil
 }
 
 func ExactRefTarget(ctx context.Context, dir, ref string) (string, bool, error) {

@@ -1,13 +1,16 @@
 package ipc_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -50,6 +53,39 @@ func startServer(t *testing.T, sock string) *ipc.Server {
 		}
 	})
 	return srv
+}
+
+// captureLogs redirects the default logger into a sink the test can read
+// safely, and restores the previous logger when the test ends.
+//
+// The sink is mutex-guarded because the reader is never the only writer: a
+// connection the server is still tearing down logs on its own goroutine, and
+// startServer's readiness probe leaves exactly one of those in flight. A plain
+// bytes.Buffer races with it.
+func captureLogs(t *testing.T, level slog.Level) *lockedBuffer {
+	t.Helper()
+	logs := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: level})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return logs
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // removeTempRoot deletes a test's temp root and fails the test when it cannot.
