@@ -258,7 +258,9 @@ gates:
 			t.Fatalf("run status = %s, want failed", run.Status)
 		}
 		gotErr := deref(run.Error)
-		for _, want := range []string{"too-late", "push", "rebase, review, test, document, lint"} {
+		// The valid list is rendered in pipeline order, so the reorder moved
+		// Review to the tail behind the cheap gates.
+		for _, want := range []string{"too-late", "push", "rebase, lint, test, document, review"} {
 			if !strings.Contains(gotErr, want) {
 				t.Errorf("run error %q does not name %q", gotErr, want)
 			}
@@ -294,11 +296,13 @@ func assertGatedPipelineOrder(t *testing.T, steps []ipc.StepResultInfo) {
 	expected := []types.StepName{
 		types.StepIntent,
 		types.StepRebase,
-		types.StepReview,
+		types.StepFormat,
+		types.StepLint,
 		types.StepTest,
 		gateRegistryStep,
+		types.StepMetrics,
 		types.StepDocument,
-		types.StepLint,
+		types.StepReview,
 		types.StepPush,
 		types.StepPR,
 		types.StepCI,
