@@ -62,7 +62,7 @@ func TestAxiOutcomeProviderUnavailableSkips(t *testing.T) {
 			t.Fatalf("%s status = %s, want skipped", result.StepName, result.Status)
 		}
 	}
-	rv := runViewFromDB(r, results, database)
+	rv := runViewFromDB(r, results)
 	if got := outcomeForRun(rv); got != "passed-with-skips" {
 		t.Fatalf("provider-unavailable PR and CI: outcome = %q, want passed-with-skips", got)
 	}
@@ -99,7 +99,7 @@ func TestAxiOutcomeProviderUnavailableSkips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := outcomeForRun(runViewFromDB(explicit, explicitResults, database)); got != "passed" {
+	if got := outcomeForRun(runViewFromDB(explicit, explicitResults)); got != "passed" {
 		t.Fatalf("explicit per-run skips: outcome = %q, want passed", got)
 	}
 }

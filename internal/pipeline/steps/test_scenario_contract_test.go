@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,18 +25,16 @@ func TestTestStep_PromptDerivesScenariosAndMarksLive(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(passingScenarioFindingsJSON)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(passingScenarioFindingsJSON),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Show users a success screen after checkout"
 
 	if _, err := (&TestStep{}).Execute(sctx); err != nil {
 		t.Fatal(err)
 	}
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 	for _, want := range []string{
 		// Scenario derivation, not test selection.
 		"Derive the scenarios this change must satisfy, then run each one against the real running product",
@@ -96,16 +93,14 @@ func TestTestStep_PromptIncludesOnlyConfiguredTrustedRunbook(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir, baseSHA, headSHA := setupGitRepo(t)
-			ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-				return &agent.Result{Output: json.RawMessage(passingScenarioFindingsJSON)}, nil
-			}}
-			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			ag := &mockAgent{name: "test", runFn: answerDiscoveryThen(passingScenarioFindingsJSON)}
+			sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 			sctx.Config.Test.Instructions = tc.instructions
 
 			if _, err := (&TestStep{}).Execute(sctx); err != nil {
 				t.Fatal(err)
 			}
-			prompt := ag.calls[0].Prompt
+			prompt := evidencePrompt(t, ag)
 			if got := strings.Contains(prompt, "Repository live-validation runbook (trusted, from the default branch):"); got != tc.wantRunbook {
 				t.Fatalf("runbook section present = %v, want %v\nprompt:\n%s", got, tc.wantRunbook, prompt)
 			}
@@ -120,15 +115,15 @@ func TestTestStep_FailingBaselineStillRunsEvidenceTurn(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	calls := 0
-	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-		calls++
+	ag := &mockAgent{name: "test", runFn: answerDiscoveryThenFunc(func(n int, _ agent.RunOpts) (*agent.Result, error) {
+		calls = n
 		return &agent.Result{Output: json.RawMessage(passingScenarioFindingsJSON)}, nil
-	}}
+	})}
 	testCmd := "printf 'baseline broke'; exit 7"
 	if runtime.GOOS == "windows" {
 		testCmd = "echo baseline broke && exit /b 7"
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: testCmd})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: testCmd})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err != nil {
@@ -147,10 +142,12 @@ func TestTestStep_FailingBaselineStillRunsEvidenceTurn(t *testing.T) {
 	if findings.Verdict != types.TestVerdictGo || len(findings.Scenarios) != 1 {
 		t.Fatalf("evidence contract was not retained: %+v", findings)
 	}
-	if len(findings.Tested) < 2 || findings.Tested[0] != testCmd {
+	// A configured command is the one "repository" unit, so the baseline entry
+	// carries that unit's name ahead of the command it ran.
+	if len(findings.Tested) < 2 || findings.Tested[0] != "repository: "+testCmd {
 		t.Fatalf("tested = %+v, want baseline followed by evidence checks", findings.Tested)
 	}
-	if len(findings.Items) == 0 || !strings.Contains(findings.Items[0].Description, "configured test command failed with exit code 7") {
+	if len(findings.Items) == 0 || !strings.Contains(findings.Items[0].Description, "tests failed with exit code 7") {
 		t.Fatalf("baseline finding missing from %+v", findings.Items)
 	}
 	if findings.Items[0].Category != types.FindingCategoryTestCommand {
@@ -235,12 +232,10 @@ func TestTestStep_VerdictPolicy(t *testing.T) {
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			output := tc.output
 			ag := &mockAgent{
-				name: "test",
-				runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-					return &agent.Result{Output: json.RawMessage(output)}, nil
-				},
+				name:  "test",
+				runFn: answerDiscoveryThen(output),
 			}
-			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 			sctx.UserIntent = "Show users a success screen after checkout"
 
 			outcome, err := (&TestStep{}).Execute(sctx)
@@ -386,12 +381,10 @@ func TestTestStep_MissingScenarioContractFails(t *testing.T) {
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			output := tc.output
 			ag := &mockAgent{
-				name: "test",
-				runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-					return &agent.Result{Output: json.RawMessage(output)}, nil
-				},
+				name:  "test",
+				runFn: answerDiscoveryThen(output),
 			}
-			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 			_, err := (&TestStep{}).Execute(sctx)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("Execute() error = %v, want one naming %q", err, tc.wantErr)
@@ -399,8 +392,8 @@ func TestTestStep_MissingScenarioContractFails(t *testing.T) {
 			if !strings.Contains(err.Error(), fmt.Sprintf("after %d attempts", testAnalyzerMaxAttempts)) {
 				t.Fatalf("Execute() error = %v, want the exhausted correction bound named", err)
 			}
-			if len(ag.calls) != testAnalyzerMaxAttempts {
-				t.Fatalf("agent calls = %d, want %d bounded correction attempts before failing", len(ag.calls), testAnalyzerMaxAttempts)
+			if len(evidenceCalls(ag)) != testAnalyzerMaxAttempts {
+				t.Fatalf("agent calls = %d, want %d bounded correction attempts before failing", len(evidenceCalls(ag)), testAnalyzerMaxAttempts)
 			}
 		})
 	}
@@ -426,12 +419,10 @@ func TestTestStep_NoLiveSurfaceCIWorkflowAsksUser(t *testing.T) {
 	headSHA := commitCIWorkflowOnlyChange(t, dir, baseSHA)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(noSurfaceCIWorkflowFindingsJSON)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(noSurfaceCIWorkflowFindingsJSON),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Split the Windows CI job into a git-heavy shard and a core remainder"
 
 	outcome, err := (&TestStep{}).Execute(sctx)
@@ -540,32 +531,30 @@ func TestTestStep_InvalidAnalyzerPayloadTriggersCorrectionRound(t *testing.T) {
 			t.Parallel()
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			invalid := tc.invalid
-			calls := 0
 			ag := &mockAgent{
 				name: "test",
-				runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-					calls++
-					if calls == 1 {
+				runFn: answerDiscoveryThenFunc(func(n int, _ agent.RunOpts) (*agent.Result, error) {
+					if n == 1 {
 						return &agent.Result{Output: json.RawMessage(invalid)}, nil
 					}
 					return &agent.Result{Output: json.RawMessage(mixedLivePassAndUntestedFindingsJSON)}, nil
-				},
+				}),
 			}
-			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 			sctx.UserIntent = "Show users a success screen after checkout"
 
 			outcome, err := (&TestStep{}).Execute(sctx)
 			if err != nil {
 				t.Fatalf("invalid payload must be returned to the analyzer, not fail the step: %v", err)
 			}
-			if len(ag.calls) != 2 {
-				t.Fatalf("agent calls = %d, want 1 rejected payload plus 1 correction", len(ag.calls))
+			if len(evidenceCalls(ag)) != 2 {
+				t.Fatalf("agent calls = %d, want 1 rejected payload plus 1 correction", len(evidenceCalls(ag)))
 			}
-			first := ag.calls[0].Prompt
+			first := evidenceCalls(ag)[0].Prompt
 			if strings.Contains(first, "were REJECTED") {
 				t.Fatalf("first evidence prompt must not be a correction round:\n%s", first)
 			}
-			correction := ag.calls[1].Prompt
+			correction := evidenceCalls(ag)[1].Prompt
 			for _, want := range []string{
 				"were REJECTED",
 				"This is a correction-only turn",
@@ -605,28 +594,26 @@ func TestTestStep_InvalidAnalyzerPayloadTriggersCorrectionRound(t *testing.T) {
 func TestTestStep_FinalizerRejectionTriggersCorrectionRound(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
-	calls := 0
 	ag := &mockAgent{
 		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			calls++
-			if calls == 1 {
+		runFn: answerDiscoveryThenFunc(func(n int, _ agent.RunOpts) (*agent.Result, error) {
+			if n == 1 {
 				return nil, rejectedStructuredOutputError{message: "structured output did not match schema: missing scenarios"}
 			}
 			return &agent.Result{Output: json.RawMessage(mixedLivePassAndUntestedFindingsJSON)}, nil
-		},
+		}),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err != nil {
 		t.Fatalf("finalizer rejection must enter the bounded correction round: %v", err)
 	}
-	if len(ag.calls) != 2 {
-		t.Fatalf("agent calls = %d, want one rejected invocation plus one correction", len(ag.calls))
+	if len(evidenceCalls(ag)) != 2 {
+		t.Fatalf("agent calls = %d, want one rejected invocation plus one correction", len(evidenceCalls(ag)))
 	}
-	if !strings.Contains(ag.calls[1].Prompt, "structured output did not match schema: missing scenarios") {
-		t.Fatalf("correction prompt omitted the finalizer error:\n%s", ag.calls[1].Prompt)
+	if !strings.Contains(evidenceCalls(ag)[1].Prompt, "structured output did not match schema: missing scenarios") {
+		t.Fatalf("correction prompt omitted the finalizer error:\n%s", evidenceCalls(ag)[1].Prompt)
 	}
 	if outcome.NeedsApproval {
 		t.Fatalf("valid corrected payload must not park, findings: %s", outcome.Findings)
@@ -636,25 +623,23 @@ func TestTestStep_FinalizerRejectionTriggersCorrectionRound(t *testing.T) {
 func TestTestStep_MalformedJSONTriggersCorrectionRound(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
-	calls := 0
 	ag := &mockAgent{
 		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			calls++
-			if calls == 1 {
+		runFn: answerDiscoveryThenFunc(func(n int, _ agent.RunOpts) (*agent.Result, error) {
+			if n == 1 {
 				return &agent.Result{Output: json.RawMessage(`{"findings": [}`)}, nil
 			}
 			return &agent.Result{Output: json.RawMessage(mixedLivePassAndUntestedFindingsJSON)}, nil
-		},
+		}),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err != nil {
 		t.Fatalf("malformed JSON must enter the bounded correction round: %v", err)
 	}
-	if len(ag.calls) != 2 {
-		t.Fatalf("agent calls = %d, want one malformed payload plus one correction", len(ag.calls))
+	if len(evidenceCalls(ag)) != 2 {
+		t.Fatalf("agent calls = %d, want one malformed payload plus one correction", len(evidenceCalls(ag)))
 	}
 	if outcome.NeedsApproval {
 		t.Fatalf("valid corrected payload must not park, findings: %s", outcome.Findings)
@@ -668,12 +653,10 @@ func TestTestStep_InvalidAnalyzerPayloadExhaustsCorrectionBound(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(passNotLiveFindingsJSON)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(passNotLiveFindingsJSON),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err == nil {
@@ -682,8 +665,8 @@ func TestTestStep_InvalidAnalyzerPayloadExhaustsCorrectionBound(t *testing.T) {
 	if outcome != nil {
 		t.Fatalf("Execute() outcome = %+v, want no outcome after the bound is exhausted", outcome)
 	}
-	if len(ag.calls) != testAnalyzerMaxAttempts {
-		t.Fatalf("agent calls = %d, want %d", len(ag.calls), testAnalyzerMaxAttempts)
+	if len(evidenceCalls(ag)) != testAnalyzerMaxAttempts {
+		t.Fatalf("agent calls = %d, want %d", len(evidenceCalls(ag)), testAnalyzerMaxAttempts)
 	}
 	got := err.Error()
 	if !strings.Contains(got, fmt.Sprintf("after %d attempts", testAnalyzerMaxAttempts)) {
@@ -692,8 +675,8 @@ func TestTestStep_InvalidAnalyzerPayloadExhaustsCorrectionBound(t *testing.T) {
 	if !strings.Contains(got, `result "pass" but live=false`) {
 		t.Fatalf("error = %q, want the actionable validation reason", got)
 	}
-	if !strings.Contains(ag.calls[1].Prompt, `scenario 1: result "pass" but live=false`) {
-		t.Fatalf("retry prompt never told the analyzer how to correct:\n%s", ag.calls[1].Prompt)
+	if !strings.Contains(evidenceCalls(ag)[1].Prompt, `scenario 1: result "pass" but live=false`) {
+		t.Fatalf("retry prompt never told the analyzer how to correct:\n%s", evidenceCalls(ag)[1].Prompt)
 	}
 }
 
@@ -701,19 +684,17 @@ func TestTestStep_ValidMixedPayloadDoesNotRetry(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(mixedLivePassAndUntestedFindingsJSON)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(mixedLivePassAndUntestedFindingsJSON),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ag.calls) != 1 {
-		t.Fatalf("agent calls = %d, want 1: a valid mixed payload must not enter a correction round", len(ag.calls))
+	if len(evidenceCalls(ag)) != 1 {
+		t.Fatalf("agent calls = %d, want 1: a valid mixed payload must not enter a correction round", len(evidenceCalls(ag)))
 	}
 	if outcome.NeedsApproval {
 		t.Fatalf("mixed live-pass + untested-with-reason must not park, findings: %s", outcome.Findings)

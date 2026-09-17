@@ -36,7 +36,7 @@ type StepRound struct {
 	Trigger          string  // "initial", "auto_fix"; legacy "user_fix" is treated as "auto_fix"
 	FindingsJSON     *string // nullable - findings produced by this round
 	ReviewedHeadSHA  *string // non-authoritative commit candidate captured by a review round
-	StartingHeadSHA  *string
+	StartingHeadSHA  *string // head the round began on; nil on rows written before it was recorded
 	TrustedConfigSHA *string
 	GlobalConfigYAML []byte
 	RepoConfigYAML   []byte
@@ -157,7 +157,27 @@ func hasSelectedFinding(raw *string) bool {
 // InsertStepRound creates a new round record for a step result. fixSummary may
 // be nil for non-fix rounds or when the agent produced no summary.
 func (d *DB) InsertStepRound(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, durationMS int64) (*StepRound, error) {
-	return d.InsertStepRoundWithRepair(stepResultID, round, trigger, findingsJSON, fixSummary, false, durationMS)
+	return d.InsertStepRoundWithStartingHead(stepResultID, round, trigger, findingsJSON, fixSummary, "", durationMS)
+}
+
+// InsertStepRoundWithStartingHead records the head the round started from
+// alongside it. That is what lets a reader tell a round that advanced the head
+// from one that changed nothing, which is how the daemon decides whether a
+// parked gate has an exit commit worth showing.
+func (d *DB) InsertStepRoundWithStartingHead(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, startingHeadSHA string, durationMS int64) (*StepRound, error) {
+	return d.InsertStepRoundWithHeadAndRepair(stepResultID, round, trigger, findingsJSON, fixSummary, startingHeadSHA, false, durationMS)
+}
+
+// InsertStepRoundWithHeadAndRepair records both facts a non-review round can
+// carry: the head it started from and whether it published a repair. It is
+// what the executor calls, since a round can be both at once; the two
+// single-fact wrappers above stay for callers that only have one.
+func (d *DB) InsertStepRoundWithHeadAndRepair(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, startingHeadSHA string, repairPublished bool, durationMS int64) (*StepRound, error) {
+	var starting *string
+	if startingHeadSHA != "" {
+		starting = &startingHeadSHA
+	}
+	return d.insertStepRound(stepResultID, round, trigger, findingsJSON, fixSummary, nil, starting, nil, nil, nil, repairPublished, durationMS)
 }
 
 func (d *DB) InsertStepRoundWithRepair(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, repairPublished bool, durationMS int64) (*StepRound, error) {

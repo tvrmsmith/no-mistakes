@@ -15,6 +15,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps/internal/stepstest"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -79,7 +80,9 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 			if got, err := os.ReadFile(filepath.Join(f.dir, "package.lock")); err != nil || string(got) != "refused lock\n" {
 				t.Fatalf("refusal changed working file: %q, %v", got, err)
 			}
-			for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepPush} {
+			// The reorder runs Test before Review, and recoveredResumePoint
+			// validates the persisted rows against that canonical order.
+			for _, name := range []types.StepName{types.StepFormat, types.StepTest, types.StepReview, types.StepPush} {
 				sr, err := f.sctx.DB.InsertStepResult(f.sctx.Run.ID, name)
 				if err != nil {
 					t.Fatal(err)
@@ -93,7 +96,17 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 			if tc.unverified {
 				gitCmd(t, f.dir, "update-ref", "HEAD", "main")
 			}
-			f.sctx.Config.Commands.Test = "git cat-file -e HEAD:fix.go"
+			// The probe proves the retained repair is in HEAD. The coverage
+			// writer in front of it satisfies the Test step's vacuous-green
+			// guard, which would otherwise park the revalidation this test is
+			// measuring.
+			f.sctx.Config.Commands.Test = stepstest.CoverageCommand(stepstest.CoverageFixture{
+				File:     "fix.go",
+				Function: "Repaired",
+				Line:     1,
+				Hits:     1,
+				Tests:    1,
+			}) + "; git cat-file -e HEAD:fix.go"
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			green := append(fakeCIGH(t, "OPEN", `[{"name":"test","state":"SUCCESS","bucket":"pass"}]`),
@@ -108,11 +121,19 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 			// environment across every step, but the executor this test drives
 			// resets StepContext.Env per step and this fixture only injects it
 			// explicitly via reconcileEnvStep.
-			steps := []pipeline.Step{&ReviewStep{}, &TestStep{}, reconcileEnvStep{step: &PushStep{}, env: green}, reconcileEnvStep{step: ci, env: green}}
+			// Format leads the list because it is the restart boundary CI's
+			// revalidation targets; the executor rejects a restart naming a
+			// step the run does not have.
+			steps := []pipeline.Step{&FormatStep{}, &TestStep{}, &ReviewStep{}, reconcileEnvStep{step: &PushStep{}, env: green}, reconcileEnvStep{step: ci, env: green}}
 			reviews := 0
 			ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
 				if strings.HasPrefix(opts.Purpose, "review") {
 					reviews++
+				}
+				// The Test step's evidence turn is unconditional and reads a
+				// different contract than review's findings.
+				if strings.HasPrefix(opts.Purpose, "test") {
+					return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 				}
 				output, err := json.Marshal(cleanReviewFindings())
 				return &agent.Result{Output: output}, err
@@ -292,7 +313,7 @@ func TestCIStep_ProtectedPathRetryFinishesRetainedRepairWithGreenChecks(t *testi
 				t.Fatalf("commit lost retained repair: %q", got)
 			}
 			if revalidate {
-				if outcome == nil || outcome.RestartFrom != types.StepReview || f.remoteHead(t) != f.headSHA {
+				if outcome == nil || outcome.RestartFrom != pipeline.RestartBoundary || f.remoteHead(t) != f.headSHA {
 					t.Fatalf("retry skipped required pipeline revalidation: %+v remote=%s", outcome, f.remoteHead(t))
 				}
 				if strings.Contains(f.log(), ciChecksPassedMsg) {

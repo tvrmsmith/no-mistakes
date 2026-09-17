@@ -40,7 +40,7 @@ func TestRunViewFromDBAwaitingStep(t *testing.T) {
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusAwaitingApproval, FindingsJSON: strptr(`{"findings":[],"summary":"x"}`)},
 	}
-	rv := runViewFromDB(run, steps, nil)
+	rv := runViewFromDB(run, steps)
 	gate, ok := rv.awaitingStep()
 	if !ok {
 		t.Fatal("expected an awaiting step")
@@ -61,7 +61,7 @@ func TestRunViewFromDBCarriesCIOverrideReason(t *testing.T) {
 		{StepName: types.StepTest, Status: types.StepStatusCompleted, OverrideReason: strptr("configured test command failed")},
 		{StepName: types.StepCI, Status: types.StepStatusCompleted, OverrideReason: strptr("live checks still failing: required-check")},
 	}
-	rv := runViewFromDB(run, steps, nil)
+	rv := runViewFromDB(run, steps)
 	if rv.CIOverrideReason != "live checks still failing: required-check" {
 		t.Errorf("CIOverrideReason = %q, want the step's override reason", rv.CIOverrideReason)
 	}
@@ -133,31 +133,6 @@ func TestWriteRunObjectShape(t *testing.T) {
 	}
 }
 
-func TestRunObjectRendersCombinedHousekeepingAttribution(t *testing.T) {
-	rv := runView{
-		ID:      "run-1",
-		Branch:  "feature/x",
-		Status:  string(types.RunRunning),
-		HeadSHA: "abcdef1234567890",
-		Steps: []stepView{{
-			Name:       string(types.StepDocument),
-			Status:     string(types.StepStatusCompleted),
-			DurationMS: 173_000,
-			WorkScope:  ipc.WorkScopeDocumentLintHousekeeping,
-		}},
-	}
-
-	out := axiDoc(runObjectField(rv))
-	for _, want := range []string{
-		"shared_work[1]{attributed_to,scope,duration_ms}:\n",
-		"document,document+lint housekeeping,173000\n",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("combined housekeeping attribution missing %q in:\n%s", want, out)
-		}
-	}
-}
-
 func TestRunObjectRendersAwaitingAgent(t *testing.T) {
 	// Pin the clock so the parked duration is deterministic.
 	restore := nowUnix
@@ -195,6 +170,85 @@ func TestRunObjectRendersAwaitingAgent(t *testing.T) {
 	rv.Status = string(types.RunCompleted)
 	if out := axiDoc(runObjectField(rv)); strings.Contains(out, "awaiting_agent") {
 		t.Errorf("terminal run should not render awaiting_agent in:\n%s", out)
+	}
+}
+
+func TestRunObjectRendersRestartCount(t *testing.T) {
+	// A run that never restarted renders no restarts field at all.
+	rv := runView{
+		ID:      "run-1",
+		Branch:  "feature/x",
+		Status:  string(types.RunRunning),
+		HeadSHA: "abcdef1234567890",
+	}
+	if out := axiDoc(runObjectField(rv)); strings.Contains(out, "restarts:") {
+		t.Errorf("zero restart count should not render restarts in:\n%s", out)
+	}
+
+	// Below the soft cap renders the plain count.
+	rv.RestartCount = 3
+	out := axiDoc(runObjectField(rv))
+	if !strings.Contains(out, "restarts: 3\n") {
+		t.Errorf("run object missing restarts count in:\n%s", out)
+	}
+
+	// Exactly at the soft cap is still plain, not annotated.
+	rv.RestartCount = db.RestartSoftCap
+	out = axiDoc(runObjectField(rv))
+	atCap := fmt.Sprintf("restarts: %d\n", db.RestartSoftCap)
+	if !strings.Contains(out, atCap) {
+		t.Errorf("run object at soft cap should render plain count in:\n%s", out)
+	}
+
+	// Strictly above the soft cap gets the exceeded annotation.
+	rv.RestartCount = db.RestartSoftCap + 1
+	out = axiDoc(runObjectField(rv))
+	aboveCap := fmt.Sprintf("restarts: %d (soft cap %d exceeded)\n", db.RestartSoftCap+1, db.RestartSoftCap)
+	if !strings.Contains(out, aboveCap) {
+		t.Errorf("run object above soft cap missing exceeded annotation in:\n%s", out)
+	}
+
+	// The field renders regardless of run terminality: restart count is
+	// history, not a live signal like awaiting_agent.
+	rv.Status = string(types.RunCompleted)
+	out = axiDoc(runObjectField(rv))
+	if !strings.Contains(out, aboveCap) {
+		t.Errorf("restarts should render on a terminal run too in:\n%s", out)
+	}
+
+	// restarts appears after awaiting_agent and before head when all three
+	// are present.
+	restore := nowUnix
+	nowUnix = func() int64 { return 1_000_000 }
+	defer func() { nowUnix = restore }()
+	parkedSince := int64(1_000_000 - 10)
+	rv2 := runView{
+		ID:                 "run-2",
+		Branch:             "feature/y",
+		Status:             string(types.RunRunning),
+		HeadSHA:            "abcdef1234567890",
+		AwaitingAgentSince: &parkedSince,
+		RestartCount:       2,
+	}
+	out = axiDoc(runObjectField(rv2))
+	awaitingIdx := strings.Index(out, "awaiting_agent:")
+	restartsIdx := strings.Index(out, "restarts:")
+	headIdx := strings.Index(out, "head:")
+	if awaitingIdx < 0 || restartsIdx < 0 || headIdx < 0 || !(awaitingIdx < restartsIdx && restartsIdx < headIdx) {
+		t.Errorf("restarts should render after awaiting_agent and before head in:\n%s", out)
+	}
+}
+
+// TestRunViewCarriesRestartCount covers the two adapters that feed
+// runObjectField. Rendering is only half the surface: a restart count dropped
+// on the way in from either the daemon snapshot or the local database renders a
+// zero that reads as "this run never restarted".
+func TestRunViewCarriesRestartCount(t *testing.T) {
+	if got := runViewFromIPC(&ipc.RunInfo{ID: "run-1", RestartCount: 4}).RestartCount; got != 4 {
+		t.Errorf("runViewFromIPC RestartCount = %d, want 4", got)
+	}
+	if got := runViewFromDB(&db.Run{ID: "run-1", RestartCount: 4}, nil).RestartCount; got != 4 {
+		t.Errorf("runViewFromDB RestartCount = %d, want 4", got)
 	}
 }
 
@@ -303,7 +357,7 @@ func TestStatusRendersCurrentAutoFixAttemptWithPersistedLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load steps: %v", err)
 	}
-	rv := runViewFromDB(run, steps, database)
+	rv := runViewFromDB(run, steps)
 	reviewLimit := 9
 	annotateRunView(&axiEnv{
 		d: database,

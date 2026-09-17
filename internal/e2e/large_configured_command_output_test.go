@@ -46,8 +46,16 @@ exit 1
 				t.Fatalf("write large failure command: %v", err)
 			}
 
-			config := "allow_repo_commands: true\ncommands:\n  test: true\n  lint: true\n"
-			config = strings.Replace(config, "  "+tc.commandKey+": true", "  "+tc.commandKey+": "+commandName, 1)
+			// The lint case still runs the Test step first, and a test command
+			// that reports no coverage parks the run before Lint is reached.
+			h.WriteTestCommand("nm-large-output-passing-test", "exit 0")
+			testCmd, lintCmd := "nm-large-output-passing-test", "true"
+			if tc.commandKey == "test" {
+				testCmd = commandName
+			} else {
+				lintCmd = commandName
+			}
+			config := fmt.Sprintf("allow_repo_commands: true\ncommands:\n  test: %s\n  lint: %s\n", testCmd, lintCmd)
 			h.CommitChange(tc.branch, ".no-mistakes.yaml", config, "configure large "+tc.name+" failure")
 			h.PushToGate(tc.branch)
 			run := waitForStepStatus(t, h, tc.branch, tc.step, types.StepStatusAwaitingApproval, 60*time.Second)

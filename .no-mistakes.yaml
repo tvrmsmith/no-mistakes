@@ -14,8 +14,12 @@ commands:
 # Pin review auto-fix to the product default so this repo does not inherit an
 # operator's global override. Review findings park for a human decision; other
 # steps keep their configured behavior.
+# Metrics auto-fix stays pinned off while thresholds are calibrated. This repo
+# configures no commands.metrics, so the step skips anyway; the pin keeps a
+# metrics breach parking for a human if that changes.
 auto_fix:
   review: 0
+  metrics: 0
 
 # This clone is a personal build that never contributes upstream: the pipeline
 # validates and pushes to the fork, and there is no PR to open or CI to watch.

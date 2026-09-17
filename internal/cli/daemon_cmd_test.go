@@ -23,6 +23,17 @@ func TestParseSkipPushOptions(t *testing.T) {
 	}
 }
 
+func TestParseSkipStepsAcceptsFormat(t *testing.T) {
+	got, err := parseSkipSteps("format")
+	if err != nil {
+		t.Fatalf("parseSkipSteps() error = %v", err)
+	}
+	want := []types.StepName{types.StepFormat}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseSkipSteps() = %v, want %v", got, want)
+	}
+}
+
 func TestParseSkipPushOptionsRejectsUnknownStep(t *testing.T) {
 	_, err := parseSkipPushOptions([]string{"no-mistakes.skip=test,deploy"})
 	if err == nil {

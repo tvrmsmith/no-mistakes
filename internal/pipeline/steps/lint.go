@@ -16,6 +16,10 @@ type LintStep struct{}
 func (s *LintStep) Name() types.StepName { return types.StepLint }
 
 func (s *LintStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
@@ -24,16 +28,6 @@ func (s *LintStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	lintCmd := sctx.Config.Commands.Lint
 
 	if lintCmd == "" {
-		// The combined document+lint housekeeping pass already performed the
-		// agent-driven lint duty for this round; consume its result instead
-		// of paying a second cold agent invocation. Fix rounds and any round
-		// without a stashed result fall through to a full agent pass, so the
-		// lint responsibility is never silently skipped.
-		if !sctx.Fixing {
-			if stash, ok := sctx.Shared.TakeHousekeepingLint(); ok {
-				return lintOutcomeFromHousekeeping(sctx, stash)
-			}
-		}
 		sctx.Log("no lint command configured, asking agent to lint and fix...")
 		reassessHistory := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx)
 		prompt := fmt.Sprintf(
@@ -184,22 +178,4 @@ Previous lint findings to address:
 
 	sctx.Log("lint passed")
 	return &pipeline.StepOutcome{FixSummary: fixSummary}, nil
-}
-
-// lintOutcomeFromHousekeeping reports the lint findings the combined
-// document+lint pass produced, with the same gate semantics as the lint
-// step's own agent path: blocking (error/warning) findings park for a
-// decision, info findings pass through.
-func lintOutcomeFromHousekeeping(sctx *pipeline.StepContext, stash pipeline.HousekeepingLintResult) (*pipeline.StepOutcome, error) {
-	findings, err := types.ParseFindingsJSON(stash.FindingsJSON)
-	if err != nil {
-		return nil, fmt.Errorf("validate combined housekeeping lint result: %w", err)
-	}
-	sctx.Log(fmt.Sprintf("lint assessed in the combined document+lint housekeeping pass: %d unresolved items", len(findings.Items)))
-	return &pipeline.StepOutcome{
-		NeedsApproval: hasBlockingFindings(findings.Items),
-		AutoFixable:   false,
-		Findings:      stash.FindingsJSON,
-		FixSummary:    stash.Summary,
-	}, nil
 }

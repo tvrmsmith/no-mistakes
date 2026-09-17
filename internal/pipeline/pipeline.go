@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
@@ -50,6 +51,39 @@ func evidenceUnavailable(cause error) error {
 	return fmt.Errorf("%w: %w", ErrRecoveryEvidenceUnavailable, cause)
 }
 
+// RestartBoundary is the step a restart re-enters validation at, the first
+// step of the validation region.
+//
+// Format is the boundary and Review is the certifier at the far end of the
+// region, so different steps hold the two roles the region needs. A restart
+// re-enters at Format, and Review still judges the result before it reaches
+// Push. That is also why the boundary step cannot restart into itself: it
+// would re-enter the same step whose commit triggered the restart.
+//
+// The region now runs Format, Lint, Test, Metrics, Document, Review, so every cheap
+// deterministic gate clears the tree before Review judges it, and no step
+// between Review and Push commits code. Push asserts a clean worktree instead
+// of formatting and sweeping one up.
+const RestartBoundary types.StepName = types.StepFormat
+
+// CommitsOwnWorkAtExit reports whether a step routes its exit through the
+// validation helper that commits an unclean worktree, which is what makes the
+// step's own round the author of every commit between the head the round
+// started on and the current head.
+//
+// Steps outside this set move the head for reasons of their own - the rebase
+// step replays the branch onto upstream, the CI step commits an agent repair -
+// so the same range there is not "what this step changed" and must not be
+// presented as it.
+func CommitsOwnWorkAtExit(name types.StepName) bool {
+	switch name {
+	case types.StepFormat, types.StepReview, types.StepTest, types.StepMetrics, types.StepDocument, types.StepLint:
+		return true
+	default:
+		return false
+	}
+}
+
 // StepContext provides shared resources to pipeline steps during execution.
 type StepContext struct {
 	Ctx                   context.Context
@@ -78,6 +112,15 @@ type StepContext struct {
 	// prompt and the PR step's publisher - names the same directory. Empty only
 	// in embeddings that never gather evidence.
 	EvidenceDir string
+	// CoverageDir is where this run's test coverage artifacts belong, always
+	// outside the worktree, so a profile never enters the branch under
+	// validation. The executor resolves it once from the app root, the same
+	// way it resolves EvidenceDir, so the Test step that writes it and the
+	// guard that reads it name one directory. Unlike evidence it is never
+	// published: profiles are large, they churn every run, and nothing outside
+	// the run consumes them. Empty only in embeddings that never run a test
+	// command.
+	CoverageDir string
 	Env         []string // extra environment variables for subprocesses (used in tests)
 	// UserIntent is a short, possibly-empty summary of what the change author
 	// was trying to accomplish. It's surfaced in step prompts so agents have
@@ -129,6 +172,31 @@ type StepContext struct {
 	// OnPRMerged is a best-effort hook after a merged PR state is persisted.
 	// Eval uses it to relabel auto-fix/shipped-unfixed gold; nil is a no-op.
 	OnPRMerged func(ctx context.Context, runID string)
+	// agentInvocations counts the agent turns run through this context. It is
+	// read and written with sync/atomic free functions on the field address
+	// rather than an atomic.Int64 so StepContext stays copyable and go vet's
+	// copylocks check stays quiet.
+	//
+	// Copyability is the constraint that bounds this counter's reach: a copied
+	// StepContext counts independently, so a turn run through a copy is
+	// invisible to the original and its commit would be attributed to a
+	// deterministic tool. The two copy sites (reconcileApprovalGate and the CI
+	// step's publishedBranchHead) run no agent, and CIStep is the only
+	// ApprovalGateReconciler. A step that routes through runValidationStep must
+	// therefore never implement ApprovalGateReconciler; TestValidationStepsAreNotApprovalGateReconcilers
+	// in internal/pipeline/steps pins that.
+	agentInvocations int64
+}
+
+// AgentInvocations returns how many agent turns have run through this step
+// context. Commit attribution reads it as a snapshot taken around one round:
+// a commit made in a round that ran an agent is agent-authored, otherwise a
+// deterministic tool produced it.
+func (sctx *StepContext) AgentInvocations() int64 {
+	if sctx == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&sctx.agentInvocations)
 }
 
 // RunAgentSession executes one turn of a durable review-loop role session,
@@ -197,6 +265,38 @@ type Step interface {
 // leaves the gate parked. Implementations must be read-only and fail closed.
 type ApprovalGateReconciler interface {
 	ReconcileApprovalGate(sctx *StepContext) (resolved bool, err error)
+}
+
+// ApprovalResidueDiscarder is implemented by the step that records the run's
+// review-approved head (Review today, whatever certifies after issues #7/#8).
+// The step that certifies must not modify the tree it certifies, so when it
+// exits with an unclean worktree it parks instead of committing: nothing is
+// destroyed and the existing certification is untouched. The gate's findings
+// describe the leftovers to a human, one item per path, while the paths discard
+// acts on come from RunShared.ValidationResidue, which the step wrote from git
+// when it raised the gate. The gate diff shows only the tracked modifications
+// among them, since it is a git diff against the worktree and untracked files
+// never appear in one.
+//
+// That gate has two answers. Approving means "discard", and the executor calls
+// this so the step removes exactly the leftovers the park recorded before the
+// run continues under the certification that already stands. Choosing fix
+// instead means "keep": the step's own fix round commits the residue and
+// re-reviews the new head, so that answer needs no hook here.
+//
+// Discard is scoped to the recorded paths because a human or a driving agent
+// may edit the worktree while the run is parked, and a blanket reset over
+// whatever the tree holds at approval time would destroy work nobody ruled on.
+// The guarantee is exactly that scope: a file outside the recorded list
+// survives, and an edit made during the park to a file that IS on the list
+// goes with the rest of that path's contents. The executor calls this only for
+// a round that actually recorded residue, so approving any other gate the same
+// step raises touches no files whatever its findings say.
+//
+// It is fail-closed. A discard that cannot complete leaves an uncommitted tree
+// a later step would commit unjudged, so the error fails the run.
+type ApprovalResidueDiscarder interface {
+	DiscardApprovalResidue(sctx *StepContext) error
 }
 
 // ApprovalOverrideVerifier is implemented by a step whose approval must not

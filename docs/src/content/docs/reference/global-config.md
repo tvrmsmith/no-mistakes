@@ -75,6 +75,7 @@ auto_fix:
   rebase: 3
   review: 0
   test: 3
+  metrics: 3
   document: 3
   lint: 3
   ci: 3
@@ -425,7 +426,7 @@ Accepts any Go `time.ParseDuration` string: `30m`, `2h`, `4h30m`, etc.
 
 This is an idle timeout, not an absolute deadline: every time the base branch advances, the monitor re-arms it.
 So an actively-updated green PR keeps its monitor no matter how long it stays open.
-If it later develops an actual GitHub, GitLab, Forgejo, or Azure DevOps merge conflict, the CI auto-fix path rebases it, revalidates from Review because rebasing cannot prove continuity with the reviewed head, and publishes it through Push, while a clean behind PR needs no command.
+If it later develops an actual GitHub, GitLab, Forgejo, or Azure DevOps merge conflict, the CI auto-fix path rebases it, revalidates from Format because rebasing cannot prove continuity with the reviewed head, and publishes it through Push, while a clean behind PR needs no command.
 A genuinely idle/abandoned PR still parks at an approval gate after the timeout elapses.
 While that CI gate is parked, the daemon continues bounded read-only PR-state checks.
 If the PR is merged or closed externally, the stale gate completes automatically; an open, unknown, or temporarily unreachable PR remains parked for a user decision.
@@ -642,7 +643,7 @@ The key is matched against the checkout path recorded at `init`. After moving a 
 
 Maximum follow-up auto-fix attempts per step. Set a step to `0` to disable the follow-up auto-fix loop, so findings require manual approval.
 The document step attempts documentation fixes during its initial pass, so unresolved documentation findings pause for approval instead of using an automatic follow-up loop.
-For empty `commands.lint`, the document step's combined housekeeping pass also attempts safe lint fixes, and the lint step consumes its result; unresolved blocking lint findings then pause for approval instead of starting another automatic fix loop.
+For empty `commands.lint`, the lint step attempts safe lint fixes during its own initial pass; unresolved blocking lint findings then pause for approval instead of starting another automatic fix loop.
 
 |      |          |
 | ---- | -------- |
@@ -651,14 +652,18 @@ For empty `commands.lint`, the document step's combined housekeeping pass also a
 | Field               | Type  | Default | Description                                                                                 |
 | ------------------- | ----- | ------- | ------------------------------------------------------------------------------------------- |
 | `auto_fix.rebase`   | `int` | `3`     | Rebase conflict auto-fix attempts                                                           |
+| `auto_fix.format`   | `int` | `3`     | Formatter failure auto-fix attempts                                                         |
 | `auto_fix.review`   | `int` | `0`     | Review finding auto-fix attempts                                                            |
 | `auto_fix.test`     | `int` | `3`     | Test failure auto-fix attempts                                                              |
+| `auto_fix.metrics`  | `int` | `3`     | Metrics breach auto-fix attempts                                                            |
 | `auto_fix.document` | `int` | `3`     | Not used by the automatic document pass                                                     |
 | `auto_fix.lint`     | `int` | `3`     | Lint issue auto-fix attempts                                                                |
 | `auto_fix.ci`       | `int` | `3`     | CI auto-fix attempts for CI failures, plus GitHub, GitLab, Forgejo, and Azure DevOps merge conflicts |
 | `auto_fix.min_severity` | `string` | `warning` | Lowest finding severity the pipeline fixes on its own: `error`, `warning`, or `info` |
 
 Legacy alias: `auto_fix.babysit`.
+
+There is deliberately no global `metrics` block beside this one. The retry count bounds how hard the pipeline tries and is an operator setting like its neighbours, while [`metrics.threshold`](/no-mistakes/reference/repo-config/#metrics) is a gate strength only the repository's own maintainer calibrates, so it lives in the repo config alone.
 
 `auto_fix.min_severity` bounds only automatic fixing. Findings below the floor are still reported at the gate and can be selected by hand with `no-mistakes axi respond --action fix --findings <ids>`; they just do not spend a fix round plus the full rereview that round triggers on their own.
 It defaults to `warning` because `info` findings are advisory. Set it to `info` to restore fixing every auto-fix finding regardless of severity, or to `error` to fix only blocking ones.
@@ -751,7 +756,7 @@ A value in the trusted repository config overrides this global value in both dir
 
 ### commit.fix_message
 
-Template for the subject of commits created by the Review, Test, Document, Lint, and CI repair paths, plus operator-authorized repository gate repairs.
+Template for the subject of commits created by the Review, Test, Metrics, Document, Lint, and CI repair paths, plus operator-authorized repository gate repairs.
 
 | | |
 | --- | --- |
@@ -819,7 +824,7 @@ A repository `commit.branch_pattern` override disables this machine-local replac
 ### intent
 
 Transcript-based user-intent extraction settings.
-When enabled and no intent was supplied directly for the run, no-mistakes can read recent local agent transcripts, match the session that produced the change, summarize the author's intent, and pass that summary to rebase, review, test, document, lint, CI auto-fix, repository gate repair, and PR prompts. For publication of the generated Intent section, see [`pr.publish_intent`](/no-mistakes/reference/repo-config/#prpublish_intent).
+When enabled and no intent was supplied directly for the run, no-mistakes can read recent local agent transcripts, match the session that produced the change, summarize the author's intent, and pass that summary to rebase, format auto-fix, lint, test, metrics auto-fix, document, review, CI auto-fix, repository gate repair, and PR prompts. For publication of the generated Intent section, see [`pr.publish_intent`](/no-mistakes/reference/repo-config/#prpublish_intent).
 
 |      |          |
 | ---- | -------- |
@@ -910,9 +915,9 @@ Local review-evaluation corpus settings for [`no-mistakes eval`](/no-mistakes/re
 
 `auto_capture` collects without any command: when an eligible run finishes, its decided review rounds become cases and fixed `ci-check` and `ci-review-bot` findings become Review false negatives. It does nothing while `capture_provenance` is off. Collection runs after the pipeline has already reported its outcome and can never change it; a failure is logged and nothing else. The [Evaluation toolkit](/no-mistakes/reference/eval/#how-cases-are-collected) owns eligibility and labeling details.
 
-`max_cases` sets the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. A case with a replay in progress or recorded candidate replays is protected, so the corpus can remain above the target rather than invalidate a comparison you have spent tokens on. Cases from the same repository share one local object pool, so a case costs its own records plus the objects its commits introduced rather than a copy of the repository.
+`max_cases` sets the retention target enforced after automatic collection. When it is exceeded the oldest unprotected cases are dropped first. A case with a replay in progress, with recorded candidate replays, or pinned into the diversified holdout is protected, so the corpus can remain above the target rather than throw away evidence you have spent tokens on. Cases from the same repository share one local object pool, so a case costs its own records plus the objects its commits introduced rather than a copy of the repository. What protection covers and when a pass skips the prune entirely is documented under [Disk use and retention](/no-mistakes/reference/eval/#disk-use-and-retention).
 
-`diversified_size` caps the official gold-only eval set used by `eval run --cases diversified`. Selection is stratified and pinned; unlabeled cases never fill it. `0` keeps one gold case per stratum with no Hamilton bound. Corpus retention (`max_cases`) and this official-set cap are different knobs.
+`diversified_size` caps the official gold-only eval set used by `eval run --cases diversified`. Selection is stratified and pinned; unlabeled cases never fill it. `0` keeps one gold case per stratum with no Hamilton bound. It is a different knob from corpus retention (`max_cases`), but the two meet at the cap: automatic collection materializes the holdout pins at this size before enforcing `max_cases`, and a `diversified_size` above `max_cases` is allowed and keeps the corpus above its retention target.
 
 These are operator settings for this machine's local disk, so they are global-only: an `eval` block in a repository's `.no-mistakes.yaml` is ignored. Corpus storage stays under `<NM_HOME>/eval` and no-mistakes never uploads it; replay still sends code to the selected agent's configured model provider as described in the [Evaluation toolkit](/no-mistakes/reference/eval/).
 

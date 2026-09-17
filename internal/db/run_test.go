@@ -322,6 +322,112 @@ func TestRunAwaitingAgentSetAndClear(t *testing.T) {
 	}
 }
 
+func TestIncrementRunRestartCount(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	run, err := d.InsertRun(repo.ID, "feature", "abc123", "def456")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	// A fresh run has never restarted.
+	if run.RestartCount != 0 {
+		t.Fatalf("new run RestartCount = %d, want 0", run.RestartCount)
+	}
+
+	firstUpdatedAt := run.UpdatedAt
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("increment restart count: %v", err)
+	}
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.RestartCount != 1 {
+		t.Fatalf("RestartCount after one increment = %d, want 1", got.RestartCount)
+	}
+	if got.UpdatedAt < firstUpdatedAt {
+		t.Errorf("UpdatedAt = %d, want >= %d after increment", got.UpdatedAt, firstUpdatedAt)
+	}
+
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("increment restart count again: %v", err)
+	}
+	got, err = d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run after second increment: %v", err)
+	}
+	if got.RestartCount != 2 {
+		t.Fatalf("RestartCount after two increments = %d, want 2", got.RestartCount)
+	}
+}
+
+// TestOpenMigratesRunRestartCount proves a database created before the
+// restart_count column existed gains it on reopen. The row inserted before the
+// migration is the case that matters: SQLite backfills an added NOT NULL column
+// with its default, but a read path that forgot COALESCE would surface that
+// legacy run's count as a scan error rather than 0.
+func TestOpenMigratesRunRestartCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	legacyRepo, err := d.InsertRepo("/tmp/legacy", "https://github.com/test/legacy", "main")
+	if err != nil {
+		t.Fatalf("insert legacy repo: %v", err)
+	}
+	legacyRun, err := d.InsertRun(legacyRepo.ID, "b", "h", "b")
+	if err != nil {
+		t.Fatalf("insert legacy run: %v", err)
+	}
+	// Simulate a legacy runs table by dropping the column out from under the
+	// row that already exists.
+	if _, err := d.sql.Exec(`ALTER TABLE runs DROP COLUMN restart_count`); err != nil {
+		t.Fatalf("drop column: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	d, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer d.Close()
+
+	migrated, err := d.GetRun(legacyRun.ID)
+	if err != nil {
+		t.Fatalf("get legacy run after migration: %v", err)
+	}
+	if migrated.RestartCount != 0 {
+		t.Fatalf("legacy run RestartCount = %d, want 0", migrated.RestartCount)
+	}
+
+	repo, err := d.InsertRepo("/tmp/repo", "https://github.com/test/repo", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	run, err := d.InsertRun(repo.ID, "b", "h", "b")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("restart_count column missing after migration: %v", err)
+	}
+	if err := d.IncrementRunRestartCount(run.ID); err != nil {
+		t.Fatalf("second increment failed: %v", err)
+	}
+
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.RestartCount != 2 {
+		t.Fatalf("RestartCount = %d, want 2", got.RestartCount)
+	}
+}
+
 func TestRecoverStaleRunsClearsAwaitingAgent(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
@@ -1251,6 +1357,51 @@ func TestRunSkippedStepsRoundTripAndDefaultEmpty(t *testing.T) {
 	}
 	if len(cleared.SkippedSteps) != 0 {
 		t.Fatalf("cleared skipped steps = %v, want none", cleared.SkippedSteps)
+	}
+}
+
+func TestRunTestDiscoveryRoundTripAndDefaultEmpty(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/discovery-project", "git@github.com:user/discovery-project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+
+	fresh, err := d.GetRunTestDiscovery(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh != "" {
+		t.Fatalf("new run test discovery = %q, want empty", fresh)
+	}
+
+	const state = `{"fingerprint":"fp","units":[{"name":"api","path":"services/api","command":"go test"}],"selected":["api"],"source":"agent","scope_faults":1}`
+	if err := d.SetRunTestDiscovery(run.ID, state); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetRunTestDiscovery(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != state {
+		t.Fatalf("test discovery = %q, want %q", got, state)
+	}
+
+	// The value belongs to one run row, so a second run in the same repository
+	// starts with nothing to reuse.
+	other, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+	otherState, err := d.GetRunTestDiscovery(other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherState != "" {
+		t.Fatalf("second run test discovery = %q, want empty", otherState)
+	}
+
+	missing, err := d.GetRunTestDiscovery("no-such-run")
+	if err != nil {
+		t.Fatalf("unknown run: %v", err)
+	}
+	if missing != "" {
+		t.Fatalf("unknown run test discovery = %q, want empty", missing)
 	}
 }
 

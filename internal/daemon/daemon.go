@@ -496,6 +496,13 @@ func recoverOnStartup(d *db.DB, p *paths.Paths, mgr *RunManager, layout *worktre
 	reapLegacyEvidence(d, root, policy, now)
 	logStartupPhase("evidence_cleanup", evidenceStarted)
 
+	// Coverage is swept after the same settling point as evidence, for the
+	// same reason: every run's status is final by now, so a directory left by
+	// a crash is distinguishable from one a run still in flight is writing to.
+	coverageStarted := time.Now()
+	sweepOrphanCoverageDirs(d, p)
+	logStartupPhase("coverage_cleanup", coverageStarted)
+
 	mgr.resumeRecoveredRuns(plans)
 }
 
@@ -812,6 +819,46 @@ func cleanupOrphanWorktrees(d *db.DB, p *paths.Paths, leftover []db.RunWorktree)
 		// case, so only an unexpected failure is reported.
 		if err := os.Remove(dir); err != nil && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("remove empty repo worktree directory failed", "dir", dir, "error", err)
+		}
+	}
+}
+
+// sweepOrphanCoverageDirs removes every directory under <root>/coverage whose
+// run is not active, catching the crash or kill that leaves a directory no
+// run-completion hook (cleanupRunCoverage) will ever reach.
+//
+// The active-run listing is the one read this sweep depends on, and it takes
+// the same posture recoverableParkedRuns does for the identical read: a
+// failed listing is not evidence that no run is active, so a read that fails
+// sweeps nothing rather than risk deleting a parked run's directory. A parked
+// run preserved by a clean daemon stop is still active - its coverage
+// directory holds nothing an operator needs, but destroying it here would be
+// the same class of mistake as removing its worktree, so it is left alone
+// alongside every other non-terminal run.
+func sweepOrphanCoverageDirs(d *db.DB, p *paths.Paths) {
+	active, err := d.GetActiveRuns()
+	if err != nil {
+		slog.Warn("skipping orphan coverage sweep: could not list active runs", "error", err)
+		return
+	}
+	keep := make(map[string]struct{}, len(active))
+	for _, run := range active {
+		keep[run.ID] = struct{}{}
+	}
+
+	entries, err := os.ReadDir(p.CoverageDir())
+	if err != nil {
+		return // directory may not exist yet, which is the normal case
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, ok := keep[entry.Name()]; ok {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(p.CoverageDir(), entry.Name())); err != nil {
+			slog.Debug("orphan coverage directory not fully removed", "run_id", entry.Name(), "reason", err)
 		}
 	}
 }
@@ -1517,6 +1564,7 @@ func runToInfo(d *db.DB, r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 		PRBaseBranch:       r.PRBaseBranch,
 		AwaitingAgent:      r.AwaitingAgentSince != nil,
 		AwaitingAgentSince: r.AwaitingAgentSince,
+		RestartCount:       r.RestartCount,
 		CreatedAt:          r.CreatedAt,
 		UpdatedAt:          r.UpdatedAt,
 	}
@@ -1550,11 +1598,6 @@ func stepToInfo(d *db.DB, s *db.StepResult) ipc.StepResultInfo {
 		LastActivityAt: s.LastActivityAt,
 		LastActivity:   s.LastActivity,
 		AgentPID:       s.AgentPID,
-	}
-	if s.StepName == types.StepDocument {
-		if combined, err := d.HasAgentInvocationPurpose(s.RunID, string(s.StepName), "housekeeping"); err == nil && combined {
-			info.WorkScope = ipc.WorkScopeDocumentLintHousekeeping
-		}
 	}
 	if s.OverrideReason != nil {
 		info.OverrideReason = *s.OverrideReason

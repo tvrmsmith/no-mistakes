@@ -72,8 +72,10 @@ func validateCommitRaw(raw CommitRaw) error {
 	for _, step := range []types.StepName{
 		types.StepReview,
 		types.StepTest,
+		types.StepMetrics,
 		types.StepDocument,
 		types.StepLint,
+		types.StepFormat,
 	} {
 		if _, err := commit.renderFixMessage(step, "apply fixes", "branch", false); err != nil {
 			return err

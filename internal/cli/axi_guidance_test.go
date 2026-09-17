@@ -50,7 +50,7 @@ import (
 // TestAxiStaleMonitorRerunBeforeSyncIsRefused counterpart.
 var canonicalStaleMonitorPhrases = []string{
 	"never hand-rebase",
-	"revalidates from Review",
+	"revalidates from Format",
 	"cannot prove continuity with the reviewed head",
 	"re-pushes",
 	"no-mistakes rerun",

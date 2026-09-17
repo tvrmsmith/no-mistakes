@@ -72,7 +72,7 @@ func runAxiStatus(cmd *cobra.Command, runID string) error {
 	if err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("load steps: %v", err))
 	}
-	rv := runViewFromDB(run, steps, env.d)
+	rv := runViewFromDB(run, steps)
 	annotateRunView(env, &rv)
 	var fields []toon.Field
 	// A run reached by an explicit --run may belong to another branch. Say so
@@ -201,7 +201,7 @@ func newAxiLogsCmd() *cobra.Command {
 			return runAxiLogs(cmd, step, runID, full)
 		},
 	}
-	cmd.Flags().StringVar(&step, "step", "", "step name: intent, rebase, review, test, document, lint, push, pr, ci, or a repository gate step name (required)")
+	cmd.Flags().StringVar(&step, "step", "", "step name: "+stepNameList()+", or a repository gate step name (required)")
 	cmd.Flags().StringVar(&runID, "run", "", "run ID (default: current branch's active or most recent)")
 	cmd.Flags().BoolVar(&full, "full", false, "show the entire log instead of the tail")
 	return cmd
@@ -211,8 +211,10 @@ func newAxiLogsCmd() *cobra.Command {
 // repository gate keeps its own step log, and the truncation marker a failing
 // command gate emits tells the operator to read it with exactly this command,
 // so the gate names have to be accepted here.
-const validLogStepsHelp = "Valid steps: intent, rebase, review, test, document, lint, push, pr, ci, " +
-	"or a repository gate step name as shown in `no-mistakes axi status` (for example gate.test.mutation-budget)"
+func validLogStepsHelp() string {
+	return validStepsHelp() + ", " +
+		"or a repository gate step name as shown in `no-mistakes axi status` (for example gate.test.mutation-budget)"
+}
 
 // runAxiLogs renders a step log. It is a read-only query: it does not emit
 // telemetry.
@@ -220,11 +222,11 @@ func runAxiLogs(cmd *cobra.Command, step, runID string, full bool) error {
 	step = strings.TrimSpace(step)
 	if step == "" {
 		return emitError(cmd, 2, "--step is required",
-			validLogStepsHelp)
+			validLogStepsHelp())
 	}
 	if !validReadableStep(types.StepName(step)) {
 		return emitError(cmd, 2, fmt.Sprintf("unknown step %q", step),
-			validLogStepsHelp)
+			validLogStepsHelp())
 	}
 
 	env, err := openAxiQueryEnv(runID)

@@ -138,17 +138,19 @@ type GetRunParams struct {
 	RunID string `json:"run_id"`
 }
 
-// GetStepDiffParams requests the working-tree diff for a run parked at a
-// fix-review gate. The diff is derived on demand from the run's worktree and
-// is never stored, so it is the reconstruction authority for the one piece of
-// gate context that is not persisted.
+// GetStepDiffParams requests the diff of what the parked step changed for a
+// run at a fix-review gate: the working-tree diff, or the round's own exit
+// commit when the step committed its work and left the tree clean. The diff is
+// derived on demand from the run's worktree and is never stored, so it is the
+// reconstruction authority for the one piece of gate context that is not
+// persisted.
 type GetStepDiffParams struct {
 	RunID string `json:"run_id"`
 }
 
-// GetStepDiffResult carries a bounded working-tree diff. Truncated reports
-// that the diff exceeded the response budget and was cut, so a very large
-// change degrades to a partial view instead of an oversized frame.
+// GetStepDiffResult carries a bounded diff of what the parked step changed.
+// Truncated reports that the diff exceeded the response budget and was cut, so
+// a very large change degrades to a partial view instead of an oversized frame.
 type GetStepDiffResult struct {
 	Diff      string `json:"diff"`
 	Truncated bool   `json:"truncated,omitempty"`
@@ -421,9 +423,14 @@ type RunInfo struct {
 	// driving agent's response. AwaitingAgentSince is the unix-seconds time it
 	// parked, so a supervisor can read "parked for N seconds" in one call. Both
 	// are observability only and clear the moment the agent responds.
-	AwaitingAgent      bool             `json:"awaiting_agent,omitempty"`
-	AwaitingAgentSince *int64           `json:"awaiting_agent_since,omitempty"`
-	Steps              []StepResultInfo `json:"steps,omitempty"`
+	AwaitingAgent      bool   `json:"awaiting_agent,omitempty"`
+	AwaitingAgentSince *int64 `json:"awaiting_agent_since,omitempty"`
+	// RestartCount mirrors db.Run.RestartCount: how many times the run
+	// re-entered validation from the restart boundary. Unlike AwaitingAgent it
+	// is history, not a live signal, and is always carried regardless of run
+	// status.
+	RestartCount int64            `json:"restart_count,omitempty"`
+	Steps        []StepResultInfo `json:"steps,omitempty"`
 	// CIOverrideReason is non-empty when the CI step in Steps carries an
 	// OverrideReason (see StepResultInfo.OverrideReason). It is derived from
 	// Steps rather than a separate DB column, so a run-level consumer such as
@@ -438,26 +445,18 @@ type RunInfo struct {
 	UpdatedAt int64 `json:"updated_at"`
 }
 
-// WorkScopeDocumentLintHousekeeping identifies the one agent invocation that
-// performs both duties while its wall time is stored on the document step.
-const WorkScopeDocumentLintHousekeeping = "document+lint housekeeping"
-
 // StepResultInfo is the IPC representation of a step result.
 type StepResultInfo struct {
-	ID         string           `json:"id"`
-	RunID      string           `json:"run_id"`
-	StepName   types.StepName   `json:"step_name"`
-	StepOrder  int              `json:"step_order"`
-	Status     types.StepStatus `json:"status"`
-	ExitCode   *int             `json:"exit_code,omitempty"`
-	DurationMS *int64           `json:"duration_ms,omitempty"`
-	// WorkScope names shared work whose wall time is recorded on this logical
-	// step. For example, the document step can own one combined document+lint
-	// housekeeping invocation while lint only records the cached handoff.
-	WorkScope        string  `json:"work_scope,omitempty"`
-	FindingsJSON     *string `json:"findings_json,omitempty"`
-	ReportedFindings int     `json:"reported_findings,omitempty"`
-	FixedFindings    int     `json:"fixed_findings,omitempty"`
+	ID               string           `json:"id"`
+	RunID            string           `json:"run_id"`
+	StepName         types.StepName   `json:"step_name"`
+	StepOrder        int              `json:"step_order"`
+	Status           types.StepStatus `json:"status"`
+	ExitCode         *int             `json:"exit_code,omitempty"`
+	DurationMS       *int64           `json:"duration_ms,omitempty"`
+	FindingsJSON     *string          `json:"findings_json,omitempty"`
+	ReportedFindings int              `json:"reported_findings,omitempty"`
+	FixedFindings    int              `json:"fixed_findings,omitempty"`
 	// FixSummaries holds one entry per fix round the pipeline ran for this
 	// step, in round order: the agent's one-line fix summary, or "" when the
 	// round recorded none. Agent surfaces use it to report applied fixes.
@@ -516,7 +515,6 @@ type Event struct {
 	ReportedFindings *int            `json:"reported_findings,omitempty"`
 	FixedFindings    *int            `json:"fixed_findings,omitempty"`
 	DurationMS       *int64          `json:"duration_ms,omitempty"` // execution-only duration for step events
-	WorkScope        string          `json:"work_scope,omitempty"`  // shared work attributed to this step
 	PRURL            *string         `json:"pr_url,omitempty"`      // PR URL for run_updated/run_completed events
 	// StateRev is the daemon-assigned monotonic revision of the run state
 	// this event reflects, or zero for activity. A consumer applies a state

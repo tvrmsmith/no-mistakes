@@ -12,9 +12,7 @@ import (
 )
 
 // DocumentStep keeps documentation accurate for the change under its
-// placement policy, and - when no deterministic lint command is configured -
-// also performs the agent-driven lint duty in the same invocation so the
-// pipeline pays one cold agent pass for housekeeping instead of two.
+// placement policy.
 type DocumentStep struct{}
 
 func (s *DocumentStep) Name() types.StepName { return types.StepDocument }
@@ -46,46 +44,11 @@ const documentScopeDiscipline = `Scope discipline:
 - Preserve load-bearing user guidance, security rationale, compatibility constraints, and onboarding material. A long document is not a defect by itself; duplication and wrong placement are.
 - Prefer consolidation, deletion, and pointers to the owner over addition and synchronization.`
 
-// housekeepingLintSection adds the agent-driven lint duty to the combined
-// document+lint pass.
-const housekeepingLintSection = `
-
-Combined lint duty (same pass - no separate lint agent will run):
-- Discover the configured linters and formatters for this repository.
-- Run the relevant checks, preferring only the changed files when possible.
-- Apply safe formatter, linter, and static-analysis fixes yourself, then re-run the relevant checks.
-- Do not run tests or broader behavioral validation.
-- Report only unresolved lint, format, or static-analysis issues as findings with "category" set to "lint". Do not report lint issues you already fixed.
-
-Set "category" on every finding: "documentation" for documentation findings, "lint" for lint findings.`
-
-// housekeepingFindingsSchema extends findingsSchema with the per-finding
-// category that routes combined-pass findings to their owning gates.
-var housekeepingFindingsSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"findings": {
-			"type": "array",
-			"items": {
-				"type": "object",
-				"properties": {
-					"id": {"type": "string"},
-					"severity": {"type": "string", "enum": ["error", "warning", "info"]},
-					"file": {"type": "string"},
-					"line": {"type": "integer"},
-					"description": {"type": "string"},
-					"action": {"type": "string", "enum": ["no-op", "auto-fix", "ask-user"]},
-					"category": {"type": "string", "enum": ["documentation", "lint"]}
-				},
-				"required": ["severity", "description", "action", "category"]
-			}
-		},
-		"summary": {"type": "string"}
-	},
-	"required": ["findings", "summary"]
-}`)
-
 func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	return runValidationStep(sctx, s.Name(), s.execute)
+}
+
+func (s *DocumentStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
@@ -97,17 +60,7 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 		ignorePatterns = strings.Join(sctx.Config.IgnorePatterns, ", ")
 	}
 
-	// Combine the agent-driven lint duty into this pass when no deterministic
-	// lint command is configured; the lint step then consumes the result
-	// instead of paying its own cold agent invocation.
-	combinedLint := sctx.Config.Commands.Lint == ""
-	if combinedLint {
-		sctx.Shared.ClearHousekeepingLint()
-	}
-
-	// Skip entirely when nothing the agent would document has changed. No
-	// lint result is stashed, so the lint step falls back to its own pass -
-	// neither duty is ever silently skipped.
+	// Skip entirely when nothing the agent would document has changed.
 	changedFiles, err := git.Run(ctx, sctx.WorkDir, "diff", "--name-only", baseSHA+".."+sctx.Run.HeadSHA)
 	if err != nil {
 		return nil, fmt.Errorf("get changed files: %w", err)
@@ -117,26 +70,14 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 		return &pipeline.StepOutcome{}, nil
 	}
 
-	if combinedLint {
-		sctx.Log("housekeeping: updating documentation and linting in one pass...")
-	} else {
-		sctx.Log("updating documentation...")
-	}
-
-	prompt := s.buildPrompt(sctx, baseSHA, ignorePatterns, combinedLint)
-	schema := findingsSchema
-	purpose := "document"
-	if combinedLint {
-		schema = housekeepingFindingsSchema
-		purpose = "housekeeping"
-	}
+	sctx.Log("updating documentation...")
 
 	result, err := sctx.RunAgentContext(ctx, agent.RunOpts{
-		Prompt:     prompt,
+		Prompt:     s.buildPrompt(sctx, baseSHA, ignorePatterns),
 		CWD:        sctx.WorkDir,
-		JSONSchema: schema,
+		JSONSchema: findingsSchema,
 		OnChunk:    sctx.LogChunk,
-		Purpose:    purpose,
+		Purpose:    "document",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent document: %w", err)
@@ -145,11 +86,7 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 	// Commit whatever the agent edited, regardless of how trustworthy its
 	// structured output turns out to be.
 	commitSummary := extractDocumentSummary(result.Output, "")
-	fallbackSummary := "update documentation"
-	if combinedLint {
-		fallbackSummary = "update documentation and fix lint"
-	}
-	committed, err := commitAgentFixesWithResult(sctx, s.Name(), commitSummary, fallbackSummary)
+	committed, err := commitAgentFixesWithResult(sctx, s.Name(), commitSummary, "update documentation")
 	if err != nil {
 		return nil, err
 	}
@@ -165,24 +102,10 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 		return nil, fmt.Errorf("validate document analyzer findings: %w", err)
 	}
 
-	docFindings := findings
-	if combinedLint {
-		var lintFindings Findings
-		docFindings, lintFindings = splitHousekeepingFindings(findings)
-		lintJSON, err := types.MarshalFindingsJSON(lintFindings)
-		if err == nil {
-			sctx.Shared.SetHousekeepingLint(pipeline.HousekeepingLintResult{
-				FindingsJSON: lintJSON,
-				Summary:      findings.Summary,
-			})
-			sctx.Log(fmt.Sprintf("housekeeping lint result recorded for the lint step: %d unresolved items", len(lintFindings.Items)))
-		}
-	}
+	needsApproval := len(findings.Items) > 0
+	findingsJSON, _ := json.Marshal(findings)
 
-	needsApproval := len(docFindings.Items) > 0
-	findingsJSON, _ := json.Marshal(docFindings)
-
-	sctx.Log(fmt.Sprintf("document findings: %d unresolved items", len(docFindings.Items)))
+	sctx.Log(fmt.Sprintf("document findings: %d unresolved items", len(findings.Items)))
 
 	return &pipeline.StepOutcome{
 		NeedsApproval: needsApproval,
@@ -192,24 +115,13 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 	}, nil
 }
 
-// buildPrompt assembles the document (or combined document+lint) prompt: the
-// placement policy, scope discipline, trusted repository-specific policy,
-// the task, and - in combined mode - the lint duty.
-func (s *DocumentStep) buildPrompt(sctx *pipeline.StepContext, baseSHA, ignorePatterns string, combinedLint bool) string {
+// buildPrompt assembles the document prompt: the placement policy, scope
+// discipline, trusted repository-specific policy, and the task.
+func (s *DocumentStep) buildPrompt(sctx *pipeline.StepContext, baseSHA, ignorePatterns string) string {
 	historySection := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx)
 
-	intro := "Keep the project documentation accurate for this change."
-	if combinedLint {
-		intro = "Perform the combined documentation and lint housekeeping pass for this change."
-	}
-
-	editRule := "- Only edit documentation files or doc comments. Do not change executable behavior or tests."
-	if combinedLint {
-		editRule = "- Documentation edits must only touch documentation files or doc comments. Lint fixes must be safe, mechanical, and behavior-preserving. Never change functional behavior or tests."
-	}
-
 	prompt := fmt.Sprintf(
-		`%s Analyze what the change made stale, fix each stale fact in its one authoritative location, and report only what you could not resolve.
+		`Keep the project documentation accurate for this change. Analyze what the change made stale, fix each stale fact in its one authoritative location, and report only what you could not resolve.
 
 Context:
 - branch: %s
@@ -239,13 +151,12 @@ Task:
 4. Report only what remains
    - Return a finding only for gaps you could not resolve, judgment calls (e.g. ambiguous intent or conflicting docs), or an out-of-scope consolidation worth a follow-up.
    - Do not report gaps you already fixed.
-   - If nothing remains, return an empty findings array.%s
+   - If nothing remains, return an empty findings array.
 
 Rules:
-%s
+- Only edit documentation files or doc comments. Do not change executable behavior or tests.
 - The summary must be one concise sentence fragment suitable for a git commit subject.
 - Keep the summary under 10 words.%s`,
-		intro,
 		sctx.Run.Branch,
 		baseSHA,
 		sctx.Run.HeadSHA,
@@ -254,8 +165,6 @@ Rules:
 		documentPlacementPolicy,
 		documentScopeDiscipline,
 		trustedDocumentPolicySection(sctx),
-		lintDutySection(combinedLint),
-		editRule,
 		historySection,
 	)
 	if sctx.PreviousFindings != "" {
@@ -283,28 +192,25 @@ func trustedDocumentPolicySection(sctx *pipeline.StepContext) string {
 		sanitizePromptMultilineText(instructions)
 }
 
-func lintDutySection(combinedLint bool) string {
-	if !combinedLint {
-		return ""
+// documentApprovalOutcome builds a single ask-user finding for cases where the
+// agent's structured output is missing or unparsable, so a human can confirm
+// the documentation state instead of silently trusting an opaque response.
+func documentApprovalOutcome(summary string) *pipeline.StepOutcome {
+	findings := Findings{
+		Items: []Finding{{
+			Severity:    "warning",
+			Description: summary,
+			Action:      types.ActionAskUser,
+		}},
+		Summary: summary,
 	}
-	return housekeepingLintSection
-}
-
-// splitHousekeepingFindings routes combined-pass findings to their owning
-// gates. An uncategorized finding counts as documentation - the stricter
-// gate (any documentation finding parks; lint parks only on error/warning) -
-// so miscategorization fails safe.
-func splitHousekeepingFindings(findings Findings) (doc Findings, lint Findings) {
-	doc = Findings{Summary: findings.Summary}
-	lint = Findings{Summary: findings.Summary}
-	for _, item := range findings.Items {
-		if item.Category == types.FindingCategoryLint {
-			lint.Items = append(lint.Items, item)
-			continue
-		}
-		doc.Items = append(doc.Items, item)
+	findingsJSON, _ := json.Marshal(findings)
+	return &pipeline.StepOutcome{
+		NeedsApproval: true,
+		AutoFixable:   false,
+		Findings:      string(findingsJSON),
+		FixSummary:    summary,
 	}
-	return doc, lint
 }
 
 func hasNonIgnoredDocumentChanges(changedFiles string, ignorePatterns []string) bool {

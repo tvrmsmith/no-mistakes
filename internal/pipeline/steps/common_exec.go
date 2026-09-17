@@ -15,6 +15,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/safeurl"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/kunchenguid/no-mistakes/internal/winproc"
 )
 
@@ -50,12 +51,19 @@ func mergeEnv(extra []string) []string {
 	if len(extra) == 0 {
 		return nil
 	}
-	merged := make([]string, 0, len(os.Environ())+len(extra))
+	return mergeEnvOnto(os.Environ(), extra)
+}
+
+// mergeEnvOnto applies extra as overrides onto base, keeping base's order for
+// entries extra does not touch and appending any override whose key base
+// lacks.
+func mergeEnvOnto(base, extra []string) []string {
+	merged := make([]string, 0, len(base)+len(extra))
 	overrides := make(map[string]string, len(extra))
 	for _, entry := range extra {
 		overrides[envKey(entry)] = entry
 	}
-	for _, entry := range os.Environ() {
+	for _, entry := range base {
 		key := envKey(entry)
 		if override, ok := overrides[key]; ok {
 			merged = append(merged, override)
@@ -278,6 +286,113 @@ func runStepShellCommand(sctx *pipeline.StepContext, cmdStr string) (string, int
 	return runShellCommandWithProcessEnv(sctx.Ctx, sctx.WorkDir, stepEnvironment(sctx), cmdStr)
 }
 
+// Test command environment contract. Every discovered test command receives
+// the base commit it validates against and the changed-file set, so a command
+// can scope itself the same way discovery did.
+const (
+	envTestBaseSHA          = "NO_MISTAKES_BASE_SHA"
+	envTestChangedFiles     = "NO_MISTAKES_CHANGED_FILES"
+	envTestChangedFileCount = "NO_MISTAKES_CHANGED_FILE_COUNT"
+	// envTestCoverageDir names the per-unit directory the command writes its
+	// coverage profile and test report into. The vacuous-green guard has no
+	// other way to tell a real pass from a suite that ran nothing, because
+	// both exit zero, and the directory sits outside the worktree so the
+	// artifacts can never enter the branch under validation.
+	envTestCoverageDir = "NO_MISTAKES_COVERAGE_DIR"
+	// envMetricsCoverageRoot names the run's coverage ROOT, the directory
+	// holding every unit's subdirectory, which the metrics command reads.
+	//
+	// It is deliberately not envTestCoverageDir. That name is the Test step's
+	// per-unit WRITE target, wiped immediately before each unit's command
+	// runs, and one repository shell function reading one name must not get a
+	// different directory depending on which step called it. The Metrics step
+	// therefore sets this name and never sets NO_MISTAKES_COVERAGE_DIR.
+	envMetricsCoverageRoot = "NO_MISTAKES_COVERAGE_ROOT"
+)
+
+// maxChangedFilesEnvBytes bounds NO_MISTAKES_CHANGED_FILES. A single
+// environment variable has a platform limit, and a very large diff can exceed
+// it, which makes the whole exec fail with a message about the test command
+// rather than about the variable that was too big.
+const maxChangedFilesEnvBytes = 96 * 1024
+
+// changedFilesEnvValue renders the changed-file list for
+// NO_MISTAKES_CHANGED_FILES and reports how many paths it left out.
+//
+// The value is newline separated, so a path that itself contains a newline
+// cannot be represented in it and is omitted rather than splitting into two
+// bogus paths for the consuming command. A list past the byte bound is dropped
+// whole rather than truncated into a half path. Either way
+// NO_MISTAKES_CHANGED_FILE_COUNT still reports the true total, so a command can
+// tell an omission from a genuinely small diff.
+func changedFilesEnvValue(changed []string) (value string, omitted int) {
+	usable := make([]string, 0, len(changed))
+	for _, path := range changed {
+		if strings.ContainsAny(path, "\n\r") {
+			continue
+		}
+		usable = append(usable, path)
+	}
+	value = strings.Join(usable, "\n")
+	if len(value) > maxChangedFilesEnvBytes {
+		return "", len(changed)
+	}
+	return value, len(changed) - len(usable)
+}
+
+// changedFilesOmittedFindingID names the advisory so an operator can decide it
+// with `--findings`, rather than reaching it by the positional ID
+// types.NormalizeFindings assigns, which moves with the list around it.
+const changedFilesOmittedFindingID = "changed-file-list-incomplete"
+
+// changedFilesEnvAdvisory renders NO_MISTAKES_CHANGED_FILES and, when the value
+// could not carry the whole list, the finding that says so.
+//
+// Every step whose command reads the variable needs the same advisory on every
+// outcome it can return, including a green one, so the omission lives in the
+// durable record rather than in the log alone. It is one helper because two
+// copies drifted: the action is ask-user, since a command scoping itself to a
+// short list worked the wrong scope and which scope a run gates on is the
+// operator's call, not a no-op.
+//
+// verb is what the calling step's command does with the list ("validates",
+// "measures"), the only part the callers differ on.
+func changedFilesEnvAdvisory(sctx *pipeline.StepContext, changed []string, verb string) (value string, advisory []Finding) {
+	value, omitted := changedFilesEnvValue(changed)
+	if omitted == 0 {
+		return value, nil
+	}
+	omission := fmt.Sprintf("%s omits %d of %d changed paths, so a command that reads it %s less than the change; %s carries the true total",
+		envTestChangedFiles, omitted, len(changed), verb, envTestChangedFileCount)
+	sctx.Log(omission)
+	return value, []Finding{{
+		Severity:    types.FindingSeverityWarning,
+		Action:      types.ActionAskUser,
+		ID:          changedFilesOmittedFindingID,
+		Description: omission,
+	}}
+}
+
+// runStepShellCommandEnv runs a step's shell command with extra environment on
+// top of stepEnvironment.
+func runStepShellCommandEnv(sctx *pipeline.StepContext, cmdStr string, extra []string) (string, int, error) {
+	return runShellCommandWithProcessEnv(sctx.Ctx, sctx.WorkDir, stepShellEnv(sctx, extra), cmdStr)
+}
+
+// runStepShellCommandEnvSplit is runStepShellCommandEnv for a step that parses
+// the command's stdout, which the combined capture can interleave with stderr.
+func runStepShellCommandEnvSplit(sctx *pipeline.StepContext, cmdStr string, extra []string) (stdout, stderr string, exitCode int, err error) {
+	return runSplitShellCommandWithProcessEnv(sctx.Ctx, sctx.WorkDir, stepShellEnv(sctx, extra), cmdStr)
+}
+
+func stepShellEnv(sctx *pipeline.StepContext, extra []string) []string {
+	base := stepEnvironment(sctx)
+	if base == nil {
+		base = os.Environ()
+	}
+	return mergeEnvOnto(base, extra)
+}
+
 func runShellCommandWithEnv(ctx context.Context, dir string, env []string, cmdStr string) (string, int, error) {
 	if len(env) > 0 {
 		env = mergeEnv(env)
@@ -286,6 +401,39 @@ func runShellCommandWithEnv(ctx context.Context, dir string, env []string, cmdSt
 }
 
 func runShellCommandWithProcessEnv(ctx context.Context, dir string, env []string, cmdStr string) (string, int, error) {
+	out, err := shellenv.CombinedOutputShellCommand(newShellCommand(ctx, dir, env, cmdStr))
+	code, execErr := shellCommandExitCode(cmdStr, err)
+	if execErr != nil {
+		return "", -1, execErr
+	}
+	return string(out), code, nil
+}
+
+// runSplitShellCommandWithProcessEnv is runShellCommandWithProcessEnv with the
+// two output streams captured apart, for a caller that parses one of them.
+func runSplitShellCommandWithProcessEnv(ctx context.Context, dir string, env []string, cmdStr string) (stdout, stderr string, exitCode int, err error) {
+	outBytes, errBytes, runErr := shellenv.SplitOutputShellCommand(newShellCommand(ctx, dir, env, cmdStr))
+	code, execErr := shellCommandExitCode(cmdStr, runErr)
+	if execErr != nil {
+		return "", "", -1, execErr
+	}
+	return string(outBytes), string(errBytes), code, nil
+}
+
+// joinCommandStreams recombines separately captured streams for the log and the
+// failure output, which want everything the command said.
+func joinCommandStreams(stdout, stderr string) string {
+	switch {
+	case stderr == "":
+		return stdout
+	case stdout == "", strings.HasSuffix(stdout, "\n"):
+		return stdout + stderr
+	default:
+		return stdout + "\n" + stderr
+	}
+}
+
+func newShellCommand(ctx context.Context, dir string, env []string, cmdStr string) *exec.Cmd {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "cmd.exe", "/c", cmdStr)
@@ -297,13 +445,18 @@ func runShellCommandWithProcessEnv(ctx context.Context, dir string, env []string
 	if env != nil {
 		cmd.Env = env
 	}
-	out, err := shellenv.CombinedOutputShellCommand(cmd)
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return string(out), ee.ExitCode(), nil
-		}
-		return "", -1, fmt.Errorf("run command %q: %w", cmdStr, err)
+	return cmd
+}
+
+// shellCommandExitCode separates a command that ran and failed, which is a
+// verdict the caller reads, from an exec failure, which is an error.
+func shellCommandExitCode(cmdStr string, err error) (int, error) {
+	if err == nil {
+		return 0, nil
 	}
-	return string(out), 0, nil
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), nil
+	}
+	return -1, fmt.Errorf("run command %q: %w", cmdStr, err)
 }

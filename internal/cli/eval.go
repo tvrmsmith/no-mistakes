@@ -11,6 +11,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// evalPipelineResolver reads the --pipeline filter the command was given.
+type evalPipelineResolver func() (eval.PipelineVersion, error)
+
+// addEvalPipelineFlag registers the --pipeline filter on eval run, eval sets,
+// and eval report and returns the resolver for it. The three commands filter
+// the same tag the same way, and a wording, default, or parse mismatch between
+// them would read as three different flags, so the flag's storage and its
+// parse both live here rather than being repeated in each RunE.
+func addEvalPipelineFlag(cmd *cobra.Command) evalPipelineResolver {
+	raw := new(string)
+	cmd.Flags().StringVar(raw, "pipeline", "", "limit to one pipeline layout: review-early, cheap-gates-first, or any (default any)")
+	return func() (eval.PipelineVersion, error) {
+		return eval.ParsePipelineVersion(*raw)
+	}
+}
+
 // newEvalCmd deliberately does not call trackCommand. Eval cases and candidate
 // results are local code data, so this command surface has no remote telemetry
 // event and does not use the daemon.
@@ -167,41 +183,47 @@ func newEvalRunCmd() *cobra.Command {
 		Use:   "run --cases <all|labeled|diversified|tune> --candidate <agent,model=...[,effort=...]>",
 		Short: "Replay captured review passes and score findings against gold",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			candidate, err := eval.ParseCandidate(candidateRaw)
-			if err != nil {
-				return err
-			}
-			_, store, err := openEvalStore()
-			if err != nil {
-				return err
-			}
-			defer closers.Quiet(store)
-			out := newPrinter(cmd.OutOrStdout())
-			caseCount := 0
-			session, evaluations, runErr := eval.Replay(cmd.Context(), store, eval.ReplayOptions{
-				Set:       cases,
-				Candidate: candidate,
-				Repeats:   repeats,
-				OnPlan: func(session eval.Session, planned []eval.Case) {
-					caseCount = len(planned)
-					out.Printf("replaying %d case(s) x %d repeat(s) with %s on %s (cohort %s)\n\n",
-						len(planned), session.Repeats, session.Candidate, session.Set, session.Cohort)
-				},
-				OnResult: func(evaluation eval.Evaluation, completed, total int) {
-					evalRunProgress(out, evaluation, completed, total)
-				},
-			})
-			if len(evaluations) > 0 {
-				out.Println()
-				out.Println(renderEvalRunSummary(session, evaluations, caseCount))
-			}
-			out.Printf("local eval session %s: %d replay(s), candidate %s, repeats %d\n", session.ID, len(evaluations), candidate, repeats)
-			if runErr != nil {
-				return runErr
-			}
-			return out.Err()
-		},
+	}
+	resolvePipeline := addEvalPipelineFlag(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		candidate, err := eval.ParseCandidate(candidateRaw)
+		if err != nil {
+			return err
+		}
+		pipeline, err := resolvePipeline()
+		if err != nil {
+			return err
+		}
+		_, store, err := openEvalStore()
+		if err != nil {
+			return err
+		}
+		defer closers.Quiet(store)
+		out := newPrinter(cmd.OutOrStdout())
+		caseCount := 0
+		session, evaluations, runErr := eval.Replay(cmd.Context(), store, eval.ReplayOptions{
+			Set:       cases,
+			Candidate: candidate,
+			Repeats:   repeats,
+			Pipeline:  pipeline,
+			OnPlan: func(session eval.Session, planned []eval.Case) {
+				caseCount = len(planned)
+				out.Printf("replaying %d case(s) x %d repeat(s) with %s on %s (cohort %s)\n\n",
+					len(planned), session.Repeats, session.Candidate, session.Set, session.Cohort)
+			},
+			OnResult: func(evaluation eval.Evaluation, completed, total int) {
+				evalRunProgress(out, evaluation, completed, total)
+			},
+		})
+		if len(evaluations) > 0 {
+			out.Println()
+			out.Println(renderEvalRunSummary(session, evaluations, caseCount))
+		}
+		out.Printf("local eval session %s: %d replay(s), candidate %s, repeats %d\n", session.ID, len(evaluations), candidate, repeats)
+		if runErr != nil {
+			return runErr
+		}
+		return out.Err()
 	}
 	cmd.Flags().StringVar(&cases, "cases", "", "case set: all, labeled (finding-level gold), diversified (official gold-only holdout), or tune")
 	cmd.Flags().StringVar(&candidateRaw, "candidate", "", eval.CandidateUsage())
@@ -217,50 +239,61 @@ func newEvalSetsCmd() *cobra.Command {
 		Use:   "sets",
 		Short: "Inspect local case-set size, finding-level gold, and composition",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_, store, err := openEvalStore()
-			if err != nil {
+	}
+	resolvePipeline := addEvalPipelineFlag(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		pipeline, err := resolvePipeline()
+		if err != nil {
+			return err
+		}
+		_, store, err := openEvalStore()
+		if err != nil {
+			return err
+		}
+		defer closers.Quiet(store)
+		if refresh {
+			if _, err := store.RefreshDiversified(cmd.Context()); err != nil {
 				return err
 			}
-			defer closers.Quiet(store)
-			if refresh {
-				if _, err := store.RefreshDiversified(); err != nil {
-					return err
-				}
-			}
-			summaries, err := eval.InspectSets(store)
-			if err != nil {
-				return err
-			}
-			out := newPrinter(cmd.OutOrStdout())
-			out.Println(renderEvalSetsDashboard(summaries))
-			return out.Err()
-		},
+		}
+		summaries, err := eval.InspectSetsForPipeline(cmd.Context(), store, pipeline)
+		if err != nil {
+			return err
+		}
+		out := newPrinter(cmd.OutOrStdout())
+		out.Println(renderEvalSetsDashboard(summaries))
+		return out.Err()
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh-diversified", false, "rebuild the official diversified pin set from current gold")
 	return cmd
 }
 
 func newEvalReportCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "report",
 		Short: "Report local true-positive / false-negative scores, tokens, and cost",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_, store, err := openEvalStore()
-			if err != nil {
-				return err
-			}
-			defer closers.Quiet(store)
-			reports, err := eval.Report(store)
-			if err != nil {
-				return err
-			}
-			out := newPrinter(cmd.OutOrStdout())
-			out.Print(eval.RenderReport(reports))
-			return out.Err()
-		},
 	}
+	resolvePipeline := addEvalPipelineFlag(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		pipeline, err := resolvePipeline()
+		if err != nil {
+			return err
+		}
+		_, store, err := openEvalStore()
+		if err != nil {
+			return err
+		}
+		defer closers.Quiet(store)
+		reports, err := eval.ReportForPipeline(store, pipeline)
+		if err != nil {
+			return err
+		}
+		out := newPrinter(cmd.OutOrStdout())
+		out.Print(eval.RenderReportForPipeline(reports, pipeline))
+		return out.Err()
+	}
+	return cmd
 }
 
 func newEvalRelabelCmd() *cobra.Command {

@@ -270,7 +270,7 @@ func TestAutoIngestCIFalseNegatives_AttachesToGreenReviewAndIsIdempotent(t *test
 		t.Fatal(err)
 	}
 	defer closers.Quiet(store)
-	labeled, err := store.ListCases("labeled")
+	labeled, err := store.ListCases(context.Background(), "labeled")
 	if err != nil {
 		t.Fatal(err)
 	}

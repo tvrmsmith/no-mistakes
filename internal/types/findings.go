@@ -106,14 +106,6 @@ const (
 	FindingsRiskScopePipelineOwnedDelivery = "pipeline-owned-delivery"
 )
 
-// Finding category constants for the combined document+lint housekeeping
-// pass. An empty Category on a housekeeping finding is treated as
-// documentation (the stricter gate).
-const (
-	FindingCategoryDocumentation = "documentation"
-	FindingCategoryLint          = "lint"
-)
-
 // Finding category constants for the CI step's check findings. The CI step
 // turns each settled issue on the pull request into one finding and the fix
 // half routes by this category: a check finding names its provider check in
@@ -202,9 +194,8 @@ type Finding struct {
 	Source           string `json:"source,omitempty"`
 	UserInstructions string `json:"user_instructions,omitempty"`
 	ReviewScope      string `json:"review_scope,omitempty"`
-	// Category separates the combined document+lint housekeeping pass's
-	// findings into their owning gates and the CI step's findings by kind
-	// (see the FindingCategoryCI* constants). Empty everywhere else.
+	// Category separates the CI step's findings by kind (see the
+	// FindingCategoryCI* constants). Empty everywhere else.
 	Category string `json:"category,omitempty"`
 	// Check is the provider check name a CI finding was derived from. CheckID
 	// is the provider's opaque identity for that exact check, so same-named

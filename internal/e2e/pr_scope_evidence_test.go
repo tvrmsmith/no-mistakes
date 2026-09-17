@@ -44,7 +44,7 @@ func writeFinalPRScopeScenario(t *testing.T) string {
           reason: ""
       verdict: go
       artifacts: []
-  - match: "Perform the combined documentation and lint housekeeping pass for this change."
+  - match: "Keep the project documentation accurate for this change."
     text: "documentation updated"
     edits:
       - path: "docs/flag.md"

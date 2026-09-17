@@ -19,7 +19,7 @@ no-mistakes --skip test,lint
 
 Unlike `no-mistakes attach`, bare `no-mistakes` only auto-attaches to an active run on the current branch.
 `--skip` only applies when bare `no-mistakes` starts a new pipeline run through the wizard; it does not skip a step on an already-active run.
-The only valid `--skip` step names are `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, and `ci`. Repository gate names are refused.
+The only valid `--skip` step names are `intent`, `rebase`, `format`, `lint`, `test`, `metrics`, `document`, `review`, `push`, `pr`, and `ci`. Repository gate names are refused.
 
 ## no-mistakes init
 
@@ -160,7 +160,7 @@ Backgrounding a call is fine for an agent harness, but the run never advances pa
 When the CI step is still monitoring an open PR and checks are green - or the trusted default-branch config declares [`no_ci: true`](/no-mistakes/reference/repo-config/#no_ci) with no registered checks - `axi run` exits successfully with `outcome: checks-passed` instead of waiting for a human merge. A generic empty check list without that declaration is not ready.
 Treat that as the agent stopping point: ask the user to review and merge the PR from the `help` line.
 If that PR later falls behind the default branch or hits a merge conflict, do not run `axi run`, `rerun`, or a manual rebase while the CI monitor is still running.
-The monitor auto-rebases onto the base, resolves actual conflicts, revalidates from Review because rebasing cannot prove continuity with the reviewed head, and re-pushes the branch through Push; a PR that is merely behind but clean needs no command.
+The monitor auto-rebases onto the base, resolves actual conflicts, revalidates from Format because rebasing cannot prove continuity with the reviewed head, and re-pushes the branch through Push; a PR that is merely behind but clean needs no command.
 Use `no-mistakes rerun` only after that monitor is no longer running, such as a closed PR, aborted or superseded run, idle timeout, or exhausted CI auto-fix attempts; see [`no-mistakes rerun`](#no-mistakes-rerun) for the restart conditions.
 When the dead run left pipeline commits your clone lacks, run `no-mistakes axi sync` before the rerun, not after: the rerun's own pending run carries no push binding, so synchronization is refused until it ends.
 Successful outcomes (`checks-passed`, `passed`, `passed-with-override`, and `passed-with-skips`) also carry `help` instructions telling the agent to summarize the run.
@@ -244,8 +244,8 @@ no-mistakes axi status --run <id>
 
 When the resolved run is parked at an `awaiting_approval` or `fix_review` gate, its top-level `run:` or `other_branch_run:` object includes `awaiting_agent: parked <duration>` immediately after `status`.
 The field disappears after that run's gate is answered, on cancel, and on terminal outcomes; use it to distinguish a run waiting for the driving agent from one actively running, fixing, or watching CI.
+A run that has re-entered validation also carries `restarts` with the count, including after it goes terminal, because that count is history rather than a live signal; above the advisory soft cap the value reads `<n> (soft cap 5 exceeded)`. [Validation restart](/no-mistakes/reference/pipeline-steps/#validation-restart) owns when a run restarts and what the cap does.
 Status offers branch-scoped `axi respond` commands only for the current branch's implicitly resolved run. An explicitly selected gate stays inspection-only even when its branch matches, because a newer active run on that branch could receive the bare response command instead; the gate remains visible and its log commands retain `--run <id>`.
-When a repository has no configured lint command and Document performs the combined Document/Lint housekeeping invocation, the run object includes `shared_work` evidence naming its `document+lint housekeeping` scope and the duration attributed to Document; Lint's own duration remains the cached-result handoff time.
 When the resolved run has a `running` or `fixing` step, the run object includes `active_steps`.
 Each row reports the whole step's elapsed time as `active_for`, the displayed execution or fix round's elapsed time as `round_active_for`, the latest meaningful log or native-agent lifecycle activity, the native agent PID if one is currently running, and the current round such as `round 1`, `auto-fix 1/3`, or `fix 2`.
 `round_active_for` resets when a fix round starts; older active runs created before this timing was recorded show it as empty.
@@ -509,7 +509,6 @@ Displays total changes, rescued changes, rescue rate, reported and fixed mistake
 
 Use `--agents` for local, per-purpose agent performance aggregates: duration and the subprocess-vs-model time split, session mode, errors, the token totals (input, output, cache-read, cache-creation, fresh input, reasoning), and the model round-trip and tool-category activity histogram, with a `METRICS` coverage count that tells a real zero apart from missing instrumentation.
 Use `--run <id>` to inspect the individual agent invocations for one run - including each invocation's per-round token deltas next to the raw counters (cumulative across a resumed session for codex; per-invocation for pi), tool-category breakdown, workload size, finding count, and fallback reason - plus the total time parked at approval gates; it implies `--agents`.
-The combined Document/Lint invocation is labeled `housekeeping (document+lint)` and attributed to `document+lint`, making its shared duration and tokens explicit without adding a second agent call.
 Nullable fields an adapter did not report, including raw input, output, and cache-read token counts, render as `-` (unknown), which is distinct from a recorded `0`.
 A `--agents` token total is all-or-nothing: it reads `-` for the whole purpose unless every invocation in it reported that field, so one failed round that reported no usage leaves the group's total unknown instead of silently under-counted.
 
@@ -541,6 +540,7 @@ Checks:
 - ACP alias default binaries: `cursor-agent` plus `acpx` for `cursor`
 - Effective global agent configuration, reported as `gate validation`; an unavailable configured runner is a failed check because the gate cannot validate without it
 - Every configured [`forge_profiles`](/no-mistakes/reference/global-config/#forge_profiles) entry, reported as `forge <host>`: the profile resolves and validates, its provider CLI is installed, and that CLI is authenticated for the profile's host
+- Claude Code workspace trust, reported as `claude trust`: the registered gate repository paths Claude Code has not accepted its trust dialog for, with the remedy. It appears only when `claude` is on `PATH` and at least one repository is registered, and it only ever warns, because doctor cannot establish the daemon's `HOME`/`CLAUDE_CONFIG_DIR` or each repository's trusted-branch `agent`. [Choosing an Agent](/no-mistakes/guides/agents/#workspace-trust) owns the mechanism and what a dropped entry costs
 
 Uses indicators: `✓` (available), `–` (not found, optional), `✗` (problem detected).
 

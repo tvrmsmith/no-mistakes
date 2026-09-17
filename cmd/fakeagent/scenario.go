@@ -83,7 +83,48 @@ func loadScenario(path string) (*Scenario, error) {
 	if err := yaml.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("parse scenario %q: %w", path, err)
 	}
+	s.applyDefaultTestUnits()
 	return &s, nil
+}
+
+// defaultUnitCommand is the command the default inferred unit runs. The e2e
+// harness installs a script under this name on PATH (internal/e2e/harness.go
+// InferredUnitCommand) that writes the coverage profile and test report the
+// Test step's vacuous-green guard requires. A bare `exit 0` here reports
+// nothing, so every journey that leaves commands.test unset would park at the
+// Test step instead of reaching the step it was written to exercise. The name
+// is repeated on both sides because this is package main and neither side can
+// import the other.
+const defaultUnitCommand = "nm-e2e-unit-test"
+
+// applyDefaultTestUnits gives every structured action a one-unit test layout
+// when it declares neither units nor selected.
+//
+// The test step's discovery pass parks the run when it cannot read a usable
+// layout, so a scenario written before discovery existed would wait at that
+// gate instead of reaching the step it was written to exercise. An action
+// that sets either key owns both and is left alone, so a scenario can still
+// drive a multi-unit layout or an unusable one. StructuredRaw is untouched,
+// because that field is how a scenario asks for malformed output on purpose.
+func (s *Scenario) applyDefaultTestUnits() {
+	for i := range s.Actions {
+		structured := s.Actions[i].Structured
+		if structured == nil {
+			continue
+		}
+		if _, ok := structured["units"]; ok {
+			continue
+		}
+		if _, ok := structured["selected"]; ok {
+			continue
+		}
+		structured["units"] = []any{map[string]any{
+			"name":    "repository",
+			"path":    ".",
+			"command": defaultUnitCommand,
+		}}
+		structured["selected"] = []string{"repository"}
+	}
 }
 
 // defaultScenario returns an "everything is clean" response that satisfies
@@ -92,7 +133,7 @@ func loadScenario(path string) (*Scenario, error) {
 // live-validation contract (one passing scenario and a go verdict) the step
 // now requires of every evidence turn.
 func defaultScenario() *Scenario {
-	return &Scenario{
+	s := &Scenario{
 		Actions: []Action{{
 			Text: "no issues found",
 			Structured: map[string]any{
@@ -121,6 +162,8 @@ func defaultScenario() *Scenario {
 			},
 		}},
 	}
+	s.applyDefaultTestUnits()
+	return s
 }
 
 // Match returns the first action whose Match substring is contained in the

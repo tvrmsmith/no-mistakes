@@ -101,7 +101,14 @@ func TestFailedInvocationUsageJourney(t *testing.T) {
 		}, "\n"),
 	})
 	// A review fix round only happens when the repository budgets one.
-	h.CommitChange("main", ".no-mistakes.yaml", "auto_fix:\n  review: 1\n", "budget one review fix round")
+	//
+	// The branch lines below are what each run's canned response keys on, and
+	// every agent step's prompt carries them, so once the reorder put the
+	// cheap gates in front of Review the Lint step claimed the review action
+	// first and the run failed before Review ever ran. Skipping the other
+	// agent steps leaves Review as the only invocation, which is the whole
+	// subject of this journey anyway.
+	h.CommitChange("main", ".no-mistakes.yaml", "auto_fix:\n  review: 1\nskip_steps:\n  - format\n  - lint\n  - test\n  - metrics\n  - document\n", "budget one review fix round and leave review the only agent step")
 	if out, err := h.runGit(context.Background(), h.WorkDir, "push", "origin", "main"); err != nil {
 		t.Fatalf("push trusted repo config: %v\n%s", err, out)
 	}

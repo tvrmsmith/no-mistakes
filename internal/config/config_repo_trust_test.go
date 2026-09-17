@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -630,5 +631,345 @@ func TestMerge_CarriesDisableProjectSettings(t *testing.T) {
 	got = Merge(&GlobalConfig{}, &RepoConfig{})
 	if got.DisableProjectSettings {
 		t.Error("Merge must leave DisableProjectSettings false by default")
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsTrustedOnly(t *testing.T) {
+	pushed := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "pushed", Path: ".", Command: "echo pwned"},
+	}}}
+	trusted := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "trusted", Path: "services/api", Command: "make -C services/api test"},
+	}}}
+
+	effective := EffectiveRepoConfig(pushed, trusted, false)
+	if len(effective.Test.Units) != 1 {
+		t.Fatalf("Test.Units = %v, want exactly one unit", effective.Test.Units)
+	}
+	if effective.Test.Units[0].Name != "trusted" {
+		t.Errorf("Test.Units[0].Name = %q, want %q", effective.Test.Units[0].Name, "trusted")
+	}
+	if effective.Test.Units[0].Command != "make -C services/api test" {
+		t.Errorf("Test.Units[0].Command = %q, want the trusted command", effective.Test.Units[0].Command)
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsOptInUsesPushedValue(t *testing.T) {
+	pushed := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "pushed", Path: ".", Command: "echo pwned"},
+	}}}
+	trusted := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "trusted", Path: "services/api", Command: "make -C services/api test"},
+	}}}
+
+	effective := EffectiveRepoConfig(pushed, trusted, true)
+	if len(effective.Test.Units) != 1 {
+		t.Fatalf("Test.Units = %v, want exactly one unit", effective.Test.Units)
+	}
+	if effective.Test.Units[0].Name != "pushed" {
+		t.Errorf("Test.Units[0].Name = %q, want %q", effective.Test.Units[0].Name, "pushed")
+	}
+	if effective.Test.Units[0].Command != "echo pwned" {
+		t.Errorf("Test.Units[0].Command = %q, want the pushed command", effective.Test.Units[0].Command)
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsNoTrustedCopyIsDropped(t *testing.T) {
+	pushed := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "pushed", Path: ".", Command: "echo pwned"},
+	}}}
+
+	effective := EffectiveRepoConfig(pushed, nil, false)
+	if len(effective.Test.Units) != 0 {
+		t.Fatalf("Test.Units = %v, want empty without a trusted copy", effective.Test.Units)
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsOptInWithNoTrustedCopyUsesPushedValue(t *testing.T) {
+	pushed := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "pushed", Path: ".", Command: "echo pwned"},
+	}}}
+
+	effective := EffectiveRepoConfig(pushed, nil, true)
+	if len(effective.Test.Units) != 1 {
+		t.Fatalf("Test.Units = %v, want exactly one unit", effective.Test.Units)
+	}
+	if effective.Test.Units[0].Name != "pushed" {
+		t.Errorf("Test.Units[0].Name = %q, want %q", effective.Test.Units[0].Name, "pushed")
+	}
+}
+
+func TestEffectiveRepoConfig_TestUnitsDoesNotAliasTrustedSlice(t *testing.T) {
+	trusted := &RepoConfig{Test: TestRaw{Units: []TestUnit{
+		{Name: "trusted", Path: "services/api", Command: "make -C services/api test"},
+	}}}
+
+	effective := EffectiveRepoConfig(&RepoConfig{}, trusted, false)
+	effective.Test.Units[0].Command = "rm -rf /"
+
+	if trusted.Test.Units[0].Command != "make -C services/api test" {
+		t.Fatalf("trusted.Test.Units[0].Command = %q, want unchanged by mutating the effective copy", trusted.Test.Units[0].Command)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectMissingName(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"\"\n      command: \"go test ./...\"\n"))
+	want := "test.units[0].name is required"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectMissingCommand(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      command: \"\"\n"))
+	want := `test.units[0].command is required (unit "api")`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectAbsolutePath(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      path: \"/etc\"\n      command: \"go test ./...\"\n"))
+	want := `test.units[0].path must be repository-relative, got "/etc"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectEscapingPath(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      path: \"../secrets\"\n      command: \"go test ./...\"\n"))
+	want := `test.units[0].path must stay inside the repository, got "../secrets"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestValidateTestRaw_UnitsRejectDuplicateName(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      command: \"go test ./...\"\n    - name: \"api\"\n      command: \"go test ./...\"\n"))
+	want := `test.units has duplicate unit name "api"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+// A YAML layout has to reach Config.Test.Units, the field the Test step reads.
+// Everything below it is exercised on hand-built structs, so without this the
+// Merge call that carries the layout across could be deleted silently.
+func TestMerge_YAMLTestUnitsReachTheResolvedConfig(t *testing.T) {
+	repo, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      path: \"services/api/\"\n      command: \"go test ./services/api/...\"\n    - name: \"root\"\n      command: \"go test ./...\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Merge(&GlobalConfig{}, repo)
+
+	if len(cfg.Test.Units) != 2 {
+		t.Fatalf("Config.Test.Units = %+v, want the two units the YAML declared", cfg.Test.Units)
+	}
+	if cfg.Test.Units[0].Name != "api" || cfg.Test.Units[0].Path != "services/api" || cfg.Test.Units[0].Command != "go test ./services/api/..." {
+		t.Errorf("Units[0] = %+v", cfg.Test.Units[0])
+	}
+	if cfg.Test.Units[1].Name != "root" || cfg.Test.Units[1].Path != "." || cfg.Test.Units[1].Command != "go test ./..." {
+		t.Errorf("Units[1] = %+v", cfg.Test.Units[1])
+	}
+}
+
+// A path escaping the repository must be rejected however it is spelled. The
+// check reads the canonical form, so an embedded ".." that resolves back
+// inside is fine and one that resolves outside is not.
+func TestValidateTestRaw_UnitPathEscapingTheRepositoryIsRejected(t *testing.T) {
+	for _, path := range []string{"..", "../shared", "services/../..", "services/../../shared"} {
+		t.Run(path, func(t *testing.T) {
+			_, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      path: \"" + path + "\"\n      command: \"go test\"\n"))
+			if err == nil {
+				t.Fatalf("path %q was accepted", path)
+			}
+		})
+	}
+}
+
+// Validation and the Test step's changed-file matching must judge the same
+// string. Before the shared canonical form, "api/.." passed a raw ".." check
+// and then cleaned to ".", so a unit scoped to one directory silently owned
+// the whole repository.
+func TestValidateTestRaw_UnitPathIsStoredInTheFormTheTestStepMatches(t *testing.T) {
+	repo, err := LoadRepoFromBytes([]byte("test:\n  units:\n    - name: \"api\"\n      path: \"api/..\"\n      command: \"go test\"\n    - name: \"web\"\n      path: \"services/web/../web\"\n      command: \"go test\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Merge(&GlobalConfig{}, repo)
+
+	if cfg.Test.Units[0].Path != "." {
+		t.Errorf("Units[0].Path = %q, want the canonical %q", cfg.Test.Units[0].Path, ".")
+	}
+	if cfg.Test.Units[1].Path != "services/web" {
+		t.Errorf("Units[1].Path = %q, want the canonical %q", cfg.Test.Units[1].Path, "services/web")
+	}
+}
+
+func TestNormalizeUnitPath_IsTheOneCanonicalForm(t *testing.T) {
+	cases := map[string]string{
+		"":                    ".",
+		"  ":                  ".",
+		".":                   ".",
+		"services/api":        "services/api",
+		"services/api/":       "services/api",
+		"./services/api":      "services/api",
+		"services\\api":       "services/api",
+		"services/web/../api": "services/api",
+		"api/..":              ".",
+		"services/api/..":     "services",
+		"../shared":           "../shared",
+	}
+	for in, want := range cases {
+		if got := NormalizeUnitPath(in); got != want {
+			t.Errorf("NormalizeUnitPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestApplyTestOverrides_ARepositoryLayoutReplacesTheGlobalOne(t *testing.T) {
+	dst := testDefaults()
+	applyTestOverrides(&dst, &TestRaw{Units: []TestUnit{
+		{Name: "global-a", Path: "a", Command: "go test ./a/..."},
+		{Name: "global-b", Path: "b", Command: "go test ./b/..."},
+	}})
+	applyTestOverrides(&dst, &TestRaw{Units: []TestUnit{
+		{Name: "repo-only", Path: "c", Command: "go test ./c/..."},
+	}})
+
+	if len(dst.Units) != 1 || dst.Units[0].Name != "repo-only" {
+		t.Fatalf("Units = %+v, want only the repository layout", dst.Units)
+	}
+}
+
+func TestApplyTestOverrides_AnEmptyLayoutKeepsWhatIsAlreadyResolved(t *testing.T) {
+	dst := testDefaults()
+	applyTestOverrides(&dst, &TestRaw{Units: []TestUnit{
+		{Name: "api", Path: "services/api", Command: "go test ./services/api/..."},
+	}})
+	applyTestOverrides(&dst, &TestRaw{})
+
+	if len(dst.Units) != 1 || dst.Units[0].Name != "api" {
+		t.Fatalf("Units = %+v, want the earlier layout kept", dst.Units)
+	}
+}
+
+func TestApplyTestOverrides_DoesNotAliasTheSourceUnits(t *testing.T) {
+	dst := testDefaults()
+	src := &TestRaw{Units: []TestUnit{{Name: "api", Path: "services/api", Command: "go test"}}}
+	applyTestOverrides(&dst, src)
+
+	src.Units[0].Command = "rm -rf /"
+
+	if dst.Units[0].Command != "go test" {
+		t.Fatalf("Units[0].Command = %q, want the resolved copy to be independent", dst.Units[0].Command)
+	}
+}
+
+func TestApplyTestOverrides_UnitsDefaultPathToDot(t *testing.T) {
+	dst := testDefaults()
+	src := &TestRaw{Units: []TestUnit{
+		{Name: "root", Path: "", Command: "go test ./..."},
+		{Name: "api", Path: " services/api ", Command: "make test"},
+	}}
+	applyTestOverrides(&dst, src)
+
+	if len(dst.Units) != 2 {
+		t.Fatalf("Units = %v, want 2 entries", dst.Units)
+	}
+	if dst.Units[0].Path != "." {
+		t.Errorf("Units[0].Path = %q, want %q", dst.Units[0].Path, ".")
+	}
+	if dst.Units[1].Path != "services/api" {
+		t.Errorf("Units[1].Path = %q, want trimmed %q", dst.Units[1].Path, "services/api")
+	}
+}
+
+func TestLoadRepoConfig_RestartExemptPathsRoundTrip(t *testing.T) {
+	cfg, err := LoadRepoFromBytes([]byte("restart:\n  exempt_paths:\n    - \"docs/**\"\n    - \"*.md\"\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []string{"docs/**", "*.md"}
+	if !slices.Equal(cfg.Restart.ExemptPaths, want) {
+		t.Fatalf("Restart.ExemptPaths = %v, want %v", cfg.Restart.ExemptPaths, want)
+	}
+}
+
+func TestLoadRepoConfig_RestartExemptPathsRejectsInvalidGlob(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("restart:\n  exempt_paths:\n    - \"docs/[\"\n"))
+	if err == nil {
+		t.Fatal("expected error for invalid restart.exempt_paths glob, got nil")
+	}
+	if !strings.Contains(err.Error(), "restart.exempt_paths") {
+		t.Fatalf("error = %v, want it to name restart.exempt_paths", err)
+	}
+}
+
+func TestLoadRepoConfig_RestartExemptPathsRejectsBlankPattern(t *testing.T) {
+	_, err := LoadRepoFromBytes([]byte("restart:\n  exempt_paths:\n    - \"   \"\n"))
+	if err == nil {
+		t.Fatal("expected error for blank restart.exempt_paths entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "restart.exempt_paths") {
+		t.Fatalf("error = %v, want it to name restart.exempt_paths", err)
+	}
+}
+
+// TestEffectiveRepoConfig_TrustedIgnorePatternsComeFromTheTrustedCopy proves
+// the split ignore_patterns gets. The list itself stays pushed-readable, since
+// narrowing what a run works on is the contributor's call, but the copy a gate
+// reads to EXEMPT a changed file from its own check has to come from the
+// default branch, or a contributor writes ignore_patterns: ["**"] on their
+// branch and switches off the guard judging it.
+func TestEffectiveRepoConfig_TrustedIgnorePatternsComeFromTheTrustedCopy(t *testing.T) {
+	pushed := &RepoConfig{IgnorePatterns: []string{"services/**"}}
+	trusted := &RepoConfig{IgnorePatterns: []string{"docs/**"}}
+
+	got := EffectiveRepoConfig(pushed, trusted, false)
+	if len(got.IgnorePatterns) != 1 || got.IgnorePatterns[0] != "services/**" {
+		t.Fatalf("ignore_patterns = %v, want the pushed copy", got.IgnorePatterns)
+	}
+	if len(got.TrustedIgnorePatterns) != 1 || got.TrustedIgnorePatterns[0] != "docs/**" {
+		t.Fatalf("trusted ignore_patterns = %v, want the trusted copy's list", got.TrustedIgnorePatterns)
+	}
+
+	// Present only on the pushed branch: the exempting copy stays empty.
+	got = EffectiveRepoConfig(pushed, &RepoConfig{}, false)
+	if len(got.TrustedIgnorePatterns) != 0 {
+		t.Fatalf("trusted ignore_patterns = %v, want none for a pushed-only value", got.TrustedIgnorePatterns)
+	}
+
+	// No trusted copy at all, and under the commands opt-in, which widens
+	// command selection and not which files a gate may skip.
+	if got = EffectiveRepoConfig(pushed, nil, false); len(got.TrustedIgnorePatterns) != 0 {
+		t.Fatalf("trusted ignore_patterns = %v, want none without a trusted copy", got.TrustedIgnorePatterns)
+	}
+	if got = EffectiveRepoConfig(pushed, nil, true); len(got.TrustedIgnorePatterns) != 0 {
+		t.Fatalf("trusted ignore_patterns = %v, want none under allow_repo_commands", got.TrustedIgnorePatterns)
+	}
+
+	// The trusted list is cloned, so a later write through the effective config
+	// cannot reach back into the trusted copy every other run reads.
+	got = EffectiveRepoConfig(pushed, trusted, false)
+	got.TrustedIgnorePatterns[0] = "**"
+	if trusted.IgnorePatterns[0] != "docs/**" {
+		t.Fatalf("the trusted copy was aliased, now %v", trusted.IgnorePatterns)
+	}
+}
+
+// TestMerge_TrustedIgnorePatternsReachTheResolvedConfig closes the gap between
+// the split above and the steps that read it: a value that stops at RepoConfig
+// never reaches a step.
+func TestMerge_TrustedIgnorePatternsReachTheResolvedConfig(t *testing.T) {
+	repo := &RepoConfig{IgnorePatterns: []string{"vendor/**"}, TrustedIgnorePatterns: []string{"docs/**"}}
+
+	cfg := Merge(&GlobalConfig{}, repo)
+
+	if len(cfg.TrustedIgnorePatterns) != 1 || cfg.TrustedIgnorePatterns[0] != "docs/**" {
+		t.Fatalf("resolved TrustedIgnorePatterns = %v, want [docs/**]", cfg.TrustedIgnorePatterns)
+	}
+	if len(cfg.IgnorePatterns) != 1 || cfg.IgnorePatterns[0] != "vendor/**" {
+		t.Fatalf("resolved IgnorePatterns = %v, want [vendor/**]", cfg.IgnorePatterns)
 	}
 }

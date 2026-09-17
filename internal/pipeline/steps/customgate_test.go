@@ -32,8 +32,9 @@ func TestWithCustomGates_InsertsAfterAnchorAndPreservesCore(t *testing.T) {
 		{Name: "arch-fitness", After: types.StepReview, Command: "make arch-fitness"},
 	}))
 	want := []string{
-		"intent", "rebase", "review", "gate.review.arch-fitness",
-		"test", "gate.test.mutation-budget", "document", "lint", "push", "pr", "ci",
+		"intent", "rebase", "format", "lint",
+		"test", "gate.test.mutation-budget", "metrics", "document",
+		"review", "gate.review.arch-fitness", "push", "pr", "ci",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("sequence =\n %v\nwant\n %v", got, want)
@@ -46,7 +47,7 @@ func TestWithCustomGates_KeepsDeclarationOrderOnSharedAnchor(t *testing.T) {
 		{Name: "second", After: types.StepLint, Command: "b"},
 	}))
 	joined := strings.Join(got, ",")
-	if !strings.Contains(joined, "lint,gate.lint.first,gate.lint.second,push") {
+	if !strings.Contains(joined, "lint,gate.lint.first,gate.lint.second,test") {
 		t.Fatalf("sequence = %v, want the two lint gates in declaration order", got)
 	}
 }
@@ -241,12 +242,12 @@ func TestCustomGateStep_WithoutFixAuthorizationRunsNoFixTurn(t *testing.T) {
 func TestBuildPipelineAttestation_ListsAGateAfterItsAnchor(t *testing.T) {
 	t.Parallel()
 	steps := []*db.StepResult{
-		{StepName: types.StepReview, Status: types.StepStatusCompleted},
-		{StepName: types.CustomGateStepName(types.StepReview, "arch-fitness"), Status: types.StepStatusCompleted},
-		{StepName: types.CustomGateStepName(types.StepReview, "budget"), Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusCompleted},
 		{StepName: types.CustomGateStepName(types.StepTest, "mutation"), Status: types.StepStatusCompleted},
 		{StepName: types.StepDocument, Status: types.StepStatusCompleted},
+		{StepName: types.StepReview, Status: types.StepStatusCompleted},
+		{StepName: types.CustomGateStepName(types.StepReview, "arch-fitness"), Status: types.StepStatusCompleted},
+		{StepName: types.CustomGateStepName(types.StepReview, "budget"), Status: types.StepStatusCompleted},
 	}
 
 	raw := buildPipelineAttestation(steps, nil, testPipelineHeadSHA)
@@ -261,8 +262,8 @@ func TestBuildPipelineAttestation_ListsAGateAfterItsAnchor(t *testing.T) {
 		got = append(got, string(s.Step))
 	}
 	want := []string{
-		"review", "gate.review.arch-fitness", "gate.review.budget",
 		"test", "gate.test.mutation", "document",
+		"review", "gate.review.arch-fitness", "gate.review.budget",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("attestation order =\n %v\nwant\n %v", got, want)

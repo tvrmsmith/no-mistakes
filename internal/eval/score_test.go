@@ -229,7 +229,7 @@ func TestEvaluationSummaryWithholdsHeadlineF1WithoutFalsePositiveGold(t *testing
 	if summary.HasFalsePositiveGold() {
 		t.Fatal("summary reported FP gold when none existed")
 	}
-	output := RenderReport([]CandidateReport{{Cohort: "c", Summary: summary, RepeatCount: 1}})
+	output := renderReportAny([]CandidateReport{{Cohort: "c", Summary: summary, RepeatCount: 1}})
 	if !strings.Contains(output, "recall: 100.0%") {
 		t.Fatalf("report = %q, want recall as the headline", output)
 	}
@@ -252,7 +252,7 @@ func TestEvaluationSummaryHeadlinesF1WhenFalsePositiveGoldExists(t *testing.T) {
 	if got := summary.Precision(); got != 2.0/3.0 {
 		t.Fatalf("precision = %v, want 2/3", got)
 	}
-	output := RenderReport([]CandidateReport{{Cohort: "c", Summary: summary, RepeatCount: 1}})
+	output := renderReportAny([]CandidateReport{{Cohort: "c", Summary: summary, RepeatCount: 1}})
 	if !strings.Contains(output, "F1:") || strings.Contains(output, "F1: withheld") {
 		t.Fatalf("report = %q, want headline F1 once false-positive gold exists", output)
 	}

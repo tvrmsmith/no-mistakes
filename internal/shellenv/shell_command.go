@@ -66,6 +66,27 @@ func CombinedOutputShellCommand(cmd *exec.Cmd) ([]byte, error) {
 	return output.Bytes(), err
 }
 
+// SplitOutputShellCommand runs cmd with stdout and stderr captured into
+// separate buffers, and delegates lifecycle cleanup to RunShellCommand.
+//
+// Use it instead of CombinedOutputShellCommand when a caller parses one of the
+// streams: the combined form points both at a single pipe, so anything the
+// command writes to stderr can land in the middle of a stdout payload longer
+// than the pipe buffer.
+func SplitOutputShellCommand(cmd *exec.Cmd) (stdout, stderr []byte, err error) {
+	if cmd.Stdout != nil {
+		return nil, nil, errors.New("exec: Stdout already set")
+	}
+	if cmd.Stderr != nil {
+		return nil, nil, errors.New("exec: Stderr already set")
+	}
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err = RunShellCommand(cmd)
+	return outBuf.Bytes(), errBuf.Bytes(), err
+}
+
 func prepareShellOutputPipes(cmd *exec.Cmd) ([]shellOutputPipe, error) {
 	var pipes []shellOutputPipe
 	stdout := cmd.Stdout

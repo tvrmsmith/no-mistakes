@@ -43,6 +43,39 @@ func DemoSteps() []pipeline.Step {
 			log:        "Fetching origin...\nChecking default branch...\nRebasing onto origin/main...\nAlready up to date.",
 		},
 		&demoStep{
+			name:       types.StepLint,
+			delay:      3 * time.Second,
+			fixDelay:   2 * time.Second,
+			displayDur: 12 * time.Second,
+			log:        "Running: golangci-lint run ./...\nChecking formatting and style...",
+			fixLog:     "Fixing lint findings...\nApplied fix: formatted handler.go",
+			findings: demoFindings{
+				Items: []types.Finding{
+					{ID: "lint-1", Severity: "warning", File: "internal/handler.go", Line: 38, Description: "File is not gofmt-ed", Action: types.ActionAutoFix},
+				},
+				Summary:   "1 finding: 1 warning",
+				RiskLevel: "low",
+			},
+		},
+		&demoStep{
+			name:       types.StepTest,
+			delay:      4 * time.Second,
+			displayDur: 32 * time.Second,
+			log:        "Running: go test -race ./...\n\nok  \tgithub.com/kunchenguid/no-mistakes/internal/handler\t1.2s\nok  \tgithub.com/kunchenguid/no-mistakes/internal/config\t0.8s\nok  \tgithub.com/kunchenguid/no-mistakes/internal/server\t1.5s\n\nPASS",
+		},
+		&demoStep{
+			name:       types.StepMetrics,
+			delay:      2 * time.Second,
+			displayDur: 9 * time.Second,
+			log:        "Running: crap-report --coverage $NO_MISTAKES_COVERAGE_ROOT\nMeasuring complexity against coverage...\nmetrics passed: 12 function(s) measured against a crap threshold of 30",
+		},
+		&demoStep{
+			name:       types.StepDocument,
+			delay:      3 * time.Second,
+			displayDur: 18 * time.Second,
+			log:        "Checking documentation coverage...\nScanning changed files for doc gaps...\nAll documentation is up to date.",
+		},
+		&demoStep{
 			name:          types.StepReview,
 			delay:         5 * time.Second,
 			fixDelay:      4 * time.Second,
@@ -58,33 +91,6 @@ func DemoSteps() []pipeline.Step {
 				Summary:       "2 findings: 1 error, 1 warning",
 				RiskLevel:     "medium",
 				RiskRationale: "Missing nil check could cause runtime panic on malformed requests",
-			},
-		},
-		&demoStep{
-			name:       types.StepTest,
-			delay:      4 * time.Second,
-			displayDur: 32 * time.Second,
-			log:        "Running: go test -race ./...\n\nok  \tgithub.com/kunchenguid/no-mistakes/internal/handler\t1.2s\nok  \tgithub.com/kunchenguid/no-mistakes/internal/config\t0.8s\nok  \tgithub.com/kunchenguid/no-mistakes/internal/server\t1.5s\n\nPASS",
-		},
-		&demoStep{
-			name:       types.StepDocument,
-			delay:      3 * time.Second,
-			displayDur: 18 * time.Second,
-			log:        "Checking documentation coverage...\nScanning changed files for doc gaps...\nAll documentation is up to date.",
-		},
-		&demoStep{
-			name:       types.StepLint,
-			delay:      3 * time.Second,
-			fixDelay:   2 * time.Second,
-			displayDur: 12 * time.Second,
-			log:        "Running: golangci-lint run ./...\nChecking formatting and style...",
-			fixLog:     "Fixing lint findings...\nApplied fix: formatted handler.go",
-			findings: demoFindings{
-				Items: []types.Finding{
-					{ID: "lint-1", Severity: "warning", File: "internal/handler.go", Line: 38, Description: "File is not gofmt-ed", Action: types.ActionAutoFix},
-				},
-				Summary:   "1 finding: 1 warning",
-				RiskLevel: "low",
 			},
 		},
 		&demoStep{

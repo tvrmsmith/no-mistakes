@@ -306,9 +306,9 @@ func TestExecutor_ResumeOfAGateWithNoParkMarkerIsRejectedRatherThanPanicking(t *
 // green.
 func TestRecoveredResumePoint_AnUnresolvedStepBeforeAGateIsRejected(t *testing.T) {
 	database, p, run, _ := setupTest(t)
-	plan := []Step{newPassStep(types.StepReview), newPassStep(types.StepTest)}
+	plan := []Step{newPassStep(types.StepTest), newPassStep(types.StepReview)}
 	rows := seedParkedGate(t, database, run, plan)
-	// seedParkedGate completes every earlier row, so put the review row back to
+	// seedParkedGate completes every earlier row, so put the first row back to
 	// the running state a crash mid-step leaves behind.
 	if err := database.UpdateStepStatus(rows[0].ID, types.StepStatusRunning); err != nil {
 		t.Fatal(err)

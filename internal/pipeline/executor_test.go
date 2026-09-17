@@ -213,7 +213,7 @@ func TestExecutor_RevalidationGateRemainsRecoverable(t *testing.T) {
 		}
 		return &StepOutcome{}, nil
 	}}
-	steps := []Step{review, newPassStep(types.StepTest), newPassStep(types.StepPush), ci}
+	steps := []Step{newPassStep(types.StepTest), review, newPassStep(types.StepPush), ci}
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
 	exec.SetSkippedSteps([]types.StepName{types.StepPush})
 	// The persisted set is what explains an already-skipped step row to
@@ -266,7 +266,7 @@ func TestExecutor_RecoveredRevalidationPreservesSkippedStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
-	exec.initializeRunScopes(run.ID)
+	exec.initializeRunScopes(run.ID, false)
 
 	if err := exec.executeRecoveredRemainder(t.Context(), run, repo, t.TempDir(), t.TempDir(), 0, true); err != nil {
 		t.Fatalf("executeRecoveredRemainder() error = %v", err)
@@ -390,9 +390,9 @@ func TestExecutor_StepError_FailsRun(t *testing.T) {
 	workDir := t.TempDir()
 
 	steps := []Step{
-		newPassStep(types.StepReview),
+		newPassStep(types.StepLint),
 		newFailStep(types.StepTest, fmt.Errorf("tests crashed")),
-		newPassStep(types.StepLint), // should not run
+		newPassStep(types.StepReview), // should not run
 	}
 
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
@@ -414,7 +414,7 @@ func TestExecutor_StepError_FailsRun(t *testing.T) {
 		t.Errorf("step test: expected %q, got %q", types.StepStatusFailed, dbSteps[1].Status)
 	}
 	if dbSteps[2].Status != types.StepStatusPending {
-		t.Errorf("step lint: expected %q, got %q", types.StepStatusPending, dbSteps[2].Status)
+		t.Errorf("step review: expected %q, got %q", types.StepStatusPending, dbSteps[2].Status)
 	}
 }
 
@@ -616,6 +616,38 @@ func TestExecutor_ConfiguredSkippedStepDoesNotExecuteAndContinues(t *testing.T) 
 		if step.StepName == types.StepReview && step.Status != types.StepStatusSkipped {
 			t.Fatalf("review status = %s, want %s", step.Status, types.StepStatusSkipped)
 		}
+	}
+}
+
+// TestExecutor_ResolvesCoverageDirForSteps verifies the executor fills
+// StepContext.CoverageDir the same way it fills EvidenceDir: resolved once
+// from the app root, keyed by run ID, so the Test step that writes coverage
+// artifacts and the guard that reads them agree on one directory.
+func TestExecutor_ResolvesCoverageDirForSteps(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	var gotCoverageDir string
+	step := &adaptiveCallStep{
+		name: types.StepTest,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			gotCoverageDir = sctx.CoverageDir
+			return &StepOutcome{ExitCode: 0}, nil
+		},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	want := p.RunCoverageDir(run.ID)
+	if gotCoverageDir == "" {
+		t.Fatal("expected CoverageDir to be set, got empty string")
+	}
+	if gotCoverageDir != want {
+		t.Errorf("CoverageDir = %q, want %q", gotCoverageDir, want)
 	}
 }
 

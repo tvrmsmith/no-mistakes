@@ -1,0 +1,384 @@
+package cli
+
+import (
+	"database/sql"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/claudetrust"
+	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+)
+
+// setupDoctorTrustEnvWithoutDatabase points NM_HOME and HOME at a fresh
+// directory and leaves the database file absent, which is the fresh-install
+// state.
+func setupDoctorTrustEnvWithoutDatabase(t *testing.T) *paths.Paths {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("NM_HOME", dir)
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	p, err := paths.New()
+	if err != nil {
+		t.Fatalf("paths.New() error = %v", err)
+	}
+	return p
+}
+
+// setupDoctorTrustEnv additionally creates the database and registers
+// repoCount repositories, so repoCount == 0 means an existing database with an
+// empty repos table rather than no database at all.
+//
+// Each gate directory is created on disk and the returned paths are
+// canonicalized, which is the production shape: claudetrust.CanonicalWorkspace
+// realpaths through filepath.EvalSymlinks, and EvalSymlinks fails (leaving the
+// raw path untouched) only while the directory is absent. On macOS the
+// t.TempDir root /var/folders resolves to /private/var/folders, so a suite that
+// left the directory absent would compare raw spellings doctor never prints.
+func setupDoctorTrustEnv(t *testing.T, repoCount int) (gatePaths []string) {
+	t.Helper()
+	p := setupDoctorTrustEnvWithoutDatabase(t)
+
+	d, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatalf("db.Open() error = %v", err)
+	}
+	defer d.Close()
+	ids := []string{"a", "b", "c"}
+	for i := 0; i < repoCount; i++ {
+		if _, err := d.InsertRepoWithID(ids[i], "/work/"+ids[i], "https://example.com/"+ids[i]+".git", "main"); err != nil {
+			t.Fatalf("InsertRepoWithID(%q) error = %v", ids[i], err)
+		}
+		if err := os.MkdirAll(p.RepoDir(ids[i]), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", p.RepoDir(ids[i]), err)
+		}
+		gatePaths = append(gatePaths, claudetrust.CanonicalWorkspace(p.RepoDir(ids[i])))
+	}
+	return gatePaths
+}
+
+func TestDoctorClaudeTrust_NoConfigReportsAllGateRepositoriesUntrusted(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	gatePaths := setupDoctorTrustEnv(t, 2)
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	out, err := executeCmd("doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "claude trust") {
+		t.Errorf("doctor output should contain %q, got:\n%s", "claude trust", out)
+	}
+	for _, gp := range gatePaths {
+		if !strings.Contains(out, gp) {
+			t.Errorf("doctor output should name gate path %q, got:\n%s", gp, out)
+		}
+	}
+	if !strings.Contains(out, "run claude interactively") {
+		t.Errorf("doctor output should contain remedy, got:\n%s", out)
+	}
+	if strings.Contains(out, "some checks failed") {
+		t.Errorf("the trust report is a warning and must never fail doctor, got:\n%s", out)
+	}
+}
+
+// TestDoctorClaudeTrust_ReportIsIndependentOfTheConfiguredAgent pins that the
+// row appears whatever `agent` says globally. The global is routinely `auto`,
+// each repository can override it from its own trusted default branch, and
+// doctor reads neither of those per-repo values, so keying the report on the
+// global would hide the condition from exactly the operator who hits it.
+func TestDoctorClaudeTrust_ReportIsIndependentOfTheConfiguredAgent(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	setupDoctorTrustEnv(t, 2)
+	nmHome := os.Getenv("NM_HOME")
+	if err := os.WriteFile(filepath.Join(nmHome, "config.yaml"), []byte("agent: codex\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	writeDoctorStubBinary(t, binDir, "claude")
+	writeDoctorStubBinary(t, binDir, "codex")
+	t.Setenv("PATH", binDir)
+
+	out, err := executeCmd("doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "claude trust") {
+		t.Errorf("doctor output should contain %q, got:\n%s", "claude trust", out)
+	}
+	if !strings.Contains(out, "untrusted") {
+		t.Errorf("doctor should still report the untrusted gate repositories, got:\n%s", out)
+	}
+	if strings.Contains(out, "some checks failed") {
+		t.Errorf("doctor should not fail overall for a non-claude agent, got:\n%s", out)
+	}
+}
+
+func TestDoctorClaudeTrust_AbsentFromProjectsIsReportedUntrusted(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	gatePaths := setupDoctorTrustEnv(t, 2)
+	nmHome := os.Getenv("NM_HOME")
+	home := os.Getenv("HOME")
+	configJSON := `{"projects":{"` + gatePaths[0] + `":{"hasTrustDialogAccepted":true}}}`
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write claude config: %v", err)
+	}
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+	_ = nmHome
+
+	out, err := executeCmd("doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, gatePaths[0]) {
+		t.Errorf("doctor should not name the already-trusted gate path %q, got:\n%s", gatePaths[0], out)
+	}
+	if !strings.Contains(out, gatePaths[1]) {
+		t.Errorf("doctor should name the untrusted gate path %q, got:\n%s", gatePaths[1], out)
+	}
+	if !strings.Contains(out, "1 gate repository untrusted") {
+		t.Errorf("doctor output should report exactly one untrusted repository, got:\n%s", out)
+	}
+}
+
+func TestDoctorClaudeTrust_AllGateRepositoriesTrusted(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	gatePaths := setupDoctorTrustEnv(t, 3)
+	home := os.Getenv("HOME")
+	entries := make([]string, len(gatePaths))
+	for i, gp := range gatePaths {
+		entries[i] = `"` + gp + `":{"hasTrustDialogAccepted":true}`
+	}
+	configJSON := `{"projects":{` + strings.Join(entries, ",") + `}}`
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write claude config: %v", err)
+	}
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	out, err := executeCmd("doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "3 gate repositories trusted") {
+		t.Errorf("doctor output should contain %q, got:\n%s", "3 gate repositories trusted", out)
+	}
+	if strings.Contains(out, "untrusted") {
+		t.Errorf("doctor should not mention untrusted, got:\n%s", out)
+	}
+	if strings.Contains(out, "some checks failed") {
+		t.Errorf("doctor should not fail overall when trusted, got:\n%s", out)
+	}
+}
+
+func TestDoctorClaudeTrust_ClaudeNotOnPathOmitsCheck(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	setupDoctorTrustEnv(t, 2)
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	t.Setenv("PATH", binDir)
+
+	out, err := executeCmd("doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "claude trust") {
+		t.Errorf("doctor output should not contain %q when claude is absent, got:\n%s", "claude trust", out)
+	}
+}
+
+func TestDoctorClaudeTrust_ZeroRepositoriesOmitsCheck(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	setupDoctorTrustEnv(t, 0)
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	out, err := executeCmd("doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "claude trust") {
+		t.Errorf("doctor output should not contain %q when no repos are registered, got:\n%s", "claude trust", out)
+	}
+}
+
+// TestDoctorClaudeTrust_DoesNotCreateTheDatabase pins that the trust check is
+// read-only. Opening the database for write creates the file and runs every
+// migration, so the "database" row would report "not found (will be created on
+// first use)" on the first doctor run and a created database on the second,
+// purely because doctor itself ran.
+func TestDoctorClaudeTrust_DoesNotCreateTheDatabase(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	p := setupDoctorTrustEnvWithoutDatabase(t)
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	out, err := executeCmd("doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(p.DB()); !os.IsNotExist(err) {
+		t.Errorf("os.Stat(%q) error = %v, want a not-exist error: doctor must not create the database", p.DB(), err)
+	}
+	if strings.Contains(out, "claude trust") {
+		t.Errorf("doctor output should not contain %q with no database, got:\n%s", "claude trust", out)
+	}
+}
+
+// TestDoctorClaudeTrust_ReportsTheCanonicalGatePath pins which key the
+// operator is told to write. Claude Code stores and looks up its projects key
+// realpath'd, so naming the symlinked spelling steers the operator into
+// writing a key Claude Code never consults - and because claudetrust.Load
+// canonicalizes it, the next doctor run reads that key as trust and reports
+// the gate trusted over a still-degraded run.
+func TestDoctorClaudeTrust_ReportsTheCanonicalGatePath(t *testing.T) {
+	realHome := t.TempDir()
+	linkedHome := filepath.Join(t.TempDir(), "nm-home")
+	if err := os.Symlink(realHome, linkedHome); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	t.Setenv("NM_HOME", linkedHome)
+	t.Setenv("HOME", realHome)
+	t.Setenv("USERPROFILE", realHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	p, err := paths.New()
+	if err != nil {
+		t.Fatalf("paths.New() error = %v", err)
+	}
+	d, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatalf("db.Open() error = %v", err)
+	}
+	if _, err := d.InsertRepoWithID("a", "/work/a", "https://example.com/a.git", "main"); err != nil {
+		d.Close()
+		t.Fatalf("InsertRepoWithID() error = %v", err)
+	}
+	d.Close()
+
+	linkedGate := p.RepoDir("a")
+	if err := os.MkdirAll(linkedGate, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	canonicalGate := claudetrust.CanonicalWorkspace(linkedGate)
+	if canonicalGate == linkedGate {
+		t.Skip("gate path is already canonical on this filesystem")
+	}
+
+	binDir := t.TempDir()
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	var warns []string
+	doctorClaudeWorkspaceTrust(p,
+		func(_, detail string) { t.Errorf("ok reported %q, want the untrusted gate warned instead", detail) },
+		func(_, detail string) { warns = append(warns, detail) },
+	)
+
+	if len(warns) != 1 {
+		t.Fatalf("warn reported %v, want exactly one entry", warns)
+	}
+	if !strings.Contains(warns[0], canonicalGate) {
+		t.Errorf("warn = %q, want it to name the canonical gate path %q", warns[0], canonicalGate)
+	}
+	if strings.Contains(warns[0], linkedGate) {
+		t.Errorf("warn = %q, must not name the symlinked gate path %q: Claude Code never consults that key", warns[0], linkedGate)
+	}
+}
+
+// A read failure of the repo table is reported rather than silently skipped:
+// with the gate list unknown, staying quiet would read as "nothing to check".
+func TestDoctorClaudeTrust_UnreadableRepoTableIsReported(t *testing.T) {
+	setupDoctorTrustEnv(t, 2)
+	p, err := paths.New()
+	if err != nil {
+		t.Fatalf("paths.New() error = %v", err)
+	}
+	sqlDB, err := sql.Open("sqlite", p.DB())
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	if _, err := sqlDB.Exec(`UPDATE repos SET created_at = 'not-a-timestamp'`); err != nil {
+		sqlDB.Close()
+		t.Fatalf("corrupt created_at: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	binDir := t.TempDir()
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	var oks, warns []string
+	doctorClaudeWorkspaceTrust(p,
+		func(_, detail string) { oks = append(oks, detail) },
+		func(_, detail string) { warns = append(warns, detail) },
+	)
+
+	if len(oks) != 0 {
+		t.Errorf("ok reported %v, want nothing: the repo list could not be read", oks)
+	}
+	if len(warns) != 1 {
+		t.Fatalf("warn reported %v, want exactly one entry", warns)
+	}
+	if !strings.Contains(warns[0], "cannot list gate repositories") {
+		t.Errorf("warn = %q, want it to name the failed repository listing", warns[0])
+	}
+}
+
+func TestDoctorClaudeTrust_MalformedConfigIsUnreadable(t *testing.T) {
+	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
+	defer restore()
+
+	setupDoctorTrustEnv(t, 2)
+	home := os.Getenv("HOME")
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{"), 0o644); err != nil {
+		t.Fatalf("write claude config: %v", err)
+	}
+	binDir := t.TempDir()
+	writeDoctorGitBinary(t, binDir)
+	writeDoctorStubBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	out, err := executeCmd("doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "unreadable Claude Code config at") {
+		t.Errorf("doctor output should contain %q, got:\n%s", "unreadable Claude Code config at", out)
+	}
+}

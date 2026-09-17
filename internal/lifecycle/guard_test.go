@@ -157,7 +157,7 @@ func TestSplitActiveRuns(t *testing.T) {
 // whose pipeline layout has drifted.
 func TestDecideExemptsOnlyResumableParkedRuns(t *testing.T) {
 	p := paths.WithRoot(t.TempDir())
-	plan := lifecycletest.Plan(types.StepReview, types.StepTest)
+	plan := lifecycletest.Plan(types.StepReview, types.StepPush)
 	lifecycletest.SeedResumableParkedRun(t, p, "/tmp/project", "feature", plan)
 
 	same, err := Decide(p, plan, ReplacementBinary)

@@ -126,7 +126,12 @@ func (m *MockAgent) Close() error { return nil }
 
 func GitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// A test that runs `git init` itself inherits the developer's global
+	// config, so a machine that signs every commit makes the fixture depend on
+	// a signing agent being unlocked and the commit fails when it is not.
+	// Every invocation carries the override, because the repository this runs
+	// against may have been created by any of them.
+	cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test",
@@ -138,7 +143,32 @@ func GitCmd(t *testing.T, dir string, args ...string) string {
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
+	if len(args) > 0 && args[0] == "init" {
+		// The -c flags above cover this helper's own commits. A step under
+		// test commits through internal/git, which only disables signing when
+		// the maintainer set sign_commits: false, so the repository itself
+		// carries the override too.
+		disableRepoCommitSigning(dir, args[1:])
+	}
 	return strings.TrimSpace(string(out))
+}
+
+// disableRepoCommitSigning writes the signing override into a freshly created
+// test repository's own config. initArgs are whatever followed `git init`, so a
+// trailing directory operand is honoured. The write is best effort: it is a
+// host-config workaround, not the behaviour under test.
+func disableRepoCommitSigning(dir string, initArgs []string) {
+	target := dir
+	for _, arg := range initArgs {
+		if !strings.HasPrefix(arg, "-") {
+			target = filepath.Join(dir, arg)
+		}
+	}
+	for _, key := range []string{"commit.gpgsign", "tag.gpgsign"} {
+		cmd := exec.Command("git", "config", key, "false")
+		cmd.Dir = target
+		_ = cmd.Run()
+	}
 }
 
 // WriteStub sends one stub HTTP response body. A short write means the client
@@ -155,8 +185,15 @@ func WriteStub(t *testing.T, w io.Writer, body string) {
 // WriteFile writes a test fixture file and fails the test if the write does
 // not land, so a later assertion cannot read a missing file as a behavior
 // change.
+// WriteFile writes a fixture file, creating its parent directories first.
+// Coverage-artifact fixtures build nested layouts (an lcov-report/ tree beside
+// lcov.info), so requiring every caller to mkdir first just duplicates the
+// same two lines.
 func WriteFile(t *testing.T, path, content string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("create parent of %s: %v", path, err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
@@ -214,6 +251,11 @@ func EnsureGitRepoTemplate(t *testing.T) {
 		run("init")
 		run("config", "user.name", "test")
 		run("config", "user.email", "test@test.com")
+		// git init inherits the developer's global config, so a machine that
+		// signs every commit makes this fixture depend on a signing agent
+		// being unlocked. Every copy of the template carries this local
+		// override, so GitCmd's later commits are unsigned too.
+		run("config", "commit.gpgsign", "false")
 		run("checkout", "-b", "main")
 
 		write("base.txt", "base content")
@@ -280,6 +322,10 @@ func NewTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA stri
 		// a per-test directory so a step under test can never write evidence
 		// into a shared location the next test would then observe.
 		EvidenceDir: filepath.Join(t.TempDir(), "evidence", "run-1"),
+		// Same rationale as EvidenceDir above: a per-test directory outside
+		// WorkDir, so a step under test can never write a coverage profile
+		// into a shared location or into the worktree it is validating.
+		CoverageDir: filepath.Join(t.TempDir(), "coverage", "run-1"),
 		WorkDir:     workDir,
 		Agent:       ag,
 		Config:      &config.Config{Agent: types.AgentClaude, Commands: cmds},
@@ -900,4 +946,48 @@ func RunGitDirect(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// CoverageFixture describes the one-function coverage profile and the test
+// report CoverageCommand emits, which is the smallest pair of artifacts the
+// Test step's vacuous-green guard accepts.
+type CoverageFixture struct {
+	File     string // source file the profile names, repository-relative
+	Function string
+	Line     int
+	Hits     int
+	Tests    int
+	Skipped  int
+}
+
+// CoverageCommand returns a shell command that writes a minimal LCOV
+// profile and a JUnit report into $NO_MISTAKES_COVERAGE_DIR, so a test
+// fixture command can satisfy the vacuous-green guard.
+//
+// The command is POSIX shell only. The Windows shard runs this package's
+// fixture commands through cmd.exe, which cannot echo the JUnit report's
+// angle brackets without escaping every one of them, and carrying a second
+// cmd.exe spelling of the same two files costs more than the coverage it
+// buys. Tests that need this skip on Windows.
+func CoverageCommand(f CoverageFixture) string {
+	profile := fmt.Sprintf("SF:%s\nFN:%d,%s\nFNDA:%d,%s\nend_of_record\n", f.File, f.Line, f.Function, f.Hits, f.Function)
+	report := fmt.Sprintf("<testsuite tests=\"%d\" skipped=\"%d\"></testsuite>\n", f.Tests, f.Skipped)
+	return WriteCoverageArtifactsCommand(profile, report)
+}
+
+// WriteCoverageArtifactsCommand returns a POSIX shell command that writes
+// profile and report verbatim into $NO_MISTAKES_COVERAGE_DIR. It exists
+// beside CoverageCommand for the fixtures whose profile needs more than one
+// function, which is how a test tells "covered the changed lines" apart from
+// "covered something else in the same file".
+func WriteCoverageArtifactsCommand(profile, report string) string {
+	return "printf '%s' " + shellQuote(profile) + ` > "$NO_MISTAKES_COVERAGE_DIR/coverage.lcov"; ` +
+		"printf '%s' " + shellQuote(report) + ` > "$NO_MISTAKES_COVERAGE_DIR/report.xml"`
+}
+
+// shellQuote wraps s for POSIX sh. Single quotes suppress every expansion,
+// which matters because a coverage profile carries characters ($ and \ among
+// them) a double-quoted string would interpret.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

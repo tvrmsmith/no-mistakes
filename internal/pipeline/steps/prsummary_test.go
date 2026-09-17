@@ -211,10 +211,10 @@ func TestBuildPipelineSummary_EmitsStructuredStepAttestation(t *testing.T) {
 	}{
 		{types.StepIntent, types.StepStatusSkipped},
 		{types.StepRebase, types.StepStatusCompleted},
-		{types.StepReview, types.StepStatusCompleted},
+		{types.StepLint, types.StepStatusAwaitingApproval},
 		{types.StepTest, types.StepStatusFailed},
 		{types.StepDocument, types.StepStatusSkipped},
-		{types.StepLint, types.StepStatusAwaitingApproval},
+		{types.StepReview, types.StepStatusCompleted},
 		{types.StepPush, types.StepStatusCompleted},
 		{types.StepPR, types.StepStatusRunning},
 		{types.StepCI, types.StepStatusPending},

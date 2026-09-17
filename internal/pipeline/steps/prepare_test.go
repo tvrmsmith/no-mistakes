@@ -66,11 +66,10 @@ func TestConfiguredTestAndLintSharePreparation(t *testing.T) {
 	}}
 	sctx := newPreparationTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{
 		Prepare: preparationCommand(),
-		Test:    dependencyExistsCommand(),
+		Test:    coveredDependencyExistsCommand(),
 		Lint:    dependencyExistsCommand(),
 	})
 	sctx.Shared = &pipeline.RunShared{}
-
 	if outcome, err := (&TestStep{}).Execute(sctx); err != nil {
 		t.Fatalf("test step: %v", err)
 	} else if outcome.ExitCode != 0 {
@@ -596,7 +595,12 @@ func TestPreparationGateInsideWorktree_AcceptsDifferentWindowsVolumes(t *testing
 	}
 }
 
-func TestPushStep_PreparesFormatterWithPendingUntrackedChanges(t *testing.T) {
+// TestFormatStep_PreparesFormatterWithPendingUntrackedChanges drives the
+// formatter over a worktree carrying a pending untracked file, then pushes.
+// Format, not Push, is the step that prepares and runs the formatter and
+// commits at its exit; Push refuses a dirty worktree, so the two together
+// prove the pending file survived preparation and reached the remote.
+func TestFormatStep_PreparesFormatterWithPendingUntrackedChanges(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -617,8 +621,11 @@ func TestPushStep_PreparesFormatterWithPendingUntrackedChanges(t *testing.T) {
 	setupGateMirror(t, sctx)
 	recordReviewApproval(t, sctx, headSHA)
 
+	if _, err := (&FormatStep{}).Execute(sctx); err != nil {
+		t.Fatalf("format with pending formatter input: %v", err)
+	}
 	if _, err := (&PushStep{}).Execute(sctx); err != nil {
-		t.Fatalf("push with pending formatter input: %v", err)
+		t.Fatalf("push after formatting: %v", err)
 	}
 	pushedHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
 	if got := gitCmd(t, upstream, "show", pushedHead+":pending_test.go"); got != "package pending" {
@@ -649,6 +656,23 @@ func dependencyExistsCommand() string {
 		return `if exist .deps\count (exit /b 0) else (exit /b 1)`
 	}
 	return `test -f .deps/count`
+}
+
+// coveredDependencyExistsCommand is dependencyExistsCommand with a minimal
+// coverage profile and test report written first, so the Test step's
+// vacuous-green guard has artifacts to read and the run reaches the evidence
+// turn this test is about. The profile names a tracked file the fixture never
+// changes, which is all the guard needs when the change itself (feature.txt)
+// has no coverable extension.
+func coveredDependencyExistsCommand() string {
+	if runtime.GOOS == "windows" {
+		return `(echo SF:base.txt& echo FN:1,Base& echo FNDA:1,Base& echo end_of_record)>"%NO_MISTAKES_COVERAGE_DIR%\coverage.lcov" & ` +
+			`(echo ^<testsuite tests="1" skipped="0"^>^</testsuite^>)>"%NO_MISTAKES_COVERAGE_DIR%\report.xml" & ` +
+			dependencyExistsCommand()
+	}
+	return `printf '%s' 'SF:base.txt\nFN:1,Base\nFNDA:1,Base\nend_of_record\n' > "$NO_MISTAKES_COVERAGE_DIR/coverage.lcov"; ` +
+		`printf '%s' '<testsuite tests="1" skipped="0"></testsuite>\n' > "$NO_MISTAKES_COVERAGE_DIR/report.xml"; ` +
+		dependencyExistsCommand()
 }
 
 func nestedRepositoryPreparationCommand() string {
@@ -736,6 +760,9 @@ func newPreparationTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, h
 	gateDir := t.TempDir()
 	gitCmd(t, gateDir, "init", "--bare")
 	sctx.GateDir = gateDir
+	// The Test step writes each unit's coverage artifacts before running its
+	// command, so a context that reaches it needs somewhere to put them.
+	sctx.CoverageDir = filepath.Join(t.TempDir(), "coverage", "run-1")
 	return sctx
 }
 

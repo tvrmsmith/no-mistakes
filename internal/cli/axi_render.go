@@ -61,12 +61,6 @@ type automaticSkipRow struct {
 	Reason string `toon:"reason"`
 }
 
-type sharedWorkRow struct {
-	AttributedTo string `toon:"attributed_to"`
-	Scope        string `toon:"scope"`
-	DurationMS   int64  `toon:"duration_ms"`
-}
-
 type activeStepRow struct {
 	Step           string `toon:"step"`
 	Status         string `toon:"status"`
@@ -113,7 +107,6 @@ type stepView struct {
 	Name             string
 	Status           string
 	DurationMS       int64
-	WorkScope        string
 	FindingsJSON     string
 	FixSummaries     []string
 	StartedAt        *int64
@@ -142,7 +135,11 @@ type runView struct {
 	// awaiting the driving agent, or nil when the run is not parked. It powers
 	// the top-level parked signal in the run object.
 	AwaitingAgentSince *int64
-	Steps              []stepView
+	// RestartCount is how many times the run re-entered validation from the
+	// restart boundary. Unlike AwaitingAgentSince it is history rather than a
+	// live signal, so it renders even once the run is terminal.
+	RestartCount int64
+	Steps        []stepView
 	// CIOverrideReason is non-empty when a human approved past a still-failing
 	// live check (see pipeline.ApprovalOverrideVerifier). outcomeForRun uses
 	// it to keep a deliberate override from reading identically to a
@@ -159,6 +156,7 @@ func runViewFromIPC(r *ipc.RunInfo) runView {
 		CIReady:            r.CIReady,
 		CIReadyNoCI:        r.CIReadyNoCI,
 		AwaitingAgentSince: r.AwaitingAgentSince,
+		RestartCount:       r.RestartCount,
 		CIOverrideReason:   r.CIOverrideReason,
 	}
 	if r.PRURL != nil {
@@ -178,7 +176,6 @@ func runViewFromIPC(r *ipc.RunInfo) runView {
 			FixRoundCount:    s.FixRoundCount,
 			AutoFixLimit:     s.AutoFixLimit,
 			PendingFixSource: s.PendingFixSource,
-			WorkScope:        s.WorkScope,
 			SkipReason:       s.SkipReason,
 		}
 		if s.LastActivity != nil {
@@ -195,13 +192,14 @@ func runViewFromIPC(r *ipc.RunInfo) runView {
 	return rv
 }
 
-func runViewFromDB(r *db.Run, steps []*db.StepResult, database *db.DB) runView {
+func runViewFromDB(r *db.Run, steps []*db.StepResult) runView {
 	rv := runView{
 		ID:                 r.ID,
 		Branch:             r.Branch,
 		Status:             string(r.Status),
 		HeadSHA:            r.HeadSHA,
 		AwaitingAgentSince: r.AwaitingAgentSince,
+		RestartCount:       r.RestartCount,
 	}
 	if r.PRURL != nil {
 		rv.PRURL = *r.PRURL
@@ -227,11 +225,6 @@ func runViewFromDB(r *db.Run, steps []*db.StepResult, database *db.DB) runView {
 		}
 		if s.DurationMS != nil {
 			sv.DurationMS = *s.DurationMS
-		}
-		if database != nil && s.StepName == types.StepDocument {
-			if combined, err := database.HasAgentInvocationPurpose(s.RunID, string(s.StepName), "housekeeping"); err == nil && combined {
-				sv.WorkScope = ipc.WorkScopeDocumentLintHousekeeping
-			}
 		}
 		if s.FindingsJSON != nil {
 			sv.FindingsJSON = *s.FindingsJSON
@@ -278,6 +271,18 @@ func formatParkedFor(sinceUnix int64) string {
 	default:
 		return fmt.Sprintf("parked %dd%dh", int(d.Hours())/24, int(d.Hours())%24)
 	}
+}
+
+// restartCountValue renders a run's restart count. Below and at db.RestartSoftCap
+// it stays a plain integer so TOON encodes it without quoting; strictly above the
+// cap it becomes an annotated string so a maintainer can spot a thrashing fix
+// loop without cross-referencing the threshold themselves. The cap itself is
+// advisory only and never blocks or limits anything.
+func restartCountValue(count int64) any {
+	if count > db.RestartSoftCap {
+		return fmt.Sprintf("%d (soft cap %d exceeded)", count, db.RestartSoftCap)
+	}
+	return count
 }
 
 // shortSHA trims a commit SHA for display.
@@ -487,6 +492,12 @@ func runObjectFieldWithKey(key string, rv runView) toon.Field {
 	if rv.AwaitingAgentSince != nil && !terminalStatus(rv.Status) {
 		fields = append(fields, toon.Field{Key: "awaiting_agent", Value: formatParkedFor(*rv.AwaitingAgentSince)})
 	}
+	// RestartCount is history, not a live signal like awaiting_agent, so it
+	// renders regardless of whether the run is terminal. Zero renders nothing:
+	// a run that never restarted has nothing worth reporting here.
+	if rv.RestartCount > 0 {
+		fields = append(fields, toon.Field{Key: "restarts", Value: restartCountValue(rv.RestartCount)})
+	}
 	fields = append(fields, toon.Field{Key: "head", Value: shortSHA(rv.HeadSHA)})
 	fields = append(fields, toon.Field{Key: "head_sha", Value: rv.HeadSHA})
 	if rv.PRURL != "" {
@@ -495,19 +506,12 @@ func runObjectFieldWithKey(key string, rv runView) toon.Field {
 	fields = append(fields, toon.Field{Key: "findings", Value: rv.findingsTally()})
 
 	rows := make([]stepRow, 0, len(rv.Steps))
-	sharedRows := make([]sharedWorkRow, 0, 1)
 	for _, s := range rv.Steps {
 		rows = append(rows, stepRow{Step: s.Name, Status: s.Status, Findings: s.findingCount(), DurationMS: s.DurationMS})
-		if s.WorkScope != "" {
-			sharedRows = append(sharedRows, sharedWorkRow{AttributedTo: s.Name, Scope: s.WorkScope, DurationMS: s.DurationMS})
-		}
 	}
 	fields = append(fields, toon.Field{Key: "steps", Value: rows})
 	if skips := rv.automaticSkips(); len(skips) > 0 {
 		fields = append(fields, toon.Field{Key: "automatic_skips", Value: skips})
-	}
-	if len(sharedRows) > 0 {
-		fields = append(fields, toon.Field{Key: "shared_work", Value: sharedRows})
 	}
 	if activeRows := rv.activeRows(); len(activeRows) > 0 {
 		fields = append(fields, toon.Field{Key: "active_steps", Value: activeRows})

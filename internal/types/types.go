@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -70,8 +71,10 @@ type StepName string
 const (
 	StepIntent   StepName = "intent"
 	StepRebase   StepName = "rebase"
+	StepFormat   StepName = "format"
 	StepReview   StepName = "review"
 	StepTest     StepName = "test"
+	StepMetrics  StepName = "metrics"
 	StepDocument StepName = "document"
 	StepLint     StepName = "lint"
 	StepPush     StepName = "push"
@@ -115,40 +118,30 @@ func (s StepName) Value() (driver.Value, error) {
 	return string(s), nil
 }
 
-// StepOrder returns the fixed execution order for a step (1-indexed).
+// allSteps owns step order within this package: AllSteps and StepName.Order
+// both read from it. It does not own the sequence the daemon executes, which is
+// a separate literal in steps.AllSteps() (internal/pipeline/steps/common.go);
+// TestAllStepsMatchesTypesAllSteps
+// (internal/pipeline/steps/step_sequence_test.go) pins the two lists equal, so
+// a new step means editing both. Moving a step shifts the values Order()
+// persists into step_results.step_order, which internal/db orders and compares
+// numerically against rows already written.
+var allSteps = []StepName{StepIntent, StepRebase, StepFormat, StepLint, StepTest, StepMetrics, StepDocument, StepReview, StepPush, StepPR, StepCI}
+
+// Order returns the fixed execution order for a step (1-indexed), derived from
+// its position in AllSteps. An unknown step returns 0.
 // A custom gate shares its anchor's order: it runs immediately after that core
 // step, and a restart that resets from the anchor must reset the gate with it.
 func (s StepName) Order() int {
 	if anchor, ok := s.CustomGateAnchor(); ok {
 		return anchor.Order()
 	}
-	switch s {
-	case StepIntent:
-		return 1
-	case StepRebase:
-		return 2
-	case StepReview:
-		return 3
-	case StepTest:
-		return 4
-	case StepDocument:
-		return 5
-	case StepLint:
-		return 6
-	case StepPush:
-		return 7
-	case StepPR:
-		return 8
-	case StepCI:
-		return 9
-	default:
-		return 0
-	}
+	return slices.Index(allSteps, s) + 1
 }
 
 // AllSteps returns all core pipeline steps in execution order.
 func AllSteps() []StepName {
-	return []StepName{StepIntent, StepRebase, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
+	return slices.Clone(allSteps)
 }
 
 func (s StepName) IsCustomGateAnchor() bool {

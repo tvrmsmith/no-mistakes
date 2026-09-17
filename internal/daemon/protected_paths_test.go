@@ -19,7 +19,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-type protectedPathPushRetryStep struct {
+type protectedPathRefusalRetryStep struct {
 	edited bool
 }
 
@@ -27,7 +27,7 @@ func TestProtectedPathRefusalCancellationCleanup(t *testing.T) {
 	for _, action := range []string{"new_push", "cancel_run", "abort_response"} {
 		t.Run(action, func(t *testing.T) {
 			p, database := startTestDaemonWithSteps(t, func() []pipeline.Step {
-				return []pipeline.Step{protectedPathCommitStep{step: &steps.PushStep{}}}
+				return []pipeline.Step{protectedPathCommitStep{step: &steps.FormatStep{}}}
 			})
 			repo, head := setupTestGitRepo(t, p, database, "protected-cancellation")
 			client, err := ipc.Dial(p.Socket())
@@ -85,7 +85,7 @@ func TestProtectedPathRefusalCancellationCleanup(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "abort_response":
-				if err := client.Call(ipc.MethodRespond, &ipc.RespondParams{RunID: result.RunID, Step: types.StepPush, Action: types.ActionAbort}, nil); err != nil {
+				if err := client.Call(ipc.MethodRespond, &ipc.RespondParams{RunID: result.RunID, Step: types.StepFormat, Action: types.ActionAbort}, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -121,7 +121,7 @@ func TestProtectedPathRefusalCancellationCleanup(t *testing.T) {
 
 func TestProtectedPathRefusalSurvivesShutdownCleanup(t *testing.T) {
 	p, database := startTestDaemonWithSteps(t, func() []pipeline.Step {
-		return []pipeline.Step{protectedPathCommitStep{step: &steps.PushStep{}}}
+		return []pipeline.Step{protectedPathCommitStep{step: &steps.FormatStep{}}}
 	})
 	repo, head := setupTestGitRepo(t, p, database, "protected-shutdown")
 	client, err := ipc.Dial(p.Socket())
@@ -170,7 +170,7 @@ func TestProtectedPathRefusalSurvivesShutdownCleanup(t *testing.T) {
 }
 
 func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
-	for _, step := range []types.StepName{types.StepPush, types.StepCI} {
+	for _, step := range []types.StepName{types.StepFormat, types.StepCI} {
 		t.Run(string(step), func(t *testing.T) {
 			p := paths.WithRoot(t.TempDir())
 			if err := p.EnsureDirs(); err != nil {
@@ -205,8 +205,8 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 			if err := database.StartStep(sr.ID); err != nil {
 				t.Fatal(err)
 			}
-			sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir, Run: run, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
-			_, refusal := (protectedPathCommitStep{step: &steps.PushStep{}}).Execute(sctx)
+			sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir, Run: run, Repo: repo, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
+			_, refusal := (protectedPathCommitStep{step: &steps.FormatStep{}}).Execute(sctx)
 			outcome := pipeline.ProtectedPathOutcome(refusal)
 			if outcome == nil {
 				t.Fatalf("expected protected-path refusal: %v", refusal)
@@ -222,7 +222,7 @@ func TestProtectedPathRefusalSurvivesFailedTrustedRecovery(t *testing.T) {
 				if step == types.StepCI {
 					return []pipeline.Step{&steps.CIStep{}}
 				}
-				return []pipeline.Step{&steps.PushStep{}}
+				return []pipeline.Step{&steps.FormatStep{}}
 			})
 			run, err = database.GetRun(run.ID)
 			if err != nil {
@@ -264,8 +264,12 @@ func assertProtectedWorktreePreserved(t *testing.T, workDir, head string) {
 	}
 }
 
-func (s *protectedPathPushRetryStep) Name() types.StepName { return types.StepPush }
-func (s *protectedPathPushRetryStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+// protectedPathRefusalRetryStep refuses on its first execution and passes on
+// the retry the operator asks for, standing in for the validation step whose
+// exit commit hits a protected path. It also records the review-approved head
+// the Push step that follows it in the plan requires.
+func (s *protectedPathRefusalRetryStep) Name() types.StepName { return types.StepFormat }
+func (s *protectedPathRefusalRetryStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	if len(sctx.Config.ProtectedPaths) != 1 || sctx.Config.ProtectedPaths[0] != "*.txt" {
 		return nil, fmt.Errorf("trusted protected_paths lost to pushed config: %q", sctx.Config.ProtectedPaths)
 	}
@@ -274,9 +278,9 @@ func (s *protectedPathPushRetryStep) Execute(sctx *pipeline.StepContext) (*pipel
 		if err := sctx.DB.UpdateRunReviewApprovedHeadSHA(sctx.Run.ID, sctx.Run.HeadSHA); err != nil {
 			return nil, err
 		}
-		return (protectedPathCommitStep{step: &steps.PushStep{}}).Execute(sctx)
+		return (protectedPathCommitStep{step: &steps.FormatStep{}}).Execute(sctx)
 	}
-	return (&steps.PushStep{}).Execute(sctx)
+	return &pipeline.StepOutcome{}, nil
 }
 
 func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing.T) {
@@ -284,7 +288,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	// leaves the machine (see writeMockGHNoPR).
 	t.Setenv("PATH", writeMockGHNoPR(t, t.TempDir())+string(os.PathListSeparator)+os.Getenv("PATH"))
 	p, database := startTestDaemonWithSteps(t, func() []pipeline.Step {
-		return []pipeline.Step{&protectedPathPushRetryStep{}}
+		return []pipeline.Step{&protectedPathRefusalRetryStep{}, &steps.PushStep{}}
 	})
 	repo, _ := setupTestGitRepo(t, p, database, "protected-publication")
 	// Exercise the manager's real trusted-config fetch: the pushed branch tries
@@ -338,7 +342,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	}
 
 	approvalErr := client.Call(ipc.MethodRespond, &ipc.RespondParams{
-		RunID: result.RunID, Step: types.StepPush, Action: types.ActionApprove,
+		RunID: result.RunID, Step: types.StepFormat, Action: types.ActionApprove,
 	}, nil)
 	if approvalErr == nil {
 		run := waitForRunTerminalState(t, database, result.RunID)
@@ -371,7 +375,7 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	// The operator resolves the protected edit, then explicitly retries Push.
 	gitCmd(t, workDir, "restore", "--source=HEAD", "--staged", "--worktree", "--", "test.txt")
 	if err := client.Call(ipc.MethodRespond, &ipc.RespondParams{
-		RunID: result.RunID, Step: types.StepPush, Action: types.ActionFix,
+		RunID: result.RunID, Step: types.StepFormat, Action: types.ActionFix,
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -394,6 +398,15 @@ func TestProtectedPathPushApprovalCannotSkipPublicationOrDiscardEdits(t *testing
 	t.Fatal("clean worktree was not removed after successful publication")
 }
 
+// protectedPathCommitStep leaves a protected file edited in both the index and
+// the worktree, then runs the wrapped step so its exit commit hits the
+// protected-path guard.
+//
+// The step it wraps is a validation step, not Push. Push no longer stages or
+// commits anything: every validation step commits its own work at its exit
+// through runValidationStep, and that exit commit is the only pipeline-owned
+// catch-all staging path protected_paths still guards. Push over this fixture's
+// dirty worktree refuses for a different reason entirely.
 type protectedPathCommitStep struct {
 	step pipeline.Step
 }
@@ -419,7 +432,7 @@ func (s protectedPathCommitStep) Execute(sctx *pipeline.StepContext) (*pipeline.
 }
 
 func TestProtectedPathRefusalParksBeforeManagerCleanup(t *testing.T) {
-	for _, step := range []pipeline.Step{&steps.PushStep{}, &steps.TestStep{}} {
+	for _, step := range []pipeline.Step{&steps.FormatStep{}, &steps.TestStep{}} {
 		t.Run(string(step.Name()), func(t *testing.T) {
 			p, database := startTestDaemonWithSteps(t, func() []pipeline.Step {
 				return []pipeline.Step{protectedPathCommitStep{step: step}}

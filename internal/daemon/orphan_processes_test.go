@@ -59,15 +59,15 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
 				t.Fatal(err)
 			}
-			sr, err := database.InsertStepResult(run.ID, types.StepPush)
+			sr, err := database.InsertStepResult(run.ID, types.StepFormat)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := database.StartStep(sr.ID); err != nil {
 				t.Fatal(err)
 			}
-			sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir, Run: run, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
-			_, refusal := (protectedPathCommitStep{step: &steps.PushStep{}}).Execute(sctx)
+			sctx := &pipeline.StepContext{Ctx: t.Context(), WorkDir: workDir, Run: run, Repo: repo, DB: database, Config: config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{}), Log: func(string) {}}
+			_, refusal := (protectedPathCommitStep{step: &steps.FormatStep{}}).Execute(sctx)
 			outcome := pipeline.ProtectedPathOutcome(refusal)
 			if outcome == nil {
 				t.Fatalf("expected protected-path refusal: %v", refusal)
@@ -91,7 +91,7 @@ func TestProtectedPathRefusalRetainsWorktreeButReapsProcessesAndEvidence(t *test
 			}
 			leakedPID := startOrphanInWorktree(t, workDir)
 			breakTrustedRepoConfig(t, p.RepoDir(repo.ID))
-			mgr := NewRunManager(database, p, func() []pipeline.Step { return []pipeline.Step{&steps.PushStep{}} })
+			mgr := NewRunManager(database, p, func() []pipeline.Step { return []pipeline.Step{&steps.FormatStep{}} })
 			run, err = database.GetRun(run.ID)
 			if err != nil {
 				t.Fatal(err)

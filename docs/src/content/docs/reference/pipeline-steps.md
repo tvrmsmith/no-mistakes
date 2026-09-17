@@ -6,7 +6,7 @@ description: Reference for each step in the validation pipeline.
 This is the per-step reference. For the overview and rationale, see [Pipeline](/no-mistakes/concepts/pipeline/). For the fix loop, see [Auto-Fix Loop](/no-mistakes/concepts/auto-fix/).
 
 ```text
-intent → rebase → review → test → document → lint → push → pr → ci
+intent → rebase → format → lint → test → metrics → document → review → push → pr → ci
 ```
 
 Each step can produce findings, request approval, trigger auto-fix, or apply safe fixes during its own pass. Steps that encounter fatal errors stop the pipeline. Steps can also be pre-skipped when starting a run, skipped by the user, or skipped automatically by the pipeline.
@@ -19,21 +19,38 @@ This is a soft boundary, not OS-level sandbox enforcement.
 The steering still allows requested test evidence under the run's managed evidence directory, plus incidental temp or cache writes from normal development tools.
 Configured shell commands and one-shot agent subprocesses are scoped to their step: when the invocation exits, fails, or is cancelled, no-mistakes terminates remaining child processes it spawned so background workers do not outlive the run.
 When configured Test, Lint, or repository gate command output exceeds 64 KiB, the complete output remains in the authoritative step log while findings, IPC responses, and repair prompts receive a valid-UTF-8 head-and-tail projection capped at 64 KiB. The truncation marker reports the exact original and omitted byte counts and points to `no-mistakes axi logs --step <step> --full` for the complete output.
-Commits created by the shared Review, Test, Document, Lint, and operator-authorized repository gate fix path, plus CI repair commits, use the configurable [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message) template.
+Commits created by the shared Format, Lint, Test, Metrics, Document, Review, and operator-authorized repository gate fix path, plus CI repair commits, use the configurable [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message) template.
 Correction and CI repair handoffs inspect the staged index after staging. An empty index succeeds without creating a commit, even if an earlier worktree status reported changes; a real `git commit` failure still fails the attempt. If the agent already advanced `HEAD`, the handoff still records or publishes that head through the existing review and publication guards. [Private mirror reconciliation](/no-mistakes/concepts/gate-model/#private-mirror-reconciliation) owns the shared-ref preservation rules for that recording.
 Review, Test, Lint, and operator-authorized repository gate repair agents, including Lint's safe-fix pass when no command is configured, share a removal-first rule with the CI repair agent: when a problem can be resolved by removing a code path the intent does not strictly require, they remove it instead of validating, hardening, or documenting it. They judge necessity against user intent when present and otherwise against the change's stated purpose.
-The shared correction commits, and the Push step's commit of leftover changes from a pipeline agent or formatter, are machine-authored records of pipeline output. Each is created with the complete local commit-hook family suppressed by combining `--no-verify` with an empty temporary `core.hooksPath` for that invocation, so `pre-commit`, `prepare-commit-msg`, `commit-msg`, and `post-commit` do not run. This lets a disposable run worktree commit a correction even when a tracked hook depends on generated untracked runtime files that do not exist there - the canonical case is `core.hooksPath=.husky` with a tracked hook that sources the absent `.husky/_/husky.sh`.
+The shared correction commits are machine-authored records of pipeline output. Each is created with the complete local commit-hook family suppressed by combining `--no-verify` with an empty temporary `core.hooksPath` for that invocation, so `pre-commit`, `prepare-commit-msg`, `commit-msg`, and `post-commit` do not run. This lets a disposable run worktree commit a correction even when a tracked hook depends on generated untracked runtime files that do not exist there - the canonical case is `core.hooksPath=.husky` with a tracked hook that sources the absent `.husky/_/husky.sh`.
 The suppression is limited to those correction-commit invocations. It does not change the repository, Git configuration, or daemon environment; CI repair commits and all other commit paths keep normal hook behavior. Pipeline gates remain authoritative; whether a CI repair returns through the local gates before publication is controlled by [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs).
 Agent roles that can write, repair, or review tests reject tests whose only evidence is matching implementation source text, tokens, syntax, or incidental snapshots.
 They instead require an executable interface or a typed or normalized semantic model that proves observable behavior.
 Reading a file remains valid when that file is itself an owned output or data contract, and deterministic tests may inspect the final emitted agent prompt as a generated interface; model interpretation is reserved for development-only evaluation.
 Review flags every newly added violation and requires same-pattern tests encountered directly in the accepted change's scope to be removed or made semantic, without expanding the change into a repository-wide test cleanup.
 
+## Validation restart
+
+Format, Lint, Test, Metrics, Document, and Review share one exit path. When a round leaves the worktree unclean, that step commits the leftovers itself, and the commit is attributed to whoever produced it.
+
+A commit made in a round that invoked an agent is agent-authored: nothing has judged it, so the run re-enters validation from Format, and the run's review approval is revoked in the same write that records the new head. Format, Lint, Test, Metrics, Document, and Review then run again against that head. A commit a deterministic tool produced, such as a formatter rewriting whitespace, carries nothing new to judge and restarts nothing.
+
+A re-entry is not a fix round. The re-entered step receives the previous round's findings as context, and per-step auto-fix budgets do not refill across a restart, so a step cannot buy more attempts by restarting.
+
+Restarts are not capped. Two guards make a loop visible instead:
+
+- A step that commits the same tree its own previous restart already produced parks with an `ask-user` finding naming the step and the tree instead of restarting again. Approve to ship it under the review that already stands, fix to run that step once more, or abort.
+- Each run counts its restarts. `no-mistakes axi status` renders that count as `restarts`, annotated once it passes an advisory soft cap of 5. The cap only annotates; it never blocks or limits a run.
+
+Format is the restart boundary and Review is the step that records the review-approved head, and the step that certifies must not modify the tree it certifies. A review round that records an approved head and still leaves the worktree unclean therefore commits nothing: it parks and lists what was left behind, tracked modifications as warnings and untracked non-ignored files as informational notes. Approving discards exactly the paths that gate recorded and keeps the certification; fixing commits them through Review's own fix round and re-reviews the resulting head. Every item is `no-op`, so an unattended `--yes` run discards and reports. A daemon restart forgets the recorded paths, so approving the recovered gate discards nothing and leaves the leftovers for the next validation step's exit commit.
+
+A run that skipped Format never rewinds into it, because that would re-mark Format skipped and walk straight back to the requesting step. With Push live the run fails, naming both steps, since Push would otherwise refuse three steps later on the missing certification. With Push skipped too - the validate-without-publishing mode of `--skip format,push` - the restart request is dropped with a log naming both steps and the run continues; the round's own findings and approval gate are unaffected. A run resumed after a daemon restart reaches the same verdict, because the run records the operator's skip list when it starts.
+
 ## Finding decision history
 
 When a human resolves a findings gate with Approve, Skip, or Abort without selecting a fix, no-mistakes records that the round's findings were declined. A gate with no findings records no decision. When the human selects only some findings to fix, the unselected complement is recorded as declined; findings merely left out by automatic filtering remain undecided.
 
-Review, Test, Document, Lint, CI, and repository gate fix agent prompts receive a sanitized history containing the current step's earlier rounds, decisions from other steps in the same run, and a bounded window of decisions from earlier runs on the same branch. A recorded decision takes precedence over conflicting user-intent wording, and later decisions about the same concern supersede earlier ones. Completing Review does not clear branch decisions.
+Format, Lint, Test, Metrics, Document, Review, CI, and repository gate fix agent prompts receive a sanitized history containing the current step's earlier rounds, decisions from other steps in the same run, and a bounded window of decisions from earlier runs on the same branch. A recorded decision takes precedence over conflicting user-intent wording, and later decisions about the same concern supersede earlier ones. Completing Review does not clear branch decisions. Metrics reaches an agent only in a fix round, so that fix prompt is the only Metrics prompt the history reaches.
 
 This context is advisory and fails open. It tells agents not to implement or re-report a declined finding unless the current code introduces a materially different problem, but it does not block a step or commit and is not a reversion detector. Rebase fix prompts do not receive this decision history.
 
@@ -83,9 +100,145 @@ The integration branch used below is the [PR base branch](/no-mistakes/reference
 
 **Default auto-fix limit:** `3`.
 
+## Format
+
+Runs the repository's configured formatter, moved here from the Push step so formatting is visible as its own outcome. Push no longer runs a formatter itself: Format running first in the validation region means every later step already sees formatted code.
+
+**Behavior:**
+
+- If `commands.format` is set: ensures [`commands.prepare`](/no-mistakes/reference/repo-config/#commandsprepare) has succeeded once for the isolated worktree, then runs it via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows). Non-zero exit produces a `warning` finding naming the exit code.
+- If `commands.format` is empty: passes without running anything. Unlike Lint, there is no agent fallback: formatting is a mechanical transform a tool either provides or does not.
+
+**Approval:** a non-zero formatter exit pauses for approval and is eligible for the fix loop.
+
+**Auto-fix:** the agent makes the smallest correct fix so the formatter can parse the source, without refactoring beyond that, then the formatter re-runs.
+
+**Default auto-fix limit:** `3`.
+
+## Lint
+
+Runs linters and static analysis.
+
+**Behavior:**
+
+- If `commands.lint` is set: ensures [`commands.prepare`](/no-mistakes/reference/repo-config/#commandsprepare) has succeeded once for the isolated worktree, then runs lint via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows). Non-zero exit produces `warning` findings.
+- If `commands.lint` is empty: the lint step runs its own agent pass. The agent detects appropriate linters/formatters, applies safe fixes, reruns the relevant checks, commits any agent changes, and returns structured findings only for unresolved issues.
+- Bounds those agent turns, including a configured-lint repair turn, with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
+
+**Approval:** lint findings with `action: ask-user` pause for approval.
+`action: auto-fix` findings stay eligible for the fix loop when `commands.lint` is configured.
+`action: no-op` findings are informational only.
+
+**Auto-fix:** when `commands.lint` is configured, the lint step follows the same pattern as test - the agent fixes `action: auto-fix` issues using the previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step, then lint re-runs.
+When `commands.lint` is empty, unresolved findings from the agent's own pass pause for approval instead of starting another automatic lint/fix loop, because the agent already attempted safe fixes during that pass.
+
+**Default auto-fix limit:** `3`.
+
+## Test
+
+Discovers which units a change touches and what command tests each one, then runs those commands, then drives the change's end-user scenarios against the real running product.
+Local Test is never a repository-wide regression-suite substitute; broad regression is owned by remote CI and remains mandatory before a PR is ready.
+[`commands.test`](/no-mistakes/reference/repo-config/#commandstest) and [`test.units`](/no-mistakes/reference/repo-config/#testunits) own the configuration contract for any explicit test command, and trusted [`test.instructions`](/no-mistakes/reference/repo-config/#testinstructions) supplies the repository's live-validation runbook.
+
+**Discovery:** derives the repository's unit layout and the units a change touches, in this order of precedence: a configured [`test.units`](/no-mistakes/reference/repo-config/#testunits) layout, then a configured `commands.test` collapsing the whole repository into one unit, then an agent pass that infers the layout. The result is stored on the run row (keyed by the changed-file set) so a run recovered after a daemon restart reuses it instead of paying a second cold agent pass; the record dies with the run and nothing carries across runs. A discovery failure - an unreadable layout, or a unit with no command - parks the step rather than passing. A changed path belongs to its most specific owner, the unit with the longest matching path, so a layout of `.` plus `api` sends a change under `api/` to `api` alone and keeps `.` for the root-level files no narrower unit claims. A changed path counts as under-selected only when no already-selected unit owns it. Under-selection expands the selection once, running the omitted unit and logging both the original selection and the expansion; a second under-selection fault in the same run parks instead of expanding again, since a repeat fault means discovery itself is unreliable rather than merely incomplete this once.
+The agent pass is held to the same targeted-validation boundary as every other Test agent: an inferred command must scope itself to the changed paths and must not be the complete repository suite, even when the unit is the whole repository, and the agent is told it can read `NO_MISTAKES_CHANGED_FILES` and `NO_MISTAKES_BASE_SHA` in the command it writes.
+A repository that configures neither `test.units` nor `commands.test` therefore pays two agent turns per attempt: the discovery pass, then a judge-only evidence pass that reads the results the unit commands already produced. An inferred command carries no maintainer's vouch, so its green still needs an agent reading the output.
+
+**Execution:**
+
+- The selected units and the command run for each are logged before anything runs, so a green result is auditable.
+- Before the first unit command, runs [`commands.prepare`](/no-mistakes/reference/repo-config/#commandsprepare) once for the isolated worktree if configured; later configured lint/format commands share that successful preparation.
+- Every selected unit's command runs via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows), exactly once per attempt, and captures output. Non-zero exit produces an `error` finding, stops further unit execution for that attempt, and parks the Test step. Approving that gate records an explicit override on the step (`step_results.override_reason`) and copies it onto the PR attestation as `steps[].override_reason`; the [`require-no-mistakes`](#pipeline-step-attestation) check treats that as non-compliant unless trusted [`test.allow_approve_over_failure`](/no-mistakes/reference/repo-config/#testallow_approve_over_failure) is set. Configure **targeted** commands (see repo-config); do not treat these as CI-parity complete-suite configuration.
+- An evidence pass runs on any of three conditions. Discovery selected no unit for the changed files, discovery inferred the layout itself with an agent, or the run carries user intent. A configured `test.units` or `commands.test` layout with a non-empty selection gets the pass only for user intent. In the pass, the agent derives a proportionate list of named end-user scenarios from user intent and the change, stands up the real product, and drives each scenario end to end, returning structured findings with severity, description, and `action` (`no-op`, `auto-fix`, `ask-user`). Both the evidence agent and the Test-repair agent are instructed not to run the complete repository test suite; a generic driver instruction asking for broad or full-suite confirmation does not override that product boundary. For UI, HTML, CSS, browser, visual layout, or copy-placement changes, the agent attempts reviewer-visible visual evidence and explains in `testing_summary` when screenshots, images, videos, GIFs, or rendered HTML artifacts are not captured.
+- When a live scenario drives a TUI through a pseudo-terminal, that pty must receive a non-zero window size (`TIOCSWINSZ`) before the TUI's first grid read, and the master must be drained. `script(1)` and a bare `forkpty()`/`pty.fork()` from a non-tty parent otherwise yield a 0x0 grid; the TUI then exits immediately with a symptom such as `terminal reported a zero-sized grid` and never registers, so a live UI check silently becomes a fake while the pipeline still passes.
+- Each scenario records `name`, `result` (`pass`, `fail`, or `untested`), `live`, `evidence`, and `reason`; the overall `verdict` is `go`, `no-go`, `inconclusive`, or `no-surface`. `live` is true only when that scenario was driven against the real running product in this run. Unit tests, stubs, mocks, recorded fixtures, and code inspection are not live. A scenario the machine cannot drive is `untested` with a reason identifying either the unavailable capability or the absence of a live product surface, never a guessed pass. `no-surface` is for a change with no runtime product no-mistakes can drive live (CI-workflow-only, docs-only, a pure non-runtime refactor, or anything else with no live-exercisable scenario); every scenario must be untested and not live, or the payload is rejected rather than treated as a skipped live validation.
+- The evidence payload must contain a non-empty scenario list and a verdict, use the exact lowercase vocabulary above, include every declared scenario field, provide evidence for each pass or fail, and avoid a fail scenario with a verdict other than `no-go`. Findings from runs recorded before this contract remain readable and render without scenario details.
+- An evidence payload that violates that contract is rejected. A fresh, correction-only analyzer invocation receives the rejected payload and specific validation errors as untrusted data; it cannot use tools, rerun scenarios, or perform external operations. It preserves supported observations and downgrades unsupported pass or fail claims to `untested` rather than inventing evidence. The step allows two extra correction attempts after the first invalid payload. Exhausting that bound fails the step; the contract itself is not relaxed. A valid payload, including a mix of live passes and untested scenarios that carry a reason, is accepted on the first attempt.
+- When the selected units' commands already ran in this attempt, the evidence prompt tells the agent to read and judge those results rather than running them again, and not to widen beyond the selected units. The step runs each selected unit's command exactly once per attempt; the evidence half of that bound is a prompt contract, since the agent has its own shell.
+- Bounds those agent turns with [`test_agent_timeout`](/no-mistakes/reference/global-config/#test_agent_timeout): each evidence-gathering or Test-repair invocation gets its own budget, and an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
+- "Do not run everything" is not "run nothing": when no targeted check can establish the intent, the agent must write or improve a focused test, perform manual verification with evidence, or report a warning finding that sufficient targeted evidence is not possible.
+- When [`NO_MISTAKES_CHANGED_FILES`](/no-mistakes/reference/environment/#no_mistakes_changed_files) cannot carry every changed path, the attempt reports a `warning` finding naming how many paths the variable dropped, so the omission reaches the outcome and the PR body rather than only the run log.
+- A unit command the step ran itself is recorded as `<unit name>: <command>`, so the durable record names the unit and not only the command that covered it.
+- **A green exit code is not a passing gate on its own.** Each unit's command runs with [`NO_MISTAKES_COVERAGE_DIR`](/no-mistakes/reference/environment/#no_mistakes_coverage_dir) pointing at a per-unit directory outside the worktree, emptied before the command starts, and must write a coverage profile (LCOV or Cobertura XML) and a test report (JUnit XML or TRX) into it. The step then requires a nonzero count of executed tests and at least one executed function inside the change's own lines. A unit that wrote no artifacts, or artifacts the step cannot parse, parks for a maintainer to fix the command. Zero executed tests, or coverage that never reaches the change, parks with an auto-fixable finding, since the repair is a test rather than a setting. A change touching no source file is exempt from the changed-function requirement, while a change whose source files the profiles describe none of parks for a maintainer instead. Coverage artifacts are deleted when the run ends and are never published, so the pushed branch and its PR diff contain none of them. The environment reference owns the formats and the exemption.
+- In a repair round the changed-file set is read against the base commit and includes untracked files, so a new file the repair agent wrote selects its unit and that unit's command runs.
+- The step records the exact tests and checks it exercised in a `tested` array, may include a short natural-language `testing_summary`, and includes an `artifacts` array for reviewer-visible evidence; `path` artifacts may be repository-relative paths or absolute paths under the run's evidence directory, `url` artifacts must be externally visible, and `content` artifacts should be short logs or command output shown directly in the PR.
+- Evidence is always collected under the run's evidence directory (`<NM_HOME>/evidence/<run-id>` by default, see [`test.evidence`](/no-mistakes/reference/global-config/#testevidence)), outside the worktree, so artifacts never enter the branch being validated. On GitHub.com/GHEC, [`test.evidence.attach_media`](/no-mistakes/reference/global-config/#testevidence) (default true) uploads supported image and video artifacts to GitHub user-attachments at PR render time. On GitHub, [`test.evidence.store_in_repo: true`](/no-mistakes/reference/global-config/#testevidence) makes the PR step publish that directory to the push-target repository's orphan evidence branch under `<test.evidence.dir>/<branch-slug>` and link the artifacts from the PR body. The config reference owns provider support and fail-closed behavior.
+- Before finishing, test agents are instructed to remove transient working-tree artifacts they created, such as downloaded models, caches, build outputs, large binaries, or generated data directories, while preserving intentional source or test-file changes and evidence files under the dedicated evidence directory.
+- Missing evidence for user intent can be reported as a warning with `action: ask-user`. When a host capability or OS permission is unavailable to the agent process, the agent is instructed to name the specific capability or permission and explain how to grant it before the test is rerun.
+- If the agent creates new test files (detected via `git status --porcelain`), they are recorded as informational `no-op` findings and do not require approval when tests pass.
+
+**Approval:** a `no-go` verdict adds an auto-fixable error and parks the step; an `inconclusive` verdict adds an `ask-user` warning and parks for a decision; a `no-surface` verdict adds an `ask-user` warning asking whether to proceed without live validation and parks for a decision. An `untested` scenario never parks by itself. Test findings with `action: ask-user` pause for approval, including missing-evidence warnings for user intent. `action: auto-fix` findings stay eligible for the fix loop. `action: no-op` findings are informational only.
+
+**Auto-fix:** the agent receives the previous test findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step. Repair mode reproduces the specific failure, applies a root-cause fix, and re-runs only focused verification - not a complete-suite confirmation - then the step's configured baseline (if any) and evidence path run again.
+
+**Default auto-fix limit:** `3`.
+
+## Metrics
+
+Runs the repository's metrics command against the coverage the Test step produced and gates the branch on a complexity-versus-coverage breach. The conventional metric is CRAP, which joins a function's cyclomatic complexity to how much of it the tests executed.
+[`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) and the [`metrics`](/no-mistakes/reference/repo-config/#metrics) block own the configuration contract.
+
+**Behavior:**
+
+- If `commands.metrics` is empty: the step logs that no metrics command is configured and skips. No agent runs. There is deliberately no agent fallback, unlike Lint and Document: a CRAP score needs measured complexity joined to measured coverage, and an agent producing those numbers by inspection is producing fiction.
+- If `commands.metrics` is set but the Test step produced no coverage: the step parks for a maintainer instead of passing. Three paths reach that state, the Test step's agent-evidence path (which runs no unit command and so writes no coverage profile), `--skip test`, and `skip_steps: [test]`. Running a metrics command against an empty directory yields an empty report that parses clean and passes, which is a vacuous green. An agent fix round cannot fix "the Test step produced no coverage", so the decision is the maintainer's.
+- Otherwise the step runs the command via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows) with [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_CHANGED_FILES`](/no-mistakes/reference/environment/#no_mistakes_changed_files), [`NO_MISTAKES_CHANGED_FILE_COUNT`](/no-mistakes/reference/environment/#no_mistakes_changed_file_count), and [`NO_MISTAKES_COVERAGE_ROOT`](/no-mistakes/reference/environment/#no_mistakes_coverage_root), the read-only directory holding every test unit's coverage subdirectory.
+- The metrics command itself is out of scope for no-mistakes. This step is generic: it runs a command, reads a verdict, and gates. The command that computes CRAP for a repository is built and distributed separately.
+
+**Output contract:** the command writes a JSON report to stdout.
+
+```json
+{
+  "metric": "crap",
+  "functions": [
+    {"file": "internal/pipeline/executor.go", "function": "executeStep", "line": 42, "score": 42.5, "complexity": 7, "coverage": 0.0}
+  ],
+  "summary": "3 functions above the threshold"
+}
+```
+
+`complexity`, `coverage`, and `summary` are optional. `file` is expected repository-relative, although an absolute path inside the worktree is tolerated and reduced to that form as the report is read, so the exempt globs, the findings, and the published `metrics.json` all carry the repository-relative path and no evidence names the daemon host's worktree. `coverage` is a fraction in `[0,1]`, rendered as a percentage in the findings; a value outside that range is reported unscaled instead. The report is read from **stdout alone**: the two streams are captured separately, so anything the command writes to stderr reaches the log and the failure output but can never interleave into a long report. The step tries the whole trimmed stdout first; failing that, one pass matches braces across all of stdout and records every balanced JSON object at every nesting depth, then tries them newest first. A command that logs progress before a pretty-printed report therefore still reads as JSON however many functions the report lists, however large the report is, and even when the report arrives nested inside a wrapper object. A candidate counts as a report only when it carries a `functions` key, which is also what keeps a long stream of JSON log lines after the report from crowding it out.
+
+**Verdict:**
+
+- A function breaches when its score is **strictly above** [`metrics.threshold`](/no-mistakes/reference/repo-config/#metrics), so the threshold is the highest score the repository accepts. The default is `30`, the conventional CRAP ceiling.
+- A function whose file matches a [`metrics.exempt_paths`](/no-mistakes/reference/repo-config/#metrics) glob is not judged.
+- A nonzero exit blocks either way. When the output did not parse there is nothing else to gate on, and the finding says so, because a fallback verdict is a weaker gate than a report. When the output did parse, a nonzero exit still blocks, because a command that emitted a partial report and then crashed is otherwise indistinguishable from a clean repository. The other half of the contract is short: a command that emits a valid report exits `0`.
+- Policy lives in the step, not the command. The command measures and the step applies the trusted threshold and exemptions, so a contributor cannot reach the numbers that decide their own breach.
+- A command that cannot be launched at all fails the run, the same as Lint.
+
+**Approval:** a breach parks with `error` findings, one per breaching function, naming the file, the line, the score, the threshold, and the reported complexity and coverage. The list is sorted by score and capped at the 20 worst functions, with one trailing item counting the rest, because a repository adopting the gate can breach on hundreds of functions at once and a list that long is unreadable in the gate prompt and the PR body alike. Each carries its own finding ID, derived from the file and the function rather than from its position in the list, so `--findings` selects one function rather than all of them and keeps selecting the same function as scores move between rounds. The findings are `auto-fix`-eligible. A park that names **no** breaching function is not: when the command could not run, its output did not parse, or its report was clean and it still exited nonzero, the gate parks for the maintainer with an `ask-user` finding, because an agent cannot repair a command that did not measure anything and the fix prompt would be asserting a breach nobody found. That is the same split the step already draws for absent coverage. Advisory behavior is reached by setting a high threshold, not by a separate mode. A pass does not park, but it still carries a non-blocking `warning` finding when the output did not parse, since nothing was measured and the exit code alone produced that green, and another when `NO_MISTAKES_CHANGED_FILES` could not carry the whole changed-file list.
+
+**Auto-fix:** a fix round is the only agent turn this step ever takes; there is no non-fix Metrics agent pass. The fix agent receives the breaching functions plus any per-finding user notes, any selected user-authored findings, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step, then the command re-runs. The prompt requires the agent to state in its summary whether it added tests or reduced complexity, because coverage enters the CRAP formula cubed and adding tests to a hairball is the cheap remedy the formula over-rewards.
+
+**Evidence:** when [`test.evidence.store_in_repo`](/no-mistakes/reference/global-config/#testevidence) is enabled, the step writes the verdict to the run's evidence directory as `metrics.json` before it gates, so a parked breach still leaves its verdict on disk. Raw coverage is never published. Two limits are worth knowing. Publication happens in the PR step, so a run that parks and is abandoned never publishes and a repository skipping `pr` never publishes at all. And the published path is keyed on the branch, not the run, so a second run on one branch overwrites the first; reading the trend across runs means reading the evidence branch's commit history.
+
+Like every validation step, Metrics commits a dirty worktree at its own exit through the shared path, and an agent-authored commit there sends the run back through [validation restart](#validation-restart) from Format.
+
+**Default auto-fix limit:** `3`.
+
+## Document
+
+Updates matching documentation for code changes and reports only unresolved gaps.
+
+**Behavior:**
+
+- Diffs the base commit against head and skips the step if there are no non-ignored changed files to document
+- Asks the agent to find every documentation gap, update docs or doc comments for all gaps it can resolve, verify its edits, and commit any documentation changes under the placement policy
+- The placement policy gives each fact one authoritative owner, prefers removing stale duplicates or replacing them with pointers, avoids new documentation surfaces for perceived gaps, and keeps durable incident lessons near their owner instead of in `AGENTS.md`
+- `document.instructions` can add trusted default-branch ownership rules for the repository
+- Includes user intent when available
+- Returns findings only for unresolved documentation gaps or human judgment calls
+- Requires approval whenever any unresolved documentation finding is returned, including `info` findings
+- Bounds the documentation agent with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
+
+**Auto-fix:** documentation fixes happen during the initial document pass. Unresolved findings pause for approval instead of starting another automatic document/fix loop. If you manually trigger a fix from the TUI or AXI interface, the agent receives the selected previous findings plus any per-finding user notes, any selected user-authored findings, and the shared [finding decision history](#finding-decision-history).
+
+**Default auto-fix limit:** not used for automatic document follow-up loops.
+
 ## Review
 
-AI code review of your diff. This is probabilistic evidence, not a security or compliance certification, and does not replace deterministic repository-owned authorization and privacy tests, static analysis, threat modeling, or human security review.
+AI code review of your diff. Review runs last in the validation region: Format, Lint, Test, Metrics, and Document have already run, so review reads the tree that will actually ship. This is probabilistic evidence, not a security or compliance certification, and does not replace deterministic repository-owned authorization and privacy tests, static analysis, threat modeling, or human security review.
 
 **Behavior:**
 
@@ -133,83 +286,14 @@ AI code review of your diff. This is probabilistic evidence, not a security or c
 The fixer fixes the reported instance narrowly, preferring to do so by addressing a deeper architectural reason and simplifying it over introducing machinery that handles the symptoms.
 It follows the shared removal-first rule described above; the Review-specific guard against reverting the author's intentional code protects only code the intent requires, while genuine doubt about whether the intent requires a path leaves it in place and reports the finding unresolved.
 It applies all selected fixes before running one focused verification limited to the changed area, and it is instructed not to run the complete repository test or lint suite during the fix round.
-The dedicated Test and Lint steps after review remain the authoritative gates, although their coverage may be focused when commands are unconfigured.
+The dedicated Test and Lint steps that already ran remain the authoritative gates, although their coverage may be focused when commands are unconfigured.
 Follow-up review passes use the history to avoid re-reporting user-ignored findings unless the code now has a materially different problem.
 
 **Default auto-fix limit:** `0`.
 
 ### Pipeline HEAD continuity
 
-At entry to every repository gate and every core step from Test through CI, no-mistakes compares the live worktree `HEAD` with the pipeline-recorded head. An equal head or a pipeline-descendant commit continues. A backward reset, divergent sibling, or unverifiable relationship fails the run before that step performs work, including for steps that would not create a commit.
-
-## Test
-
-Runs **targeted** local validation of the change and requested intent, then gathers evidence for that intent.
-Local Test is never a repository-wide regression-suite substitute; broad regression is owned by remote CI and remains mandatory before a PR is ready.
-[`commands.test`](/no-mistakes/reference/repo-config/#commandstest) owns the configuration contract for any explicit baseline command.
-
-**Behavior:**
-
-- Before a configured test command, runs [`commands.prepare`](/no-mistakes/reference/repo-config/#commandsprepare) once for the isolated worktree if configured; later configured lint/format commands share that successful preparation
-- If `commands.test` is set in repo config, runs it first as a baseline via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows) and captures output. Non-zero exit produces `error` findings and parks the Test step. Approving that gate records an explicit override on the step (`step_results.override_reason`) and copies it onto the PR attestation as `steps[].override_reason`; the [`require-no-mistakes`](#pipeline-step-attestation) check treats that as non-compliant unless trusted [`test.allow_approve_over_failure`](/no-mistakes/reference/repo-config/#testallow_approve_over_failure) is set. Configure a **targeted** command here (see repo-config); do not treat this field as CI-parity complete-suite configuration.
-- After the baseline passes, fails, or is absent, always invokes the evidence agent. The agent derives a proportionate list of named end-user scenarios from user intent and the change, stands up the real product, and drives each scenario end to end. Repository-specific startup guidance can be supplied through trusted [`test.instructions`](/no-mistakes/reference/repo-config/#testinstructions).
-- When a live scenario drives a TUI through a pseudo-terminal, that pty must receive a non-zero window size (`TIOCSWINSZ`) before the TUI's first grid read, and the master must be drained. `script(1)` and a bare `forkpty()`/`pty.fork()` from a non-tty parent otherwise yield a 0x0 grid; the TUI then exits immediately with a symptom such as `terminal reported a zero-sized grid` and never registers, so a live UI check silently becomes a fake while the pipeline still passes.
-- Each scenario records `name`, `result` (`pass`, `fail`, or `untested`), `live`, `evidence`, and `reason`; the overall `verdict` is `go`, `no-go`, `inconclusive`, or `no-surface`. `live` is true only when that scenario was driven against the real running product in this run. Unit tests, stubs, mocks, recorded fixtures, and code inspection are not live. A scenario the machine cannot drive is `untested` with a reason identifying either the unavailable capability or the absence of a live product surface, never a guessed pass. `no-surface` is for a change with no runtime product no-mistakes can drive live (CI-workflow-only, docs-only, a pure non-runtime refactor, or anything else with no live-exercisable scenario); every scenario must be untested and not live, or the payload is rejected rather than treated as a skipped live validation.
-- The evidence payload must contain a non-empty scenario list and a verdict, use the exact lowercase vocabulary above, include every declared scenario field, provide evidence for each pass or fail, and avoid a fail scenario with a verdict other than `no-go`. Findings from runs recorded before this contract remain readable and render without scenario details.
-- An evidence payload that violates that contract is rejected. A fresh, correction-only analyzer invocation receives the rejected payload and specific validation errors as untrusted data; it cannot use tools, rerun scenarios, or perform external operations. It preserves supported observations and downgrades unsupported pass or fail claims to `untested` rather than inventing evidence. The step allows two extra correction attempts after the first invalid payload. Exhausting that bound fails the step; the contract itself is not relaxed. A valid payload, including a mix of live passes and untested scenarios that carry a reason, is accepted on the first attempt.
-- Bounds those agent turns with [`test_agent_timeout`](/no-mistakes/reference/global-config/#test_agent_timeout): each evidence-gathering or Test-repair invocation gets its own budget, and an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
-- The agent may use an existing automated test only when it drives the scenario end to end. It must not run the complete repository suite; when it cannot establish the intent with a targeted check or manual verification, it reports what is missing rather than treating broad regression or a unit test as live evidence.
-- The analyzer result also includes `tested`, `testing_summary`, and `artifacts`; `tested` records exact tests and checks, `testing_summary` is a short natural-language account of the result, and `artifacts` holds reviewer-visible evidence. `path` artifacts may be repository-relative paths or absolute paths under the run's evidence directory, `url` artifacts must be externally visible, and `content` artifacts should be short logs or command output shown directly in the PR.
-- Evidence is always collected under the run's evidence directory (`<NM_HOME>/evidence/<run-id>` by default, see [`test.evidence`](/no-mistakes/reference/global-config/#testevidence)), outside the worktree, so artifacts never enter the branch being validated. On GitHub.com/GHEC, [`test.evidence.attach_media`](/no-mistakes/reference/global-config/#testevidence) (default true) uploads supported image and video artifacts to GitHub user-attachments at PR render time. [`test.evidence.store_in_repo: true`](/no-mistakes/reference/global-config/#testevidence) also publishes that directory to the push-target repository's orphan evidence branch under `<test.evidence.dir>/<branch-slug>` and links the artifacts from the PR body. The config reference owns provider support and fail-closed behavior.
-- Before finishing, test agents are instructed to remove transient working-tree artifacts they created, such as downloaded models, caches, build outputs, large binaries, or generated data directories, while preserving intentional source or test-file changes and evidence files under the dedicated evidence directory.
-- Missing evidence for user intent can be reported as a warning with `action: ask-user`. When a host capability or OS permission is unavailable to the agent process, the agent is instructed to name the specific capability or permission and explain how to grant it before the test is rerun.
-- If the agent creates new test files (detected via `git status --porcelain`), they are recorded as informational `no-op` findings and do not require approval when tests pass.
-
-**Approval:** a `no-go` verdict adds an auto-fixable error and parks the step; an `inconclusive` verdict adds an `ask-user` warning and parks for a decision; a `no-surface` verdict adds an `ask-user` warning asking whether to proceed without live validation and parks for a decision. An `untested` scenario never parks by itself. Other test findings follow their `action`: `ask-user` pauses for approval, `auto-fix` stays eligible for the fix loop, and `no-op` is informational only.
-
-**Auto-fix:** the agent receives the previous test findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step. Repair mode reproduces the specific failure, applies a root-cause fix, and re-runs only focused verification - not a complete-suite confirmation - then the step's configured baseline (if any) and evidence path run again.
-
-**Default auto-fix limit:** `3`.
-
-## Document
-
-Updates matching documentation for code changes and reports only unresolved gaps.
-
-**Behavior:**
-
-- Diffs the base commit against head and skips the step if there are no non-ignored changed files to document
-- Asks the agent to find every documentation gap, update docs or doc comments for all gaps it can resolve, verify its edits, and commit any documentation changes under the placement policy
-- The placement policy gives each fact one authoritative owner, prefers removing stale duplicates or replacing them with pointers, avoids new documentation surfaces for perceived gaps, and keeps durable incident lessons near their owner instead of in `AGENTS.md`
-- `document.instructions` can add trusted default-branch ownership rules for the repository
-- When `commands.lint` is empty, performs documentation and agent-driven lint in one combined housekeeping invocation, categorizing findings for the document or lint gate; if that pass is skipped, its structured output is unusable, or a daemon restart loses the in-memory result, lint runs its own agent pass instead
-- Includes user intent when available
-- Returns findings only for unresolved documentation gaps or human judgment calls
-- Requires approval whenever any unresolved documentation finding is returned, including `info` findings
-- Bounds the documentation (and combined housekeeping) agent with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
-
-**Auto-fix:** documentation fixes happen during the initial document pass. Unresolved findings pause for approval instead of starting another automatic document/fix loop. If you manually trigger a fix from the TUI or AXI interface, the agent receives the selected previous findings plus any per-finding user notes, any selected user-authored findings, and the shared [finding decision history](#finding-decision-history).
-
-**Default auto-fix limit:** not used for automatic document follow-up loops.
-
-## Lint
-
-Runs linters and static analysis.
-
-**Behavior:**
-
-- If `commands.lint` is set: ensures [`commands.prepare`](/no-mistakes/reference/repo-config/#commandsprepare) has succeeded once for the isolated worktree, then runs lint via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows). Non-zero exit produces `warning` findings.
-- If `commands.lint` is empty: consumes lint-category findings from the document step's combined housekeeping pass, avoiding a second cold agent invocation. If no usable combined result exists, the lint step detects appropriate linters/formatters, applies safe fixes, reruns the relevant checks, commits any agent changes, and returns structured findings only for unresolved issues.
-- Bounds those agent turns, including a configured-lint repair turn, with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
-
-**Approval:** lint findings with `action: ask-user` pause for approval.
-`action: auto-fix` findings stay eligible for the fix loop when `commands.lint` is configured.
-`action: no-op` findings are informational only.
-Combined-pass lint findings use the same gate: `error` and `warning` findings pause for a decision, while `info` findings do not.
-
-**Auto-fix:** when `commands.lint` is configured, the lint step follows the same pattern as test - the agent fixes `action: auto-fix` issues using the previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step, then lint re-runs.
-When `commands.lint` is empty, unresolved findings from the combined pass pause for approval instead of starting another automatic lint/fix loop, because the agent already attempted safe fixes during housekeeping.
-
-**Default auto-fix limit:** `3`.
+At entry to every repository gate and every remaining core step - Push, PR, and CI - no-mistakes compares the live worktree `HEAD` with the pipeline-recorded head. An equal head or a pipeline-descendant commit continues. A backward reset, divergent sibling, or unverifiable relationship fails the run before that step performs work, including for steps that would not create a commit.
 
 ## Push
 
@@ -217,8 +301,7 @@ Pushes the validated branch to the configured push target.
 
 **Behavior:**
 
-- If `commands.format` is set, ensures [`commands.prepare`](/no-mistakes/reference/repo-config/#commandsprepare) has succeeded once for the isolated worktree, then runs the formatter
-- Commits any uncommitted changes left by pipeline agents or the formatter with message `no-mistakes: apply agent fixes`
+- Refuses with an error if the worktree is dirty: every validation step commits its own work at its own exit, so a dirty tree here means an earlier step misreported its exit state. Push does not run a formatter and does not make a catch-all commit for leftover changes.
 - Without fork routing, successful run-start validation selects the upstream URL from the working clone; when it matches the gate worktree's `origin`, the worktree URL is used so embedded credentials retained outside the database can authenticate. If validation fails, the run continues with its prior routing.
 - With GitHub fork routing, the push target is `repos.fork_url`
 - Immediately before remote mutation, reloads the durable review-approved commit and refuses to push when that binding is missing, malformed, or unreachable
@@ -238,7 +321,7 @@ A remote branch can move without being rejected when all remote commits are alre
 Any other out-of-band commit stops the push instead of being overwritten.
 Pre-skipping or later skipping Review leaves no approval binding, so Push fails closed unless Push is also skipped.
 
-This step never requires approval - it runs automatically after review, test, document, and lint pass.
+This step never requires approval - it runs automatically after format, lint, test, metrics, document, and review pass.
 
 ## PR
 
@@ -291,7 +374,7 @@ The `v1` payload is compact JSON with these required fields:
 - `head_sha`: the exact git commit SHA recorded for the run when no-mistakes writes the PR body
 - `steps`: the ordered pipeline step snapshot; every item has the required fields below and may carry the optional Test override field described afterward
 
-- `step`: the raw pipeline step name, such as `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, or `ci`; a repository-declared [gate](/no-mistakes/reference/repo-config/#gates) appears as `gate.<anchor>.<name>`
+- `step`: the raw pipeline step name, such as `intent`, `rebase`, `format`, `lint`, `test`, `document`, `review`, `push`, `pr`, or `ci`; a repository-declared [gate](/no-mistakes/reference/repo-config/#gates) appears as `gate.<anchor>.<name>`
 - `status`: the raw [step status](#step-statuses) recorded for that step, such as `completed`, `skipped`, or `failed`
 
 When the Test step validated the same `head_sha`, the payload also includes `live_validation` with `verdict`, `live` (the number of scenarios driven live), and `total`. The field is omitted for pre-contract findings and whenever a later Document, Lint, Push, or repair commit changes the head without validating that new commit. Consumers therefore never receive a previous head's live-validation verdict as a claim about the current head.
@@ -346,12 +429,12 @@ Monitors PR health after creation and auto-fixes CI failures. Mergeability polli
 - Keeps waiting, rather than pausing, while any check can still finish on its own, so a cancellation observed alongside a running check is decided only once the rollup has stopped moving
 - Never re-runs checks across a head change: if the published branch head no longer equals the commit the run delivered, the step clears any ready-to-merge signal and pauses for user approval with the expected and observed commits, because re-running checks would certify a revision this run never produced
 - Once every check has settled and every authorized rerun is spent, reports each remaining issue as one finding carrying an `action`, and hands those findings to the executor's shared auto-fix machinery - the same loop the review step uses. A failing check the provider attributes to the job itself, and a merge conflict, are `auto-fix` errors that enter the `auto_fix.ci` loop as fix rounds; a provider-attributed outcome no rerun will replace is an `ask-user` warning; a red check published by a supported review bot (currently Greptile, identified on GitHub by the check suite's app, never by the check's name) becomes one `ask-user` warning per unresolved review comment, anchored to the comment's file and line, so it never spends an auto-fix attempt and a human chooses which comments a fix round addresses. Each finding names its check, so a fix round - automatic or answered at the gate with `fix` - repairs exactly the findings selected for it, with any notes attached at the gate
-- On CI failure: fetches failed job logs only for the selected checks (GitHub via `gh run view --log-failed`, GitLab via `glab ci trace`, Forgejo via the exact native check target plus `forgejo-axi run view --log-failed` when runtime routes are available, Bitbucket Cloud via failed pipeline step logs; Azure DevOps has no first-class build-log command, so the agent fixes from the failing-check list without logs), sends them to the agent with user intent when available, and, if the agent produces changes, commits them with [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message). Target-aware providers return each selected check's evidence separately; the prompt labels it with the check and provider identity, shares a 32 KiB budget across all selected targets, and marks per-target truncation or incomplete retrieval explicitly so one check cannot hide another's missing evidence. The fixer is told to fix a genuine code, test, or build failure and to fix that instance narrowly, preferring a deeper root cause and simplification over machinery for the symptoms, and follows the shared removal-first rule described above; it may conclude that no code change is warranted when the red check is not caused by the PR's code (a stale run, an infrastructure or attestation check such as `PR must be raised via no-mistakes` that fails only because a later pipeline push moved the head, or any failure external to the code). What happens next follows one rule on every CI-fix path: a repair is published without revalidating only when its continuity with the reviewed, published head can be proven, meaning the repaired head is the run's review-approved commit or a descendant of it. A provable repair is published immediately through the Push step's own guarded publication path, using that step's own remote-safety decision, and the monitor keeps watching the same run; on supported providers, an existing pipeline attestation is rebound to the proposed head before the branch push, and failure to settle that rewrite after retries reports the repair as unsettled without pushing. An unavailable SCM host skips the rewrite, while strict attestation head equality keeps any stale binding fail-closed. Anything else is held locally, the run's review approval is revoked, and validation restarts from Review so Push republishes it only after Review approves it. [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs) sets the intent identically on every path: `false` (default) publishes when it is provable, `true` revalidates outright. A merge-conflict repair rebases, so its continuity is never provable and it always revalidates. Forgejo status gating remains active when logs are unsupported or unavailable
+- On CI failure: fetches failed job logs only for the selected checks (GitHub via `gh run view --log-failed`, GitLab via `glab ci trace`, Forgejo via the exact native check target plus `forgejo-axi run view --log-failed` when runtime routes are available, Bitbucket Cloud via failed pipeline step logs; Azure DevOps has no first-class build-log command, so the agent fixes from the failing-check list without logs), sends them to the agent with user intent when available, and, if the agent produces changes, commits them with [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message). Target-aware providers return each selected check's evidence separately; the prompt labels it with the check and provider identity, shares a 32 KiB budget across all selected targets, and marks per-target truncation or incomplete retrieval explicitly so one check cannot hide another's missing evidence. The fixer is told to fix a genuine code, test, or build failure and to fix that instance narrowly, preferring a deeper root cause and simplification over machinery for the symptoms, and follows the shared removal-first rule described above; it may conclude that no code change is warranted when the red check is not caused by the PR's code (a stale run, an infrastructure or attestation check such as `PR must be raised via no-mistakes` that fails only because a later pipeline push moved the head, or any failure external to the code). What happens next follows one rule on every CI-fix path: a repair is published without revalidating only when its continuity with the reviewed, published head can be proven, meaning the repaired head is the run's review-approved commit or a descendant of it. A provable repair is published immediately through the Push step's own guarded publication path, using that step's own remote-safety decision, and the monitor keeps watching the same run; on supported providers, an existing pipeline attestation is rebound to the proposed head before the branch push, and failure to settle that rewrite after retries reports the repair as unsettled without pushing. An unavailable SCM host skips the rewrite, while strict attestation head equality keeps any stale binding fail-closed. Anything else is held locally, the run's review approval is revoked, and validation restarts from Format so Push republishes it only after Review approves it. [`ci.revalidate_repairs`](/no-mistakes/reference/repo-config/#cirevalidate_repairs) sets the intent identically on every path: `false` (default) publishes when it is provable, `true` revalidates outright. A merge-conflict repair rebases, so its continuity is never provable and it always revalidates. Forgejo status gating remains active when logs are unsupported or unavailable
 - On GitHub, a red check from a supported review bot (currently Greptile) parks as `ask-user` findings that carry the bot's unresolved review-thread comments (at most 50 per gate, each bounded, with a count of any omitted); when a fix round starts, the same comments are also included in the repair prompt, framed as untrusted external data and capped at 32 KiB
 - After a repair is published, the step reports that it is monitoring again, so its status returns from `fixing` to `running` and `checks-passed` can surface for the repaired head
 - States the configured repair policy in the step log before the first poll, so a run's log says which of the two paths a repair would take without cross-referencing the config in force at the time
 - Settles the local gate mirror before atomically recording the published head and push binding, so a publication that stalls part way records nothing: the run stays on its pre-repair head and the next fix attempt re-enters the same path, finds the remote already at that commit, and completes it
-- Whenever a repair revalidates - either because the setting requires it or because continuity cannot be proven - restarts at Review only: Intent and Rebase keep their results, steps already skipped for the run stay skipped, the run id is unchanged, and the durable auto-fix attempt count carries across. Earlier cycles remain in the run's round history; the step's own status shows the latest cycle
+- Whenever a repair revalidates - either because the setting requires it or because continuity cannot be proven - restarts at Format, the same boundary an agent-authored commit restarts to elsewhere in the pipeline: Intent and Rebase keep their results, steps already skipped for the run stay skipped, the run id is unchanged, and the durable auto-fix attempt count carries across. Earlier cycles remain in the run's round history; the step's own status shows the latest cycle
 - Bounds that CI-fix agent with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the attempt with a timeout diagnostic rather than leaving the run active indefinitely, and a late successful return after the deadline is not committed
 - If the CI-fix agent exhausts that budget, pauses for user approval instead of re-issuing the same request on the next poll. A budget burn is not transient - repeating it costs another full budget - so the remaining auto-fix attempts are left for the user to spend deliberately with a fix response. The finding carries the measured timeout diagnostic and, when the timed-out agent left uncommitted work in the run worktree, that worktree's path. Ordinary (non-timeout) fix failures keep retrying as before
 - On GitHub, GitLab, Forgejo, or Azure DevOps merge conflict: asks the agent to rebase onto the latest PR base branch tip and make the smallest correct root-cause fix for the conflicts, using user intent when available

@@ -217,6 +217,17 @@ When `GLAB_CONFIG_DIR` is unset, no-mistakes looks for glab's configured hosts a
 When `GH_CONFIG_DIR` is unset, no-mistakes looks for gh's configured hosts at `$XDG_CONFIG_HOME/gh/hosts.yml`, falling back to `~/.config/gh/hosts.yml` when `XDG_CONFIG_HOME` is unset.
 tea has no CLI-specific override env var (unlike `GLAB_CONFIG_DIR`/`GH_CONFIG_DIR`); no-mistakes always looks for its configured logins at `$XDG_CONFIG_HOME/tea/config.yml`, falling back to `~/.config/tea/config.yml` when `XDG_CONFIG_HOME` is unset. See [Provider Integration](/no-mistakes/guides/provider-integration/#self-hosted-gitea).
 
+## `CLAUDE_CONFIG_DIR`
+
+Directory holding Claude Code's `.claude.json`, consulted when checking gate-repository workspace trust.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` |
+| Default | (none)   |
+
+`no-mistakes doctor` and the Claude adapter's untrusted-workspace remedy read Claude Code's trust decisions from `$CLAUDE_CONFIG_DIR/.claude.json` when that file exists, falling back to `~/.claude.json` otherwise. Both surfaces are read-only; no-mistakes never writes a trust decision into that file. See [Choosing an Agent](/no-mistakes/guides/agents/#workspace-trust).
+
 ## `NO_MISTAKES_UMAMI_HOST`
 
 Override the telemetry collection host.
@@ -255,7 +266,7 @@ Run IDs, repository paths, branch names, session identities, prompts, model outp
 Repository-declared [gate](/no-mistakes/reference/repo-config/#gates) labels stay local. Remote step, approval, fix, and failed-step fields record them as the fixed token `gate`.
 
 Detailed performance evidence stays on the machine in the local state database (`<NM_HOME>/state.sqlite`): one `agent_invocations` row per agent invocation, plus each run's accumulated parked-at-gate time.
-Each row records run and step identity, purpose (such as review/review-fix/housekeeping), the reported model and its provider, the cold/started/resumed/fallback session mode, a truncated session-identity hash, timestamps, duration, exit status, and failure category, alongside the session-fidelity metrics below.
+Each row records run and step identity, purpose (such as review/review-fix/document), the reported model and its provider, the cold/started/resumed/fallback session mode, a truncated session-identity hash, timestamps, duration, exit status, and failure category, alongside the session-fidelity metrics below.
 It never stores prompts, model outputs, diffs, raw command arguments, secret values, or credentials - only bounded counts, low-cardinality categories, and durations.
 
 Token counts and the additive session-fidelity fields are nullable and read back as unknown (rendered `-`) rather than a fabricated zero when the adapter did not report them, so a failed or cancelled invocation, a row written before a field existed, and an adapter that does not surface a datum stay honest.
@@ -279,6 +290,67 @@ Disable telemetry collection.
 | Default | unset                                                             |
 
 When set to a disabling value, telemetry stays off even if a runtime or embedded website ID is available.
+
+## `NO_MISTAKES_BASE_SHA`
+
+Set by no-mistakes, not read from it. Every unit test command receives this as the base commit the run is validating against, so the command can scope itself the same way discovery did. That covers a [`test.units`](/no-mistakes/reference/repo-config/#testunits) command and a [`commands.test`](/no-mistakes/reference/repo-config/#commandstest) command alike, since discovery treats the latter as one implicit `repository` unit. A [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receives it too.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` |
+| Default | (n/a; always set for a unit test command) |
+
+## `NO_MISTAKES_CHANGED_FILES`
+
+Set by no-mistakes, not read from it. Every unit test command and the [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receive this as the run's changed paths, one per line.
+
+Paths are newline-separated, because an environment variable cannot carry a NUL. A path containing a newline or a carriage return is therefore omitted, and a whole list over 96 KiB is dropped to empty rather than truncated to a misleading prefix. Compare the line count with `NO_MISTAKES_CHANGED_FILE_COUNT` to detect either case.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` |
+| Default | (n/a; always set for a unit test command) |
+
+## `NO_MISTAKES_CHANGED_FILE_COUNT`
+
+Set by no-mistakes, not read from it. Every unit test command and the [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receive this as the number of paths the run changed. It is the true total even when `NO_MISTAKES_CHANGED_FILES` could not carry them all.
+
+|         |          |
+| ------- | -------- |
+| Type    | `int`    |
+| Default | (n/a; always set for a unit test command) |
+
+## `NO_MISTAKES_COVERAGE_DIR`
+
+Set by no-mistakes, not read from it. Every unit test command receives this as the directory it must write its coverage profile and test report into. The directory is created empty before the command runs, is scoped to that one unit in that one run, and lives outside the worktree, so a profile can never be committed to the branch under validation or appear in its pull request diff.
+
+The Test step reads those artifacts to refuse a vacuous green. A command that runs no test, a filter that matched nothing, and a runner that found no suite all exit zero, so the exit code alone cannot tell any of them from a real pass. The step requires a coverage profile in [LCOV](https://github.com/linux-test-project/lcov) or Cobertura XML form, a test report in JUnit XML or Visual Studio TRX form, a nonzero count of executed tests, and at least one executed function inside the change's own lines. Format is detected from file content, so the files can be named anything.
+
+A unit that writes neither artifact parks for the maintainer, because that is a command to fix rather than a test to write. A unit that reports zero executed tests, or whose coverage never reaches the change, parks with an auto-fixable finding. If the step could not read something in the coverage directory, those two verdicts park for the maintainer instead, since the missing coverage may be sitting in the file it had to skip.
+
+A change touching no source file at all, a documentation or configuration edit, is exempt from the changed-function requirement. A change that does touch source files none of the coverage profiles describe parks for the maintainer instead of taking that exemption, since it means the commands that ran cover a different project than the change. Source is judged by the repository's own conventions, through two rules. An extension counts as source when the repository tracks both a file its language's test-runner convention names as a test (`*_test.go`, `*.spec.ts`, `*Test.java`, `*Tests.cs`, `*_test.cc`, and the equivalents for Rust, Python, Ruby, Kotlin, Swift, PHP, and Elixir) and an ordinary file carrying the same extension. It also counts when a test directory pairs a file with production code by layout: a convention-named test file whose stem names a non-test file elsewhere credits that file's extension, which is how `test/orders_test.exs` marks `lib/orders.ex`, and a test-directory file with no convention in its name credits its extension only when a non-test file under `src`, `lib`, `app`, `pkg`, `internal`, `source`, or `cmd` carries the same stem and the same extension, which is how `tests/orders.rs` marks `src/orders.rs`. That second pairing demands the matching extension and the source directory so a tracked `tests/README.md` cannot make markdown a source extension through the repository's own root `README.md`. The layout rules decide only whether the repository writes code in a language; whether a particular file under a test directory is production source is still decided by the first rule alone. A changed file the profiles never name and the repository names as test code is not itself required to be covered, so a change that only adds tests clears the gate. A file name exempts itself only through its language's test-runner convention, the same list above, since a marker like `payments-test.py` says nothing about how the file is discovered and plenty of production source carries one. A directory named `test`, `tests`, `__tests__`, `spec`, `specs`, `testdata`, or `fixtures` never exempts a file on its own, because all seven hold production source in plenty of repositories; a file under any of them is exempt only when its extension is not one the repository writes code in. A file the change only deleted lines from is not required to be covered either, since nothing is left in it to exercise.
+
+Code above every function a file declares, its imports, package-level constants, and struct or type declarations, belongs to no function, so requiring an executed function there would park a struct-field edit. A changed range that sits entirely above the file's first recorded declaration counts as covered when the profile names that file and reports at least one executed function in it. The bound is the first declaration the profile recorded, executed or not, so a brand-new function with zero hits declared above an existing tested one still parks.
+
+A coverage profile names files however its runner does. The step resolves both sides to a repository-relative path before comparing them, so an absolute path under the worktree matches, and so does a path reported relative to a source root the way Cobertura reports one. A partial match must land on a path-separator boundary, and when more than one changed file could satisfy the same profile path, the step treats it as no match rather than letting an ambiguous one certify the change.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` (absolute path) |
+| Default | (n/a; always set for a unit test command) |
+
+## `NO_MISTAKES_COVERAGE_ROOT`
+
+Set by no-mistakes, not read from it. The [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receives this as the run's coverage root, the directory holding one subdirectory per test unit. It is a read source. The metrics command reads the profiles the Test step's unit commands wrote there and must not write into it.
+
+It is deliberately a different name from `NO_MISTAKES_COVERAGE_DIR`, which is the Test step's per-unit write target and is emptied immediately before each unit's command runs. One repository shell function reading one name must not get a different directory depending on which step called it, and a metrics command pointed at a wiped per-unit directory would report an empty repository as clean. The Metrics step does not set `NO_MISTAKES_COVERAGE_DIR` at all, and the Test step does not set `NO_MISTAKES_COVERAGE_ROOT`.
+
+Like the per-unit directories inside it, the root lives outside the worktree and is deleted when the run ends, so no coverage artifact enters the branch under validation or its pull request diff.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` (absolute path) |
+| Default | (n/a; always set for a metrics command) |
 
 ## Environment the daemon sees
 

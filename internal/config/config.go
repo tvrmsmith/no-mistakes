@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path"
@@ -86,17 +87,17 @@ const (
 	MaxCIRerunTransient = 5
 	// DefaultCIRevalidateRepairs is the policy the CI step uses when
 	// ci.revalidate_repairs is unset. It is false because restarting the whole
-	// pipeline at Review for every CI repair is the single most expensive
-	// thing the pipeline can do to a run: it replays Review, Test, Document,
-	// Lint, Push, and PR against the repaired head, so one repair costs
-	// another full agent pass over the whole change. VISION.md's cost
-	// constraint makes that opt-in.
+	// pipeline at Format for every CI repair is the single most expensive
+	// thing the pipeline can do to a run: it replays Format, Lint, Test,
+	// Metrics, Document, Review, Push, and PR against the repaired head, so
+	// one repair costs another full agent pass over the whole change.
+	// VISION.md's cost constraint makes that opt-in.
 	//
 	// False does not mean "always publish". It means "publish when it is
 	// provably safe to": a repair is published only when its head is the run's
 	// review-approved commit or a descendant of it, and any repair that cannot
 	// show that - every merge-conflict repair, since a rebase rewrites the
-	// head - revalidates from Review instead. See CI.RevalidateRepairs.
+	// head - revalidates from Format instead. See CI.RevalidateRepairs.
 	DefaultCIRevalidateRepairs = false
 	// RebaseStrategyRebase replays the branch on top of the moved base. It is
 	// the historical behavior and the default.
@@ -312,6 +313,14 @@ type RepoConfig struct {
 	Agents         []types.AgentName `yaml:"-"`
 	Commands       Commands          `yaml:"commands"`
 	IgnorePatterns []string          `yaml:"ignore_patterns"`
+	// TrustedIgnorePatterns is the ignore_patterns list as the trusted
+	// default-branch copy declares it, carried beside the pushed-branch list
+	// rather than replacing it. IgnorePatterns stays contributor-writable
+	// because it only narrows what a run works on, but a gate that exempts a
+	// changed file from a check reads this copy instead, so a pushed branch
+	// cannot exempt its own file from the gate judging it. EffectiveRepoConfig
+	// is the only writer; it is never decoded from YAML.
+	TrustedIgnorePatterns []string `yaml:"-"`
 	// ProtectedPaths prevents automatic staging of dirty matching paths. It is
 	// trusted-only, regardless of allow_repo_commands, so a pushed branch cannot
 	// remove the maintainer's protection from its own fixes.
@@ -399,7 +408,64 @@ type RepoConfig struct {
 	// registered pending or failing check. No inference from workflow files,
 	// prior history, branch names, or grace-period expiry.
 	NoCI bool `yaml:"no_ci"`
+	// Restart carries the exemption list that decides which agent-authored
+	// commits skip re-entering pipeline validation. Its ExemptPaths is a gate
+	// strength - widening it to "**" disables the restart rule entirely - so
+	// it is honored ONLY from the trusted default-branch copy of
+	// .no-mistakes.yaml (see EffectiveRepoConfig), regardless of
+	// allow_repo_commands: a contributor's pushed branch must not be able to
+	// exempt its own commits from revalidation.
+	Restart RestartRaw `yaml:"restart"`
+	// Metrics carries the metrics step's gate settings. Its threshold is the
+	// gate's strength and its exempt_paths waive the gate for a path, so the
+	// WHOLE block is honored ONLY from the trusted default-branch copy of
+	// .no-mistakes.yaml (see EffectiveRepoConfig), regardless of
+	// allow_repo_commands: a contributor's pushed branch must not be able to
+	// raise the threshold past its own breach or exempt the file that breached.
+	Metrics MetricsRaw `yaml:"metrics"`
 }
+
+// MetricsRaw is the YAML representation of the metrics block.
+type MetricsRaw struct {
+	// Threshold is the highest score the repository accepts: a measured
+	// function breaches when its score is strictly above it. nil means unset,
+	// so the built-in default applies. Zero is a legal calibration value
+	// meaning every function scoring above zero breaches.
+	Threshold *float64 `yaml:"threshold"`
+	// ExemptPaths lists the globs whose matching files the gate does not judge.
+	ExemptPaths []string `yaml:"exempt_paths"`
+}
+
+// Metrics is the resolved metrics-step configuration.
+type Metrics struct {
+	Threshold   float64
+	ExemptPaths []string
+}
+
+// DefaultMetricsThreshold is the built-in score ceiling, the conventional CRAP
+// limit above which a function is judged too complex for its coverage.
+const DefaultMetricsThreshold = 30
+
+// RestartRaw is the YAML representation of the restart block.
+type RestartRaw struct {
+	// ExemptPaths lists the globs a commit's every path must match for that
+	// commit to skip re-entering validation. nil means unset, so the built-in
+	// default applies; an explicit empty list means no path is exempt and
+	// every agent-authored commit restarts.
+	ExemptPaths []string `yaml:"exempt_paths"`
+}
+
+// Restart is the resolved restart configuration.
+type Restart struct {
+	ExemptPaths []string
+}
+
+// DefaultRestartExemptPaths is the built-in exemption list: a commit whose
+// every changed path matches one of these globs is documentation-shaped and
+// skips re-entering validation. It deliberately carries no entry for
+// AGENTS.md or CLAUDE.md - those steer agent behavior rather than being read
+// by humans, so a commit touching only them still restarts.
+var DefaultRestartExemptPaths = []string{"*.md", "docs/**", "*.txt", "LICENSE", "LICENSE.*", "COPYING", "NOTICE"}
 
 // DocumentRaw is the YAML representation of document-step settings.
 type DocumentRaw struct {
@@ -578,6 +644,8 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 		Gates                  []Gate           `yaml:"gates"`
 		DisableProjectSettings bool             `yaml:"disable_project_settings"`
 		NoCI                   bool             `yaml:"no_ci"`
+		Restart                RestartRaw       `yaml:"restart"`
+		Metrics                MetricsRaw       `yaml:"metrics"`
 		Providers              ProvidersRaw     `yaml:"providers"`
 	}
 	var raw repoConfigRaw
@@ -603,6 +671,8 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.Gates = raw.Gates
 	c.DisableProjectSettings = raw.DisableProjectSettings
 	c.NoCI = raw.NoCI
+	c.Restart = raw.Restart
+	c.Metrics = raw.Metrics
 	c.Providers = raw.Providers
 	return nil
 }
@@ -613,6 +683,7 @@ type Commands struct {
 	Lint    string `yaml:"lint"`
 	Test    string `yaml:"test"`
 	Format  string `yaml:"format"`
+	Metrics string `yaml:"metrics"`
 }
 
 // AutoFixRaw is the YAML representation of auto-fix config.
@@ -622,9 +693,11 @@ type AutoFixRaw struct {
 	Test     *int `yaml:"test"`
 	Review   *int `yaml:"review"`
 	Document *int `yaml:"document"`
+	Format   *int `yaml:"format"`
 	CI       *int `yaml:"ci"`
 	Babysit  *int `yaml:"babysit"`
 	Rebase   *int `yaml:"rebase"`
+	Metrics  *int `yaml:"metrics"`
 	// MinSeverity is the lowest finding severity the executor will fix on its
 	// own. Unrecognized and blank values leave the resolved default in place.
 	// It is trusted-only (see EffectiveRepoConfig), unlike the retry counts
@@ -657,7 +730,7 @@ type CI struct {
 	// failure and merge conflict alike: a repair is published without
 	// revalidating only when its continuity with the reviewed, published head
 	// can be PROVEN - the repaired head is the run's review-approved commit or
-	// a descendant of it - and revalidates from Review when it cannot.
+	// a descendant of it - and revalidates from Format when it cannot.
 	//
 	// false (default): a provable repair is published through the same guarded
 	// force-push path the Push step uses - review-approved-head continuity, the
@@ -672,8 +745,9 @@ type CI struct {
 	// resolved rebase from one that dropped the work.
 	//
 	// true: the repair is kept local, the run's review approval is revoked,
-	// and the pipeline restarts at Review so the repaired head re-passes
-	// Review, Test, Document, and Lint before Push republishes it. Safer, and
+	// and the pipeline restarts at Format so the repaired head re-passes
+	// Format, Lint, Test, Metrics, Document, and Review before Push
+	// republishes it. Safer, and
 	// materially more expensive in wall-clock time and tokens - which is why
 	// it is opt-in (see VISION.md).
 	RevalidateRepairs bool
@@ -718,8 +792,10 @@ type AutoFix struct {
 	Test     int
 	Review   int
 	Document int
+	Format   int
 	CI       int
 	Rebase   int
+	Metrics  int
 	// MinSeverity bounds automatic fixing to findings at or above this
 	// severity. Lower-severity findings are still reported and remain
 	// selectable by hand; they just do not spend a fix round on their own.
@@ -757,15 +833,19 @@ type Config struct {
 	// default-branch copy).
 	Gates          []Gate
 	IgnorePatterns []string
-	ProtectedPaths []string
-	AutoFix        AutoFix
-	CI             CI
-	Rebase         Rebase
-	Commit         Commit
-	Intent         Intent
-	Test           Test
-	Document       Document
-	Review         Review
+	// TrustedIgnorePatterns is the default-branch copy of IgnorePatterns. Read
+	// it, not IgnorePatterns, when an ignore entry exempts a changed file from
+	// a gate rather than merely narrowing the run's scope.
+	TrustedIgnorePatterns []string
+	ProtectedPaths        []string
+	AutoFix               AutoFix
+	CI                    CI
+	Rebase                Rebase
+	Commit                Commit
+	Intent                Intent
+	Test                  Test
+	Document              Document
+	Review                Review
 	// SignCommits is global-only; see the GlobalConfig field.
 	SignCommits bool
 	// SCM carries the global SCM CLI settings; see SCMRaw. It is global-only:
@@ -787,6 +867,12 @@ type Config struct {
 	// (see the RepoConfig field). Use SkippedSteps to combine it with a run's
 	// own --skip selection.
 	SkipSteps []types.StepName
+	// Restart is the resolved, trusted-only restart-exemption configuration
+	// (see the RepoConfig field).
+	Restart Restart
+	// Metrics is the resolved metrics-step configuration. Its repository half
+	// is trusted-only (see the RepoConfig field).
+	Metrics Metrics
 	// Providers holds the resolved provider-specific settings.
 	Providers Providers
 }
@@ -912,6 +998,9 @@ type Review struct {
 // TestRaw is the YAML representation of test-step settings.
 type TestRaw struct {
 	Evidence EvidenceRaw `yaml:"evidence"`
+	// Units lists the repository's independently testable units. See
+	// TestUnit for why the whole list is trusted-only.
+	Units []TestUnit `yaml:"units"`
 	// Instructions is the repository's live-validation runbook: how to stand
 	// the product up in an isolated environment so the test step can drive
 	// end-user scenarios against the real thing. It is injected into the test
@@ -929,6 +1018,57 @@ type TestRaw struct {
 	// (see EffectiveRepoConfig): a contributor's pushed branch must not be able
 	// to waive the configured-test gate that validates it.
 	AllowApproveOverFailure string `yaml:"allow_approve_over_failure"`
+}
+
+// TestUnit is one independently testable part of a repository: a service in a
+// monorepo, a directory of code with its own test command, or the repository
+// itself. Units are what the Test step selects between.
+//
+// Command runs verbatim via sh -c on the daemon host with the maintainer's
+// credentials, exactly like commands.test, so the whole list is honored ONLY
+// from the trusted default-branch copy of .no-mistakes.yaml unless the
+// repository opts in via allow_repo_commands (see EffectiveRepoConfig): a
+// contributor's pushed branch must not be able to inject shell by naming a
+// new unit or repointing an existing one's command.
+type TestUnit struct {
+	// Name identifies the unit in the run log and in the Test step's selection.
+	Name string `yaml:"name"`
+	// Path is the repository-relative directory the unit owns. "." means the
+	// whole repository. A changed file under Path belongs to this unit.
+	Path string `yaml:"path"`
+	// Command is the shell command that tests the unit.
+	Command string `yaml:"command"`
+}
+
+// NormalizeUnitPath is the single owner of a unit path's canonical form: it
+// trims, converts backslashes a Windows daemon host may hand it, maps an empty
+// path to ".", and cleans the result. Validation, the resolved config, and the
+// Test step's changed-file matching all read this same string, so a path like
+// "foo/.." cannot pass a check on one spelling and match on another.
+func NormalizeUnitPath(raw string) string {
+	trimmed := strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
+	if trimmed == "" {
+		return "."
+	}
+	return path.Clean(trimmed)
+}
+
+// ValidateUnitPath rejects a unit path that names an absolute location or
+// resolves outside the repository. It judges the canonical form, so a
+// configured layout and an agent-inferred one are held to one rule against the
+// same string the Test step matches changed files with. The returned message
+// starts with "path " so a caller can prefix it with whatever names the unit.
+func ValidateUnitPath(raw string) error {
+	canonical := NormalizeUnitPath(raw)
+	// The leading-slash check is not redundant with filepath.IsAbs: on Windows
+	// that returns false for "/services/api", and the daemon runs there too.
+	if filepath.IsAbs(canonical) || strings.HasPrefix(canonical, "/") {
+		return fmt.Errorf("path must be repository-relative, got %q", canonical)
+	}
+	if canonical == ".." || strings.HasPrefix(canonical, "../") {
+		return fmt.Errorf("path must stay inside the repository, got %q", canonical)
+	}
+	return nil
 }
 
 // EvidenceRaw is the YAML representation of test-evidence settings.
@@ -968,7 +1108,10 @@ type EvidenceRaw struct {
 // AllowApproveOverFailure come from the trusted default-branch repo config
 // only (see TestRaw).
 type Test struct {
-	Evidence                Evidence
+	Evidence Evidence
+	// Units lists the repository's independently testable units, sourced
+	// per TestUnit's trust rules. Nil means no unit layout is configured.
+	Units                   []TestUnit
 	Instructions            string
 	AllowApproveOverFailure string
 }
@@ -1290,9 +1433,9 @@ ci:
   # be proven. Defaults to false: a repair that descends from the reviewed head
   # is published through the same guarded push path the Push step uses and
   # CI keeps monitoring, so one repair costs one agent round. A repair that
-  # cannot show that ancestry revalidates from Review anyway - a merge-conflict
+  # cannot show that ancestry revalidates from Format anyway - a merge-conflict
   # repair always does, because rebasing rewrites the head. Set true to restart
-  # validation at Review for every repair - safer, and it pays for another full
+  # validation at Format for every repair - safer, and it pays for another full
   # pipeline pass in wall clock and tokens every time CI is repaired. A
   # repository that sets ci.revalidate_repairs on its own default branch
   # overrides this value.
@@ -2473,6 +2616,9 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateReviewRaw(cfg.Review); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	if err := validateRestartRaw(cfg.Restart); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	for i, pattern := range cfg.ProtectedPaths {
 		pattern = strings.TrimSpace(pattern)
 		if pattern == "" {
@@ -2484,6 +2630,9 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 		cfg.ProtectedPaths[i] = pattern
 	}
 	if err := validateTestRaw(cfg.Test); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
+	if err := validateMetricsRaw(cfg.Metrics); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
 	skipSteps, err := normalizeSkipSteps(cfg.SkipSteps)
@@ -2618,6 +2767,62 @@ func validatePathInstructionGlob(pattern string) error {
 	return nil
 }
 
+// validateRestartRaw fails the config closed on a restart.exempt_paths entry
+// that is blank or that validatePathInstructionGlob would reject, using the
+// same glob rules as ignore_patterns and review.path_instructions. This
+// deliberately also runs on the PUSHED copy for the same reason
+// validateReviewRaw does: a branch carrying an invalid block must fail here,
+// before it merges, rather than brick the trusted-config read afterwards.
+func validateRestartRaw(restart RestartRaw) error {
+	for i, pattern := range restart.ExemptPaths {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed == "" {
+			return fmt.Errorf("restart.exempt_paths[%d] must not be blank", i)
+		}
+		if err := validatePathInstructionGlob(trimmed); err != nil {
+			return fmt.Errorf("restart.exempt_paths[%d] %q is not a valid glob: %w", i, pattern, err)
+		}
+	}
+	return nil
+}
+
+// validateMetricsRaw fails the config closed on a metrics block the gate could
+// not act on. It deliberately also runs on the PUSHED copy, for the same
+// reason validateRestartRaw does: a branch carrying an invalid block must fail
+// here, before it merges, rather than brick the trusted-config read afterwards.
+//
+// The rules stay minimal on purpose. The daemon's
+// assertGateTrustedConfigReadable aborts EVERY run of a repository whose
+// default-branch config fails to validate, so each rule added here is a way to
+// take the whole repository offline. Zero is legal: it means every function
+// scoring above zero breaches, which is a real calibration value.
+//
+// The glob rule earns that cost the same way restart.exempt_paths does.
+// matchIgnorePattern answers false for a pattern path.Match rejects, so an
+// unvalidated malformed waiver is inert: the run parks on the very file the
+// maintainer exempted and nothing says why.
+func validateMetricsRaw(metrics MetricsRaw) error {
+	if metrics.Threshold != nil {
+		threshold := *metrics.Threshold
+		if math.IsNaN(threshold) || math.IsInf(threshold, 0) {
+			return fmt.Errorf("metrics.threshold must be a finite number")
+		}
+		if threshold < 0 {
+			return fmt.Errorf("metrics.threshold must not be negative, got %v", threshold)
+		}
+	}
+	for i, pattern := range metrics.ExemptPaths {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed == "" {
+			return fmt.Errorf("metrics.exempt_paths[%d] must not be empty", i)
+		}
+		if err := validatePathInstructionGlob(trimmed); err != nil {
+			return fmt.Errorf("metrics.exempt_paths[%d] %q is not a valid glob: %w", i, pattern, err)
+		}
+	}
+	return nil
+}
+
 // EffectiveRepoConfig returns the repo config that should drive the pipeline
 // given a pushed-branch copy and the trusted default-branch copy.
 //
@@ -2637,7 +2842,11 @@ func validatePathInstructionGlob(pattern string) error {
 // project-instruction boundary. NoCI is trusted-only so a pushed branch cannot
 // self-declare no-CI and bypass its own checks, and CI (the transient-rerun
 // budget) is trusted-only because every rerun it authorizes is another
-// provider-side workflow run billed to the repository. These gate-control
+// provider-side workflow run billed to the repository. Restart
+// (restart.exempt_paths, which commit shapes skip re-entering pipeline
+// validation) is trusted-only for the same reason as auto_fix.min_severity: it
+// is a gate strength, and widening it to "**" would disable the restart rule
+// for a pushed branch's own commits. These gate-control
 // fields ignore allowRepoCommands, as do pr.template and pr.publish_intent.
 // PR.BaseBranch is the explicit exception: the
 // allowRepoCommands opt-in also permits a pushed PR target because it controls
@@ -2655,13 +2864,15 @@ func validatePathInstructionGlob(pattern string) error {
 // Non-executing fields (ignore patterns, auto-fix, commit, intent, test,
 // PR title format, and providers) are always taken from the pushed copy, matching prior behavior,
 // since they cannot run arbitrary shell, select a process, or spend the
-// maintainer's CI minutes.
-// Four exceptions live inside them: test.evidence.branch, which names a git
-// ref the daemon pushes to; test.instructions, which steers the gate that
-// validates the pushed branch; test.allow_approve_over_failure, which waives
-// the required check for an approved-over-failure commands.test; and
-// auto_fix.min_severity, which is a gate strength rather than an effort bound.
-// All four are trusted-only.
+// maintainer's CI minutes. Five exceptions live inside them.
+// test.evidence.branch names a git ref the daemon pushes to,
+// test.instructions steers the gate that validates the pushed branch,
+// test.allow_approve_over_failure waives the required check for an
+// approved-over-failure commands.test, and auto_fix.min_severity is a gate
+// strength rather than an effort bound; all four are trusted-only
+// unconditionally. test.units is the fifth and behaves differently: it runs
+// shell with the maintainer's credentials, so it follows Commands and Agent
+// below, including their allowRepoCommands opt-in.
 func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
 	if pushed == nil {
 		pushed = &RepoConfig{}
@@ -2731,6 +2942,29 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// allow_repo_commands, which widens command selection, not which gates
 		// exist. A pushed branch that could list `review` would review itself.
 		effective.SkipSteps = slices.Clone(trusted.SkipSteps)
+		// The whole restart block is trusted-only, exactly like the ci block
+		// above and for the same shape of reason: restart.exempt_paths is a
+		// gate strength, and widening it to "**" would disable the restart
+		// rule entirely. Replacing the block rather than the one field means a
+		// restart.* setting added later lands on the safe side by default.
+		effective.Restart = RestartRaw{ExemptPaths: slices.Clone(trusted.Restart.ExemptPaths)}
+		// The whole metrics block is trusted-only for the same reason: the
+		// threshold is the gate's strength and exempt_paths waives the gate for
+		// a path, so a pushed branch that could set either would clear its own
+		// breach. Replacing the block rather than each field means a metrics.*
+		// setting added later lands on the safe side by default. The slice is
+		// cloned because a bare struct copy would alias the trusted config's
+		// backing array.
+		effective.Metrics = MetricsRaw{
+			Threshold:   trusted.Metrics.Threshold,
+			ExemptPaths: slices.Clone(trusted.Metrics.ExemptPaths),
+		}
+		// ignore_patterns itself stays pushed-readable, since narrowing what a
+		// run works on is the contributor's call. The trusted copy is carried
+		// beside it for the gates that use an ignore entry to EXEMPT a changed
+		// file from a check, which a pushed branch must not be able to do to
+		// its own file, the same split review.path_instructions gets.
+		effective.TrustedIgnorePatterns = slices.Clone(trusted.IgnorePatterns)
 		// test.instructions is the runbook injected into the test gate's own
 		// prompt, so it is trusted-only for exactly the reasons
 		// document.instructions and review.path_instructions are: a contributor
@@ -2765,6 +2999,9 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.Test.Evidence.Branch = nil
 		effective.AutoFix.MinSeverity = nil
 		effective.SkipSteps = nil
+		effective.Restart = RestartRaw{}
+		effective.Metrics = MetricsRaw{}
+		effective.TrustedIgnorePatterns = nil
 		effective.Test.Instructions = ""
 		effective.Test.AllowApproveOverFailure = ""
 		if !allowRepoCommands {
@@ -2780,10 +3017,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.Commands = trusted.Commands
 		effective.Agent = trusted.Agent
 		effective.Agents = copyAgents(trusted.Agents)
+		effective.Test.Units = copyTestUnits(trusted.Test.Units)
 	} else {
 		effective.Commands = Commands{}
 		effective.Agent = ""
 		effective.Agents = nil
+		effective.Test.Units = nil
 	}
 	return &effective
 }
@@ -2921,6 +3160,29 @@ func applyTestOverrides(dst *Test, src *TestRaw) {
 			dst.Evidence.Branch = branch
 		}
 	}
+	// A non-empty source list REPLACES dst.Units rather than appending, so
+	// applying the repo copy after the global copy (see Merge) does not merge
+	// two layouts into one - a repository's list is a complete layout, not an
+	// addition to whatever the global config named.
+	if len(src.Units) > 0 {
+		dst.Units = copyTestUnits(src.Units)
+		for i := range dst.Units {
+			dst.Units[i].Name = strings.TrimSpace(dst.Units[i].Name)
+			dst.Units[i].Command = strings.TrimSpace(dst.Units[i].Command)
+			dst.Units[i].Path = NormalizeUnitPath(dst.Units[i].Path)
+		}
+	}
+}
+
+// copyTestUnits deep-copies a unit list so the resolved config never aliases
+// a caller's slice or its trusted-copy source.
+func copyTestUnits(units []TestUnit) []TestUnit {
+	if len(units) == 0 {
+		return nil
+	}
+	out := make([]TestUnit, len(units))
+	copy(out, units)
+	return out
 }
 
 // applyEvidenceStorageOverrides applies the global-only local-storage half of
@@ -3037,6 +3299,34 @@ func validateTestRaw(test TestRaw) error {
 	if test.Evidence.MaxRuns != nil && *test.Evidence.MaxRuns < 0 {
 		return fmt.Errorf("test.evidence.max_runs must be 0 (keep every run) or greater, got %d", *test.Evidence.MaxRuns)
 	}
+	// test.units is honored only from the trusted copy (see TestUnit), but
+	// like branch and local_root above this also validates the PUSHED copy:
+	// a branch carrying an invalid layout has to fail before it merges.
+	seen := make(map[string]bool, len(test.Units))
+	for i, unit := range test.Units {
+		name := strings.TrimSpace(unit.Name)
+		if name == "" {
+			return fmt.Errorf("test.units[%d].name is required", i)
+		}
+		if strings.TrimSpace(unit.Command) == "" {
+			return fmt.Errorf("test.units[%d].command is required (unit %q)", i, name)
+		}
+		// The Test step matches changed files against the canonical form of
+		// this path, so validation judges that exact string through the same
+		// owner the step reads. Checking a differently spelled value let
+		// "\services\api" through on Windows, where filepath.IsAbs is false and
+		// there is no leading slash, and it reported a rejected path back in a
+		// spelling the step never matches on. Canonicalization does not narrow
+		// what a maintainer may name: "api/.." resolves to "." and owns the
+		// whole repository, which is a layout they are free to declare.
+		if err := ValidateUnitPath(unit.Path); err != nil {
+			return fmt.Errorf("test.units[%d].%w", i, err)
+		}
+		if seen[name] {
+			return fmt.Errorf("test.units has duplicate unit name %q", name)
+		}
+		seen[name] = true
+	}
 	return nil
 }
 
@@ -3051,6 +3341,30 @@ func reviewDefaults() Review {
 func applyReviewOverrides(dst *Review, src *GlobalReviewRaw) {
 	if src.NarrowAfterRound != nil {
 		dst.NarrowAfterRound = max(*src.NarrowAfterRound, 0)
+	}
+}
+
+// metricsDefaults returns the default metrics-step settings: the conventional
+// CRAP ceiling and no exemptions.
+func metricsDefaults() Metrics {
+	return Metrics{Threshold: DefaultMetricsThreshold}
+}
+
+// applyMetricsOverrides applies non-nil raw values onto resolved defaults.
+// The threshold is validated at config parse time (validateMetricsRaw), so a
+// negative or non-finite value never reaches here.
+func applyMetricsOverrides(dst *Metrics, src *MetricsRaw) {
+	if src.Threshold != nil {
+		dst.Threshold = *src.Threshold
+	}
+	// A non-nil source list REPLACES dst.ExemptPaths rather than appending, so
+	// applying the repo copy after the global copy does not merge two
+	// exemption lists into one. An explicit empty list means no exemptions.
+	if src.ExemptPaths != nil {
+		dst.ExemptPaths = make([]string, 0, len(src.ExemptPaths))
+		for _, pattern := range src.ExemptPaths {
+			dst.ExemptPaths = append(dst.ExemptPaths, strings.TrimSpace(pattern))
+		}
 	}
 }
 
@@ -3077,8 +3391,10 @@ func autoFixDefaults() AutoFix {
 		Test:     3,
 		Review:   0,
 		Document: 3,
+		Format:   3,
 		CI:       3,
 		Rebase:   3,
+		Metrics:  3,
 		// Info findings are advisory. Fixing them automatically costs a fix
 		// round plus the full rereview that round triggers, so they are
 		// reported and left for a deliberate hand selection instead.
@@ -3158,11 +3474,17 @@ func applyAutoFixOverrides(dst *AutoFix, src *AutoFixRaw) {
 	if src.Document != nil {
 		dst.Document = *src.Document
 	}
+	if src.Format != nil {
+		dst.Format = *src.Format
+	}
 	if src.CI != nil {
 		dst.CI = *src.CI
 	}
 	if src.Rebase != nil {
 		dst.Rebase = *src.Rebase
+	}
+	if src.Metrics != nil {
+		dst.Metrics = *src.Metrics
 	}
 	if src.MinSeverity != nil {
 		if severity := strings.ToLower(strings.TrimSpace(*src.MinSeverity)); severity != "" && types.IsKnownFindingSeverity(severity) {
@@ -3183,10 +3505,14 @@ func (c *Config) AutoFixLimit(step types.StepName) int {
 		return c.AutoFix.Review
 	case types.StepDocument:
 		return c.AutoFix.Document
+	case types.StepFormat:
+		return c.AutoFix.Format
 	case types.StepCI:
 		return c.AutoFix.CI
 	case types.StepRebase:
 		return c.AutoFix.Rebase
+	case types.StepMetrics:
+		return c.AutoFix.Metrics
 	default:
 		return 0
 	}
@@ -3241,6 +3567,28 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	// narrowing knob is global-only.
 	review.PathInstructions = resolvePathInstructions(repo.Review.PathInstructions)
 
+	// restart.exempt_paths: nil (unset) falls back to the built-in default,
+	// an explicit empty list (no path is exempt) is cloned through as-is. The
+	// package-level default is never handed to a caller directly, so mutating
+	// the resolved slice cannot corrupt it for the next repository.
+	restart := Restart{ExemptPaths: slices.Clone(DefaultRestartExemptPaths)}
+	if repo.Restart.ExemptPaths != nil {
+		// Trimmed here rather than at validation, which reads the config
+		// without rewriting it. An untrimmed " docs/** " passes the glob check
+		// and then matches nothing, so the exemption would silently never fire.
+		restart.ExemptPaths = make([]string, 0, len(repo.Restart.ExemptPaths))
+		for _, pattern := range repo.Restart.ExemptPaths {
+			restart.ExemptPaths = append(restart.ExemptPaths, strings.TrimSpace(pattern))
+		}
+	}
+
+	// There is deliberately no global metrics block. The threshold is a gate
+	// strength that only the repository's own maintainer can calibrate, and
+	// EffectiveRepoConfig already sourced this copy from the trusted default
+	// branch, so an operator-wide default would only add a surface nobody sets.
+	metrics := metricsDefaults()
+	applyMetricsOverrides(&metrics, &repo.Metrics)
+
 	commit := Commit{FixMessage: DefaultFixMessageTemplate}
 	if global.Commit.FixMessage != nil {
 		commit.FixMessage = *global.Commit.FixMessage
@@ -3293,29 +3641,32 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		SessionReuse:          global.SessionReuse,
 		// Eval is global-only by design (see GlobalConfig.Eval), so it is
 		// copied straight through with no repository override step.
-		Eval:           global.Eval,
-		SCM:            global.SCM,
-		Commands:       repo.Commands,
-		Gates:          copyGates(repo.Gates),
-		IgnorePatterns: repo.IgnorePatterns,
-		ProtectedPaths: repo.ProtectedPaths,
-		AutoFix:        af,
-		CI:             ci,
-		Rebase:         rebase,
-		Commit:         commit,
-		Intent:         intent,
-		Test:           test,
-		Document:       Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
-		Review:         review,
-		SignCommits:    global.SignCommits,
-		PR:             pr,
-		ForgeProfiles:  global.ForgeProfiles,
-		Providers:      providers,
+		Eval:                  global.Eval,
+		SCM:                   global.SCM,
+		Commands:              repo.Commands,
+		Gates:                 copyGates(repo.Gates),
+		IgnorePatterns:        repo.IgnorePatterns,
+		TrustedIgnorePatterns: repo.TrustedIgnorePatterns,
+		ProtectedPaths:        repo.ProtectedPaths,
+		AutoFix:               af,
+		CI:                    ci,
+		Rebase:                rebase,
+		Commit:                commit,
+		Intent:                intent,
+		Test:                  test,
+		Document:              Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
+		Review:                review,
+		SignCommits:           global.SignCommits,
+		PR:                    pr,
+		ForgeProfiles:         global.ForgeProfiles,
+		Providers:             providers,
 		// repo is the EffectiveRepoConfig result, so this value is already
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,
 		NoCI:                   repo.NoCI,
 		SkipSteps:              slices.Clone(repo.SkipSteps),
+		Restart:                restart,
+		Metrics:                metrics,
 	}
 
 	if repo.Agent != "" {

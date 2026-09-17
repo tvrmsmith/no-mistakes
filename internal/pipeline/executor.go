@@ -62,6 +62,10 @@ type Executor struct {
 	shared   *RunShared
 	workDir  string
 
+	// restartFindings holds each restarting step's last verdict until the
+	// restart brings the run back to that step. Created per Execute.
+	restartFindings map[types.StepName]string
+
 	mu                   sync.Mutex
 	approvalCh           chan approvalResponse // buffered channel for approval responses
 	waiting              bool                  // true when blocked on approval
@@ -98,6 +102,35 @@ func (e *Executor) SetSkippedSteps(steps []types.StepName) {
 	for _, step := range steps {
 		e.skips[step] = true
 	}
+}
+
+// adoptRecordedSkips restores the operator's skip set onto an executor built
+// to resume a recovered run. The set a run started with otherwise lives only
+// in the executor that started it, so every decision reading e.skips would
+// come out differently after a daemon restart than before one.
+//
+// It reads runs.skipped_steps, the list the daemon wrote when the run started,
+// and never infers the set from step rows. A step row says skipped for three
+// different reasons (the operator's list, a human answering skip at a gate, a
+// step declaring itself skipped) and, worse, says nothing at all about a step
+// the run had not reached yet: a run parked at a document gate has a pending
+// Push row whether or not the operator passed --skip push, so inference would
+// turn the deliberate --skip review --skip push decline into a hard failure.
+func (e *Executor) adoptRecordedSkips(run *db.Run) error {
+	if run == nil {
+		return nil
+	}
+	steps := run.SkippedSteps
+	if len(steps) == 0 {
+		return nil
+	}
+	if e.skips == nil {
+		e.skips = make(map[types.StepName]bool, len(steps))
+	}
+	for _, step := range steps {
+		e.skips[step] = true
+	}
+	return nil
 }
 
 // NewExecutor creates a pipeline executor.
@@ -138,6 +171,18 @@ func (e *Executor) runEvidenceDir(runID string) string {
 		configured = e.config.Test.Evidence.LocalRoot
 	}
 	return e.paths.RunEvidenceDir(configured, runID)
+}
+
+// runCoverageDir resolves where this run's test-coverage artifacts are
+// written, the same way runEvidenceDir resolves evidence: once, from the app
+// root, so the Test step that writes coverage and the guard that reads it
+// name the same directory. Coverage takes no configured root, unlike
+// evidence, because nothing outside the run ever needs to find it.
+func (e *Executor) runCoverageDir(runID string) string {
+	if e.paths == nil {
+		return ""
+	}
+	return e.paths.RunCoverageDir(runID)
 }
 
 // SetGateReconcileTimings overrides the interval between approval-gate
@@ -211,7 +256,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 		return e.failRun(run, repo, fmt.Errorf("create log dir: %w", err))
 	}
 
-	e.initializeRunScopes(run.ID)
+	e.initializeRunScopes(run.ID, false)
 
 	// Create step result records in DB
 	stepRecords := make(map[types.StepName]*db.StepResult)
@@ -243,6 +288,9 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 		if err != nil {
 			return e.failRun(run, repo, fmt.Errorf("restore step %s execution state: %w", step.Name(), err), ctx)
 		}
+		// A restart re-entry is context, not a fix round, so state.fixing stays
+		// false and only the findings carry over.
+		state.previousFindings = e.takeRestartFindings(step.Name())
 		skipRemaining, restartFrom, err := e.executeStep(ctx, step, sr, run, repo, workDir, logDir, state)
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
@@ -259,9 +307,9 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 			break
 		}
 		if restartFrom != "" {
-			restartIndex, err := e.prepareRestart(run.ID, restartFrom, i)
+			restartIndex, err := e.honourRestart(run, step.Name(), restartFrom, i)
 			if err != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", step.Name(), restartFrom), ctx)
+				return e.failRun(run, repo, err, ctx)
 			}
 			i = restartIndex - 1
 		}
@@ -275,6 +323,74 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 	return nil
 }
 
+// ErrInvalidRestartBoundary is what prepareRestart returns when the step named
+// a boundary the pipeline cannot restart at. Every other error it returns is a
+// failed write, and the two must not be reported alike: blaming the step for a
+// database failure sends whoever reads the run at a step that did nothing
+// wrong. restartFailure keeps that distinction at the call sites.
+var ErrInvalidRestartBoundary = errors.New("invalid restart boundary")
+
+// ErrRestartBoundarySkipped is what prepareRestart returns when the boundary is
+// a step this run was told to skip. Rewinding to it would re-mark it skipped
+// and walk straight back to the requesting step, re-running every agent pass
+// between them while nothing revalidates, and the loop would only end when two
+// consecutive rounds happened to produce a byte-identical tree.
+//
+// A run that still publishes is already doomed: push has no exception for a
+// skipped review, so it refuses on the NULL certification three steps later
+// with a message naming nothing about the skip. Failing where the contradiction
+// arises, naming both steps, beats spinning and beats deferring to that
+// refusal. declineRestart carves out the one exception; skipping Push too is
+// the documented validate-without-publishing mode, where the request is
+// dropped in executeStep and never reaches prepareRestart.
+var ErrRestartBoundarySkipped = errors.New("restart boundary step was skipped")
+
+// declineRestart reports whether the run drops a restart request outright
+// instead of acting on it, and is the only case where it does: a boundary this
+// run skips in a run that also skips Push (`--skip review --skip push`, the
+// documented validate-without-publishing mode). Nothing reaches a remote
+// there, so no certification is load-bearing and killing the run buys nothing,
+// while Document's and Lint's agent commits make the request itself routine
+// rather than exceptional.
+//
+// executeStep asks before it acts on outcome.RestartFrom, so a dropped request
+// leaves the round exactly as it would have been had the step never asked: its
+// auto-fix branch and its approval park both still run. Deciding later, after
+// the round had already broken out on the request, let an ask-user finding
+// reach a completed run with no human ever seeing its gate.
+func (e *Executor) declineRestart(run *db.Run, step, restartFrom types.StepName) bool {
+	if !e.skips[restartFrom] || !e.skips[types.StepPush] {
+		return false
+	}
+	slog.Warn("restart request not honoured because its boundary step is skipped",
+		"run", run.ID, "boundary", restartFrom, "requested_by", step,
+		"reason", "push is skipped too, so the run publishes nothing and has no certification to protect")
+	return true
+}
+
+// honourRestart resolves a step's restart request into the next index to run.
+// It is the single place a RestartFrom is acted on, so every producer passes
+// through it.
+func (e *Executor) honourRestart(run *db.Run, step, restartFrom types.StepName, currentIndex int) (int, error) {
+	index, err := e.prepareRestart(run, restartFrom, currentIndex)
+	if err != nil {
+		return 0, restartFailure(step, restartFrom, err)
+	}
+	return index, nil
+}
+
+// restartFailure phrases a prepareRestart error for the run's failure message,
+// naming the step only when the step is what was wrong.
+func restartFailure(step types.StepName, restartFrom types.StepName, err error) error {
+	if errors.Is(err, ErrInvalidRestartBoundary) {
+		return fmt.Errorf("step %s requested invalid restart from %s", step, restartFrom)
+	}
+	if errors.Is(err, ErrRestartBoundarySkipped) {
+		return fmt.Errorf("cannot restart validation from %s requested by step %s: this run skips %s, so re-entering it would validate nothing", restartFrom, step, restartFrom)
+	}
+	return fmt.Errorf("restart from %s requested by step %s: %w", restartFrom, step, err)
+}
+
 func (e *Executor) stepIndex(name types.StepName) (int, error) {
 	for index, step := range e.steps {
 		if step.Name() == name {
@@ -284,21 +400,92 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 	return 0, fmt.Errorf("step %s is not in the pipeline", name)
 }
 
-func (e *Executor) prepareRestart(runID string, name types.StepName, currentIndex int) (int, error) {
+// prepareRestart rewinds the run to a boundary step and revokes the authority
+// the pre-restart passes had accumulated. honourRestart is its only caller, so
+// every RestartFrom producer passes through its two rejections:
+// ErrInvalidRestartBoundary and ErrRestartBoundarySkipped.
+//
+// Every write here is fail-closed. Warning and continuing would resume a run
+// whose review approval still covers a head the re-review has not reached, and
+// push accepts a certified ancestor, so the uncertified tree would ship.
+//
+// Termination is deliberately uncapped. ResetStepsFrom leaves step_rounds
+// intact, so a re-entered step recounts the auto-fix rounds it already spent
+// and its per-step budget never refills, and the no-progress tree guard in
+// runValidationStep parks a step that re-commits the tree its own most recent
+// restart produced. That guard is per-process and remembers only that one
+// tree, so it narrows the loop rather than bounding it: a step whose agent
+// produces genuinely different output every round is still unbounded, and
+// restart_count plus the soft-cap warning are what make that visible instead
+// of silent.
+func (e *Executor) prepareRestart(run *db.Run, name types.StepName, currentIndex int) (int, error) {
 	index, err := e.stepIndex(name)
 	if err != nil || index >= currentIndex {
-		return 0, fmt.Errorf("invalid restart boundary")
+		return 0, ErrInvalidRestartBoundary
 	}
-	if err := e.db.ResetStepsFrom(runID, e.steps[index].Name().Order()); err != nil {
+	if e.skips[name] {
+		return 0, ErrRestartBoundarySkipped
+	}
+	if err := e.db.ResetStepsFrom(run.ID, e.steps[index].Name().Order()); err != nil {
 		return 0, err
+	}
+	// Passing the run's current head leaves the head alone and NULLs the
+	// approval in the same statement, reusing the one owner of "revoke review
+	// authority" rather than adding a second, non-atomic way to do it.
+	if err := e.db.UpdateRunHeadSHAForRevalidation(run.ID, run.HeadSHA); err != nil {
+		return 0, err
+	}
+	run.ReviewApprovedHeadSHA = nil
+	if err := e.db.IncrementRunRestartCount(run.ID); err != nil {
+		return 0, err
+	}
+	run.RestartCount++
+	if run.RestartCount > db.RestartSoftCap {
+		slog.Warn("run has restarted more often than the soft cap",
+			"run", run.ID, "restart_count", run.RestartCount, "soft_cap", db.RestartSoftCap)
 	}
 	return index, nil
 }
 
-func (e *Executor) initializeRunScopes(runID string) {
+// stashRestartFindings holds a restarting step's findings until the restart
+// brings the run back to that step. Keyed by step name, so a restart carries
+// context only into the step that produced it.
+func (e *Executor) stashRestartFindings(name types.StepName, findings string) {
+	if e.restartFindings == nil || findings == "" {
+		return
+	}
+	e.restartFindings[name] = findings
+}
+
+// takeRestartFindings consumes the stash once. A step that runs again for any
+// other reason must not silently inherit a verdict from a previous re-entry.
+func (e *Executor) takeRestartFindings(name types.StepName) string {
+	if e.restartFindings == nil {
+		return ""
+	}
+	findings := e.restartFindings[name]
+	delete(e.restartFindings, name)
+	return findings
+}
+
+// initializeRunScopes creates the run-scoped session and shared-result holders
+// this execution uses. A fresh run starts both empty; a recovered run restores
+// the shared half from the run row, so the resumed Test step reuses the unit
+// layout it already paid a discovery agent pass for instead of paying a second
+// cold pass.
+func (e *Executor) initializeRunScopes(runID string, recovered bool) {
 	sessionsEnabled := e.config != nil && e.config.SessionReuse && e.agent != nil
 	e.sessions = NewRunSessions(e.db, runID, e.agent, sessionsEnabled)
-	e.shared = &RunShared{}
+	e.restartFindings = make(map[types.StepName]string)
+	var store RunSharedStore
+	if e.db != nil {
+		store = e.db
+	}
+	if recovered {
+		e.shared = RestoreRunShared(store, runID)
+		return
+	}
+	e.shared = NewRunShared(store, runID)
 }
 
 type stepExecutionState struct {
@@ -380,6 +567,9 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	if err := ValidateRecoveredRun(e.db, run, e.steps); err != nil {
 		return err
 	}
+	if err := e.adoptRecordedSkips(run); err != nil {
+		return err
+	}
 	point, err := e.recoveredResumePoint(run)
 	if err != nil {
 		return err
@@ -388,7 +578,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		return e.failRun(run, repo, fmt.Errorf("create log dir: %w", err))
 	}
-	e.initializeRunScopes(run.ID)
+	e.initializeRunScopes(run.ID, true)
 
 	if point.ciMonitor != nil {
 		return e.resumeCIMonitor(ctx, run, repo, workDir, logDir, point.ciMonitor)
@@ -525,6 +715,9 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	switch response.action {
 	case types.ActionApprove:
 		e.recordDeclinedRound(gate.lastRoundID, gate.findings, gate.step.Name(), gate.round)
+		if err := e.discardApprovalResidue(gate.step, reconcileCtx); err != nil {
+			return e.failRun(run, repo, err, ctx)
+		}
 		if err := e.applyApprovalOverride(gate.step, reconcileCtx, gate.stepResult.ID); err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
@@ -583,9 +776,9 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			return e.skipRecoveredRemainder(run, repo, gate.index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run.ID, restartFrom, gate.index)
-			if indexErr != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", gate.step.Name(), restartFrom), ctx)
+			restartIndex, restartErr := e.honourRestart(run, gate.step.Name(), restartFrom, gate.index)
+			if restartErr != nil {
+				return e.failRun(run, repo, restartErr, ctx)
 			}
 			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex, true)
 		}
@@ -624,7 +817,7 @@ func (e *Executor) resumeCIMonitor(ctx context.Context, run *db.Run, repo *db.Re
 		return e.skipRecoveredRemainder(run, repo, monitor.index+1)
 	}
 	if restartFrom != "" {
-		restartIndex, indexErr := e.prepareRestart(run.ID, restartFrom, monitor.index)
+		restartIndex, indexErr := e.prepareRestart(run, restartFrom, monitor.index)
 		if indexErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", step.Name(), restartFrom), ctx)
 		}
@@ -797,7 +990,11 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 			continue
 		}
 		// The resumed executor carries the run's persisted skip set, so a step
-		// the operator excluded stays excluded across a daemon stop.
+		// the operator excluded stays excluded across a daemon stop. A skipped
+		// step is still pending here whenever the run parked before reaching
+		// it, so its row cannot answer this and the restored set has to:
+		// running it anyway would publish a run the operator asked not to
+		// publish, and would falsify the premise the declined restart rests on.
 		if e.skips[e.steps[index].Name()] {
 			if err := e.markRecoveredStepSkipped(run, repo, result, e.steps[index].Name()); err != nil {
 				return e.failRun(run, repo, err, ctx)
@@ -808,6 +1005,7 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		if stateErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("restore step %s execution state: %w", e.steps[index].Name(), stateErr), ctx)
 		}
+		state.previousFindings = e.takeRestartFindings(e.steps[index].Name())
 		skipRemaining, restartFrom, err := e.executeStep(ctx, e.steps[index], result, run, repo, workDir, logDir, state)
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
@@ -816,9 +1014,9 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 			return e.skipRecoveredRemainder(run, repo, index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run.ID, restartFrom, index)
-			if indexErr != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", e.steps[index].Name(), restartFrom), ctx)
+			restartIndex, restartErr := e.honourRestart(run, e.steps[index].Name(), restartFrom, index)
+			if restartErr != nil {
+				return e.failRun(run, repo, restartErr, ctx)
 			}
 			revalidating = true
 			index = restartIndex - 1
@@ -1252,6 +1450,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		Sessions:         e.sessions,
 		Shared:           e.shared,
 		EvidenceDir:      e.runEvidenceDir(run.ID),
+		CoverageDir:      e.runCoverageDir(run.ID),
 		Fixing:           state.fixing,
 		PreviousFindings: state.previousFindings,
 		DeferredFindings: state.deferredFindings,
@@ -1342,6 +1541,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			return false, "", fmt.Errorf("step %s failed: %s", stepName, redactedErr)
 		}
 		restartFrom = outcome.RestartFrom
+		if restartFrom != "" && e.declineRestart(run, stepName, restartFrom) {
+			restartFrom = ""
+		}
 
 		if stepName == types.StepReview {
 			reviewApprovedHeadSHA = outcome.ReviewApprovedHeadSHA
@@ -1377,10 +1579,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if e.config != nil && e.config.CaptureEvalProvenance {
 				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, e.config.TrustedConfigSHA, e.config.ReplayGlobalYAML, e.config.ReplayRepoYAML, roundDuration)
 			} else {
-				inserted, dbErr = e.db.InsertReviewStepRound(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, roundDuration)
+				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, "", nil, nil, roundDuration)
 			}
 		} else {
-			inserted, dbErr = e.db.InsertStepRoundWithRepair(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, outcome.RepairPublished, roundDuration)
+			inserted, dbErr = e.db.InsertStepRoundWithHeadAndRepair(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewStartingHeadSHA, outcome.RepairPublished, roundDuration)
 		}
 		if dbErr != nil {
 			currentRoundID = roundInsertID(currentRoundID, inserted, dbErr)
@@ -1393,6 +1595,24 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if outcome.PRURL != "" {
 			run.PRURL = &outcome.PRURL
 			e.emitRunEvent(ipc.EventRunUpdated, run, repo)
+		}
+
+		// A restart outranks everything left in this round. The step's verdict
+		// describes a tree the restart is about to send back through validation,
+		// so an auto-fix round would repair findings that are already stale and
+		// an approval park would ask a human to rule on them. This break also
+		// deliberately skips outcome.SkipRemaining and outcome.Skipped; no step
+		// sets either alongside RestartFrom, and restart wins if one ever does.
+		// CI's own restart path is unaffected: it reports NeedsApproval false, so
+		// breaking here reaches the same place it always did, and the CI
+		// roundTrigger special case above still runs first. A request
+		// declineRestart already dropped is not a restart and never gets here,
+		// so the round it came from keeps its auto-fix branch and its gate.
+		if restartFrom != "" {
+			// Stash this round's findings so the step sees them again when the
+			// restart brings the run back to it, rather than re-deriving them.
+			e.stashRestartFindings(stepName, outcome.Findings)
+			break
 		}
 
 		// Check if auto-fix should be attempted. Only findings whose action is
@@ -1442,11 +1662,15 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		executionMS += time.Since(phaseStart).Milliseconds()
 
 		// Determine approval status: fix_review after a fix cycle, awaiting_approval otherwise.
-		// The working-tree diff that shows what the agent changed is NOT
-		// attached here: it is unbounded, and one frame over the transport
-		// limit kills the whole subscription and hides every event after it.
-		// Consumers fetch it on demand from the run's worktree instead
-		// (ipc.MethodGetStepDiff).
+		// The diff that shows what the agent changed is NOT attached here: it
+		// is unbounded, and one frame over the transport limit kills the whole
+		// subscription and hides every event after it. Consumers fetch it on
+		// demand from the run's worktree instead (ipc.MethodGetStepDiff), which
+		// serves the working tree when the step left work uncommitted and the
+		// range from the round's recorded starting head to the current head
+		// when it did not - a validation step commits at its exit, so its
+		// worktree is usually already clean by the time the gate is
+		// observable. daemon.parkedRoundStartingHead owns reading that head.
 		approvalStatus := types.StepStatusAwaitingApproval
 		if sctx.Fixing {
 			approvalStatus = types.StepStatusFixReview
@@ -1522,6 +1746,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// Approved - execution already frozen in executionMS, reset phaseStart
 			// so the done label computes no additional elapsed.
 			e.recordDeclinedRound(currentRoundID, outcome.Findings, stepName, roundNum)
+			if err := e.discardApprovalResidue(step, sctx); err != nil {
+				return false, "", err
+			}
 			if err := e.applyApprovalOverride(step, sctx, sr.ID); err != nil {
 				return false, "", err
 			}
@@ -1592,7 +1819,12 @@ done:
 	// actually completes. Parked outcomes stay in the loop above, failures
 	// return earlier, and skipped reviews deliberately leave the binding empty.
 	// Completion and authority replacement are one DB transaction.
-	if stepName == types.StepReview && status == types.StepStatusCompleted && reviewApprovedHeadSHA != "" {
+	//
+	// A review round that asked for a restart completes as an ordinary step and
+	// certifies nothing: it has already declared the head unfinished, so
+	// publishing authority over it would let push ship a tree the re-review has
+	// not seen.
+	if stepName == types.StepReview && status == types.StepStatusCompleted && reviewApprovedHeadSHA != "" && restartFrom == "" {
 		if err := e.db.CompleteReviewStep(sr.ID, run.ID, reviewApprovedHeadSHA, finalExitCode, durationMS, logPath); err != nil {
 			return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 		}
@@ -1610,23 +1842,31 @@ done:
 	return skipRemaining, restartFrom, nil
 }
 
-// recordDeclinedRound persists an approve, skip, or abort resolution as a real
-// decision instead of leaving no trace.
+// discardApprovalResidue is what both ActionApprove sites route
+// through. A step that parked over work it deliberately refused to commit
+// (ApprovalResidueDiscarder) clears that work here, because approving such a
+// gate means discard.
 //
-// Before this existed, those three resolutions wrote no finding-level state at
-// all, so a round where the human read a blocking finding and said "ship it as
-// is" was byte-identical to a round with no findings. Nothing downstream could
-// tell the two apart, and the only durable statement of what the change must do
-// stayed the user-intent prose - which is how a later step could re-derive and
-// re-apply the very change the human had just declined.
-//
-// The decline is stored the way a partial selection already stores one: as the
-// complement of selected_finding_ids. Writing an explicit empty array with the
-// user_declined source is what makes "selected nothing" representable, since a
-// NULL column means "no decision was recorded".
-//
-// Best effort by design. This is advisory prompt context for later steps, so a
-// failed write degrades to today's behavior and must never fail the run.
+// The trigger is the run's own record of what that step parked over, never the
+// gate's findings. Review raises ordinary gates far more often than residue
+// ones, and its findings are agent-authored, so keying a destructive git
+// restore on their contents let an ordinary approval delete whatever files the
+// agent had named. Every step that does not implement the interface is
+// unaffected, and so is every round that recorded no residue.
+func (e *Executor) discardApprovalResidue(step Step, sctx *StepContext) error {
+	discarder, ok := step.(ApprovalResidueDiscarder)
+	if !ok {
+		return nil
+	}
+	if _, parked := e.shared.ValidationResidue(step.Name()); !parked {
+		return nil
+	}
+	if err := discarder.DiscardApprovalResidue(sctx); err != nil {
+		return fmt.Errorf("discard approval residue for step %s: %w", step.Name(), err)
+	}
+	return nil
+}
+
 // applyApprovalOverride is the single place both ActionApprove sites (the
 // live wait in executeStep and the daemon-restart recovery path in Resume)
 // route through before completing a step on approval. For a step implementing
@@ -1665,6 +1905,23 @@ func (e *Executor) applyApprovalOverride(step Step, sctx *StepContext, stepResul
 	return nil
 }
 
+// recordDeclinedRound persists an approve, skip, or abort resolution as a real
+// decision instead of leaving no trace.
+//
+// Before this existed, those three resolutions wrote no finding-level state at
+// all, so a round where the human read a blocking finding and said "ship it as
+// is" was byte-identical to a round with no findings. Nothing downstream could
+// tell the two apart, and the only durable statement of what the change must do
+// stayed the user-intent prose - which is how a later step could re-derive and
+// re-apply the very change the human had just declined.
+//
+// The decline is stored the way a partial selection already stores one: as the
+// complement of selected_finding_ids. Writing an explicit empty array with the
+// user_declined source is what makes "selected nothing" representable, since a
+// NULL column means "no decision was recorded".
+//
+// Best effort by design. This is advisory prompt context for later steps, so a
+// failed write degrades to today's behavior and must never fail the run.
 func (e *Executor) recordDeclinedRound(roundID, findingsJSON string, stepName types.StepName, roundNum int) {
 	if e == nil || e.db == nil || roundID == "" {
 		return
@@ -2110,15 +2367,6 @@ func (e *Executor) emitStepEventWithFindingsAndError(eventType ipc.EventType, ru
 		StepName:   &stepName,
 		Status:     &status,
 		DurationMS: durationMS,
-	}
-	// The combined housekeeping invocation is recorded under Document because
-	// that is where it executes. Carry its broader scope on completion so an
-	// attached TUI does not temporarily present the shared wall time as
-	// documentation-only work while waiting for another snapshot.
-	if stepName == types.StepDocument {
-		if combined, err := e.db.HasAgentInvocationPurpose(run.ID, string(stepName), "housekeeping"); err == nil && combined {
-			event.WorkScope = ipc.WorkScopeDocumentLintHousekeeping
-		}
 	}
 	stats := e.findingStatsForStep(run.ID, stepName)
 	if stats.ReportedFindings > 0 || stats.FixedFindings > 0 {

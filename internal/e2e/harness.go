@@ -125,6 +125,7 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 		}
 	}
 	h.writeLoginShellPathSeed()
+	h.writeInferredUnitCommand()
 
 	// Symlink each agent name to the same fake binary. Native agents dispatch
 	// by argv[0] basename; opencode does the same. Symlinks (not
@@ -295,6 +296,51 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
+// InferredUnitCommand is the command the fake agent's default discovered test
+// unit runs (cmd/fakeagent/scenario.go applyDefaultTestUnits names the same
+// string). A journey that configures no commands.test reaches the agent
+// discovery pass, and the unit it infers runs like any other unit command, so
+// it has to emit the coverage artifacts the vacuous-green guard requires or
+// every such journey parks at the Test step. Both sides carry the name because
+// cmd/fakeagent is package main and neither can import the other.
+const InferredUnitCommand = "nm-e2e-unit-test"
+
+// writeInferredUnitCommand installs InferredUnitCommand on PATH so the fake
+// agent's inferred unit reports coverage the same way a configured command
+// written through WriteTestCommand does.
+func (h *Harness) writeInferredUnitCommand() {
+	h.WriteTestCommand(InferredUnitCommand, "exit 0")
+}
+
+// WriteTestCommand writes an executable shell script into BinDir that emits
+// the coverage artifacts the Test step's vacuous-green guard requires and then
+// runs `body`. A journey configuring commands.test needs both, because a
+// command that reports no coverage profile and no test count parks the run
+// however green its exit code is.
+//
+// It writes one LCOV record per entry in NO_MISTAKES_CHANGED_FILES, so the
+// profile describes the change the journey actually pushed, plus a JUnit report
+// claiming one executed test. When the list is empty it names a placeholder so
+// the profile still parses. The e2e suite cannot reuse stepstest's equivalent
+// fixture, because that package sits under internal/pipeline/steps and Go's
+// internal rule puts it out of reach here.
+func (h *Harness) WriteTestCommand(name, body string) string {
+	h.t.Helper()
+	path := filepath.Join(h.BinDir, name)
+	script := `#!/bin/sh
+: > "$NO_MISTAKES_COVERAGE_DIR/coverage.lcov"
+printf '%s\n' "${NO_MISTAKES_CHANGED_FILES:-e2e-placeholder.txt}" | while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  printf 'SF:%s\nFN:1,e2e_covered\nFNDA:1,e2e_covered\nend_of_record\n' "$f" >> "$NO_MISTAKES_COVERAGE_DIR/coverage.lcov"
+done
+printf '<testsuite tests="1" skipped="0"></testsuite>\n' > "$NO_MISTAKES_COVERAGE_DIR/report.xml"
+` + body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		h.t.Fatalf("write test command %s: %v", name, err)
+	}
+	return path
+}
+
 // writeGlobalConfig writes a no-mistakes global config that pins the
 // agent name and binary path. The path override forces no-mistakes'
 // agent.New to use our absolute fake-agent path instead of looking up the
@@ -312,8 +358,10 @@ agent_path_override:
   %s: %s
 auto_fix:
   rebase: 0
+  format: 0
   lint: 0
   test: 0
+  metrics: 0
   review: 0
   document: 0
   ci: 0
@@ -508,6 +556,17 @@ func (h *Harness) UpstreamBranchSHA(branch string) string {
 		h.t.Fatalf("rev-parse upstream %s: %v\n%s", branch, err, sha)
 	}
 	return string(bytes.TrimSpace(sha))
+}
+
+// UpstreamHasBranch reports whether the branch exists on the upstream remote,
+// which is how a test tells "the pipeline published this" from "it stopped
+// before Push".
+func (h *Harness) UpstreamHasBranch(branch string) bool {
+	h.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := h.runGit(ctx, h.UpstreamDir, "rev-parse", "--verify", "refs/heads/"+branch)
+	return err == nil
 }
 
 func (h *Harness) AddWorktree(branch string) string {

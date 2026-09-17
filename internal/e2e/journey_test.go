@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,7 +105,7 @@ func TestAXIControlByteFailureGateRemainsReadable(t *testing.T) {
 	if !bytes.Contains(rawLog, []byte("bad\x1fvalue")) {
 		t.Fatal("durable Test log should preserve the raw control byte")
 	}
-	for _, stepName := range []types.StepName{types.StepDocument, types.StepLint, types.StepPush} {
+	for _, stepName := range []types.StepName{types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush} {
 		step, ok := findStep(run.Steps, stepName)
 		if !ok || step.Status != types.StepStatusPending {
 			t.Fatalf("%s should remain pending at the readable Test gate, got %+v", stepName, step)
@@ -191,7 +193,7 @@ func runHappyPath(t *testing.T, agentName string) {
 	assertEmptyDiffAfterRebaseRun(t, h)
 	assertIgnoredOnlyRun(t, h)
 	assertAgentEditCommitRun(t, h)
-	assertFormatFailureWarningRun(t, h)
+	assertFormatFailureParksAutoFixable(t, h)
 	assertNonEmptyDiffAfterRebaseRun(t, h)
 	assertRebaseConflictRun(t, h)
 
@@ -274,8 +276,11 @@ func runHappyPath(t *testing.T, agentName string) {
 	assertDocumentPrompt(t, h, run, invs)
 	assertDocumentStepNoGaps(t, run.Steps)
 	assertNoCommandTestStep(t, run.Steps, invs)
-	if sawPromptContainingAll(invs, "Detect the linting and formatting tools", "branch: feature/e2e") {
-		t.Errorf("expected combined housekeeping to avoid a separate lint prompt, got %d:\n%s", len(invs), summarisePrompts(invs))
+	// Lint runs ahead of Document now, so there is no later step to fold its
+	// work into. With no commands.lint configured it always pays its own
+	// agent pass.
+	if !sawPromptContainingAll(invs, "Detect the linting and formatting tools", "branch: feature/e2e") {
+		t.Errorf("expected Lint to run its own prompt, got %d invocations:\n%s", len(invs), summarisePrompts(invs))
 	}
 	assertPromptsAbsent(t, invs,
 		"Draft a pull request title and summary for the full branch delta.",
@@ -296,6 +301,7 @@ func runHappyPath(t *testing.T, agentName string) {
 	assertAbortByRunIDReapsRunFromOutsideWorktree(t, h)
 	assertRespondNoWaitingStepRun(t, h)
 	assertFailingTestCommandRun(t, h)
+	assertVacuousGreenTestCommandParks(t, h)
 	assertFailingLintCommandRun(t, h)
 	if agentName == "claude" {
 		assertDifferentBranchDoesNotCancelActiveRun(t, h)
@@ -401,7 +407,7 @@ func cleanReviewScenario(t *testing.T) string {
       risk_level: low
       risk_rationale: "documentation status only"
       risk_scope: source-or-external
-  - match: "branch: document-info"
+  - match: "report only what you could not resolve.\n\nContext:\n- branch: document-info"
     text: "documentation info finding"
     structured:
       findings:
@@ -428,7 +434,7 @@ func cleanReviewScenario(t *testing.T) string {
       artifacts: []
       title: "docs: update README"
       body: "## Summary\ndocumentation update"
-  - match: "branch: review-warning"
+  - match: "Review the code changes and return structured findings with a risk assessment.\n\nContext:\n- branch: review-warning"
     text: "review found a warning"
     structured:
       findings:
@@ -442,7 +448,7 @@ func cleanReviewScenario(t *testing.T) string {
       risk_level: medium
       risk_rationale: "warning requires human review"
       risk_scope: source-or-external
-  - match: "branch: agent-edits"
+  - match: "Detect the linting and formatting tools for this project, run the relevant checks yourself, apply safe fixes, and verify the result.\n\nContext:\n- branch: agent-edits"
     text: "agent edited a file"
     edits:
       - path: "agent-edit.txt"
@@ -1103,7 +1109,7 @@ func assertEmptyDiffAfterRebaseRun(t *testing.T, h *Harness) {
 	if run.Status != types.RunCompleted {
 		t.Fatalf("empty-after-rebase run did not complete: status=%s error=%v", run.Status, deref(run.Error))
 	}
-	for _, stepName := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument, types.StepLint, types.StepPush, types.StepPR, types.StepCI} {
+	for _, stepName := range []types.StepName{types.StepFormat, types.StepLint, types.StepTest, types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush, types.StepPR, types.StepCI} {
 		step, ok := findStep(run.Steps, stepName)
 		if !ok {
 			t.Fatalf("expected %s step in empty-after-rebase run", stepName)
@@ -1130,10 +1136,19 @@ func assertEmptyDiffAfterRebaseRun(t *testing.T, h *Harness) {
 	}
 }
 
+// assertAgentEditCommitRun pins how an agent's edit and a formatter's output
+// reach the branch now that Push commits nothing.
+//
+// Lint runs ahead of Review, so the scenario's edit lands in Lint's own exit
+// commit. That commit is agent-authored, so the run restarts from Format and
+// every gate sees the edit; by the time Review certifies, the tree is clean.
+// The formatter's output lands the same way one step earlier, in Format's own
+// exit commit, which is tool-authored and restarts nothing. Push then publishes
+// exactly the head Review judged and creates no commit of its own.
 func assertAgentEditCommitRun(t *testing.T, h *Harness) {
 	t.Helper()
 	formatScript := filepath.Join(h.BinDir, "nm-format-e2e")
-	if err := os.WriteFile(formatScript, []byte("#!/bin/sh\nprintf formatted > formatted-by-push.txt\n"), 0o755); err != nil {
+	if err := os.WriteFile(formatScript, []byte("#!/bin/sh\nprintf formatted > formatted-by-format-step.txt\n"), 0o755); err != nil {
 		t.Fatalf("write e2e formatter: %v", err)
 	}
 	h.CommitChange("agent-edits", "agent-edits.txt", "feature before agent\n", "add agent-edits branch")
@@ -1145,7 +1160,7 @@ func assertAgentEditCommitRun(t *testing.T, h *Harness) {
 		t.Fatalf("agent-edits run did not complete: status=%s error=%v", run.Status, deref(run.Error))
 	}
 	if run.HeadSHA == originalHead {
-		t.Fatalf("expected push step to commit agent changes, head remained %s", run.HeadSHA)
+		t.Fatalf("expected a validation step to commit the agent edit, head remained %s", run.HeadSHA)
 	}
 	assertPushedHead(t, run.HeadSHA, h.UpstreamBranchSHA("agent-edits"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1158,13 +1173,7 @@ func assertAgentEditCommitRun(t *testing.T, h *Harness) {
 	if strings.TrimSpace(string(gateBranchSHA)) != run.HeadSHA {
 		t.Fatalf("agent-edits gate branch SHA = %s, want run head %s", strings.TrimSpace(string(gateBranchSHA)), run.HeadSHA)
 	}
-	message, err := h.runGit(ctx, h.UpstreamDir, "log", "-1", "--format=%s", "refs/heads/agent-edits")
-	if err != nil {
-		t.Fatalf("read agent-edits upstream commit message: %v\n%s", err, message)
-	}
-	if strings.TrimSpace(string(message)) != "no-mistakes: apply agent fixes" {
-		t.Fatalf("agent-edits upstream commit message = %q", strings.TrimSpace(string(message)))
-	}
+
 	contents, err := h.runGit(ctx, h.UpstreamDir, "show", "refs/heads/agent-edits:agent-edit.txt")
 	if err != nil {
 		t.Fatalf("read committed agent edit from upstream: %v\n%s", err, contents)
@@ -1172,34 +1181,100 @@ func assertAgentEditCommitRun(t *testing.T, h *Harness) {
 	if string(contents) != "agent edited\n" {
 		t.Fatalf("agent-edit.txt contents = %q", string(contents))
 	}
-	formatted, err := h.runGit(ctx, h.UpstreamDir, "show", "refs/heads/agent-edits:formatted-by-push.txt")
+	formatted, err := h.runGit(ctx, h.UpstreamDir, "show", "refs/heads/agent-edits:formatted-by-format-step.txt")
 	if err != nil {
-		t.Fatalf("read formatted file from upstream: %v\n%s", err, formatted)
+		t.Fatalf("read formatter output from upstream: %v\n%s", err, formatted)
 	}
 	if string(formatted) != "formatted" {
-		t.Fatalf("formatted-by-push.txt contents = %q", string(formatted))
+		t.Fatalf("formatted-by-format-step.txt contents = %q", string(formatted))
+	}
+
+	// Each file arrived in the exit commit of the step that produced it.
+	assertPathCommittedByStep(t, h, ctx, "agent-edits", originalHead, "agent-edit.txt", types.StepLint)
+	assertPathCommittedByStep(t, h, ctx, "agent-edits", originalHead, "formatted-by-format-step.txt", types.StepFormat)
+
+	// The deleted catch-all is the thing that must not come back.
+	subjects, err := h.runGit(ctx, h.UpstreamDir, "log", "--format=%s", originalHead+"..refs/heads/agent-edits")
+	if err != nil {
+		t.Fatalf("read agent-edits pipeline commit subjects: %v\n%s", err, subjects)
+	}
+	if strings.Contains(string(subjects), "no-mistakes: apply agent fixes") {
+		t.Fatalf("push must create no catch-all commit, got subjects:\n%s", subjects)
+	}
+	logPath := filepath.Join(h.NMHome, "logs", run.ID, "push.log")
+	pushLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read agent-edits push log: %v", err)
+	}
+	if strings.Contains(string(pushLog), "committing agent changes") {
+		t.Fatalf("push must publish a clean tree without committing, got:\n%s", pushLog)
 	}
 }
 
-func assertFormatFailureWarningRun(t *testing.T, h *Harness) {
+// assertPathCommittedByStep checks that every pipeline commit touching path
+// since base is the exit commit of the named step. The default fix-message
+// template renders "no-mistakes(<step>): <summary>", so the prefix identifies
+// the author without pinning the scenario's summary wording.
+func assertPathCommittedByStep(t *testing.T, h *Harness, ctx context.Context, branch, base, path string, step types.StepName) {
+	t.Helper()
+	out, err := h.runGit(ctx, h.UpstreamDir, "log", "--format=%s", base+"..refs/heads/"+branch, "--", path)
+	if err != nil {
+		t.Fatalf("read commits touching %s: %v\n%s", path, err, out)
+	}
+	subjects := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(subjects) != 1 || subjects[0] == "" {
+		t.Fatalf("expected exactly one commit to introduce %s, got %q", path, string(out))
+	}
+	wantPrefix := fmt.Sprintf("no-mistakes(%s):", step)
+	if !strings.HasPrefix(subjects[0], wantPrefix) {
+		t.Fatalf("%s should reach the branch through the %s exit commit, got subject %q", path, step, subjects[0])
+	}
+}
+
+// assertFormatFailureParksAutoFixable replaces the old push-log warning check.
+// Push no longer runs the formatter, and Format is no longer a step that shrugs
+// at a non-zero exit: it reports the failure as an auto-fixable finding and
+// parks for a decision, so nothing downstream judges source the formatter could
+// not process.
+func assertFormatFailureParksAutoFixable(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("format-fails", "format-fails.txt", "feature with failing formatter\n", "add format-fails branch")
 	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  format: \"exit 1\"\n"
 	h.CommitChange("format-fails", ".no-mistakes.yaml", config, "configure failing formatter")
 	h.PushToGate("format-fails")
-	run := h.WaitForRun("format-fails", 60*time.Second)
-	if run.Status != types.RunCompleted {
-		t.Fatalf("format-fails run did not complete: status=%s error=%v", run.Status, deref(run.Error))
+	run := waitForStepStatus(t, h, "format-fails", types.StepFormat, types.StepStatusAwaitingApproval, 60*time.Second)
+	formatStep, ok := findStep(run.Steps, types.StepFormat)
+	if !ok {
+		t.Fatal("expected format step in format-fails run")
 	}
-	assertPushedHead(t, run.HeadSHA, h.UpstreamBranchSHA("format-fails"))
-	logPath := filepath.Join(h.NMHome, "logs", run.ID, "push.log")
+	if formatStep.FindingsJSON == nil {
+		t.Fatal("expected the format gate to record findings JSON")
+	}
+	if !strings.Contains(*formatStep.FindingsJSON, "formatter found issues (exit code 1)") {
+		t.Fatalf("format gate should name the formatter failure and its exit code, got %s", *formatStep.FindingsJSON)
+	}
+	logPath := filepath.Join(h.NMHome, "logs", run.ID, "format.log")
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
-		t.Fatalf("read format-fails push log: %v", err)
+		t.Fatalf("read format-fails format log: %v", err)
 	}
-	logText := string(logData)
-	if !strings.Contains(logText, "warning") || !strings.Contains(logText, "format") {
-		t.Fatalf("expected failing formatter warning in push log, got: %s", logText)
+	if !strings.Contains(string(logData), "running formatter") {
+		t.Fatalf("expected the Format step to own the formatter run, got: %s", logData)
+	}
+	// Nothing may reach the remote from a run stopped at the first gate.
+	for _, stepName := range []types.StepName{types.StepLint, types.StepTest, types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush} {
+		step, ok := findStep(run.Steps, stepName)
+		if !ok || step.Status != types.StepStatusPending {
+			t.Fatalf("%s should remain pending at the Format gate, got %+v", stepName, step)
+		}
+	}
+	h.Respond(run.ID, types.StepFormat, types.ActionAbort)
+	aborted := h.WaitForRun("format-fails", 60*time.Second)
+	if aborted.Status != types.RunFailed {
+		t.Fatalf("format-fails run status after abort = %s, want failed", aborted.Status)
+	}
+	if h.UpstreamHasBranch("format-fails") {
+		t.Fatal("a run aborted at the Format gate must publish nothing")
 	}
 }
 
@@ -1246,7 +1321,7 @@ func assertNonEmptyDiffAfterRebaseRun(t *testing.T, h *Harness) {
 	if strings.TrimSpace(string(mergeBase)) != strings.TrimSpace(string(mainSHA)) {
 		t.Fatalf("non-empty-after-rebase merge-base = %s, want upstream main %s", strings.TrimSpace(string(mergeBase)), strings.TrimSpace(string(mainSHA)))
 	}
-	for _, stepName := range []types.StepName{types.StepRebase, types.StepReview, types.StepTest, types.StepDocument, types.StepLint, types.StepPush} {
+	for _, stepName := range []types.StepName{types.StepRebase, types.StepFormat, types.StepLint, types.StepTest, types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush} {
 		step, ok := findStep(run.Steps, stepName)
 		if !ok {
 			t.Fatalf("expected %s step in non-empty-after-rebase run", stepName)
@@ -1396,10 +1471,7 @@ func assertGateRefDeletionDoesNotCreateRun(t *testing.T, h *Harness, branch stri
 func assertConfiguredCommandRun(t *testing.T, h *Harness) {
 	t.Helper()
 	testCommandLog := filepath.Join(h.NMHome, "configured-test-command.log")
-	testCommand := filepath.Join(h.BinDir, "nm-test-e2e")
-	if err := os.WriteFile(testCommand, []byte("#!/bin/sh\nprintf test-ran > \""+testCommandLog+"\"\n"), 0o755); err != nil {
-		t.Fatalf("write e2e test command: %v", err)
-	}
+	h.WriteTestCommand("nm-test-e2e", "printf test-ran > \""+testCommandLog+"\"")
 	lintCommandLog := filepath.Join(h.NMHome, "configured-lint-command.log")
 	lintCommand := filepath.Join(h.BinDir, "nm-lint-e2e")
 	if err := os.WriteFile(lintCommand, []byte("#!/bin/sh\nprintf lint-ran > \""+lintCommandLog+"\"\n"), 0o755); err != nil {
@@ -1424,7 +1496,9 @@ func assertConfiguredCommandRun(t *testing.T, h *Harness) {
 	if err != nil {
 		t.Fatalf("parse configured test findings: %v", err)
 	}
-	if len(findings.Tested) == 0 || findings.Tested[0] != "nm-test-e2e" {
+	// A configured commands.test is discovery's implicit "repository" unit, so
+	// the recorded entry names that unit alongside the command it ran.
+	if len(findings.Tested) == 0 || findings.Tested[0] != "repository: nm-test-e2e" {
 		t.Fatalf("expected configured test command to be recorded first, got %+v", findings.Tested)
 	}
 	if len(findings.Scenarios) == 0 || findings.Verdict == "" {
@@ -1807,42 +1881,41 @@ func assertTestAgentNewTestFileRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("test-agent-new-test-file", "test-agent-new-test-file.txt", "test agent new test file\n", "add test agent new test file")
 	h.PushToGate("test-agent-new-test-file")
-	// Issue #140: a passing test run whose only finding is an informational
-	// "new test file written by agent" note must not gate on approval; the run
-	// proceeds automatically to completion.
-	run := h.WaitForRun("test-agent-new-test-file", 60*time.Second)
+	assertAgentTestFileShipsWithoutAGate(t, h, "test-agent-new-test-file", "agent_test.py")
+}
+
+// assertAgentTestFileShipsWithoutAGate covers issue #140 under the restart
+// contract. A passing test run whose only finding is the informational "new
+// test file written by agent" note must not gate on approval, so the run
+// reaches completion on its own and the agent's file reaches the branch.
+//
+// The note itself is not asserted on the finished step row. Writing the file
+// makes the Test step's exit commit agent-authored, which re-enters validation
+// from Format; the second pass finds the file already committed, reports no new
+// test file, and its findings are the ones the step row keeps. The note's own
+// shape is pinned at the step level by TestTestStep tests in
+// internal/pipeline/steps. What matters end to end is that nothing asked a
+// human and the file shipped.
+func assertAgentTestFileShipsWithoutAGate(t *testing.T, h *Harness, branch, testFile string) {
+	t.Helper()
+	run := h.WaitForRun(branch, 90*time.Second)
 	if run.Status != types.RunCompleted {
-		t.Fatalf("test-agent-new-test-file run status = %s, want completed; error=%v", run.Status, deref(run.Error))
+		t.Fatalf("%s run status = %s, want completed; error=%v", branch, run.Status, deref(run.Error))
 	}
 	testStep, ok := findStep(run.Steps, types.StepTest)
 	if !ok {
-		t.Fatal("expected test step in test-agent-new-test-file run")
+		t.Fatalf("expected test step in %s run", branch)
 	}
 	if testStep.Status != types.StepStatusCompleted {
 		t.Fatalf("test step status = %s, want completed", testStep.Status)
 	}
-	if testStep.FindingsJSON == nil {
-		t.Fatal("expected test step to record findings JSON for new test file")
+	for _, step := range run.Steps {
+		if step.Status == types.StepStatusAwaitingApproval {
+			t.Fatalf("step %s gated on approval, but a new test file note is informational", step.StepName)
+		}
 	}
-	findings, err := types.ParseFindingsJSON(*testStep.FindingsJSON)
-	if err != nil {
-		t.Fatalf("parse new test file findings: %v", err)
-	}
-	if len(findings.Items) != 1 {
-		t.Fatalf("expected one new test file finding, got %+v", findings.Items)
-	}
-	item := findings.Items[0]
-	if item.Severity != "info" {
-		t.Fatalf("new test file finding severity = %q, want info", item.Severity)
-	}
-	if item.Action != types.ActionNoOp {
-		t.Fatalf("new test file finding action = %q, want no-op", item.Action)
-	}
-	if item.File != "agent_test.py" {
-		t.Fatalf("new test file finding file = %q, want agent_test.py", item.File)
-	}
-	if !strings.Contains(item.Description, "new test file written by agent: agent_test.py") {
-		t.Fatalf("new test file finding description = %q", item.Description)
+	if _, err := h.runGit(context.Background(), h.UpstreamDir, "cat-file", "-e", "refs/heads/"+branch+":"+testFile); err != nil {
+		t.Fatalf("expected %s on pushed branch %s: %v", testFile, branch, err)
 	}
 }
 
@@ -1850,42 +1923,8 @@ func assertTestAgentStagedNewTestFileRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("test-agent-staged-new-test-file", "test-agent-staged-new-test-file.txt", "test agent staged new test file\n", "add test agent staged new test file")
 	h.PushToGate("test-agent-staged-new-test-file")
-	// Issue #140: same as the untracked case, but the agent stages the new test
-	// file. It is still purely informational, so the run proceeds automatically.
-	run := h.WaitForRun("test-agent-staged-new-test-file", 60*time.Second)
-	if run.Status != types.RunCompleted {
-		t.Fatalf("test-agent-staged-new-test-file run status = %s, want completed; error=%v", run.Status, deref(run.Error))
-	}
-	testStep, ok := findStep(run.Steps, types.StepTest)
-	if !ok {
-		t.Fatal("expected test step in test-agent-staged-new-test-file run")
-	}
-	if testStep.Status != types.StepStatusCompleted {
-		t.Fatalf("test step status = %s, want completed", testStep.Status)
-	}
-	if testStep.FindingsJSON == nil {
-		t.Fatal("expected test step to record findings JSON for staged new test file")
-	}
-	findings, err := types.ParseFindingsJSON(*testStep.FindingsJSON)
-	if err != nil {
-		t.Fatalf("parse staged new test file findings: %v", err)
-	}
-	if len(findings.Items) != 1 {
-		t.Fatalf("expected one staged new test file finding, got %+v", findings.Items)
-	}
-	item := findings.Items[0]
-	if item.Severity != "info" {
-		t.Fatalf("staged new test file finding severity = %q, want info", item.Severity)
-	}
-	if item.Action != types.ActionNoOp {
-		t.Fatalf("staged new test file finding action = %q, want no-op", item.Action)
-	}
-	if item.File != "agent_staged_test.go" {
-		t.Fatalf("staged new test file finding file = %q, want agent_staged_test.go", item.File)
-	}
-	if !strings.Contains(item.Description, "new test file written by agent: agent_staged_test.go") {
-		t.Fatalf("staged new test file finding description = %q", item.Description)
-	}
+	// Same as the untracked case, but the agent stages the new test file.
+	assertAgentTestFileShipsWithoutAGate(t, h, "test-agent-staged-new-test-file", "agent_staged_test.go")
 }
 
 func assertReviewWarningRun(t *testing.T, h *Harness) {
@@ -1949,12 +1988,15 @@ func assertReviewWarningRun(t *testing.T, h *Harness) {
 	if completedReviewStep.Status != types.StepStatusFailed {
 		t.Fatalf("expected review step to fail after abort, got %s", completedReviewStep.Status)
 	}
-	testStep, ok := findStep(completed.Steps, types.StepTest)
+	// Aborting at a gate stops the pipeline, so every step after the aborted
+	// one stays pending. Review is the last of the validation region now, so
+	// Push is the step that proves it.
+	pushStep, ok := findStep(completed.Steps, types.StepPush)
 	if !ok {
-		t.Fatal("expected pending test step in review-warning run")
+		t.Fatal("expected pending push step in review-warning run")
 	}
-	if testStep.Status != types.StepStatusPending {
-		t.Fatalf("expected test step to remain pending after review abort, got %s", testStep.Status)
+	if pushStep.Status != types.StepStatusPending {
+		t.Fatalf("expected push step to remain pending after review abort, got %s", pushStep.Status)
 	}
 }
 
@@ -2018,21 +2060,26 @@ func waitForStepStatus(t *testing.T, h *Harness, branch string, stepName types.S
 
 func assertSupersededRunCancellation(t *testing.T, h *Harness) {
 	t.Helper()
-	slowCommand := filepath.Join(h.BinDir, "nm-superseded-test-e2e")
 	// Keep the first run deterministically active even when the full e2e suite
 	// is CPU-saturated. Cancellation reaps the process group, so this does not
 	// add wall time on the passing path.
+	slowCommand := filepath.Join(h.BinDir, "nm-superseded-slow-e2e")
 	if err := os.WriteFile(slowCommand, []byte("#!/bin/sh\nsleep 120\n"), 0o755); err != nil {
 		t.Fatalf("write superseded slow test command: %v", err)
 	}
-	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-superseded-test-e2e\n  lint: true\n"
-	h.CommitChange("superseded-run", ".no-mistakes.yaml", config, "configure superseded slow test")
+	// The second push names a different command rather than overwriting the
+	// first one's script. Rewriting it in place raced the Test step's own
+	// spawn: the step reports running before it executes the command, so the
+	// first run could pick up the fast version, exit zero having tested
+	// nothing, and park at the vacuous-green gate where no push can supersede
+	// it.
+	h.WriteTestCommand("nm-superseded-fast-e2e", "exit 0")
+	slowConfig := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-superseded-slow-e2e\n  lint: true\n"
+	h.CommitChange("superseded-run", ".no-mistakes.yaml", slowConfig, "configure superseded slow test")
 	h.PushToGate("superseded-run")
 	first := waitForStepStatus(t, h, "superseded-run", types.StepTest, types.StepStatusRunning, 60*time.Second)
-	if err := os.WriteFile(slowCommand, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("replace superseded test command with fast version: %v", err)
-	}
-	h.CommitChange("superseded-run", "superseded-run.txt", "second push\n", "supersede active run")
+	fastConfig := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-superseded-fast-e2e\n  lint: true\n"
+	h.CommitChange("superseded-run", ".no-mistakes.yaml", fastConfig, "configure superseding fast test")
 	h.PushToGate("superseded-run")
 	cancelled := waitForRunIDStatus(t, h, first.ID, types.RunCancelled, 60*time.Second)
 	if cancelled.Error == nil || !strings.Contains(*cancelled.Error, "superseded by new push") {
@@ -2057,7 +2104,8 @@ func assertDifferentBranchDoesNotCancelActiveRun(t *testing.T, h *Harness) {
 	h.CommitChange("different-branch-slow", ".no-mistakes.yaml", slowConfig, "configure different-branch slow test")
 	h.PushToGate("different-branch-slow")
 	slowRun := waitForStepStatus(t, h, "different-branch-slow", types.StepTest, types.StepStatusRunning, 60*time.Second)
-	fastConfig := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: true\n  lint: true\n"
+	h.WriteTestCommand("nm-different-branch-fast-e2e", "exit 0")
+	fastConfig := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-different-branch-fast-e2e\n  lint: true\n"
 	h.CommitChange("different-branch-fast", ".no-mistakes.yaml", fastConfig, "configure different-branch fast checks")
 	h.PushToGate("different-branch-fast")
 	fastRun := h.WaitForRun("different-branch-fast", 60*time.Second)
@@ -2137,10 +2185,11 @@ func assertAbortByRunIDReapsRunFromOutsideWorktree(t *testing.T, h *Harness) {
 
 func assertRespondNoWaitingStepRun(t *testing.T, h *Harness) {
 	t.Helper()
-	slowCommand := filepath.Join(h.BinDir, "nm-slow-test-e2e")
-	if err := os.WriteFile(slowCommand, []byte("#!/bin/sh\nsleep 2\n"), 0o755); err != nil {
-		t.Fatalf("write slow e2e test command: %v", err)
-	}
+	// Slow enough that the respond arrives while Test is still running, and it
+	// writes coverage artifacts because this run has to reach completion: a
+	// command reporting none parks on the vacuous-green guard however green its
+	// exit code is.
+	h.WriteTestCommand("nm-slow-test-e2e", "sleep 2")
 	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-slow-test-e2e\n  lint: true\n"
 	h.CommitChange("respond-no-waiting", ".no-mistakes.yaml", config, "configure slow test command")
 	h.PushToGate("respond-no-waiting")
@@ -2185,8 +2234,12 @@ func assertFailingTestCommandRun(t *testing.T, h *Harness) {
 	if findings.Items[0].ID != "test-1" {
 		t.Fatalf("expected normalized failing test finding ID test-1, got %q", findings.Items[0].ID)
 	}
-	if len(findings.Tested) < 2 || findings.Tested[0] != "nm-test-fails-e2e" {
-		t.Fatalf("expected failing test command followed by live evidence checks, got %+v", findings.Tested)
+	// The configured command is discovery's implicit "repository" unit, so a
+	// failing run records the unit name beside the command that failed. The
+	// evidence turn runs even on a failing baseline and appends its own
+	// entries after that one, so the unit record is the prefix.
+	if len(findings.Tested) == 0 || findings.Tested[0] != "repository: nm-test-fails-e2e" {
+		t.Fatalf("expected failing test command to be recorded, got %+v", findings.Tested)
 	}
 	if testStep.DurationMS == nil {
 		t.Fatal("expected awaiting failing test step to expose execution duration")
@@ -2214,7 +2267,7 @@ func assertFailingTestCommandRun(t *testing.T, h *Harness) {
 	if *completedTestStep.DurationMS > awaitingDurationMS+200 {
 		t.Fatalf("test step duration should exclude approval wait: awaiting=%dms completed=%dms", awaitingDurationMS, *completedTestStep.DurationMS)
 	}
-	for _, stepName := range []types.StepName{types.StepDocument, types.StepLint, types.StepPush} {
+	for _, stepName := range []types.StepName{types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush} {
 		step, ok := findStep(completed.Steps, stepName)
 		if !ok {
 			t.Fatalf("expected %s step after approving failing test command", stepName)
@@ -2225,13 +2278,70 @@ func assertFailingTestCommandRun(t *testing.T, h *Harness) {
 	}
 }
 
+// assertVacuousGreenTestCommandParks is the whole-pipeline observation of the
+// gate issue 9 added. Every other journey's test command writes coverage
+// artifacts, so nothing else here exercises the case the gate exists for: a
+// command that exits zero having run no test. This one writes nothing, and the
+// pipeline must stop at the Test step for a maintainer rather than carry the
+// exit code through to a pushed branch and an opened PR.
+func assertVacuousGreenTestCommandParks(t *testing.T, h *Harness) {
+	t.Helper()
+	silentCommand := filepath.Join(h.BinDir, "nm-test-vacuous-e2e")
+	if err := os.WriteFile(silentCommand, []byte("#!/bin/sh\necho no tests matched\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write vacuous e2e test command: %v", err)
+	}
+	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-test-vacuous-e2e\n  lint: true\n"
+	h.CommitChange("vacuous-test-command", ".no-mistakes.yaml", config, "configure vacuous test command")
+	h.PushToGate("vacuous-test-command")
+	run := waitForStepStatus(t, h, "vacuous-test-command", types.StepTest, types.StepStatusAwaitingApproval, 60*time.Second)
+	testStep, ok := findStep(run.Steps, types.StepTest)
+	if !ok {
+		t.Fatal("expected test step in vacuous test command run")
+	}
+	if testStep.FindingsJSON == nil {
+		t.Fatal("expected vacuous test command to record findings JSON")
+	}
+	findings, err := types.ParseFindingsJSON(*testStep.FindingsJSON)
+	if err != nil {
+		t.Fatalf("parse vacuous test findings: %v", err)
+	}
+	if len(findings.Items) == 0 {
+		t.Fatalf("expected a finding for the vacuous test command, got %+v", findings)
+	}
+	item := findings.Items[0]
+	if item.Action != types.ActionAskUser {
+		t.Fatalf("expected the vacuous-green gate to ask the maintainer, got action %q", item.Action)
+	}
+	if !strings.Contains(item.Description, `"repository"`) {
+		t.Fatalf("expected the finding to name the unit that reported nothing, got %q", item.Description)
+	}
+	// The snapshot above was taken the moment the Test step reached the gate,
+	// so reading Push and PR out of it proves only that they had not run yet.
+	// Re-read the run after a settle, which is the state that says the park
+	// actually held the pipeline rather than merely preceding it.
+	time.Sleep(3 * time.Second)
+	settled := h.RunInfo(run.ID)
+	if settled.Status == types.RunCompleted {
+		t.Fatal("the run completed while the test gate was parked, so a command that ran no test reached the remote")
+	}
+	for _, stepName := range []types.StepName{types.StepPush, types.StepPR} {
+		step, ok := findStep(settled.Steps, stepName)
+		if ok && step.Status == types.StepStatusCompleted {
+			t.Fatalf("%s completed while the test gate was still parked, so a command that ran no test reached the remote", stepName)
+		}
+	}
+	h.CancelRun(run.ID)
+	waitForRunIDStatus(t, h, run.ID, types.RunCancelled, 60*time.Second)
+}
+
 func assertFailingLintCommandRun(t *testing.T, h *Harness) {
 	t.Helper()
 	failingCommand := filepath.Join(h.BinDir, "nm-lint-fails-e2e")
 	if err := os.WriteFile(failingCommand, []byte("#!/bin/sh\necho configured lint failed\nexit 1\n"), 0o755); err != nil {
 		t.Fatalf("write failing e2e lint command: %v", err)
 	}
-	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: true\n  lint: nm-lint-fails-e2e\n"
+	h.WriteTestCommand("nm-lint-journey-test-e2e", "exit 0")
+	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: nm-lint-journey-test-e2e\n  lint: nm-lint-fails-e2e\n"
 	h.CommitChange("failing-lint-command", ".no-mistakes.yaml", config, "configure failing lint command")
 	h.PushToGate("failing-lint-command")
 	run := waitForStepStatus(t, h, "failing-lint-command", types.StepLint, types.StepStatusAwaitingApproval, 60*time.Second)
@@ -2699,9 +2809,13 @@ func assertPushedHead(t *testing.T, runHeadSHA, upstreamHeadSHA string) {
 	}
 }
 
+// assertPipelineStepsInOrder pins the executed layout end to end. The cheap
+// deterministic gates (Format, Lint, Test, Metrics) and Document all precede Review, so
+// Review judges a tree the earlier gates already cleared and its approval
+// describes what Push then publishes unchanged.
 func assertPipelineStepsInOrder(t *testing.T, steps []ipc.StepResultInfo) {
 	t.Helper()
-	expected := []types.StepName{types.StepIntent, types.StepRebase, types.StepReview, types.StepTest, types.StepDocument, types.StepLint, types.StepPush, types.StepPR, types.StepCI}
+	expected := []types.StepName{types.StepIntent, types.StepRebase, types.StepFormat, types.StepLint, types.StepTest, types.StepMetrics, types.StepDocument, types.StepReview, types.StepPush, types.StepPR, types.StepCI}
 	if len(steps) != len(expected) {
 		t.Fatalf("pipeline recorded %d steps, want %d", len(steps), len(expected))
 	}
@@ -2813,8 +2927,6 @@ func assertDocumentPrompt(t *testing.T, h *Harness, run *ipc.RunInfo, invs []Inv
 		"one authoritative owner document",
 		"Only touch documentation this change made stale",
 		"Do not create a new documentation surface merely to close a perceived gap.",
-		"Combined lint duty (same pass - no separate lint agent will run):",
-		`"category" set to "lint"`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("expected document prompt to contain %q, got:\n%s", want, prompt)
@@ -2825,6 +2937,10 @@ func assertDocumentPrompt(t *testing.T, h *Harness, run *ipc.RunInfo, invs []Inv
 		"Be exhaustive.",
 		"fix all of them yourself",
 		"Do not stop after the first documentation gap.",
+		// Lint runs as its own step ahead of Document now, so Document
+		// carries no lint duty and no lint finding category.
+		"Combined lint duty",
+		`"category" set to "lint"`,
 	} {
 		if strings.Contains(prompt, unexpected) {
 			t.Errorf("expected document prompt to exclude %q, got:\n%s", unexpected, prompt)
@@ -2873,8 +2989,11 @@ func assertNoCommandTestStep(t *testing.T, steps []ipc.StepResultInfo, invs []In
 	if err != nil {
 		t.Fatalf("parse test step findings: %v", err)
 	}
-	if len(findings.Tested) != 1 || findings.Tested[0] != "fakeagent: simulated test run" {
-		t.Fatalf("expected fakeagent test details to be preserved, got %+v", findings.Tested)
+	// Tested carries both halves of the step: the units execution ran, each
+	// as "<name>: <command>", and whatever the evidence pass reported.
+	wantTested := []string{"repository: " + InferredUnitCommand, "fakeagent: simulated test run"}
+	if !slices.Equal(findings.Tested, wantTested) {
+		t.Fatalf("tested = %+v, want the executed unit plus the fakeagent detail %+v", findings.Tested, wantTested)
 	}
 	if findings.TestingSummary != "simulated tests passed" {
 		t.Fatalf("expected fakeagent testing summary to be preserved, got %q", findings.TestingSummary)

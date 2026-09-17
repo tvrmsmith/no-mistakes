@@ -35,7 +35,6 @@ func TestStatsAgentsReportsLocalPerformanceTelemetry(t *testing.T) {
 		{RunID: run.ID, StepName: "review", Round: 1, Purpose: "review", Agent: "codex", Model: "gpt-5.2", SessionMode: db.InvocationModeStarted, SessionKey: "deadbeef00000000", StartedAt: 1, CompletedAt: 2, DurationMS: 60_000, ExitStatus: "ok", InputTokens: statsIntPtr(100), OutputTokens: statsIntPtr(10), CacheReadTokens: statsIntPtr(40), CacheCreationTokens: statsIntPtr(20)},
 		{RunID: run.ID, StepName: "review", Round: 2, Purpose: "review", Agent: "codex", Model: "gpt-5.2", SessionMode: db.InvocationModeResumed, SessionKey: "deadbeef00000000", StartedAt: 3, CompletedAt: 4, DurationMS: 30_000, ExitStatus: "ok", InputTokens: statsIntPtr(50), OutputTokens: statsIntPtr(5), CacheReadTokens: statsIntPtr(45), CacheCreationTokens: statsIntPtr(25)},
 		{RunID: run.ID, StepName: "review", Round: 2, Purpose: "review-fix", Agent: "codex", Model: "gpt-5.2", SessionMode: db.InvocationModeStarted, SessionKey: "feedface00000000", StartedAt: 5, CompletedAt: 6, DurationMS: 45_000, ExitStatus: "ok"},
-		{RunID: run.ID, StepName: "document", Round: 1, Purpose: "housekeeping", Agent: "codex", Model: "gpt-5.2", SessionMode: db.InvocationModeCold, StartedAt: 7, CompletedAt: 8, DurationMS: 172_000, ExitStatus: "ok"},
 	}
 	for _, inv := range seed {
 		if _, err := d.InsertAgentInvocation(inv); err != nil {
@@ -51,7 +50,7 @@ func TestStatsAgentsReportsLocalPerformanceTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stats --agents: %v\n%s", err, out)
 	}
-	for _, want := range []string{"PURPOSE", "review", "review-fix", "housekeeping (document+lint)", "RESUMED", "CACHE WRITE TOK", "45"} {
+	for _, want := range []string{"PURPOSE", "review", "review-fix", "RESUMED", "CACHE WRITE TOK", "45"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stats --agents missing %q in:\n%s", want, out)
 		}
@@ -61,7 +60,7 @@ func TestStatsAgentsReportsLocalPerformanceTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stats --run: %v\n%s", err, out)
 	}
-	for _, want := range []string{run.ID, "parked at gates 1m30s total", "resumed", "deadbeef00000000", "gpt-5.2", "document+lint", "housekeeping (document+lint)", "CACHE WR", "20"} {
+	for _, want := range []string{run.ID, "parked at gates 1m30s total", "resumed", "deadbeef00000000", "gpt-5.2", "CACHE WR", "20"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stats --run missing %q in:\n%s", want, out)
 		}

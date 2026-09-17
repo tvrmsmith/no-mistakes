@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -14,14 +15,140 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps/internal/stepstest"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
+// oneRepositoryUnitCommand is the "repository" unit's command for every test
+// in this file that only cares about the evidence pass following discovery
+// (or, in fix mode, about the fix agent and the resulting commit). It writes
+// a coverage profile and test report so the vacuous-green guard (issue #9)
+// does not park the attempt, naming a file setupGitRepo's own changed files
+// (feature.txt, and in fix mode an untracked fix.txt) can never match. That
+// means the guard's changed-function check is skipped exactly as it is for a
+// documentation-only change (see
+// TestTestStep_DocsOnlyChangeDoesNotRequireACoveredFunction in
+// test_coverage_guard_test.go), and only "did the command produce any
+// evidence at all" applies, leaving these tests free to keep asserting what
+// they asserted before the guard existed.
+var oneRepositoryUnitCommand = stepstest.CoverageCommand(stepstest.CoverageFixture{
+	File:     "internal/repository/fixture.go",
+	Function: "Exercised",
+	Line:     1,
+	Hits:     1,
+	Tests:    1,
+})
+
+// oneRepositoryUnitLayout answers the discovery pass with a single unit whose
+// command satisfies the vacuous-green guard (see oneRepositoryUnitCommand),
+// so a test that cares only about the evidence pass gets past discovery and
+// the guard without asserting anything about either.
+var oneRepositoryUnitLayout = encodeOneUnitLayout("repository", ".", oneRepositoryUnitCommand, "repository")
+
+// encodeOneUnitLayout builds a discovery-pass answer naming a single test
+// unit, JSON-encoded so a command carrying quotes or newlines (as
+// oneRepositoryUnitCommand does) round-trips correctly.
+func encodeOneUnitLayout(name, path, command, selected string) string {
+	data, err := json.Marshal(struct {
+		Units []struct {
+			Name    string `json:"name"`
+			Path    string `json:"path"`
+			Command string `json:"command"`
+		} `json:"units"`
+		Selected []string `json:"selected"`
+	}{
+		Units: []struct {
+			Name    string `json:"name"`
+			Path    string `json:"path"`
+			Command string `json:"command"`
+		}{{Name: name, Path: path, Command: command}},
+		Selected: []string{selected},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+// newTestContextWithCoverage wraps newTestContextWithDBRecords and sets
+// CoverageDir. The real Executor derives that path itself from its
+// paths.Paths root (see Executor.runCoverageDir), but a step exercised
+// directly, as every test in this file except the Executor-driven ones does,
+// gets it from newTestContext as empty, and the vacuous-green guard has
+// nowhere to read a unit's coverage artifacts without it.
+func newTestContextWithCoverage(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA string, cmds config.Commands) *pipeline.StepContext {
+	t.Helper()
+	sctx := newTestContextWithDBRecords(t, ag, workDir, baseSHA, headSHA, cmds)
+	sctx.CoverageDir = filepath.Join(t.TempDir(), "coverage", "run-1")
+	return sctx
+}
+
+// isDiscoveryCall reports whether an agent invocation is the discovery pass.
+// It keys on the schema rather than on prompt text so a prompt rewrite does
+// not silently turn these tests into discovery tests.
+func isDiscoveryCall(opts agent.RunOpts) bool {
+	return bytes.Equal(opts.JSONSchema, testDiscoverySchema)
+}
+
+// answerDiscoveryThen serves the discovery pass a one-unit layout and every
+// later pass the given structured output.
+func answerDiscoveryThen(output string) func(context.Context, agent.RunOpts) (*agent.Result, error) {
+	return func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if isDiscoveryCall(opts) {
+			return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
+		}
+		return &agent.Result{Output: json.RawMessage(output)}, nil
+	}
+}
+
+// answerDiscoveryThenFunc serves the discovery pass a one-unit layout and
+// hands every later pass to fn, numbered from 1, so a test can sequence the
+// evidence turns without counting discovery among them.
+func answerDiscoveryThenFunc(fn func(n int, opts agent.RunOpts) (*agent.Result, error)) func(context.Context, agent.RunOpts) (*agent.Result, error) {
+	n := 0
+	return func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if isDiscoveryCall(opts) {
+			return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
+		}
+		n++
+		return fn(n, opts)
+	}
+}
+
+// evidenceCalls returns the invocations that were not the discovery pass, so
+// a test can count and index the evidence turns alone.
+func evidenceCalls(ag *mockAgent) []agent.RunOpts {
+	out := make([]agent.RunOpts, 0, len(ag.calls))
+	for _, call := range ag.calls {
+		if !isDiscoveryCall(call) {
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
+// evidencePrompt returns the prompt of the evidence pass, which follows
+// discovery whenever the repository configured no unit layout.
+func evidencePrompt(t *testing.T, ag *mockAgent) string {
+	t.Helper()
+	for _, call := range ag.calls {
+		if !isDiscoveryCall(call) {
+			return call.Prompt
+		}
+	}
+	t.Fatalf("agent was never called for evidence, calls = %d", len(ag.calls))
+	return ""
+}
+
 func TestTestStep_HangingEvidenceAgentFailsRunAfterTimeout(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{
 		name: "hanging-evidence-agent",
-		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if isDiscoveryCall(opts) {
+				return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
+			}
 			<-ctx.Done()
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["ok"],"testing_summary":"ok","artifacts":[],"scenarios":[{"name":"user runs the command","result":"pass","live":true,"evidence":"ok","reason":""}],"verdict":"go"}`)}, nil
 		},
@@ -57,17 +184,21 @@ func TestTestStep_HangingEvidenceAgentFailsRunAfterTimeout(t *testing.T) {
 }
 
 func TestTestStep_EvidenceAgentCallIsDeadlineBounded(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	var sawDeadline bool
 	ag := &mockAgent{
 		name: "test",
-		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if isDiscoveryCall(opts) {
+				return &agent.Result{Output: json.RawMessage(oneRepositoryUnitLayout)}, nil
+			}
 			_, sawDeadline = ctx.Deadline()
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["ok"],"testing_summary":"ok","artifacts":[],"scenarios":[{"name":"user runs the command","result":"pass","live":true,"evidence":"ok","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
@@ -85,11 +216,11 @@ func TestTestStep_NoStructuredOutputFails(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{
 		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		runFn: answerDiscoveryThenFunc(func(int, agent.RunOpts) (*agent.Result, error) {
 			return &agent.Result{Text: "tests unavailable"}, nil
-		},
+		}),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err == nil || !strings.Contains(err.Error(), "test analyzer") {
@@ -104,12 +235,10 @@ func TestTestStep_IncompleteStructuredOutputFails(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":""}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[],"summary":""}`),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err == nil || !strings.Contains(err.Error(), "missing tested array") {
@@ -133,12 +262,10 @@ func TestTestStep_EmptyEvidenceFails(t *testing.T) {
 			t.Parallel()
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			ag := &mockAgent{
-				name: "test",
-				runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-					return &agent.Result{Output: tc.output}, nil
-				},
+				name:  "test",
+				runFn: answerDiscoveryThen(string(tc.output)),
 			}
-			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 			outcome, err := (&TestStep{}).Execute(sctx)
 			if err == nil || !strings.Contains(err.Error(), "empty tested array") {
@@ -155,12 +282,10 @@ func TestTestStep_BlankTestingSummaryFails(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["go test ./..."],"testing_summary":"","artifacts":[]}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[],"summary":"","tested":["go test ./..."],"testing_summary":"","artifacts":[]}`),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err == nil || !strings.Contains(err.Error(), "empty testing summary") {
@@ -172,6 +297,7 @@ func TestTestStep_BlankTestingSummaryFails(t *testing.T) {
 }
 
 func TestTestStep_FixAgentTimeoutDoesNotCancelPostProcessing(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -184,7 +310,7 @@ func TestTestStep_FixAgentTimeoutDoesNotCancelPostProcessing(t *testing.T) {
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix tests","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: oneRepositoryUnitCommand})
 	sctx.Fixing = true
 	sctx.Config.TestAgentTimeout = time.Second
 
@@ -233,6 +359,7 @@ func TestTestStep_FixAgentSuccessfulReturnAfterTimeoutFailsWithoutCommit(t *test
 }
 
 func TestTestStep_FixMode(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -247,7 +374,7 @@ func TestTestStep_FixMode(t *testing.T) {
 			return &agent.Result{Output: json.RawMessage(`{"summary":"  \"fix test failures.\"  ","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: oneRepositoryUnitCommand})
 	sctx.Fixing = true
 	sctx.PreviousFindings = previousFindings
 
@@ -300,6 +427,7 @@ func TestTestStep_FixMode(t *testing.T) {
 }
 
 func TestTestStep_FixMode_UsesConfiguredCommitMessage(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -311,7 +439,7 @@ func TestTestStep_FixMode_UsesConfiguredCommitMessage(t *testing.T) {
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix test failures","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: oneRepositoryUnitCommand})
 	sctx.Config.Commit = config.Commit{FixMessage: "fix({{.Step}}): {{.Summary}}"}
 	sctx.Fixing = true
 	sctx.PreviousFindings = `{"findings":[{"severity":"error","description":"tests failed"}],"summary":"tests failed"}`
@@ -329,6 +457,7 @@ func TestTestStep_FixMode_UsesConfiguredCommitMessage(t *testing.T) {
 }
 
 func TestTestStep_FixMode_UsesFallbackSummaryWhenStructuredSummaryMalformed(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -348,7 +477,7 @@ func TestTestStep_FixMode_UsesFallbackSummaryWhenStructuredSummaryMalformed(t *t
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: oneRepositoryUnitCommand})
 	sctx.Fixing = true
 	sctx.PreviousFindings = `{"findings":[{"severity":"error","description":"tests failed"}],"summary":"tests failed"}`
 
@@ -366,6 +495,7 @@ func TestTestStep_FixMode_UsesFallbackSummaryWhenStructuredSummaryMalformed(t *t
 }
 
 func TestTestStep_FixMode_AgentWritesNewTests_ProceedsAutomatically(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
@@ -379,7 +509,7 @@ func TestTestStep_FixMode_AgentWritesNewTests_ProceedsAutomatically(t *testing.T
 			return &agent.Result{Output: json.RawMessage(`{"summary":"add regression test","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: oneRepositoryUnitCommand})
 	sctx.Fixing = true
 
 	step := &TestStep{}
@@ -425,7 +555,7 @@ func TestTestStep_ConfiguredCommandRunsEvidenceWithoutExtractedIntent(t *testing
 			return &agent.Result{Output: json.RawMessage(passingScenarioFindingsJSON)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: oneRepositoryUnitCommand})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err != nil {
@@ -444,10 +574,16 @@ func TestTestStep_ConfiguredCommandRunsEvidenceWithoutExtractedIntent(t *testing
 }
 
 func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	baselineLog := filepath.Join(dir, "baseline.log")
 	testCmd := "go env GOOS > baseline.log"
+	// combinedTestCmd keeps the original baseline behavior this test asserts
+	// on (baseline.log written with runtime.GOOS) and adds coverage artifacts
+	// so the configured command's green exit satisfies the vacuous-green
+	// guard instead of parking before the evidence agent ever runs.
+	combinedTestCmd := testCmd + " && " + oneRepositoryUnitCommand
 
 	callCount := 0
 	ag := &mockAgent{
@@ -457,7 +593,7 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"evidence demonstrates intent","tested":["manual screenshot review"],"testing_summary":"captured screenshot evidence","artifacts":[],"scenarios":[{"name":"reviewer sees the new screen","result":"pass","live":true,"evidence":"manual screenshot review","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: testCmd})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: combinedTestCmd})
 	sctx.UserIntent = "Show users a success screen after checkout"
 
 	step := &TestStep{}
@@ -486,7 +622,7 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 		"drive each scenario end-to-end against that running product",
 		"Prefer product-level artifacts",
 		"Only use command output as an artifact when that output directly demonstrates the end-user experience or requested behavior",
-		"Configured test command already ran successfully as baseline",
+		"The selected test units already ran to completion and passed in this attempt",
 		testCmd,
 		"The \"testing_summary\" must account for the complete test step: baseline commands that already ran, scenarios driven, manual or evidence-producing checks, artifacts gathered, and the overall result",
 		"screenshots, GIFs, videos, rendered UI, CLI transcripts",
@@ -519,23 +655,21 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 	if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("evidence findings JSON: %s", outcome.Findings)
-	if len(findings.Tested) != 2 || findings.Tested[0] != testCmd || findings.Tested[1] != "manual screenshot review" {
+	if len(findings.Tested) != 2 || findings.Tested[0] != "repository: "+combinedTestCmd || findings.Tested[1] != "manual screenshot review" {
 		t.Fatalf("expected baseline command and agent-tested evidence to be recorded, got %+v", findings.Tested)
 	}
 }
 
 func TestTestStep_EvidenceDirectoryIsAlwaysOutsideTheWorktree(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["manual evidence check"],"testing_summary":"checked evidence","artifacts":[],"scenarios":[{"name":"user sees the change","result":"pass","live":true,"evidence":"manual evidence check","reason":""}],"verdict":"go"}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[],"summary":"","tested":["manual evidence check"],"testing_summary":"checked evidence","artifacts":[],"scenarios":[{"name":"user sees the change","result":"pass","live":true,"evidence":"manual evidence check","reason":""}],"verdict":"go"}`),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Show users a success screen after checkout"
 
 	step := &TestStep{}
@@ -543,7 +677,7 @@ func TestTestStep_EvidenceDirectoryIsAlwaysOutsideTheWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 	wantDir := sctx.EvidenceDir
 	if !strings.Contains(prompt, "Write new evidence files into this evidence directory, never into the worktree: "+wantDir) {
 		t.Fatalf("expected evidence guidance to point outside the worktree, got:\n%s", prompt)
@@ -554,16 +688,15 @@ func TestTestStep_EvidenceDirectoryIsAlwaysOutsideTheWorktree(t *testing.T) {
 }
 
 func TestTestStep_PublishedEvidenceGuidanceNamesTheEvidenceBranch(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["manual evidence check"],"testing_summary":"checked evidence","artifacts":[],"scenarios":[{"name":"user sees the change","result":"pass","live":true,"evidence":"manual evidence check","reason":""}],"verdict":"go"}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[],"summary":"","tested":["manual evidence check"],"testing_summary":"checked evidence","artifacts":[],"scenarios":[{"name":"user sees the change","result":"pass","live":true,"evidence":"manual evidence check","reason":""}],"verdict":"go"}`),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Show users a success screen after checkout"
 	sctx.Config.Test.Evidence = config.Evidence{StoreInRepo: true, Dir: ".no-mistakes/evidence", Branch: "team/ci/evidence"}
 
@@ -572,7 +705,7 @@ func TestTestStep_PublishedEvidenceGuidanceNamesTheEvidenceBranch(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 	wantDir := sctx.EvidenceDir
 	if !strings.Contains(prompt, "published to the repository's team/ci/evidence branch automatically and linked from the PR: "+wantDir) {
 		t.Fatalf("expected evidence-branch publishing guidance, got:\n%s", prompt)
@@ -587,28 +720,32 @@ func TestTestStep_PublishedEvidenceGuidanceNamesTheEvidenceBranch(t *testing.T) 
 // normal evidence-agent contract wording so a soft "run the appropriate tests"
 // regression is caught.
 func TestTestStep_InitialAgent_TargetedValidationContract(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"","tested":["go test ./internal/cli -run TestDoctor -count=1"],"testing_summary":"targeted check passed","artifacts":[],"scenarios":[{"name":"doctor reports the new row","result":"pass","live":true,"evidence":"go test ./internal/cli -run TestDoctor -count=1","reason":""}],"verdict":"go"}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[],"summary":"","tested":["go test ./internal/cli -run TestDoctor -count=1"],"testing_summary":"targeted check passed","artifacts":[],"scenarios":[{"name":"doctor reports the new row","result":"pass","live":true,"evidence":"go test ./internal/cli -run TestDoctor -count=1","reason":""}],"verdict":"go"}`),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Keep doctor checks green for CLI users"
 
 	if _, err := (&TestStep{}).Execute(sctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(ag.calls) != 1 {
-		t.Fatalf("expected 1 evidence agent call, got %d", len(ag.calls))
+	// One discovery pass, then one evidence pass.
+	if len(ag.calls) != 2 {
+		t.Fatalf("expected a discovery call and 1 evidence agent call, got %d", len(ag.calls))
 	}
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 
 	assertTestQualityRulePrompt(t, prompt)
 	for _, want := range []string{
+		// The discovered unit's command already ran, so this pass judges its
+		// result instead of repeating it. The unbaselined opening is pinned by
+		// TestTestStep_ConfiguredLayoutOwningNoChangedFileFallsBackToTheEvidenceAgent.
+		"Read and judge those results rather than running them again",
 		"Derive the scenarios this change must satisfy, then run each one against the real running product",
 		"Do NOT run the complete repository test suite",
 		"Local Test is targeted validation of the requested intent",
@@ -638,6 +775,7 @@ func TestTestStep_InitialAgent_TargetedValidationContract(t *testing.T) {
 // re-verify only with focused checks. Soft "Run the tests" / "relevant tests"
 // wording invited complete-suite walks after a one-line fix.
 func TestTestStep_FixMode_TargetedVerificationContract(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -649,7 +787,7 @@ func TestTestStep_FixMode_TargetedVerificationContract(t *testing.T) {
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix targeted failure","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: oneRepositoryUnitCommand})
 	sctx.Fixing = true
 	sctx.PreviousFindings = `{"findings":[{"id":"test-1","severity":"error","description":"tests failed with exit code 1","action":"auto-fix"}],"summary":"FAIL: TestFoo"}`
 
@@ -689,6 +827,7 @@ func TestTestStep_FixMode_TargetedVerificationContract(t *testing.T) {
 // be accompanied by the hard product boundary so the repair agent does not
 // treat that instruction as license to expand scope.
 func TestTestStep_FixMode_DriverFullSuiteInstructionDoesNotOverrideContract(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
@@ -700,7 +839,7 @@ func TestTestStep_FixMode_DriverFullSuiteInstructionDoesNotOverrideContract(t *t
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix focused failure","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the repaired behaviour","artifacts":[],"scenarios":[{"name":"the repaired behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
 		},
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: oneRepositoryUnitCommand})
 	sctx.Fixing = true
 	sctx.PreviousFindings = `{"findings":[{"id":"test-1","severity":"error","description":"tests failed with exit code 1","action":"auto-fix","user_instructions":"confirm the full suite path for this failure is green"}],"summary":"FAIL: TestFoo"}`
 
@@ -722,16 +861,15 @@ func TestTestStep_FixMode_DriverFullSuiteInstructionDoesNotOverrideContract(t *t
 // Honest failure reporting when no targeted check can establish intent must
 // remain mandatory; the no-full-suite rule must not collapse into "skip tests".
 func TestTestStep_InitialAgent_NoTargetedEvidenceRequiresHonestFinding(t *testing.T) {
+	skipUnlessPOSIXShell(t)
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	ag := &mockAgent{
-		name: "test",
-		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
-			return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"warning","description":"no targeted test can prove the intent","action":"ask-user"}],"summary":"missing evidence","tested":["manual review of changed packages"],"testing_summary":"could not produce targeted evidence","artifacts":[],"scenarios":[{"name":"user exercises the changed behavior","result":"untested","live":false,"evidence":"","reason":"no targeted product driver is available"}],"verdict":"inconclusive"}`)}, nil
-		},
+		name:  "test",
+		runFn: answerDiscoveryThen(`{"findings":[{"severity":"warning","description":"no targeted test can prove the intent","action":"ask-user"}],"summary":"missing evidence","tested":["manual review of changed packages"],"testing_summary":"could not produce targeted evidence","artifacts":[],"scenarios":[{"name":"user exercises the changed behavior","result":"untested","live":false,"evidence":"","reason":"no targeted product driver is available"}],"verdict":"inconclusive"}`),
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.UserIntent = "Prove the checkout success screen works end-to-end"
 
 	outcome, err := (&TestStep{}).Execute(sctx)
@@ -741,7 +879,7 @@ func TestTestStep_InitialAgent_NoTargetedEvidenceRequiresHonestFinding(t *testin
 	if !outcome.NeedsApproval {
 		t.Fatal("expected missing targeted evidence to require approval")
 	}
-	prompt := ag.calls[0].Prompt
+	prompt := evidencePrompt(t, ag)
 	for _, want := range []string{
 		"Never treat \"do not run everything\" as permission to run nothing",
 		"write or improve a focused test",

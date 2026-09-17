@@ -351,7 +351,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 		}
 		retryRefusal = false
 		if repair.Revalidate {
-			return &pipeline.StepOutcome{RestartFrom: types.StepReview}, nil
+			return &pipeline.StepOutcome{RestartFrom: pipeline.RestartBoundary}, nil
 		}
 	}
 	baseBranch := effectivePRBaseBranch(sctx)

@@ -194,9 +194,6 @@ func TestCommitAgentFixes_AllowsForwardAgentCommit(t *testing.T) {
 
 func TestPostReviewStepsRefuseHeadClobberAtEntry(t *testing.T) {
 	postReviewSteps := []pipeline.Step{
-		&TestStep{},
-		&DocumentStep{},
-		&LintStep{},
 		&PushStep{},
 		&PRStep{},
 		&CIStep{},

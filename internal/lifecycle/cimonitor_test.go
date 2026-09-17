@@ -168,7 +168,7 @@ func TestExemptFromGuard_ACIMonitorWithUncommittedWorkIsNotPreserved(t *testing.
 // pipeline work in its worktree, and the stop preserves it regardless.
 func TestExemptFromGuard_AGateParkedRunWithUncommittedWorkIsStillPreserved(t *testing.T) {
 	p := paths.WithRoot(t.TempDir())
-	plan := lifecycletest.Plan(types.StepReview, types.StepTest)
+	plan := lifecycletest.Plan(types.StepTest, types.StepReview)
 	parked := lifecycletest.SeedResumableParkedRun(t, p, "/tmp/project", "feature", plan)
 	if err := os.WriteFile(filepath.Join(parked.WorkDir, "pending.go"), []byte("package pending\n"), 0o600); err != nil {
 		t.Fatal(err)

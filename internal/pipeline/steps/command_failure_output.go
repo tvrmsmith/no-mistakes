@@ -71,6 +71,10 @@ func configuredCommandStepLabel(step types.StepName) string {
 		return "Test"
 	case types.StepLint:
 		return "Lint"
+	case types.StepFormat:
+		return "Format"
+	case types.StepMetrics:
+		return "Metrics"
 	default:
 		return string(step)
 	}

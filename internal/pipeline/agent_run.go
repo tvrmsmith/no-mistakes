@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
@@ -56,6 +57,14 @@ func (sctx *StepContext) RunAgentSessionContext(parent context.Context, role Ses
 }
 
 func (sctx *StepContext) runAgent(parent context.Context, opts agent.RunOpts, sessionRole SessionRole) (*agent.Result, error) {
+	// Count the turn before it runs and whatever it returns. Every agent path a
+	// validation step can reach funnels through here, including the durable
+	// session path below, so this is the one place commit attribution can trust.
+	// An agent that timed out or errored may already have edited files, so
+	// counting only successes would attribute its commit to a deterministic tool.
+	if sctx != nil {
+		atomic.AddInt64(&sctx.agentInvocations, 1)
+	}
 	var ag agent.Agent
 	timeout := AgentTimeout(nil)
 	if sctx != nil {

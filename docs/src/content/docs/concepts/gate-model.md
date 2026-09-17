@@ -19,7 +19,7 @@ flowchart TD
   admission --> daemon["Daemon"]
   hook --> daemon
   daemon --> worktree["Disposable worktree"]
-  worktree --> pipeline["intent -> rebase -> review -> test -> document -> lint -> push -> pr -> ci"]
+  worktree --> pipeline["intent -> rebase -> format -> lint -> test -> document -> review -> push -> pr -> ci"]
   pipeline --> target["Push target"]
   daemon --> db["SQLite state"]
   daemon --> ipc["IPC socket"]
@@ -57,7 +57,7 @@ That is a core design choice, not an implementation detail.
 3. Git writes an admitted push into the local bare gate repo.
 4. The gate repo's `post-receive` hook notifies the daemon.
 5. The daemon creates a detached worktree for this run.
-6. The nine core steps run in order: `intent -> rebase -> review -> test -> document -> lint -> push -> pr -> ci`. Repository gates, when configured, run immediately after their anchors.
+6. The eleven core steps run in order: `intent -> rebase -> format -> lint -> test -> metrics -> document -> review -> push -> pr -> ci`. Repository gates, when configured, run immediately after their anchors.
 7. If a step pauses, you can attach with the TUI or use `no-mistakes axi respond` to approve, fix, or skip.
    Use `no-mistakes axi abort` only when you mean to cancel the whole run.
    AXI run objects show `awaiting_agent: parked <duration>` while a non-terminal run is parked at that gate, so a supervising agent can distinguish a waiting run from active work in one status read.
@@ -72,7 +72,7 @@ That is a core design choice, not an implementation detail.
 - **Named remote** - `origin` is never hijacked. You push to `no-mistakes` on purpose, so regular `git push` still works normally.
 - **Recursive-run containment** - managed gate identity and authenticated daemon peer ancestry prevent active validation steps from starting or controlling another pipeline. `NO_MISTAKES_GATE` is diagnostic evidence only, not authorization.
 - **Disposable worktrees** - each run happens in its own detached worktree, under `~/.no-mistakes/worktrees/` by default or under the directory [`worktree_roots`](/no-mistakes/reference/global-config/#worktree_roots) names for that repository. The daemon can safely modify files, run tests, and commit fixes without touching your working directory.
-- **Fixed pipeline** - the step order is opinionated and not configurable: `intent → rebase → review → test → document → lint → push → pr → ci`. What you _can_ configure is the commands each step runs, how many auto-fix attempts are allowed, whether transcript-based intent extraction is used when intent is not supplied directly, and extra [`gates`](/no-mistakes/reference/repo-config/#gates) that run after a core step - additions only, never a removal or a reordering.
+- **Fixed pipeline** - the step order is opinionated and not configurable: `intent → rebase → format → lint → test → metrics → document → review → push → pr → ci`. What you _can_ configure is the commands each step runs, how many auto-fix attempts are allowed, whether transcript-based intent extraction is used when intent is not supplied directly, and extra [`gates`](/no-mistakes/reference/repo-config/#gates) that run after a core step - additions only, never a removal or a reordering.
 - **Remote data-loss guard** - force-pushes are checked against the live push target and refused when they would discard commits the run did not incorporate.
 
 ## Why it is built this way
@@ -227,7 +227,8 @@ An agent-supplied AXI intent is stored directly on the run.
 Raw transcript text is not stored in this database.
 Legacy `user_fix` rounds are still read as `auto-fix` for backward compatibility.
 Run records also store the nullable `awaiting_agent_since` timestamp set while a gate is waiting for the driving agent, which both renders the AXI parked signal and marks the run as one a clean daemon stop preserves, plus accumulated `parked_ms` for local performance reporting.
-They also record the run's requested `--skip` set and the ordered step layout it started under, so a preserved run resumes with the scope it began with and a lifecycle guard can tell that its layout still matches the installed binary.
+They also record the run's requested `--skip` set and the ordered step layout it started under, so a preserved run resumes with the scope it began with and a lifecycle guard can tell that its layout still matches the installed binary. The restored skip set is also what a resumed run judges a restart request against, so it decides the same way the original executor did.
+They also store `restart_count`, the number of times the run re-entered validation.
 For version-specific debugging, inspect `runs.no_mistakes_version` and `runs.no_mistakes_build_sha`: each new run records the version returned by `internal/buildinfo.CurrentVersion()` and the `internal/buildinfo.Commit` build SHA embedded through release `-ldflags`, the same identity shown by `no-mistakes --version`. Historical rows remain `NULL`.
 Each agent invocation records local-only purpose, provider/model metadata, session mode and a truncated session-identity hash, timing, failure category, and token usage; prompts, outputs, diffs, and credentials are never stored there.
 Use `no-mistakes stats --agents` for aggregates or `no-mistakes stats --run <id>` for a run timeline and parked time.

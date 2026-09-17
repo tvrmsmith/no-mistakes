@@ -87,10 +87,14 @@ func stepLabel(name types.StepName) string {
 		return "Intent"
 	case types.StepRebase:
 		return "Rebase"
+	case types.StepFormat:
+		return "Format"
 	case types.StepReview:
 		return "Review"
 	case types.StepTest:
 		return "Test"
+	case types.StepMetrics:
+		return "Metrics"
 	case types.StepLint:
 		return "Lint"
 	case types.StepDocument:
@@ -151,9 +155,6 @@ func renderPipelineView(run *ipc.RunInfo, steps []ipc.StepResultInfo, width int,
 		icon := stepStatusIndicator(step.Status, spinnerFrame)
 		style := stepStatusStyle(step.Status)
 		label := stepLabel(step.StepName)
-		if step.WorkScope == ipc.WorkScopeDocumentLintHousekeeping {
-			label = "Document + Lint housekeeping"
-		}
 
 		line := style.Render(icon) + " " + label
 

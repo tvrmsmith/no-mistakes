@@ -19,34 +19,41 @@ import (
 // producing an approval that AXI --yes could accept.
 func TestAnalyzerEvidenceFailuresFailPipelineJourney(t *testing.T) {
 	scenario := filepath.Join(t.TempDir(), "analyzer-failure-gate.yaml")
+	// Each malformed answer is scoped to one step's prompt AND one branch, so
+	// the branch fails at the step it names and every other step on it reaches
+	// the clean catch-all. A bare branch match would answer the earliest agent
+	// step of that branch instead, and the reorder put Lint, Test, and Document
+	// ahead of Review. The catch-all is last and carries every schema's fields
+	// at once, including the live-validation contract and the test layout the
+	// discovery pass reads (fakeagent fills units/selected in).
+	//
+	// The Test step is the one analyzer that retries, through a fresh
+	// correction-only prompt carrying neither branch nor original task, so its
+	// malformed answer needs a second rule keyed on that prompt. Without it the
+	// retry reaches the catch-all and the step the subtest is about passes.
 	content := `actions:
-  - match: "report only what you could not resolve.\n\nContext:\n- branch: analyzer-document-malformed-output"
-    text: "documentation unavailable"
-    structured_raw: '{"summary":123}'
-  - match: "You are validating a code change by driving the product itself. Derive the scenarios this change must satisfy, then run each one against the real running product.\n\nContext:\n- branch: analyzer-document-malformed-output"
-    text: "tests passed"
-    structured:
-      findings: []
-      summary: "targeted test passed"
-      tested:
-        - "fakeagent: targeted test"
-      testing_summary: "targeted validation passed"
-      scenarios:
-        - name: "fakeagent: simulated end-to-end scenario"
-          result: pass
-          live: true
-          evidence: "fakeagent: simulated test run"
-          reason: ""
-      verdict: go
-      artifacts: []
   - match: "Detect the linting and formatting tools for this project, run the relevant checks yourself, apply safe fixes, and verify the result.\n\nContext:\n- branch: analyzer-lint-malformed-output"
     text: "lint unavailable"
     structured_raw: '{"summary":123}'
-  - match: "You are validating a code change by driving the product itself. Derive the scenarios this change must satisfy, then run each one against the real running product.\n\nContext:\n- branch: analyzer-lint-malformed-output"
-    text: "tests passed"
+  - match: "You are validating a code change by driving the product itself. Derive the scenarios this change must satisfy, then run each one against the real running product.\n\nContext:\n- branch: analyzer-test-incomplete-evidence"
+    text: "tests unavailable"
+    structured_raw: '{"findings":[],"summary":""}'
+  - match: "report only what you could not resolve.\n\nContext:\n- branch: analyzer-document-malformed-output"
+    text: "documentation unavailable"
+    structured_raw: '{"summary":123}'
+  - match: "Review the code changes and return structured findings with a risk assessment.\n\nContext:\n- branch: analyzer-review-null-findings"
+    text: "review unavailable"
+    structured_raw: '{"findings":null,"risk_level":"low","risk_rationale":"clean","risk_scope":"source-or-external"}'
+  - match: "Your previous structured findings were REJECTED because they violate the live-validation contract."
+    text: "tests still unavailable"
+    structured_raw: '{"findings":[],"summary":""}'
+  - text: "no issues found"
     structured:
       findings: []
-      summary: "targeted test passed"
+      summary: "no issues found"
+      risk_level: low
+      risk_rationale: "no source risks"
+      risk_scope: source-or-external
       tested:
         - "fakeagent: targeted test"
       testing_summary: "targeted validation passed"
@@ -58,19 +65,6 @@ func TestAnalyzerEvidenceFailuresFailPipelineJourney(t *testing.T) {
           reason: ""
       verdict: go
       artifacts: []
-  - match: "branch: analyzer-review-null-findings"
-    text: "review unavailable"
-    structured_raw: '{"findings":null,"risk_level":"low","risk_rationale":"clean","risk_scope":"source-or-external"}'
-  - match: "Review the code changes and return structured findings"
-    text: "review clean"
-    structured:
-      findings: []
-      risk_level: low
-      risk_rationale: "no source risks"
-      risk_scope: source-or-external
-  - match: "You are validating a code change by driving the product itself."
-    text: "tests unavailable"
-    structured_raw: '{"findings":[],"summary":""}'
 `
 	if err := os.WriteFile(scenario, []byte(content), 0o644); err != nil {
 		t.Fatalf("write scenario: %v", err)

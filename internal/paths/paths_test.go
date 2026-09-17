@@ -3,6 +3,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,30 @@ func TestWorktreePaths(t *testing.T) {
 	}
 	if got := p.WorktreeDir("repo1", "run1"); got != filepath.Join(root, "worktrees", "repo1", "run1") {
 		t.Errorf("WorktreeDir() = %q", got)
+	}
+}
+
+func TestCoveragePaths(t *testing.T) {
+	root := filepath.Join("tmp", "nm-test")
+	p := WithRoot(root)
+
+	if got := p.CoverageDir(); got != filepath.Join(root, "coverage") {
+		t.Errorf("CoverageDir() = %q", got)
+	}
+	if got := p.RunCoverageDir("run-7"); got != filepath.Join(root, "coverage", "run-7") {
+		t.Errorf("RunCoverageDir() = %q", got)
+	}
+}
+
+func TestRunCoverageDirIsOutsideWorktreesDir(t *testing.T) {
+	p := WithRoot(filepath.Join("tmp", "nm-test"))
+
+	rel, err := filepath.Rel(p.WorktreesDir(), p.RunCoverageDir("run-7"))
+	if err != nil {
+		t.Fatalf("filepath.Rel: %v", err)
+	}
+	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		t.Errorf("RunCoverageDir() = %q, want a path outside WorktreesDir() %q (rel = %q)", p.RunCoverageDir("run-7"), p.WorktreesDir(), rel)
 	}
 }
 

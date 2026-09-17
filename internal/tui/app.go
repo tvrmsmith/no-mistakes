@@ -41,7 +41,7 @@ type Model struct {
 	reviewDiffErr        error
 	// resubscribeTries bounds reconnect attempts for a dropped event stream.
 	resubscribeTries int
-	// fetchStepDiff reads a fix-review gate's working-tree diff. Nil in
+	// fetchStepDiff reads a fix-review gate's diff of what the parked step changed. Nil in
 	// production, where the IPC client is used; injectable for tests.
 	fetchStepDiff       func(types.StepName) (string, error)
 	steps               []ipc.StepResultInfo

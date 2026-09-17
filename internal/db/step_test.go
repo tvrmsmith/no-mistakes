@@ -123,13 +123,13 @@ func TestStepsByRun(t *testing.T) {
 	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
 
 	// insert in reverse order to verify ordering
-	if _, err := d.InsertStepResult(run.ID, types.StepLint); err != nil {
-		t.Fatalf("insert step result: %v", err)
-	}
 	if _, err := d.InsertStepResult(run.ID, types.StepReview); err != nil {
 		t.Fatalf("insert step result: %v", err)
 	}
 	if _, err := d.InsertStepResult(run.ID, types.StepTest); err != nil {
+		t.Fatalf("insert step result: %v", err)
+	}
+	if _, err := d.InsertStepResult(run.ID, types.StepLint); err != nil {
 		t.Fatalf("insert step result: %v", err)
 	}
 
@@ -141,14 +141,14 @@ func TestStepsByRun(t *testing.T) {
 		t.Fatalf("got %d steps, want 3", len(steps))
 	}
 	// should be in execution order
-	if steps[0].StepName != types.StepReview {
-		t.Errorf("first step = %q, want review", steps[0].StepName)
+	if steps[0].StepName != types.StepLint {
+		t.Errorf("first step = %q, want lint", steps[0].StepName)
 	}
 	if steps[1].StepName != types.StepTest {
 		t.Errorf("second step = %q, want test", steps[1].StepName)
 	}
-	if steps[2].StepName != types.StepLint {
-		t.Errorf("third step = %q, want lint", steps[2].StepName)
+	if steps[2].StepName != types.StepReview {
+		t.Errorf("third step = %q, want review", steps[2].StepName)
 	}
 }
 
@@ -634,10 +634,10 @@ func TestGetStepsByRun_PlacesAGateAfterItsAnchor(t *testing.T) {
 	}
 
 	sequence := []types.StepName{
+		types.StepTest,
 		types.StepReview,
 		types.CustomGateStepName(types.StepReview, "arch-fitness"),
 		types.CustomGateStepName(types.StepReview, "budget"),
-		types.StepTest,
 	}
 	for _, name := range sequence {
 		if _, err := d.InsertStepResult(run.ID, name); err != nil {

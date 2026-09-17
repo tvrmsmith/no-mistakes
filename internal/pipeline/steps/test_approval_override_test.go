@@ -35,7 +35,7 @@ func TestTestStep_VerifyApprovalOverride_FailingConfiguredCommand(t *testing.T) 
 	if runtime.GOOS == "windows" {
 		testCmd = "echo configured command broke && exit /b 7"
 	}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: testCmd})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: testCmd})
 	var logs []string
 	sctx.Log = func(line string) { logs = append(logs, line) }
 
@@ -46,11 +46,8 @@ func TestTestStep_VerifyApprovalOverride_FailingConfiguredCommand(t *testing.T) 
 	if outcome.ExitCode != 7 || !outcome.NeedsApproval {
 		t.Fatalf("outcome = %+v, want a parked failing configured command", outcome)
 	}
-	if !containsLog(logs, "configured test command failed, asking agent to gather live evidence...") {
-		t.Fatalf("missing configured-command failure log, got %q", logs)
-	}
-	if containsLog(logs, "baseline tests failed") {
-		t.Fatalf("failure log still used baseline wording: %q", logs)
+	if !containsLog(logs, "unit repository: "+testCmd) {
+		t.Fatalf("failure log did not name the configured command's unit, got %q", logs)
 	}
 	persistTestStepFindings(t, sctx, outcome.ExitCode, outcome.Findings)
 
@@ -58,7 +55,7 @@ func TestTestStep_VerifyApprovalOverride_FailingConfiguredCommand(t *testing.T) 
 	if err != nil {
 		t.Fatalf("VerifyApprovalOverride() error = %v", err)
 	}
-	if !strings.Contains(unresolved, "configured test command failed with exit code 7") {
+	if !strings.Contains(unresolved, "tests failed with exit code 7") {
 		t.Fatalf("unresolved = %q, want the configured-command failure reason", unresolved)
 	}
 }
@@ -77,7 +74,7 @@ func TestTestStep_VerifyApprovalOverride_PassingCommandLeavesNoMark(t *testing.T
   "verdict": "no-go"
 }`)}, nil
 	}}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 0"})
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err != nil {

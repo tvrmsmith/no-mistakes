@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS runs (
     error                   TEXT,
     awaiting_agent_since INTEGER,
     parked_ms            INTEGER,
+    restart_count        INTEGER NOT NULL DEFAULT 0,
+    skipped_steps        TEXT,
     launch_nonce         TEXT,
     launch_validation_generation TEXT,
     launch_intent_digest TEXT,
@@ -236,6 +238,14 @@ var migrationStatements = []string{
 	// compares it against the plan the resuming binary would run; NULL means a
 	// legacy row whose layout cannot be proven compatible.
 	`ALTER TABLE runs ADD COLUMN step_plan TEXT`,
+	// The Test step's discovered unit layout, its selection, the changed-file
+	// fingerprint they were derived from, and the run's under-selection fault
+	// count. It is durable so a run recovered after a daemon restart reuses the
+	// layout instead of paying a second cold discovery agent pass, and so the
+	// guard that parks a repeat under-selection survives the restart too. The
+	// value lives on the run row, so it dies with the run and nothing carries
+	// across runs. NULL means this run never discovered units.
+	`ALTER TABLE runs ADD COLUMN test_discovery TEXT`,
 	// Branch synchronization provenance is intentionally nullable. Historical
 	// rows stay unbound because mutable head_sha cannot prove a successful push.
 	`ALTER TABLE runs ADD COLUMN submitted_head_sha TEXT`,
@@ -330,4 +340,8 @@ var migrationStatements = []string{
 	`ALTER TABLE agent_invocations ADD COLUMN workload_files INTEGER`,
 	`ALTER TABLE agent_invocations ADD COLUMN workload_lines INTEGER`,
 	`ALTER TABLE agent_invocations ADD COLUMN finding_count INTEGER`,
+	// A pre-existing row reads 0 because no run before this column existed could
+	// have restarted under the attribution rule (internal/pipeline increments it
+	// only from the restart boundary it introduces).
+	`ALTER TABLE runs ADD COLUMN restart_count INTEGER NOT NULL DEFAULT 0`,
 }

@@ -111,9 +111,6 @@ func (m *Model) applyEvent(event ipc.Event) bool {
 		if event.StepName != nil && event.ReportedFindings != nil {
 			m.setStepReportedFindings(*event.StepName, *event.ReportedFindings)
 		}
-		if event.StepName != nil && event.WorkScope != "" {
-			m.setStepWorkScope(*event.StepName, event.WorkScope)
-		}
 		// Persist duration so the step continues to display its elapsed time.
 		// Prefer the event's execution-only duration; fall back to local timing.
 		// For "fixing" status, clear the persisted duration and back-date the
@@ -284,7 +281,7 @@ func (m *Model) clearGateState(step types.StepName) {
 }
 
 // requestStepDiff queues one on-demand read of a fix-review gate's
-// working-tree diff. At most one request per step is in flight.
+// diff of what the parked step changed. At most one request per step is in flight.
 func (m *Model) requestStepDiff(step types.StepName, replace bool) {
 	if m.stepDiffFetching[step] && !replace {
 		return
@@ -420,15 +417,6 @@ func (m *Model) setStepDuration(name types.StepName, durationMS *int64) {
 	for i := range m.steps {
 		if m.steps[i].StepName == name {
 			m.steps[i].DurationMS = durationMS
-			return
-		}
-	}
-}
-
-func (m *Model) setStepWorkScope(name types.StepName, workScope string) {
-	for i := range m.steps {
-		if m.steps[i].StepName == name {
-			m.steps[i].WorkScope = workScope
 			return
 		}
 	}

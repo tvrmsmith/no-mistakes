@@ -97,8 +97,8 @@ const body = `
 
 Drive ` + "`no-mistakes`" + ` through the ` + "`no-mistakes axi`" + ` command family: it prints
 machine-readable [TOON](https://toonformat.dev) to stdout and progress to stderr.
-The pipeline validates committed history through intent, rebase, review, test,
-document, lint, push, PR, and CI before it reaches the configured push target.
+The pipeline validates committed history through intent, rebase, format, lint,
+test, metrics, document, review, push, PR, and CI before it reaches the configured push target.
 ` + gateguidance.SkillBoundary + `
 ## Validate and decide
 
@@ -231,7 +231,7 @@ Because that background monitor stays live, a PR that falls behind the default b
 hits a merge conflict after checks pass - commonly because another PR merged
 first - needs **no command from you**: leave it to the live monitor and
 never hand-rebase it yourself. When the CI monitor sees an actual conflict it
-**rebases onto the base, resolves it, revalidates from Review because
+**rebases onto the base, resolves it, revalidates from Format because
 rebasing cannot prove continuity with the reviewed head, and re-pushes the
 branch through Push**; a PR
 that is merely behind but still clean needs nothing either, since the platform

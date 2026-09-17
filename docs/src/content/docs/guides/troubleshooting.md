@@ -147,6 +147,12 @@ no-mistakes daemon stop
 no-mistakes daemon start
 ```
 
+## Run aborts with "claude workspace not trusted"
+
+Symptom: a step fails immediately with `claude workspace not trusted, project-scoped permission entries were discarded`, or `no-mistakes doctor` warns on the `claude trust` row.
+
+Claude Code has not been through its interactive trust dialog for the bare gate repository path, so it discarded that repository's project-scoped permission entries. The error and the doctor row both carry the remedy for the exact path. [Choosing an Agent](/no-mistakes/guides/agents/#workspace-trust) owns which categories actually cost a run and how to grant trust.
+
 ## Agents fail with "403 Request not allowed" behind a proxy
 
 Symptom: runs fail and the step log shows agents (for example `claude --print`) unable to reach the network, often with `403 Request not allowed`.

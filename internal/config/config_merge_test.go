@@ -179,6 +179,35 @@ func TestMerge_AutoFixRepoOverridesGlobal(t *testing.T) {
 	}
 }
 
+func TestAutoFixLimit_FormatDefaultsToThree(t *testing.T) {
+	global := &GlobalConfig{}
+	repo := &RepoConfig{}
+	cfg := Merge(global, repo)
+	if got := cfg.AutoFixLimit(types.StepFormat); got != 3 {
+		t.Errorf("AutoFixLimit(format) = %d, want 3 (default)", got)
+	}
+
+	repo = &RepoConfig{AutoFix: AutoFixRaw{Format: intPtr(1)}}
+	cfg = Merge(global, repo)
+	if got := cfg.AutoFixLimit(types.StepFormat); got != 1 {
+		t.Errorf("AutoFixLimit(format) = %d, want 1 (repo override)", got)
+	}
+}
+
+func TestAutoFixLimit_MetricsDefaultsToThree(t *testing.T) {
+	global := &GlobalConfig{}
+	cfg := Merge(global, &RepoConfig{})
+	if got := cfg.AutoFixLimit(types.StepMetrics); got != 3 {
+		t.Errorf("AutoFixLimit(metrics) = %d, want 3 (default)", got)
+	}
+
+	repo := &RepoConfig{AutoFix: AutoFixRaw{Metrics: intPtr(0)}}
+	cfg = Merge(global, repo)
+	if got := cfg.AutoFixLimit(types.StepMetrics); got != 0 {
+		t.Errorf("AutoFixLimit(metrics) = %d, want 0 (repo override)", got)
+	}
+}
+
 func TestLoadRepoFromBytes_ParsesProvidersDraft(t *testing.T) {
 	repo, err := LoadRepoFromBytes([]byte("providers:\n  github:\n    draft_pull_requests: true\n"))
 	if err != nil {
@@ -258,7 +287,7 @@ func TestMerge_ProvidersRepoOverridesGlobalAzureDevOpsDraft(t *testing.T) {
 
 func TestAutoFixLimit(t *testing.T) {
 	cfg := &Config{
-		AutoFix: AutoFix{Lint: 5, Test: 2, Review: 0, Document: 1, CI: 3, Rebase: 4},
+		AutoFix: AutoFix{Lint: 5, Test: 2, Review: 0, Document: 1, CI: 3, Rebase: 4, Metrics: 6},
 	}
 	tests := []struct {
 		step types.StepName
@@ -270,6 +299,7 @@ func TestAutoFixLimit(t *testing.T) {
 		{types.StepDocument, 1},
 		{types.StepCI, 3},
 		{types.StepRebase, 4},
+		{types.StepMetrics, 6},
 		{types.StepPush, 0},
 		{types.StepPR, 0},
 	}

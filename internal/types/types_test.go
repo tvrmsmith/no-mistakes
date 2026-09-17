@@ -22,11 +22,11 @@ func TestRunStatusTerminal(t *testing.T) {
 
 func TestAllStepsOrder(t *testing.T) {
 	steps := AllSteps()
-	if len(steps) != 9 {
-		t.Fatalf("expected 9 steps, got %d", len(steps))
+	if len(steps) != 11 {
+		t.Fatalf("expected 11 steps, got %d", len(steps))
 	}
 
-	expected := []StepName{StepIntent, StepRebase, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
+	expected := []StepName{StepIntent, StepRebase, StepFormat, StepLint, StepTest, StepMetrics, StepDocument, StepReview, StepPush, StepPR, StepCI}
 	for i, s := range steps {
 		if s != expected[i] {
 			t.Errorf("step[%d] = %q, want %q", i, s, expected[i])
@@ -41,13 +41,15 @@ func TestStepNameOrder(t *testing.T) {
 	}{
 		{StepIntent, 1},
 		{StepRebase, 2},
-		{StepReview, 3},
-		{StepTest, 4},
-		{StepDocument, 5},
-		{StepLint, 6},
-		{StepPush, 7},
-		{StepPR, 8},
-		{StepCI, 9},
+		{StepFormat, 3},
+		{StepLint, 4},
+		{StepTest, 5},
+		{StepMetrics, 6},
+		{StepDocument, 7},
+		{StepReview, 8},
+		{StepPush, 9},
+		{StepPR, 10},
+		{StepCI, 11},
 		{StepName("unknown"), 0},
 	}
 
@@ -55,6 +57,51 @@ func TestStepNameOrder(t *testing.T) {
 		if got := tt.step.Order(); got != tt.want {
 			t.Errorf("%q.Order() = %d, want %d", tt.step, got, tt.want)
 		}
+	}
+}
+
+// TestStepNameOrderAgreesWithAllSteps catches a duplicate entry in allSteps and
+// a future re-divergence of AllSteps and Order. The absolute 1..11 values stay
+// pinned by TestStepNameOrder.
+func TestStepNameOrderAgreesWithAllSteps(t *testing.T) {
+	for i, step := range AllSteps() {
+		want := i + 1
+		if got := step.Order(); got != want {
+			t.Errorf("%q.Order() = %d, want %d from its position in AllSteps()", step, got, want)
+		}
+	}
+	for _, step := range []StepName{"", "unknown", "babysit"} {
+		if got := step.Order(); got != 0 {
+			t.Errorf("%q.Order() = %d, want 0 for a step outside AllSteps()", step, got)
+		}
+	}
+}
+
+// TestReviewIsTheLastStepOfTheValidationRegion pins the property the reorder
+// exists for: every cheap gate has run by the time Review judges the tree, and
+// nothing between Review and Push can change what Review certified.
+func TestReviewIsTheLastStepOfTheValidationRegion(t *testing.T) {
+	for _, step := range []StepName{StepFormat, StepLint, StepTest, StepMetrics, StepDocument} {
+		if step.Order() >= StepReview.Order() {
+			t.Errorf("%q.Order() = %d, want less than %q at %d", step, step.Order(), StepReview, StepReview.Order())
+		}
+	}
+	if StepReview.Order() >= StepPush.Order() {
+		t.Errorf("%q.Order() = %d, want less than %q at %d", StepReview, StepReview.Order(), StepPush, StepPush.Order())
+	}
+}
+
+func TestAllStepsReturnsACopy(t *testing.T) {
+	a, b := AllSteps(), AllSteps()
+	if len(a) == 0 || len(b) == 0 {
+		t.Fatalf("AllSteps() returned an empty slice")
+	}
+	a[0] = StepName("mutated")
+	if b[0] != StepIntent {
+		t.Errorf("mutating one AllSteps() result changed another: b[0] = %q, want %q", b[0], StepIntent)
+	}
+	if got := AllSteps()[0]; got != StepIntent {
+		t.Errorf("mutating an AllSteps() result changed a later call: got %q, want %q", got, StepIntent)
 	}
 }
 

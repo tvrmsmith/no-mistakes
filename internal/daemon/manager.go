@@ -513,6 +513,7 @@ func (m *RunManager) finishRunGoroutine(repoID, runID string, cfg *config.Config
 		// A preserved run resumes and still owns its evidence; only a run that
 		// is really finished gives its directory up.
 		m.cleanupRunEvidence(cfg, runID)
+		m.cleanupRunCoverage(runID)
 	}
 	m.mu.Lock()
 	delete(m.executors, runID)
@@ -1064,6 +1065,19 @@ func (m *RunManager) cleanupRunEvidence(cfg *config.Config, runID string) {
 		slog.Debug("run evidence kept", "run_id", runID, "reason", err)
 	}
 	reapEvidence(m.db, root, policy, time.Now())
+}
+
+// cleanupRunCoverage removes one finished run's whole coverage directory.
+//
+// Unlike evidence this is os.RemoveAll rather than the empty-directory-only
+// os.Remove: evidence is kept for the operator to read after the run, while a
+// coverage profile is consumed by the run that produced it and is dead the
+// moment the run ends, whatever it holds. Best effort, like its neighbour: a
+// failed cleanup logs at debug and never fails a finished run.
+func (m *RunManager) cleanupRunCoverage(runID string) {
+	if err := os.RemoveAll(m.paths.RunCoverageDir(runID)); err != nil {
+		slog.Debug("run coverage directory not fully removed", "run_id", runID, "reason", err)
+	}
 }
 
 // removeRunWorktree sweeps processes before deciding whether to remove the
@@ -2161,13 +2175,19 @@ func (m *RunManager) autoCaptureEvalCase(ctx context.Context, cfg *config.Config
 	ctx, cancel := context.WithTimeout(ctx, evalAutoCaptureTimeout)
 	defer cancel()
 
-	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, cfg.Eval.MaxCases)
+	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, eval.Retention{
+		MaxCases:        cfg.Eval.MaxCases,
+		DiversifiedSize: cfg.Eval.DiversifiedSize,
+	})
 	switch {
 	case err != nil:
 		slog.Warn("failed to collect eval case", "run_id", runID, "error", err)
 	case result.Skipped:
 		slog.Debug("run has no eval case to collect", "run_id", runID, "reason", result.Reason)
 	default:
+		if result.PinWarning != "" {
+			slog.Warn("eval retention skipped: diversified pins unavailable", "run_id", runID, "reason", result.PinWarning)
+		}
 		slog.Info("collected eval case", "run_id", runID, "cases", result.Captured, "pruned", result.Pruned)
 	}
 }

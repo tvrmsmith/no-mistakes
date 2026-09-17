@@ -68,6 +68,11 @@ type Run struct {
 	// milliseconds across every gate wait (local performance telemetry;
 	// step duration_ms values exclude this time).
 	ParkedMS int64
+	// RestartCount is how many times the run re-entered validation from the
+	// restart boundary. The executor's prepareRestart is the only writer, via
+	// IncrementRunRestartCount. It is history, not a live signal, so it stays
+	// nonzero and rendered after the run goes terminal.
+	RestartCount int64
 	// SkippedSteps is the run's requested skip set. It is empty for runs
 	// started without --skip and for legacy rows recorded before the set was
 	// persisted; a resumed run restores it so a stop cannot silently run a
@@ -96,7 +101,7 @@ type Run struct {
 	UpdatedAt    int64
 }
 
-const runColumns = `id, repo_id, branch, head_sha, base_sha, worktree_dir, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, review_approved_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, COALESCE(ci_ready_no_ci, 0), last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), terminal_head_verified_at, custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), skipped_steps, step_plan, intent, intent_source, intent_session_id, intent_score, launch_nonce, launch_validation_generation, launch_intent_digest, launch_receipt_claimed_at, pr_base_branch, created_at, updated_at`
+const runColumns = `id, repo_id, branch, head_sha, base_sha, worktree_dir, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, review_approved_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, COALESCE(ci_ready_no_ci, 0), last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), terminal_head_verified_at, custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), COALESCE(restart_count, 0), skipped_steps, step_plan, intent, intent_source, intent_session_id, intent_score, launch_nonce, launch_validation_generation, launch_intent_digest, launch_receipt_claimed_at, pr_base_branch, created_at, updated_at`
 
 func scanRun(row interface {
 	Scan(...any) error
@@ -107,7 +112,7 @@ func scanRun(row interface {
 		&r.PRURL, &r.PRState, &r.PRStateObservedAt, &r.CIReadyAt, &r.CIReadyNoCI,
 		&r.LastPushedSHA, &r.PushTargetKind, &r.PushTargetFingerprint, &r.PushRef,
 		&r.LastPushedAt, &r.PushGeneration, &r.PushActive, &r.TerminalHeadVerifiedAt,
-		&r.CustodyReturnedAt, &r.Error, &r.AwaitingAgentSince, &r.ParkedMS, &skipped, &plan,
+		&r.CustodyReturnedAt, &r.Error, &r.AwaitingAgentSince, &r.ParkedMS, &r.RestartCount, &skipped, &plan,
 		&r.Intent, &r.IntentSource, &r.IntentSessionID, &r.IntentScore,
 		&r.LaunchNonce, &r.LaunchValidationGeneration, &r.LaunchIntentDigest, &r.LaunchReceiptClaimedAt,
 		&r.PRBaseBranch,
@@ -949,6 +954,21 @@ func (d *DB) AddRunParkedDuration(id string, ms int64) error {
 	return nil
 }
 
+// RestartSoftCap is an advisory threshold on Run.RestartCount only. Nothing
+// blocks or caps a run at this number; surfaces annotate a run above it so a
+// maintainer can spot a thrashing fix loop.
+const RestartSoftCap = 5
+
+// IncrementRunRestartCount bumps a run's restart count by one. Called by the
+// executor each time the run re-enters validation from the restart boundary.
+func (d *DB) IncrementRunRestartCount(id string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET restart_count = COALESCE(restart_count, 0) + 1, updated_at = ? WHERE id = ?`, now(), id)
+	if err != nil {
+		return fmt.Errorf("increment run restart count: %w", err)
+	}
+	return nil
+}
+
 func (d *DB) CompleteRunAwaitingAgent(id string, ms int64) error {
 	if ms < 0 {
 		ms = 0
@@ -1207,6 +1227,33 @@ func (d *DB) GetRunCIRerunState(id string) (string, error) {
 		return "", fmt.Errorf("get run ci rerun state: %w", err)
 	}
 	return state.String, nil
+}
+
+// GetRunTestDiscovery returns the Test step's persisted unit discovery for a
+// run, or the empty string when the run never discovered units. The payload is
+// opaque here: the pipeline owns its shape, and the database only guarantees
+// that what was written survives a restart.
+func (d *DB) GetRunTestDiscovery(id string) (string, error) {
+	var state sql.NullString
+	err := d.sql.QueryRow(`SELECT test_discovery FROM runs WHERE id = ?`, id).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get run test discovery: %w", err)
+	}
+	return state.String, nil
+}
+
+// SetRunTestDiscovery persists the Test step's unit discovery for a run, so a
+// run recovered after a daemon restart reuses the layout instead of paying a
+// second cold discovery agent pass.
+func (d *DB) SetRunTestDiscovery(id, state string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET test_discovery = ?, updated_at = ? WHERE id = ?`, state, now(), id)
+	if err != nil {
+		return fmt.Errorf("set run test discovery: %w", err)
+	}
+	return nil
 }
 
 // SetRunCIRerunState persists the CI step's rerun budget. The CI step calls
