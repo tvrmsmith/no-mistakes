@@ -17,6 +17,15 @@ LDFLAGS := -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Version=$(VE
 
 DIST_DIR ?= dist
 INSTALL_BIN := $(shell go env GOPATH)/bin/no-mistakes
+# The binary on PATH and the one launchd runs both resolve through the copy the
+# self-updater owns, $(NM_HOME)/bin/no-mistakes, which ~/.local/bin/no-mistakes
+# symlinks to. Installing only to GOPATH left that copy stale, so `no-mistakes
+# --version` reported the old build while the daemon ran the new one, and
+# `daemon start` re-pointed the launchd plist at GOPATH (the plist records
+# whichever path started it).
+NM_HOME ?= $(HOME)/.no-mistakes
+MANAGED_BIN := $(NM_HOME)/bin/no-mistakes
+LAUNCHER_BIN := $(HOME)/.local/bin/no-mistakes
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/no-mistakes ./cmd/no-mistakes
@@ -46,7 +55,14 @@ install: build
 	mkdir -p $(dir $(INSTALL_BIN))
 	install -m 755 bin/no-mistakes $(INSTALL_BIN)
 	$(INSTALL_BIN) daemon stop
-	$(INSTALL_BIN) daemon start
+	@if [ -e "$(MANAGED_BIN)" ]; then \
+		echo "refreshing managed binary $(MANAGED_BIN)"; \
+		install -m 755 bin/no-mistakes "$(MANAGED_BIN)"; \
+	fi
+	@start="$(INSTALL_BIN)"; \
+	if [ -x "$(LAUNCHER_BIN)" ]; then start="$(LAUNCHER_BIN)"; fi; \
+	echo "starting daemon via $$start"; \
+	"$$start" daemon start
 
 test:
 	go test -race ./...
