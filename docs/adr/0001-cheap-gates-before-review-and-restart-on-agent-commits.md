@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Cheap gates run before Review, and any agent-authored commit restarts validation
