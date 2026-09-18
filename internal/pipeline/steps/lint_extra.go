@@ -17,10 +17,9 @@ import (
 // step's own duty produced.
 //
 // It runs on every path through the step - configured commands.lint, the cold
-// agent pass, the combined document+lint housekeeping consume, and fix rounds
-// - because the whole reason these linters exist is that nothing in the
-// repository can discover them. A path that skipped them would report clean
-// for the exact reason the operator configured them.
+// agent pass, and fix rounds - because the whole reason these linters exist is
+// that nothing in the repository can discover them. A path that skipped them
+// would report clean for the exact reason the operator configured them.
 //
 // It is additive. The lint duty's own findings, summary, exit code, and fix
 // summary all survive unchanged; extra findings are appended, and the approval

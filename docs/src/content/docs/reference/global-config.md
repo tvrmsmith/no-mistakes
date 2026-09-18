@@ -928,19 +928,9 @@ lint:
 
 This exists for a linter the repository cannot declare. A personal rule set is usually delivered by machine-local state, an MSBuild property, a binary outside the tree, an adoption registry under `~/.config`, exactly so the repository commits nothing about it. The lint agent can only discover repo-committed tooling, so without this list such a linter is absent from every run and the step reports clean.
 
-It is additive. The repository's `commands.lint`, or the agent pass that replaces it, runs exactly as before and keeps its own findings, output, and exit code; these linters append to that outcome. They run on every path through the step, including fix rounds and the combined document+lint housekeeping pass.
+It is additive. The repository's `commands.lint`, or the agent pass that replaces it, runs exactly as before and keeps its own findings, output, and exit code; these linters append to that outcome. They run on every path through the step, including fix rounds.
 
-**The command receives the run's facts as environment variables**, not as template substitution, so no quoting question arises:
-
-| Variable                | Value                                                                       |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `NO_MISTAKES_BASE_SHA`  | The diff base the Lint step is working against; pair it with a `--since` flag |
-| `NO_MISTAKES_HEAD_SHA`  | The head being validated                                                     |
-| `NO_MISTAKES_BRANCH`    | The branch being validated                                                   |
-| `NO_MISTAKES_WORKDIR`   | The run worktree the command runs in                                         |
-| `NO_MISTAKES_REPO_PATH` | Your registered checkout, which is **not** the run worktree                   |
-
-`NO_MISTAKES_REPO_PATH` matters when your linter decides whether a repository is adopted by looking its path up in a registry. Runs happen in a detached worktree of the daemon's bare gate repository under `<NM_HOME>`, so a lookup that resolves the path itself finds an unadopted directory and skips silently. Pass this value to whatever the linter uses to key that lookup.
+**The command receives the run's facts as environment variables**, not as template substitution, so no quoting question arises: [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_HEAD_SHA`](/no-mistakes/reference/environment/#no_mistakes_head_sha), [`NO_MISTAKES_BRANCH`](/no-mistakes/reference/environment/#no_mistakes_branch), [`NO_MISTAKES_WORKDIR`](/no-mistakes/reference/environment/#no_mistakes_workdir), and [`NO_MISTAKES_REPO_PATH`](/no-mistakes/reference/environment/#no_mistakes_repo_path), your registered checkout rather than the run worktree. The environment reference owns their values.
 
 **`findings_pattern` is how a report-only linter is heard.** Advisory rule sets exit `0` carrying their findings, so an exit code alone reports nothing. Named capture groups `file`, `line`, and `message` set the finding's location and text when the pattern declares them; otherwise the whole matched line is the text. Output is the command's stdout and stderr combined. At most 50 findings per linter reach the PR body, and the remainder is stated in a final finding rather than dropped silently. With no pattern, a non-zero exit is the only signal the command gives.
 

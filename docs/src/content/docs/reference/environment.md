@@ -293,7 +293,7 @@ When set to a disabling value, telemetry stays off even if a runtime or embedded
 
 ## `NO_MISTAKES_BASE_SHA`
 
-Set by no-mistakes, not read from it. Every unit test command receives this as the base commit the run is validating against, so the command can scope itself the same way discovery did. That covers a [`test.units`](/no-mistakes/reference/repo-config/#testunits) command and a [`commands.test`](/no-mistakes/reference/repo-config/#commandstest) command alike, since discovery treats the latter as one implicit `repository` unit. A [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receives it too.
+Set by no-mistakes, not read from it. Every unit test command receives this as the base commit the run is validating against, so the command can scope itself the same way discovery did. That covers a [`test.units`](/no-mistakes/reference/repo-config/#testunits) command and a [`commands.test`](/no-mistakes/reference/repo-config/#commandstest) command alike, since discovery treats the latter as one implicit `repository` unit. A [`commands.metrics`](/no-mistakes/reference/repo-config/#commandsmetrics) command receives it too, and so does every [`lint.extra_linters`](/no-mistakes/reference/global-config/#lintextra_linters) command, where it is the diff base the Lint step is working against and pairs with a `--since` flag.
 
 |         |          |
 | ------- | -------- |
@@ -338,6 +338,46 @@ A coverage profile names files however its runner does. The step resolves both s
 | ------- | -------- |
 | Type    | `string` (absolute path) |
 | Default | (n/a; always set for a unit test command) |
+
+## `NO_MISTAKES_HEAD_SHA`
+
+Set by no-mistakes, not read from it. Every [`lint.extra_linters`](/no-mistakes/reference/global-config/#lintextra_linters) command receives this as the head commit the run is validating.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` |
+| Default | (n/a; always set for an extra linter command) |
+
+## `NO_MISTAKES_BRANCH`
+
+Set by no-mistakes, not read from it. Every [`lint.extra_linters`](/no-mistakes/reference/global-config/#lintextra_linters) command receives this as the branch the run is validating.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` |
+| Default | (n/a; always set for an extra linter command) |
+
+## `NO_MISTAKES_WORKDIR`
+
+Set by no-mistakes, not read from it. Every [`lint.extra_linters`](/no-mistakes/reference/global-config/#lintextra_linters) command receives this as the run worktree it runs in.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` (absolute path) |
+| Default | (n/a; always set for an extra linter command) |
+
+## `NO_MISTAKES_REPO_PATH`
+
+Set by no-mistakes, not read from it. Every [`lint.extra_linters`](/no-mistakes/reference/global-config/#lintextra_linters) command receives this as the registered checkout of the repository under validation, which is **not** the directory the command runs in.
+
+It matters when your linter decides whether a repository is adopted by looking its path up in a registry. A run lints in a detached worktree of the daemon's bare gate repository under [`NM_HOME`](#nm_home), so a lookup that resolves the path itself, through `git rev-parse --git-common-dir` for example, finds an unadopted directory and skips silently, which is indistinguishable from a clean result. Pass this value to whatever the linter uses to key that lookup.
+
+It is absent when the run carries no registered repository.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` (absolute path) |
+| Default | (unset when the run has no registered repository) |
 
 ## `NO_MISTAKES_COVERAGE_ROOT`
 

@@ -33,9 +33,8 @@ func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	return applyExtraLinters(sctx, baseSHA, outcome)
 }
 
-// lintDuty performs the repository's own lint duty: its configured
-// commands.lint when it has one, otherwise an agent pass (or the result the
-// combined document+lint housekeeping pass already produced).
+// lintDuty performs the repository's own lint duty, its configured
+// commands.lint when it has one and otherwise an agent pass.
 func (s *LintStep) lintDuty(sctx *pipeline.StepContext, baseSHA string) (*pipeline.StepOutcome, error) {
 	ctx := sctx.Ctx
 	lintCmd := sctx.Config.Commands.Lint
