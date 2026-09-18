@@ -432,7 +432,7 @@ func TestReconcileStaleBranchDecision41AExactSubmittedHeadOnly(t *testing.T) {
 			gateDir := filepath.Join(t.TempDir(), "gate.git")
 			reconcileGit(t, "", "init", "--bare", gateDir)
 			reconcileGit(t, gateDir, "fetch", work, privateHead+":refs/heads/feature")
-			plan, err := PlanMirrorPublicationReconciliation(t.Context(), gateDir, work, "feature", liveHead, ownedHead)
+			plan, err := PlanMirrorPublicationReconciliation(t.Context(), gateDir, work, "feature", liveHead, MirrorPublicationEvidence{SubmittedHead: ownedHead})
 			if variant != "exact" {
 				if err == nil || plan.Reconcile {
 					t.Fatalf("non-exact submitted head exempted: plan=%+v err=%v", plan, err)
