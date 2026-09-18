@@ -34,8 +34,9 @@ const ExtraLinterMaxFindings = 50
 // contributes nothing.
 type ExtraLinter struct {
 	// Name identifies the linter in logs and in the finding text. Required,
-	// unique within the list, and restricted to path-safe characters so it can
-	// be quoted into a log line or a PR body without escaping surprises.
+	// distinct within the list once ExtraLinterIDSlug has folded case and
+	// punctuation away, and restricted to path-safe characters so it can be
+	// quoted into a log line or a PR body without escaping surprises.
 	Name string `yaml:"name"`
 	// Command is the shell command, run by `sh -c` in the run worktree with
 	// the same environment every other step command gets, plus the
