@@ -215,8 +215,13 @@ type GlobalConfig struct {
 	// this machine's local eval corpus (disk, retention, whether review rounds
 	// record replay provenance), never a repository policy. Keeping it out of
 	// RepoConfig means no pushed branch can enable, disable, or resize it.
-	Eval      Eval
-	SCM       SCMRaw `yaml:"scm"`
+	Eval Eval
+	SCM  SCMRaw `yaml:"scm"`
+	// Lint carries the operator's own extra linters. Global-only for the same
+	// reason agent_path_override is: the commands run on this machine with
+	// this operator's credentials, and no repository declares them (see
+	// ExtraLinter).
+	Lint      Lint
 	Providers ProvidersRaw
 	// Review steers how wide and how strict each review turn is. Global-only:
 	// a pushed branch must not be able to loosen the review of its own change.
@@ -289,6 +294,7 @@ type globalConfigRaw struct {
 	Eval                    EvalRaw                    `yaml:"eval"`
 	Review                  GlobalReviewRaw            `yaml:"review"`
 	SCM                     SCMRaw                     `yaml:"scm"`
+	Lint                    Lint                       `yaml:"lint"`
 	ForgeProfiles           ForgeProfiles              `yaml:"forge_profiles"`
 	TrustWorkingPathConfig  bool                       `yaml:"trust_working_path_config"`
 	Providers               ProvidersRaw               `yaml:"providers"`
@@ -827,7 +833,11 @@ type Config struct {
 	LogLevel              string
 	SessionReuse          bool
 	Eval                  Eval
-	Commands              Commands
+	// Lint is the operator's own extra-linter list, global-only (see
+	// ExtraLinter). It is additive to Commands.Lint and to the lint agent's
+	// own discovery, never a replacement for either.
+	Lint     Lint
+	Commands Commands
 	// Gates are the repository's extra checks, already trusted-only by the
 	// time they reach here (EffectiveRepoConfig sourced them from the trusted
 	// default-branch copy).
@@ -2354,6 +2364,9 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	if err := validateRebaseRaw(raw.Rebase); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
+	if err := validateLintRaw(raw.Lint); err != nil {
+		return nil, fmt.Errorf("parse global config: %w", err)
+	}
 
 	if len(raw.Agent) > 0 {
 		cfg.Agents = copyAgents(raw.Agent)
@@ -2491,6 +2504,7 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	cfg.Intent = raw.Intent
 	cfg.Test = raw.Test
 	cfg.Providers = raw.Providers
+	cfg.Lint = raw.Lint
 	applyEvalOverrides(&cfg.Eval, &raw.Eval)
 	cfg.Review = raw.Review
 
@@ -3641,7 +3655,10 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		SessionReuse:          global.SessionReuse,
 		// Eval is global-only by design (see GlobalConfig.Eval), so it is
 		// copied straight through with no repository override step.
-		Eval:                  global.Eval,
+		Eval: global.Eval,
+		// Lint is global-only by design (see ExtraLinter), so it is copied
+		// straight through with no repository override step.
+		Lint:                  global.Lint,
 		SCM:                   global.SCM,
 		Commands:              repo.Commands,
 		Gates:                 copyGates(repo.Gates),

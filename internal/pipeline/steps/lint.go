@@ -23,8 +23,20 @@ func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
+	baseSHA := resolveBranchBaseSHA(sctx.Ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
+	outcome, err := s.lintDuty(sctx, baseSHA)
+	if err != nil {
+		return nil, err
+	}
+	// The operator's own linters run on top of whatever the repository could
+	// supply, on every path above. See applyExtraLinters.
+	return applyExtraLinters(sctx, baseSHA, outcome)
+}
+
+// lintDuty performs the repository's own lint duty, its configured
+// commands.lint when it has one and otherwise an agent pass.
+func (s *LintStep) lintDuty(sctx *pipeline.StepContext, baseSHA string) (*pipeline.StepOutcome, error) {
 	ctx := sctx.Ctx
-	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
 	lintCmd := sctx.Config.Commands.Lint
 
 	if lintCmd == "" {

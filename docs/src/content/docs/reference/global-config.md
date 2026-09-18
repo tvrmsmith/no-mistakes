@@ -113,6 +113,13 @@ test:
     retention: 336h
     max_runs: 200
 
+lint:
+  extra_linters:
+    - name: personal-dotnet
+      command: '"$HOME/.config/coding-standards/lint-changed-dotnet.sh" --since "$NO_MISTAKES_BASE_SHA"'
+      findings_pattern: ': warning TVRM[0-9]+'
+      severity: info
+
 providers:
   github:
     draft_pull_requests: false
@@ -895,6 +902,45 @@ Reaping runs after each finished run and again at daemon startup. An upgraded da
 `local_root` must be an absolute path outside `<NM_HOME>/worktrees`; a relative or managed-worktree path fails daemon startup and prevents new or recovered runs from starting. Because `retention` bounds how long a PR body's local artifact links keep resolving, raise it rather than lowering it if your reviews run long.
 
 The publication fields are global defaults. Repo config can override `store_in_repo`, `attach_media`, and `dir`; it can override `branch` only through the trusted default-branch copy. `local_root`, `retention`, and `max_runs` are global-only: a repository does not get to name a filesystem path this machine's daemon writes to, or set the retention budget for a directory every repository on the machine shares.
+
+### lint.extra_linters
+
+Linters you configure once on this machine and want run in the Lint step of **every** repository no-mistakes validates, in addition to whatever that repository configures or the lint agent discovers.
+
+|      |         |
+| ---- | ------- |
+| Type | `array` |
+
+| Field              | Type     | Default  | Description                                                         |
+| ------------------ | -------- | -------- | ------------------------------------------------------------------- |
+| `name`             | `string` | required | Identifies the linter in logs and findings; distinct, `[A-Za-z0-9._-]` |
+| `command`          | `string` | required | Shell command, run by `sh -c` in the run worktree                    |
+| `findings_pattern` | `string` | required | Regular expression; each stdout line it matches becomes one finding  |
+| `severity`         | `string` | `info`   | Severity of those findings: `info`, `warning`, or `error`            |
+
+```yaml
+lint:
+  extra_linters:
+    - name: personal-dotnet
+      command: '"$HOME/.config/coding-standards/lint-changed-dotnet.sh" --since "$NO_MISTAKES_BASE_SHA"'
+      findings_pattern: '^\s*(?P<file>[^\s(]+)\((?P<line>\d+),\d+\): warning (?P<message>TVRM\d+: .*)$'
+```
+
+This exists for a linter the repository cannot declare. A personal rule set is usually delivered by machine-local state, an MSBuild property, a binary outside the tree, an adoption registry under `~/.config`, exactly so the repository commits nothing about it. The lint agent can only discover repo-committed tooling, so without this list such a linter is absent from every run and the step reports clean.
+
+It is additive. The repository's `commands.lint`, or the agent pass that replaces it, runs exactly as before and keeps its own findings, output, and exit code; these linters append to that outcome. They run on every path through the step, including fix rounds.
+
+**The command receives the run's facts as environment variables**, not as template substitution, so no quoting question arises: [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_HEAD_SHA`](/no-mistakes/reference/environment/#no_mistakes_head_sha), [`NO_MISTAKES_BRANCH`](/no-mistakes/reference/environment/#no_mistakes_branch), [`NO_MISTAKES_WORKDIR`](/no-mistakes/reference/environment/#no_mistakes_workdir), and [`NO_MISTAKES_REPO_PATH`](/no-mistakes/reference/environment/#no_mistakes_repo_path), your registered checkout rather than the run worktree. The environment reference owns their values.
+
+**`findings_pattern` is how a report-only linter is heard.** Advisory rule sets exit `0` carrying their findings, so an exit code alone reports nothing. Named capture groups `file`, `line`, and `message` set the finding's location and text when the pattern declares them; otherwise the whole matched line is the text. It is matched against stdout alone, so a progress banner written to stderr cannot split a diagnostic in half; both streams still reach the step log. At most 50 findings per linter reach the PR body, and the remainder is stated in a final finding rather than dropped silently. Findings are bounded by size as well as count, because they travel over the daemon's event stream: a single finding's text is cut at 2000 bytes and marked `[truncated]`, and once all the configured linters together have contributed 128 KiB the rest are replaced by one finding saying how many are not listed. The step log always holds the full output. The pattern is required: a linter with no pattern could only ever report nothing, which is indistinguishable from clean.
+
+**Names must stay distinct after case and punctuation are folded away**, because each finding's ID is built from the name lowercased with every run of `.`, `_`, and `-` collapsed to a single `-`. `my.linter` and `my-linter` would identify their findings identically, so selecting one finding by ID would reach the other linter's; the config fails to load naming both entries rather than letting that happen.
+
+**Severity decides whether findings gate.** The default `info` reports on the pull request and in `axi status` without parking the step or spending an auto-fix round, so wiring a personal linter up never silently starts blocking your pushes. Set `warning` or `error` to park the Lint step for a decision, the same as an agent finding of that severity.
+
+**A non-zero exit always parks**, whatever `severity` says, and carries the command's output. That is the run breaking rather than a finding, and a linter that failed to run is otherwise indistinguishable from one that found nothing.
+
+Global-only, and not for convenience: the command runs through `sh -c` with your credentials, which is the same authority as `commands.lint`. A repository's copy of that field is read from the trusted default branch; this one has no trusted repository position to come from, because the point is that no repository declares it. A `lint` block in a `.no-mistakes.yaml` contributes nothing.
 
 ### eval
 
