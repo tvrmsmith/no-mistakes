@@ -50,6 +50,8 @@ document:
     Guides and troubleshooting pages explain purpose and symptoms and link to the
     owners above instead of restating their tables, examples, or key semantics.
     AGENTS.md holds invariants plus pointers to the authoritative implementation
-    and regression tests. Do not duplicate generic command catalogs, but retain
-    its project-specific verification sequence and other load-bearing operating
-    guidance.
+    and regression tests, and the maintainer writes it by hand, as he does
+    CLAUDE.md and every file under docs/adr/. Leave those files exactly as they
+    stand and place what you write in the owners above. When a change belongs in
+    one of them, report it as a finding naming the file and the exact text you
+    would add, and let it reach him.

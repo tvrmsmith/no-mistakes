@@ -259,6 +259,8 @@ Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/
 
 ## Maintaining this file
 
+This file, `CLAUDE.md`, and every file under `docs/adr/` are hand-edited by the maintainer, in a session he is watching. A pipeline gate agent leaves them exactly as they stand and reports a needed change as a finding naming the file and the exact text it would add. Every other file in the repository is yours to edit as usual.
+
 Keep this file for knowledge useful to almost every future agent session in this project.
 Do not repeat what the codebase already shows; point to the authoritative file or command instead.
 Prefer rewriting or pruning existing entries over appending new ones.
