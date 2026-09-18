@@ -71,7 +71,9 @@ func TestLintStep_ExtraLinterReportsFindingsAGreenRepoCommandMisses(t *testing.T
 }
 
 // Info is the default and it reports without gating, so wiring a personal
-// linter up never silently starts blocking pushes.
+// linter up never silently starts blocking pushes. The predicate here is the
+// one the executor's completion gate reads, not NeedsApproval alone: a finding
+// with no action reads as ask-user and parks the step just as surely.
 func TestLintStep_ExtraLinterInfoFindingsDoNotPark(t *testing.T) {
 	t.Parallel()
 	sctx := extraLinterContext(t, &mockAgent{name: "test"}, config.Commands{Lint: "exit 0"}, config.ExtraLinter{
@@ -85,11 +87,15 @@ func TestLintStep_ExtraLinterInfoFindingsDoNotPark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.NeedsApproval {
-		t.Error("expected info-severity extra findings to report without parking the step")
+	if outcome.ParksForApproval() {
+		t.Errorf("expected info-severity extra findings to report without parking the step: %s", outcome.Findings)
 	}
-	if len(outcomeFindings(t, outcome).Items) != 1 {
-		t.Errorf("expected the finding to still be reported: %s", outcome.Findings)
+	items := outcomeFindings(t, outcome).Items
+	if len(items) != 1 {
+		t.Fatalf("expected the finding to still be reported: %s", outcome.Findings)
+	}
+	if items[0].ActionOrDefault() != types.ActionNoOp {
+		t.Errorf("expected an info finding to carry the no-op action, got %q", items[0].ActionOrDefault())
 	}
 }
 
@@ -107,8 +113,91 @@ func TestLintStep_ExtraLinterWarningSeverityParksTheStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !outcome.NeedsApproval {
+	if !outcome.ParksForApproval() {
 		t.Error("expected warning-severity extra findings to park the step for a decision")
+	}
+}
+
+// The IDs a responder selects by must name the linter and the place, never the
+// position in a findings list the repository's own lint duty resizes between
+// rounds.
+func TestLintStep_ExtraLinterFindingIDsSurviveAResizedDutyList(t *testing.T) {
+	t.Parallel()
+	linter := config.ExtraLinter{
+		Name:            "personal-go",
+		Command:         `echo "main.go:3:1: avoid init()"`,
+		FindingsPattern: `^(?P<file>[^:]+):(?P<line>\d+):\d+: (?P<message>.*)$`,
+	}
+
+	idFor := func(t *testing.T, lintCmd string) string {
+		t.Helper()
+		sctx := extraLinterContext(t, &mockAgent{name: "test"}, config.Commands{Lint: lintCmd}, linter)
+		outcome, err := (&LintStep{}).Execute(sctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range outcomeFindings(t, outcome).Items {
+			if item.Source == linter.Name {
+				return item.ID
+			}
+		}
+		t.Fatalf("expected the extra-linter finding in %s", outcome.Findings)
+		return ""
+	}
+
+	withRedDuty := idFor(t, `echo "repo lint broke"; exit 1`)
+	withGreenDuty := idFor(t, "exit 0")
+	if withRedDuty == "" || withRedDuty != withGreenDuty {
+		t.Errorf("expected a stable extra-linter finding id, got %q then %q", withRedDuty, withGreenDuty)
+	}
+}
+
+// A repository's Lint behaviour must not change because the operator has a
+// personal linter, and commands.prepare is the expensive, failure-prone half of
+// that: the agent path never ran it before.
+func TestLintStep_ExtraLinterDoesNotRunPrepareOnTheAgentPath(t *testing.T) {
+	t.Parallel()
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"lint clean"}`)}, nil
+		},
+	}
+	sctx := extraLinterContext(t, ag, config.Commands{Prepare: "exit 9"}, config.ExtraLinter{
+		Name:            "personal-go",
+		Command:         `echo "main.go:3:1: avoid init()"`,
+		FindingsPattern: `^(?P<file>[^:]+):(?P<line>\d+):\d+: (?P<message>.*)$`,
+	})
+
+	outcome, err := (&LintStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatalf("a failing commands.prepare must not fail a step that would otherwise pass: %v", err)
+	}
+	if len(outcomeFindings(t, outcome).Items) != 1 {
+		t.Errorf("expected the extra linter to still report, got %s", outcome.Findings)
+	}
+}
+
+// Stderr shares no pipe with stdout, so a diagnostic cannot be split in half by
+// an interleaved progress write and silently dropped.
+func TestLintStep_ExtraLinterStderrDoesNotCorruptTheMatchedOutput(t *testing.T) {
+	t.Parallel()
+	sctx := extraLinterContext(t, &mockAgent{name: "test"}, config.Commands{Lint: "exit 0"}, config.ExtraLinter{
+		Name:            "personal-go",
+		Command:         `printf 'main.go:3:1: ' >&1; printf 'scanning...' >&2; printf 'avoid init()\n' >&1`,
+		FindingsPattern: `^(?P<file>[^:]+):(?P<line>\d+):\d+: (?P<message>.*)$`,
+	})
+
+	outcome, err := (&LintStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := outcomeFindings(t, outcome).Items
+	if len(items) != 1 {
+		t.Fatalf("expected the diagnostic to survive the interleaved stderr write, got %s", outcome.Findings)
+	}
+	if !strings.Contains(items[0].Description, "avoid init()") || strings.Contains(items[0].Description, "scanning") {
+		t.Errorf("expected a clean stdout-only diagnostic, got %q", items[0].Description)
 	}
 }
 
@@ -143,27 +232,6 @@ func TestLintStep_ExtraLinterBrokenRunParksEvenAtInfoSeverity(t *testing.T) {
 	}
 	if !strings.Contains(findings.Items[0].Description, "no analyzer binary") {
 		t.Errorf("expected the command's own output in the failure finding, got %q", findings.Items[0].Description)
-	}
-}
-
-// No pattern means "the exit code is the only signal", so a clean exit
-// contributes nothing even when the command printed progress.
-func TestLintStep_ExtraLinterWithoutPatternReportsNothingOnACleanExit(t *testing.T) {
-	t.Parallel()
-	sctx := extraLinterContext(t, &mockAgent{name: "test"}, config.Commands{Lint: "exit 0"}, config.ExtraLinter{
-		Name:    "personal-ts",
-		Command: `echo "=== packages/web ==="`,
-	})
-
-	outcome, err := (&LintStep{}).Execute(sctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(outcomeFindings(t, outcome).Items) != 0 {
-		t.Errorf("expected no findings from a patternless clean run, got %s", outcome.Findings)
-	}
-	if outcome.NeedsApproval {
-		t.Error("expected a patternless clean run to leave the step passing")
 	}
 }
 

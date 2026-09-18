@@ -294,7 +294,7 @@ type globalConfigRaw struct {
 	Eval                    EvalRaw                    `yaml:"eval"`
 	Review                  GlobalReviewRaw            `yaml:"review"`
 	SCM                     SCMRaw                     `yaml:"scm"`
-	Lint                    LintRaw                    `yaml:"lint"`
+	Lint                    Lint                       `yaml:"lint"`
 	ForgeProfiles           ForgeProfiles              `yaml:"forge_profiles"`
 	TrustWorkingPathConfig  bool                       `yaml:"trust_working_path_config"`
 	Providers               ProvidersRaw               `yaml:"providers"`
@@ -2504,7 +2504,7 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	cfg.Intent = raw.Intent
 	cfg.Test = raw.Test
 	cfg.Providers = raw.Providers
-	cfg.Lint = resolveLint(raw.Lint)
+	cfg.Lint = raw.Lint
 	applyEvalOverrides(&cfg.Eval, &raw.Eval)
 	cfg.Review = raw.Review
 

@@ -15,6 +15,7 @@ lint:
       findings_pattern: ': warning (TVRM|FAA)[0-9]+'
     - name: personal-go
       command: lint-changed-go.sh
+      findings_pattern: ': warning'
       severity: warning
 `))
 	if err != nil {
@@ -24,8 +25,8 @@ lint:
 		t.Fatalf("expected 2 extra linters, got %d", len(cfg.Lint.ExtraLinters))
 	}
 	first := cfg.Lint.ExtraLinters[0]
-	if strings.HasPrefix(first.Command, " ") || strings.HasSuffix(first.Command, " ") {
-		t.Errorf("expected the command to be trimmed, got %q", first.Command)
+	if strings.HasPrefix(first.EffectiveCommand(), " ") || strings.HasSuffix(first.EffectiveCommand(), " ") {
+		t.Errorf("expected the command to be read trimmed, got %q", first.EffectiveCommand())
 	}
 	if first.EffectiveSeverity() != DefaultExtraLinterSeverity {
 		t.Errorf("expected an unset severity to default to %q, got %q", DefaultExtraLinterSeverity, first.EffectiveSeverity())
@@ -50,19 +51,25 @@ func TestLoadGlobal_ExtraLinterRejectsBadEntries(t *testing.T) {
 			want: "must start with a letter or digit",
 		},
 		"duplicate name": {
-			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: x\n    - name: a\n      command: y\n",
+			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: x\n      findings_pattern: 'x'\n    - name: a\n      command: y\n      findings_pattern: 'y'\n",
 			want: `duplicate name "a"`,
 		},
 		"missing command": {
 			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: \"   \"\n",
 			want: "command must not be empty",
 		},
+		// A linter with no pattern exits 0 carrying its findings and reports
+		// nothing, which is the silent-clean outcome the list exists to end.
+		"missing pattern": {
+			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: x\n",
+			want: "findings_pattern must not be empty",
+		},
 		"uncompilable pattern": {
 			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: x\n      findings_pattern: '([unclosed'\n",
 			want: "findings_pattern does not compile",
 		},
 		"unknown severity": {
-			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: x\n      severity: fatal\n",
+			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: x\n      findings_pattern: 'x'\n      severity: fatal\n",
 			want: `severity "fatal" must be one of`,
 		},
 	}

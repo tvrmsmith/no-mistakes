@@ -915,7 +915,7 @@ Linters you configure once on this machine and want run in the Lint step of **ev
 | ------------------ | -------- | -------- | ------------------------------------------------------------------- |
 | `name`             | `string` | required | Identifies the linter in logs and findings; unique, `[A-Za-z0-9._-]` |
 | `command`          | `string` | required | Shell command, run by `sh -c` in the run worktree                    |
-| `findings_pattern` | `string` | `""`     | Regular expression; each output line it matches becomes one finding  |
+| `findings_pattern` | `string` | required | Regular expression; each stdout line it matches becomes one finding  |
 | `severity`         | `string` | `info`   | Severity of those findings: `info`, `warning`, or `error`            |
 
 ```yaml
@@ -932,7 +932,7 @@ It is additive. The repository's `commands.lint`, or the agent pass that replace
 
 **The command receives the run's facts as environment variables**, not as template substitution, so no quoting question arises: [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment/#no_mistakes_base_sha), [`NO_MISTAKES_HEAD_SHA`](/no-mistakes/reference/environment/#no_mistakes_head_sha), [`NO_MISTAKES_BRANCH`](/no-mistakes/reference/environment/#no_mistakes_branch), [`NO_MISTAKES_WORKDIR`](/no-mistakes/reference/environment/#no_mistakes_workdir), and [`NO_MISTAKES_REPO_PATH`](/no-mistakes/reference/environment/#no_mistakes_repo_path), your registered checkout rather than the run worktree. The environment reference owns their values.
 
-**`findings_pattern` is how a report-only linter is heard.** Advisory rule sets exit `0` carrying their findings, so an exit code alone reports nothing. Named capture groups `file`, `line`, and `message` set the finding's location and text when the pattern declares them; otherwise the whole matched line is the text. Output is the command's stdout and stderr combined. At most 50 findings per linter reach the PR body, and the remainder is stated in a final finding rather than dropped silently. With no pattern, a non-zero exit is the only signal the command gives.
+**`findings_pattern` is how a report-only linter is heard.** Advisory rule sets exit `0` carrying their findings, so an exit code alone reports nothing. Named capture groups `file`, `line`, and `message` set the finding's location and text when the pattern declares them; otherwise the whole matched line is the text. It is matched against stdout alone, so a progress banner written to stderr cannot split a diagnostic in half; both streams still reach the step log. At most 50 findings per linter reach the PR body, and the remainder is stated in a final finding rather than dropped silently. The pattern is required: a linter with no pattern could only ever report nothing, which is indistinguishable from clean.
 
 **Severity decides whether findings gate.** The default `info` reports on the pull request and in `axi status` without parking the step or spending an auto-fix round, so wiring a personal linter up never silently starts blocking your pushes. Set `warning` or `error` to park the Lint step for a decision, the same as an agent finding of that severity.
 

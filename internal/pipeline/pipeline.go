@@ -247,6 +247,15 @@ type StepOutcome struct {
 	DurationOverrideMS int64
 }
 
+// ParksForApproval is the single owner of "does this outcome stop the run for a
+// decision". The executor's completion gate reads it, so a step's own tests can
+// assert the question the executor actually asks rather than NeedsApproval
+// alone: a finding whose action is ask-user parks the step too, and an empty
+// action reads as ask-user.
+func (o *StepOutcome) ParksForApproval() bool {
+	return o.NeedsApproval || hasAskUserFindingsJSON(o.Findings)
+}
+
 // Step is the interface that each pipeline step implements.
 type Step interface {
 	// Name returns the step's identity in the run's pipeline sequence.

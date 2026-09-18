@@ -30,14 +30,9 @@ func applyExtraLinters(sctx *pipeline.StepContext, baseSHA string, outcome *pipe
 		return outcome, nil
 	}
 
-	// The extra linters are as entitled to installed dependencies as a
-	// configured lint command is - an ESLint layer needs the package's own
-	// node_modules. ensurePrepared is once-per-worktree, so the configured
-	// path having already called it makes this a no-op.
-	if err := ensurePrepared(sctx, types.StepLint); err != nil {
-		return nil, fmt.Errorf("prepare extra linter dependencies: %w", err)
-	}
-
+	// No ensurePrepared here. Configuring a personal linter must not change a
+	// repository's own Lint behaviour, and commands.prepare runs in this step
+	// only on the path lintDuty already runs it on.
 	var extra []Finding
 	for _, linter := range linters {
 		items, err := runExtraLinter(sctx, baseSHA, linter)
@@ -75,40 +70,82 @@ func applyExtraLinters(sctx *pipeline.StepContext, baseSHA string, outcome *pipe
 // entry carries, because a personal linter that failed to run is
 // indistinguishable from one that found nothing, and that indistinguishability
 // is the failure this whole feature exists to end. FindingsPattern answers the
-// other question: which lines of a successful run are findings. Advisory rule
-// sets exit 0 carrying their findings, so without a pattern a successful run
-// contributes nothing.
+// other question: which lines of a successful run are findings.
+//
+// The pattern is matched against stdout alone. Both streams reach the log and
+// the failure finding, but one combined pipe interleaves stderr into stdout,
+// which splits a diagnostic across two lines and drops it silently - the same
+// reason the Metrics step reads its report through runStepShellCommandEnvSplit.
 func runExtraLinter(sctx *pipeline.StepContext, baseSHA string, linter config.ExtraLinter) ([]Finding, error) {
-	sctx.Log(fmt.Sprintf("running extra linter %s: %s", linter.Name, linter.Command))
-	env := append(stepEnvironment(sctx), extraLinterEnv(sctx, baseSHA)...)
-	output, exitCode, err := runShellCommandWithEnv(sctx.Ctx, sctx.WorkDir, env, linter.Command)
+	name := linter.EffectiveName()
+	command := linter.EffectiveCommand()
+	sctx.Log(fmt.Sprintf("running extra linter %s: %s", name, command))
+	stdout, stderr, exitCode, err := runStepShellCommandEnvSplit(sctx, command, extraLinterEnv(sctx, baseSHA))
 	if err != nil {
-		return nil, fmt.Errorf("run extra linter %s: %w", linter.Name, err)
+		return nil, fmt.Errorf("run extra linter %s: %w", name, err)
 	}
 
-	projected := logCommandOutput(sctx, output, "extra linter "+linter.Name, types.StepLint)
+	projected := logCommandOutput(sctx, joinCommandStreams(stdout, stderr), "extra linter "+name, types.StepLint)
 
 	if exitCode != 0 {
 		return []Finding{{
-			Severity:    "warning",
-			Description: fmt.Sprintf("extra linter %s failed (exit code %d), so its rules did not report on this change: %s", linter.Name, exitCode, projected),
-			Source:      linter.Name,
+			ID:          extraLinterFindingID(name, "failed"),
+			Severity:    types.FindingSeverityWarning,
+			Action:      types.ActionAskUser,
+			Description: fmt.Sprintf("extra linter %s failed (exit code %d), so its rules did not report on this change: %s", name, exitCode, projected),
+			Source:      name,
 		}}, nil
 	}
 
-	if linter.FindingsPattern == "" {
-		sctx.Log(fmt.Sprintf("extra linter %s passed", linter.Name))
-		return nil, nil
-	}
-
-	pattern, err := regexp.Compile(linter.FindingsPattern)
+	pattern, err := regexp.Compile(linter.EffectivePattern())
 	if err != nil {
 		// Unreachable through config load, which compiles the same pattern.
-		return nil, fmt.Errorf("compile findings_pattern for extra linter %s: %w", linter.Name, err)
+		return nil, fmt.Errorf("compile findings_pattern for extra linter %s: %w", name, err)
 	}
-	items := matchExtraLinterFindings(pattern, output, linter)
-	sctx.Log(fmt.Sprintf("extra linter %s: %d finding(s)", linter.Name, len(items)))
+	items := matchExtraLinterFindings(pattern, stdout, linter)
+	sctx.Log(fmt.Sprintf("extra linter %s: %d finding(s)", name, len(items)))
 	return items, nil
+}
+
+// extraLinterAction keeps the configured severity and the finding's action in
+// step. An empty action reads as ask-user downstream, which would park the
+// step on the reporting-only default the operator did not ask to gate on.
+func extraLinterAction(severity string) string {
+	if types.NormalizeFindingSeverity(severity) == types.FindingSeverityInfo {
+		return types.ActionNoOp
+	}
+	return types.ActionAskUser
+}
+
+// extraLinterFindingID names one extra-linter finding stably across rounds.
+// The IDs findings are selected and filtered by must not move when the lint
+// duty's own finding list changes length between rounds, which is what the
+// positional fallback would do.
+func extraLinterFindingID(linterName, locator string) string {
+	slug := metricsIDSlug(linterName)
+	if slug == "" {
+		slug = "unnamed"
+	}
+	return "lint-extra-" + slug + "-" + locator
+}
+
+// extraLinterMatchLocator identifies a matched finding by where it points. A
+// pattern that declares no file or line group has nothing stable to key on, so
+// the match's ordinal stands in; two matches at the same place are
+// disambiguated in the order the output listed them.
+func extraLinterMatchLocator(file string, line, index int, used map[string]int) string {
+	locator := metricsIDSlug(file)
+	if locator != "" && line > 0 {
+		locator += "-" + strconv.Itoa(line)
+	}
+	if locator == "" {
+		locator = "match-" + strconv.Itoa(index)
+	}
+	used[locator]++
+	if seen := used[locator]; seen > 1 {
+		locator = fmt.Sprintf("%s-%d", locator, seen)
+	}
+	return locator
 }
 
 // matchExtraLinterFindings turns each matching output line into one finding.
@@ -119,6 +156,7 @@ func runExtraLinter(sctx *pipeline.StepContext, baseSHA string, linter config.Ex
 func matchExtraLinterFindings(pattern *regexp.Regexp, output string, linter config.ExtraLinter) []Finding {
 	var items []Finding
 	matched := 0
+	usedLocators := make(map[string]int)
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimRight(line, "\r")
 		groups := pattern.FindStringSubmatch(line)
@@ -129,22 +167,25 @@ func matchExtraLinterFindings(pattern *regexp.Regexp, output string, linter conf
 		if len(items) >= config.ExtraLinterMaxFindings {
 			continue
 		}
-		items = append(items, extraLinterFinding(pattern, groups, line, linter))
+		items = append(items, extraLinterFinding(pattern, groups, line, linter, matched, usedLocators))
 	}
 	if matched > len(items) {
 		items = append(items, Finding{
+			ID:          extraLinterFindingID(linter.EffectiveName(), "truncated"),
 			Severity:    linter.EffectiveSeverity(),
-			Description: fmt.Sprintf("%s: %d more finding(s) not listed; see the lint step log for the full output", linter.Name, matched-len(items)),
-			Source:      linter.Name,
+			Action:      extraLinterAction(linter.EffectiveSeverity()),
+			Description: fmt.Sprintf("%s: %d more finding(s) not listed; see the lint step log for the full output", linter.EffectiveName(), matched-len(items)),
+			Source:      linter.EffectiveName(),
 		})
 	}
 	return items
 }
 
-func extraLinterFinding(pattern *regexp.Regexp, groups []string, line string, linter config.ExtraLinter) Finding {
+func extraLinterFinding(pattern *regexp.Regexp, groups []string, line string, linter config.ExtraLinter, index int, usedLocators map[string]int) Finding {
 	finding := Finding{
 		Severity: linter.EffectiveSeverity(),
-		Source:   linter.Name,
+		Action:   extraLinterAction(linter.EffectiveSeverity()),
+		Source:   linter.EffectiveName(),
 	}
 	message := ""
 	for i, name := range pattern.SubexpNames() {
@@ -165,7 +206,8 @@ func extraLinterFinding(pattern *regexp.Regexp, groups []string, line string, li
 	if message == "" {
 		message = strings.TrimSpace(line)
 	}
-	finding.Description = linter.Name + ": " + message
+	finding.Description = linter.EffectiveName() + ": " + message
+	finding.ID = extraLinterFindingID(linter.EffectiveName(), extraLinterMatchLocator(finding.File, finding.Line, index, usedLocators))
 	return finding
 }
 

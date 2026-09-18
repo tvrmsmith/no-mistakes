@@ -45,15 +45,14 @@ type ExtraLinter struct {
 	// substitution, so no quoting or injection question arises here.
 	Command string `yaml:"command"`
 	// FindingsPattern turns a report-only linter into findings. Lines of the
-	// command's output that match it each become one finding.
+	// command's stdout that match it each become one finding.
 	//
-	// It is required for any linter whose findings are advisory, and those are
-	// the common case: a warning-severity rule set exits 0 carrying its
-	// findings, so an exit code alone reports nothing. Named capture groups
-	// `file`, `line`, and `message` are used for the finding's location and
-	// text when present; otherwise the whole matched line is the text.
-	//
-	// When it is empty, a non-zero exit is the only signal the command gives.
+	// It is required, because a rule set of this kind exits 0 carrying its
+	// findings: a linter with no pattern could only ever report nothing, which
+	// is the indistinguishable-from-clean outcome this list exists to end.
+	// Named capture groups `file`, `line`, and `message` are used for the
+	// finding's location and text when present; otherwise the whole matched
+	// line is the text.
 	FindingsPattern string `yaml:"findings_pattern"`
 	// Severity is the severity every matched finding carries, read through
 	// EffectiveSeverity. Default "info",
@@ -65,14 +64,12 @@ type ExtraLinter struct {
 	Severity string `yaml:"severity"`
 }
 
-// LintRaw is the YAML representation of the global lint block.
-type LintRaw struct {
-	ExtraLinters []ExtraLinter `yaml:"extra_linters"`
-}
-
-// Lint holds the resolved global lint settings.
+// Lint is the global lint block, both as written in YAML and as the resolved
+// config carries it. There is no resolution work to do: every entry is
+// validated at load and each field is read through the accessor that owns its
+// normalization.
 type Lint struct {
-	ExtraLinters []ExtraLinter
+	ExtraLinters []ExtraLinter `yaml:"extra_linters"`
 }
 
 // ExtraLinterSeverities are the severities an extra linter's findings may
@@ -85,10 +82,10 @@ var extraLinterNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 // gating. Making a personal linter blocking is a separate, deliberate choice.
 const DefaultExtraLinterSeverity = "info"
 
-func validateLintRaw(raw LintRaw) error {
+func validateLintRaw(raw Lint) error {
 	seen := make(map[string]bool, len(raw.ExtraLinters))
 	for i, linter := range raw.ExtraLinters {
-		name := strings.TrimSpace(linter.Name)
+		name := linter.EffectiveName()
 		if name == "" {
 			return fmt.Errorf("invalid lint.extra_linters[%d]: name must not be empty", i)
 		}
@@ -99,13 +96,15 @@ func validateLintRaw(raw LintRaw) error {
 			return fmt.Errorf("invalid lint.extra_linters[%d]: duplicate name %q", i, name)
 		}
 		seen[name] = true
-		if strings.TrimSpace(linter.Command) == "" {
+		if linter.EffectiveCommand() == "" {
 			return fmt.Errorf("invalid lint.extra_linters[%d] (%s): command must not be empty", i, name)
 		}
-		if pattern := strings.TrimSpace(linter.FindingsPattern); pattern != "" {
-			if _, err := regexp.Compile(pattern); err != nil {
-				return fmt.Errorf("invalid lint.extra_linters[%d] (%s): findings_pattern does not compile: %w", i, name, err)
-			}
+		pattern := linter.EffectivePattern()
+		if pattern == "" {
+			return fmt.Errorf("invalid lint.extra_linters[%d] (%s): findings_pattern must not be empty; this linter reports its findings on a clean exit, so without a pattern it can only ever report nothing", i, name)
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("invalid lint.extra_linters[%d] (%s): findings_pattern does not compile: %w", i, name, err)
 		}
 		if severity := strings.TrimSpace(linter.Severity); severity != "" && !validExtraLinterSeverity(severity) {
 			return fmt.Errorf("invalid lint.extra_linters[%d] (%s): severity %q must be one of %s", i, name, severity, strings.Join(ExtraLinterSeverities, ", "))
@@ -134,21 +133,11 @@ func (l ExtraLinter) EffectiveSeverity() string {
 	return DefaultExtraLinterSeverity
 }
 
-// resolveLint normalizes the parsed block. validateLintRaw has already run, so
-// every entry here is usable; severity stays as written, because
-// EffectiveSeverity owns the default.
-func resolveLint(raw LintRaw) Lint {
-	if len(raw.ExtraLinters) == 0 {
-		return Lint{}
-	}
-	linters := make([]ExtraLinter, 0, len(raw.ExtraLinters))
-	for _, linter := range raw.ExtraLinters {
-		linters = append(linters, ExtraLinter{
-			Name:            strings.TrimSpace(linter.Name),
-			Command:         strings.TrimSpace(linter.Command),
-			FindingsPattern: strings.TrimSpace(linter.FindingsPattern),
-			Severity:        strings.TrimSpace(linter.Severity),
-		})
-	}
-	return Lint{ExtraLinters: linters}
-}
+// EffectiveName, EffectiveCommand, and EffectivePattern own the normalization
+// of the three free-text fields, so validation and the Lint step read the same
+// string for each without a second resolved copy of the block existing.
+func (l ExtraLinter) EffectiveName() string { return strings.TrimSpace(l.Name) }
+
+func (l ExtraLinter) EffectiveCommand() string { return strings.TrimSpace(l.Command) }
+
+func (l ExtraLinter) EffectivePattern() string { return strings.TrimSpace(l.FindingsPattern) }
