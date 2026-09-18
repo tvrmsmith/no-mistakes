@@ -117,7 +117,7 @@ lint:
   extra_linters:
     - name: personal-dotnet
       command: '"$HOME/.config/coding-standards/lint-changed-dotnet.sh" --since "$NO_MISTAKES_BASE_SHA"'
-      findings_pattern: ': warning (TVRM|FAA)[0-9]+'
+      findings_pattern: ': warning TVRM[0-9]+'
       severity: info
 
 providers:
@@ -923,7 +923,7 @@ lint:
   extra_linters:
     - name: personal-dotnet
       command: '"$HOME/.config/coding-standards/lint-changed-dotnet.sh" --since "$NO_MISTAKES_BASE_SHA"'
-      findings_pattern: '^\s*(?P<file>[^\s(]+)\((?P<line>\d+),\d+\): warning (?P<message>(TVRM|FAA)\d+: .*)$'
+      findings_pattern: '^\s*(?P<file>[^\s(]+)\((?P<line>\d+),\d+\): warning (?P<message>TVRM\d+: .*)$'
 ```
 
 This exists for a linter the repository cannot declare. A personal rule set is usually delivered by machine-local state, an MSBuild property, a binary outside the tree, an adoption registry under `~/.config`, exactly so the repository commits nothing about it. The lint agent can only discover repo-committed tooling, so without this list such a linter is absent from every run and the step reports clean.

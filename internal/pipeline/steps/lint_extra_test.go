@@ -118,9 +118,9 @@ func TestLintStep_ExtraLinterWarningSeverityParksTheStep(t *testing.T) {
 	}
 }
 
-// The IDs a responder selects by must name the linter and the place, never the
-// position in a findings list the repository's own lint duty resizes between
-// rounds.
+// The IDs a responder selects by must name the linter and the finding's place
+// in that linter's own output, never the position in a findings list the
+// repository's own lint duty resizes between rounds.
 func TestLintStep_ExtraLinterFindingIDsSurviveAResizedDutyList(t *testing.T) {
 	t.Parallel()
 	linter := config.ExtraLinter{
@@ -301,6 +301,13 @@ func TestLintStep_ExtraLinterReceivesTheRunFactsInTheEnvironment(t *testing.T) {
 		Command:         `echo "base=$NO_MISTAKES_BASE_SHA head=$NO_MISTAKES_HEAD_SHA branch=$NO_MISTAKES_BRANCH repo=$NO_MISTAKES_REPO_PATH workdir=$NO_MISTAKES_WORKDIR"`,
 		FindingsPattern: `^(?P<message>base=.*)$`,
 	})
+	// The registered checkout and the run worktree are different directories in
+	// production, and only a fixture that keeps them apart can catch the
+	// variable being filled from the wrong one.
+	sctx.Repo.WorkingPath = t.TempDir()
+	if sctx.Repo.WorkingPath == sctx.WorkDir {
+		t.Fatal("the registered checkout and the run worktree must differ for this test to mean anything")
+	}
 
 	outcome, err := (&LintStep{}).Execute(sctx)
 	if err != nil {
@@ -344,9 +351,100 @@ func TestLintStep_ExtraLinterFindingsAreBoundedAndSaySo(t *testing.T) {
 	if len(items) != config.ExtraLinterMaxFindings+1 {
 		t.Fatalf("expected %d findings plus one truncation notice, got %d", config.ExtraLinterMaxFindings, len(items))
 	}
-	last := items[len(items)-1].Description
-	if !strings.Contains(last, "7 more finding(s) not listed") {
-		t.Errorf("expected the truncation notice to state the remainder, got %q", last)
+	last := items[len(items)-1]
+	if !strings.Contains(last.Description, "7 more finding(s) not listed") {
+		t.Errorf("expected the truncation notice to state the remainder, got %q", last.Description)
+	}
+	// The notice carries its linter's severity, so an info linter's truncation
+	// reports without parking the step the findings themselves did not park.
+	if outcome.ParksForApproval() {
+		t.Errorf("expected an info linter's truncation notice to report without parking: %s", outcome.Findings)
+	}
+	if last.ActionOrDefault() != types.ActionNoOp {
+		t.Errorf("expected the notice of an info linter to carry the no-op action, got %q", last.ActionOrDefault())
+	}
+}
+
+// The same notice from a gating linter gates, for the same reason its findings
+// do: the operator asked for that severity.
+func TestLintStep_ExtraLinterTruncationNoticeParksForAGatingLinter(t *testing.T) {
+	t.Parallel()
+	total := config.ExtraLinterMaxFindings + 2
+	sctx := extraLinterContext(t, &mockAgent{name: "test"}, config.Commands{Lint: "exit 0"}, config.ExtraLinter{
+		Name:            "flood",
+		Command:         fmt.Sprintf(`seq 1 %d | sed 's/^/finding /'`, total),
+		FindingsPattern: `^(?P<message>finding \d+)$`,
+		Severity:        "warning",
+	})
+
+	outcome, err := (&LintStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := outcomeFindings(t, outcome).Items
+	last := items[len(items)-1]
+	if !strings.Contains(last.Description, "2 more finding(s) not listed") {
+		t.Fatalf("expected the truncation notice last, got %q", last.Description)
+	}
+	if last.ActionOrDefault() != types.ActionAskUser {
+		t.Errorf("expected the notice of a warning linter to ask the user, got %q", last.ActionOrDefault())
+	}
+	if !outcome.ParksForApproval() {
+		t.Error("expected a warning linter's truncation notice to park the step")
+	}
+}
+
+// A finding's text is arbitrary output from a command the pipeline does not
+// control, and findings ride the IPC event stream whole, so one enormous line
+// must not be able to push the event past the reader's frame.
+func TestLintStep_ExtraLinterFindingDescriptionIsClamped(t *testing.T) {
+	t.Parallel()
+	sctx := extraLinterContext(t, &mockAgent{name: "test"}, config.Commands{Lint: "exit 0"}, config.ExtraLinter{
+		Name:            "verbose",
+		Command:         fmt.Sprintf(`printf 'finding %%s\n' "$(head -c %d /dev/zero | tr '\0' 'x')"`, extraLinterMaxDescriptionBytes*3),
+		FindingsPattern: `^(?P<message>finding .*)$`,
+	})
+
+	outcome, err := (&LintStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := outcomeFindings(t, outcome).Items
+	if len(items) != 1 {
+		t.Fatalf("expected the one finding, got %s", outcome.Findings)
+	}
+	if len(items[0].Description) > extraLinterMaxDescriptionBytes+len(extraLinterTruncationMarker) {
+		t.Errorf("expected the description clamped to %d bytes, got %d", extraLinterMaxDescriptionBytes, len(items[0].Description))
+	}
+	if !strings.HasSuffix(items[0].Description, extraLinterTruncationMarker) {
+		t.Errorf("expected the truncation to be visible in the description, got %q", items[0].Description[max(0, len(items[0].Description)-60):])
+	}
+}
+
+// The per-linter cap bounds one linter, not the operator's whole list: enough
+// linters each reporting their full allowance still add up to one event.
+func TestBoundExtraLinterFindings_BoundsTheWholeListNotJustOneLinter(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("y", extraLinterMaxDescriptionBytes)
+	var items []Finding
+	for i := 0; i < (extraLinterMaxTotalBytes/extraLinterMaxDescriptionBytes)+20; i++ {
+		items = append(items, Finding{ID: fmt.Sprintf("lint-extra-flood-%d", i), Description: body})
+	}
+
+	bounded := boundExtraLinterFindings(items)
+	total := 0
+	for _, item := range bounded {
+		total += len(item.Description)
+	}
+	if total > extraLinterMaxTotalBytes+len(bounded[len(bounded)-1].Description) {
+		t.Errorf("expected the aggregate bounded near %d bytes, got %d", extraLinterMaxTotalBytes, total)
+	}
+	if len(bounded) >= len(items) {
+		t.Fatalf("expected the list to be truncated, kept %d of %d", len(bounded), len(items))
+	}
+	notice := bounded[len(bounded)-1]
+	if !strings.Contains(notice.Description, "finding(s) are not listed") {
+		t.Errorf("expected the aggregate truncation to be stated, got %q", notice.Description)
 	}
 }
 

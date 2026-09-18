@@ -83,7 +83,7 @@ var extraLinterNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 const DefaultExtraLinterSeverity = "info"
 
 func validateLintRaw(raw Lint) error {
-	seen := make(map[string]bool, len(raw.ExtraLinters))
+	seen := make(map[string]string, len(raw.ExtraLinters))
 	for i, linter := range raw.ExtraLinters {
 		name := linter.EffectiveName()
 		if name == "" {
@@ -92,10 +92,15 @@ func validateLintRaw(raw Lint) error {
 		if !extraLinterNamePattern.MatchString(name) {
 			return fmt.Errorf("invalid lint.extra_linters[%d]: name %q must start with a letter or digit and contain only letters, digits, '.', '_' or '-'", i, name)
 		}
-		if seen[name] {
-			return fmt.Errorf("invalid lint.extra_linters[%d]: duplicate name %q", i, name)
+		// Uniqueness is checked on the slug, not the name, because the slug is
+		// what each finding's ID is built from: "my.linter" and "my-linter"
+		// are two entries whose findings would otherwise answer to one ID, so
+		// a --findings selection would reach the wrong linter's finding.
+		slug := ExtraLinterIDSlug(name)
+		if other, ok := seen[slug]; ok {
+			return fmt.Errorf("invalid lint.extra_linters[%d]: name %q collides with %q; both identify their findings as %q", i, name, other, slug)
 		}
-		seen[name] = true
+		seen[slug] = name
 		if linter.EffectiveCommand() == "" {
 			return fmt.Errorf("invalid lint.extra_linters[%d] (%s): command must not be empty", i, name)
 		}
@@ -111,6 +116,27 @@ func validateLintRaw(raw Lint) error {
 		}
 	}
 	return nil
+}
+
+// ExtraLinterIDSlug is the single owner of how a linter's name becomes the
+// stable part of its findings' IDs. Load-time uniqueness and the Lint step's
+// ID construction both read it, so two entries can never be accepted that
+// would then name their findings identically.
+func ExtraLinterIDSlug(name string) string {
+	var b strings.Builder
+	dashed := true
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			dashed = false
+			continue
+		}
+		if !dashed {
+			b.WriteByte('-')
+			dashed = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func validExtraLinterSeverity(severity string) bool {

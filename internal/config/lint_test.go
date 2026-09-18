@@ -12,7 +12,7 @@ lint:
   extra_linters:
     - name: personal-dotnet
       command: "  ~/.config/coding-standards/lint-changed-dotnet.sh --since \"$NO_MISTAKES_BASE_SHA\"  "
-      findings_pattern: ': warning (TVRM|FAA)[0-9]+'
+      findings_pattern: ': warning TVRM[0-9]+'
     - name: personal-go
       command: lint-changed-go.sh
       findings_pattern: ': warning'
@@ -24,15 +24,34 @@ lint:
 	if len(cfg.Lint.ExtraLinters) != 2 {
 		t.Fatalf("expected 2 extra linters, got %d", len(cfg.Lint.ExtraLinters))
 	}
+	// The block is carried as written, with no resolved second copy: the raw
+	// padding survives the load and the accessors own the normalization.
 	first := cfg.Lint.ExtraLinters[0]
-	if strings.HasPrefix(first.EffectiveCommand(), " ") || strings.HasSuffix(first.EffectiveCommand(), " ") {
-		t.Errorf("expected the command to be read trimmed, got %q", first.EffectiveCommand())
+	wantCommand := `  ~/.config/coding-standards/lint-changed-dotnet.sh --since "$NO_MISTAKES_BASE_SHA"  `
+	if first.Command != wantCommand {
+		t.Errorf("expected the command to survive load as written, got %q", first.Command)
 	}
-	if first.EffectiveSeverity() != DefaultExtraLinterSeverity {
-		t.Errorf("expected an unset severity to default to %q, got %q", DefaultExtraLinterSeverity, first.EffectiveSeverity())
+	if first.Severity != "" {
+		t.Errorf("expected an undeclared severity to stay empty on the loaded entry, got %q", first.Severity)
 	}
 	if cfg.Lint.ExtraLinters[1].EffectiveSeverity() != "warning" {
 		t.Errorf("expected the declared severity to survive, got %q", cfg.Lint.ExtraLinters[1].EffectiveSeverity())
+	}
+}
+
+func TestExtraLinterAccessorsOwnNormalization(t *testing.T) {
+	t.Parallel()
+	if got := (ExtraLinter{Command: "  run-it  "}).EffectiveCommand(); got != "run-it" {
+		t.Errorf("expected EffectiveCommand to trim, got %q", got)
+	}
+	if got := (ExtraLinter{Name: "  personal-go  "}).EffectiveName(); got != "personal-go" {
+		t.Errorf("expected EffectiveName to trim, got %q", got)
+	}
+	if got := (ExtraLinter{FindingsPattern: "  warn  "}).EffectivePattern(); got != "warn" {
+		t.Errorf("expected EffectivePattern to trim, got %q", got)
+	}
+	if got := (ExtraLinter{}).EffectiveSeverity(); got != DefaultExtraLinterSeverity {
+		t.Errorf("expected an unset severity to default to %q, got %q", DefaultExtraLinterSeverity, got)
 	}
 }
 
@@ -52,7 +71,14 @@ func TestLoadGlobal_ExtraLinterRejectsBadEntries(t *testing.T) {
 		},
 		"duplicate name": {
 			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: x\n      findings_pattern: 'x'\n    - name: a\n      command: y\n      findings_pattern: 'y'\n",
-			want: `duplicate name "a"`,
+			want: `name "a" collides with "a"`,
+		},
+		// Two distinct names that slug to one ID would have their findings
+		// answer to the same ID, so a --findings selection reaches the wrong
+		// linter's finding.
+		"colliding names": {
+			yaml: "lint:\n  extra_linters:\n    - name: my.linter\n      command: x\n      findings_pattern: 'x'\n    - name: My-Linter\n      command: y\n      findings_pattern: 'y'\n",
+			want: `name "My-Linter" collides with "my.linter"; both identify their findings as "my-linter"`,
 		},
 		"missing command": {
 			yaml: "lint:\n  extra_linters:\n    - name: a\n      command: \"   \"\n",
