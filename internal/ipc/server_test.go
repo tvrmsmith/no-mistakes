@@ -122,9 +122,15 @@ func encodeFrame(t *testing.T, enc *json.Encoder, v any) {
 // reportFrameWrite fails the test on a write the client should have read. A
 // client that has already hung up is the exception: a test can end the stream
 // on purpose and then the frames after it are expected to go nowhere.
+//
+// ENOTCONN belongs in that exception alongside EPIPE. Darwin reports a write
+// to a unix socket whose peer has gone as either one depending on how far the
+// kernel has torn the connection down, so a loaded machine turns the same
+// hang-up into a test failure only sometimes.
 func reportFrameWrite(t *testing.T, err error, op string) {
 	t.Helper()
-	if errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ENOTCONN) {
 		return
 	}
 	t.Errorf("%s: %v", op, err)
