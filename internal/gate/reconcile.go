@@ -49,22 +49,67 @@ func ReconcileStaleBranch(ctx context.Context, gateDir, workDir, branch, liveHea
 //
 // Rewritten histories require both stable per-file patch identities and final
 // tree survival. runOwnedHead is a policy exception, not containment evidence:
-// publication callers must supply only Run.SubmittedHeadSHA, and fresh
-// submissions must leave it empty. The contract and rationale are owned by
-// docs/src/content/docs/concepts/gate-model.md (Private mirror reconciliation).
+// AXI callers must supply only Run.SubmittedHeadSHA, and fresh submissions must
+// leave it empty. A pipeline publication has more evidence available and enters
+// through PlanMirrorPublicationReconciliation instead. The contract and
+// rationale are owned by docs/src/content/docs/concepts/gate-model.md (Private
+// mirror reconciliation).
 func PlanStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead, runOwnedHead string) (StaleBranchPlan, error) {
-	return planStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, runOwnedHead, false)
+	return planStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, MirrorPublicationEvidence{SubmittedHead: runOwnedHead}, false)
 }
 
-func PlanMirrorPublicationReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead, runOwnedHead string) (StaleBranchPlan, error) {
-	return planStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, runOwnedHead, true)
+// MirrorPublicationEvidence is everything a publication caller may present for
+// replacing a private mirror head the live head does not contain. Every field
+// is a head of the SAME run; another run's head is never evidence, and a fresh
+// AXI submission leaves all three empty.
+//
+// SubmittedHead is Accepted Decision 41-A: the head the contributor submitted,
+// which publication may replace so a reviewed rebase or conflict resolution can
+// change the submitted patch.
+//
+// PublishedHead and ReviewApprovedHead are ADR 0002, and they hold only
+// TOGETHER. PublishedHead is a head this run itself put on the mirror;
+// ReviewApprovedHead is runs.review_approved_head_sha, and the exception needs
+// it to equal the head now being published. The evidence is a completed review
+// of the successor, not ownership of the predecessor, which is what 41-A's
+// "ownership is not containment evidence" asks for. Either field alone reopens
+// the hole 41-A closed: ownership with no review certifies nothing, and a
+// review approval with no ownership would let one run's approval overwrite a
+// head it never published.
+type MirrorPublicationEvidence struct {
+	SubmittedHead      string
+	PublishedHead      string
+	ReviewApprovedHead string
 }
 
-func planStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead, runOwnedHead string, preserveDescendants bool) (StaleBranchPlan, error) {
+// permitsReplacing reports whether the evidence authorises replacing gateHead
+// with liveHead without containment proof.
+func (e MirrorPublicationEvidence) permitsReplacing(gateHead, liveHead string) bool {
+	if gateHead == "" || liveHead == "" {
+		return false
+	}
+	if gateHead == strings.TrimSpace(e.SubmittedHead) {
+		return true
+	}
+	published := strings.TrimSpace(e.PublishedHead)
+	approved := strings.TrimSpace(e.ReviewApprovedHead)
+	if published == "" || approved == "" {
+		return false
+	}
+	return gateHead == published && approved == liveHead
+}
+
+// PlanMirrorPublicationReconciliation plans reconciliation for a pipeline
+// publication, which preserves a mirror head that descends from the live head
+// and may present MirrorPublicationEvidence for one that does not.
+func PlanMirrorPublicationReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead string, evidence MirrorPublicationEvidence) (StaleBranchPlan, error) {
+	return planStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, evidence, true)
+}
+
+func planStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead string, evidence MirrorPublicationEvidence, preserveDescendants bool) (StaleBranchPlan, error) {
 	var plan StaleBranchPlan
 	branch = strings.TrimSpace(branch)
 	liveHead = strings.TrimSpace(liveHead)
-	runOwnedHead = strings.TrimSpace(runOwnedHead)
 	if branch == "" || liveHead == "" {
 		return plan, fmt.Errorf("reconcile stale gate branch: branch and live head are required")
 	}
@@ -119,7 +164,7 @@ func planStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch
 			return plan, nil
 		}
 	}
-	if gateHead != runOwnedHead {
+	if !evidence.permitsReplacing(gateHead, liveHead) {
 		atRiskCommits, err := privateCommitsAbsentFromLive(ctx, gateDir, liveHead, gateHead)
 		if err != nil {
 			return plan, fmt.Errorf("compare private mirror content for %s: %w", branchRef, err)

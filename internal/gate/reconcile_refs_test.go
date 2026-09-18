@@ -13,7 +13,7 @@ func TestReconciliationRejectsSymbolicRefs(t *testing.T) {
 			t.Run(phase+"/"+symbolic, func(t *testing.T) {
 				ctx := t.Context()
 				work, gateDir, privateHead, liveHead := reconciliationRefFixture(t)
-				plan, err := PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead, privateHead)
+				plan, err := PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead, MirrorPublicationEvidence{SubmittedHead: privateHead})
 				if err != nil || !plan.Reconcile {
 					t.Fatalf("direct-ref fixture plan = %+v, err = %v", plan, err)
 				}
@@ -31,7 +31,7 @@ func TestReconciliationRejectsSymbolicRefs(t *testing.T) {
 				reconcileGit(t, gateDir, "symbolic-ref", ref, target)
 				refsBefore := reconcileGit(t, gateDir, "for-each-ref", "--format=%(refname) %(objectname) %(symref)")
 				if phase == "plan" {
-					_, err = PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead, privateHead)
+					_, err = PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead, MirrorPublicationEvidence{SubmittedHead: privateHead})
 				} else {
 					_, err = ApplyStaleBranchReconciliation(ctx, gateDir, plan)
 				}

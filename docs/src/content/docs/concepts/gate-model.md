@@ -112,6 +112,25 @@ not containment evidence. The exception does not extend to another recorded
 head, an abbreviated SHA, or an external, newer, or divergent private head.
 Fresh AXI submissions do not receive this exception.
 
+**ADR 0002, review-certified supersession:** pipeline publication may also
+replace a private mirror head when both of these hold. The head on the mirror is
+one **this same run published** (`runs.last_pushed_sha`), and
+`runs.review_approved_head_sha` equals **the head now being published**. The
+evidence is a completed review of the successor, not ownership of the
+predecessor, so 41-A's rule stands rather than bends. Either condition alone is
+refused: ownership with no review certifies nothing, and a review approval over
+a head this run never published would overwrite another author's work. Both
+heads are read off the run, so another run's head is never evidence, and fresh
+AXI submissions do not receive this exception either.
+
+This exists because a CI merge-conflict repair rebases a branch the run already
+pushed. The repaired head cannot descend from the reviewed head, so validation
+restarts at Format and re-certifies the repaired head, and the mirror is left
+holding the run's own pre-repair head with patch identities the conflict
+resolutions changed. Without the exception that branch cannot be published at
+all. The superseded head is archived under
+`refs/tags/no-mistakes-abandoned/<branch>/<sha>` first, as on every other path.
+
 Reconciliation requires direct private branch and archive refs; symbolic refs,
 including dangling symbolic refs, are refused before containment checks. Ref
 creation and deletion use exact names without dereferencing and expected old

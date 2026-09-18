@@ -216,9 +216,11 @@ func publishRunHead(sctx *pipeline.StepContext, headBeingPushed, localRefUpdate 
 }
 
 // planGateMirrorReconciliation inspects the gate mirror without mutating it.
-// Only the exact submitted head is eligible for the policy exception owned by
-// docs/src/content/docs/concepts/gate-model.md. Do not substitute an agent-created
-// or later recorded head: those still require preservation checks.
+// Only the heads of THIS run named by gatepkg.MirrorPublicationEvidence are
+// eligible for the policy exceptions owned by
+// docs/src/content/docs/concepts/gate-model.md. Do not substitute an
+// agent-created head, nor the cross-run tip lastKnownBranchTip can fall back
+// to: those still require preservation checks.
 func planGateMirrorReconciliation(ctx context.Context, sctx *pipeline.StepContext, ref, branch, headBeingPushed string) (gatepkg.StaleBranchPlan, error) {
 	var plan gatepkg.StaleBranchPlan
 	if sctx.Repo == nil || strings.TrimSpace(sctx.GateDir) == "" {
@@ -231,18 +233,34 @@ func planGateMirrorReconciliation(ctx context.Context, sctx *pipeline.StepContex
 		}
 		return plan, fmt.Errorf("update gate mirror ref %s before push: stat repository: %w", ref, err)
 	}
-	plan, err := gatepkg.PlanMirrorPublicationReconciliation(ctx, gateDir, sctx.WorkDir, branch, headBeingPushed, runOwnedSubmittedHead(sctx))
+	plan, err := gatepkg.PlanMirrorPublicationReconciliation(ctx, gateDir, sctx.WorkDir, branch, headBeingPushed, mirrorPublicationEvidence(sctx))
 	if err != nil {
 		return gatepkg.StaleBranchPlan{}, fmt.Errorf("update gate mirror ref %s before push: %w", ref, err)
 	}
 	return plan, nil
 }
 
-func runOwnedSubmittedHead(sctx *pipeline.StepContext) string {
-	if sctx.Run.SubmittedHeadSHA == nil {
-		return ""
+// mirrorPublicationEvidence reads the three heads of this run the mirror guard
+// accepts. Every one comes off sctx.Run, so a head another run recorded can
+// never reach the guard as evidence. A CI merge-conflict repair is why
+// LastPushedSHA is here: the repair rebases a branch this run already pushed,
+// so the mirror holds this run's own pre-repair head, revalidation re-certifies
+// the rebased head, and ReviewApprovedHeadSHA is that second review.
+func mirrorPublicationEvidence(sctx *pipeline.StepContext) gatepkg.MirrorPublicationEvidence {
+	if sctx.Run == nil {
+		return gatepkg.MirrorPublicationEvidence{}
 	}
-	return strings.TrimSpace(*sctx.Run.SubmittedHeadSHA)
+	deref := func(value *string) string {
+		if value == nil {
+			return ""
+		}
+		return strings.TrimSpace(*value)
+	}
+	return gatepkg.MirrorPublicationEvidence{
+		SubmittedHead:      deref(sctx.Run.SubmittedHeadSHA),
+		PublishedHead:      deref(sctx.Run.LastPushedSHA),
+		ReviewApprovedHead: deref(sctx.Run.ReviewApprovedHeadSHA),
+	}
 }
 
 // updateGateMirrorAfterPush settles the gate mirror, and its caller must do
