@@ -626,7 +626,11 @@ func TestMetricsStep_ParsedReportWithANonzeroExitParksForTheMaintainer(t *testin
 }
 
 func TestMetricsStep_CommandReceivesTheCoverageRootAndTheChangedFileSet(t *testing.T) {
-	t.Parallel()
+	// A self-hosted run exports NO_MISTAKES_COVERAGE_DIR to the unit command
+	// running this suite, and the probe shell inherits it, so clear it here to
+	// measure only what the Metrics step contributes. The empty value still
+	// satisfies the probe's :-unset default. t.Setenv forbids t.Parallel.
+	t.Setenv("NO_MISTAKES_COVERAGE_DIR", "")
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
