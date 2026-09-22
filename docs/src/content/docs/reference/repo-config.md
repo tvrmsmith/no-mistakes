@@ -483,6 +483,36 @@ The **whole block** is honored **only from the trusted default-branch copy** of 
 
 There is deliberately no global `metrics` block. The threshold is a gate strength only the repository's own maintainer can calibrate, so an operator setting cannot supply one.
 
+### commands.cleanup
+
+Teardown command that releases whatever a run left running outside its own process tree. Run via the platform shell - `sh -c` on POSIX, `cmd.exe /c` on Windows.
+
+| | |
+| --- | --- |
+| Type | `string` |
+| Default | Empty (no teardown command) |
+
+no-mistakes reaps the processes a run started, but only the ones descended from it. A container stack, a daemonized service, or a VM the run brought up is a child of some other supervisor, so the sweep cannot see it and it outlives the run worktree. `commands.cleanup` is how a repository releases those resources.
+
+It runs at two points, always inside the run worktree and always best effort:
+
+- On entry to the [Push](/no-mistakes/reference/pipeline-steps/#push) step, because nothing from push onward (push, PR, CI monitoring) needs a local dev stack, and CI monitoring is the long part of a run.
+- When the run worktree is removed, before every retention decision, so a preserved worktree does not also mean a preserved container stack.
+
+A normal run therefore invokes the command twice, and a run that never reaches push invokes it once, so it must be idempotent: the second call finds the resources the first one already released and has to exit cleanly anyway. The same applies to a run that started nothing to release.
+
+A non-zero exit, a launch failure, or a timeout is logged and otherwise ignored. It never fails a step and never changes a run's recorded outcome. One invocation is bounded at five minutes.
+
+Scope the command to this run's own resources. It runs on the daemon host with the maintainer's credentials, so a teardown that removes anything shared by name, a machine-wide cache volume for example, takes it from every other worktree and run on that host too.
+
+The daemon runs configured commands without sourcing a login shell, so the command has to resolve its own tooling; use absolute paths or set `PATH` in the command itself. It sees the same environment `commands.test` and `commands.prepare` see.
+
+Leave the worktree as you found it. The push step refuses a dirty worktree, and the push-entry invocation runs just before that check, so a cleanup command that writes files into the worktree makes push refuse the run.
+
+Because the worktree path is usually what identifies which resources belong to this run, the command must derive its target from its working directory rather than from an argument captured elsewhere.
+
+Like every `commands.*` value, `commands.cleanup` comes from the trusted default-branch configuration unless that trusted copy explicitly enables `allow_repo_commands: true`.
+
 ### document.instructions
 
 Repository-specific documentation ownership policy for the document step.

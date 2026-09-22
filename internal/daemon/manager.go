@@ -509,7 +509,7 @@ func (m *RunManager) finishRunGoroutine(repoID, runID string, cfg *config.Config
 		// removeRunWorktree does the identity-based reap before the directory
 		// goes: a descendant that left the process group can only be named by
 		// the worktree its cwd resolves under.
-		m.removeRunWorktree(repoID, runID, gateDir, workDir, reason)
+		m.removeRunWorktree(repoID, runID, gateDir, workDir, reason, cleanupCommand(cfg))
 		// A preserved run resumes and still owns its evidence; only a run that
 		// is really finished gives its directory up.
 		m.cleanupRunEvidence(cfg, runID)
@@ -1088,8 +1088,15 @@ func (m *RunManager) cleanupRunCoverage(runID string) {
 // at one site and invisible when forgotten - a run whose setup failed, whose
 // execution returned, or which was resumed after a crash all reach this point by
 // different routes. reason distinguishes the routes in the log.
-func (m *RunManager) removeRunWorktree(repoID, runID, gateDir, wtDir, reason string) {
+//
+// cleanupCmd is the run's trusted commands.cleanup, empty when the repository
+// configures none. It runs immediately after the process sweep and BEFORE both
+// retention returns below: retention preserves the index and working FILES for
+// inspection or a later resume, and neither of those wants a container stack or
+// a database still burning CPU in the background while it waits.
+func (m *RunManager) removeRunWorktree(repoID, runID, gateDir, wtDir, reason, cleanupCmd string) {
 	m.sweepRunWorktreeProcesses(repoID, runID, wtDir)
+	m.releaseRunResources(runID, wtDir, cleanupCmd)
 	run, err := m.db.GetRun(runID)
 	if err != nil {
 		slog.Warn("preserving run worktree: cannot read run", "run_id", runID, "error", err)
@@ -1112,6 +1119,67 @@ func (m *RunManager) removeRunWorktree(repoID, runID, gateDir, wtDir, reason str
 	if err := git.WorktreeRemove(context.Background(), gateDir, wtDir); err != nil {
 		slog.Warn("failed to remove run worktree", "reason", reason, "run_id", runID, "path", wtDir, "error", err)
 	}
+}
+
+// releaseRunResources runs the repository's trusted commands.cleanup in the run
+// worktree while that directory still exists.
+//
+// This is the half of run teardown the process sweep cannot do. Cancelling the
+// run context kills the run's own process tree, and procreap.SweepRunWorktree
+// then reaches escaped descendants that are still standing in the worktree, but
+// neither sees a container: it is a child of the container daemon, so no
+// ancestry and no cwd links it back to the run. The only thing that can name it
+// is the repository's own command, and that command usually derives its target
+// from the directory it runs in - which is why this runs before removal rather
+// than after, and why the run context (already cancelled by the time teardown
+// reaches here) is deliberately not the one it runs under.
+//
+// Best effort by design: a repository that configures no cleanup command, a
+// worktree that is already gone, a command that cannot launch, and a command
+// that exits non-zero all log and continue. The run's recorded outcome was
+// decided before teardown started and nothing here may change it.
+func (m *RunManager) releaseRunResources(runID, wtDir, cleanupCmd string) {
+	cleanupCmd = strings.TrimSpace(cleanupCmd)
+	if cleanupCmd == "" {
+		return
+	}
+	if info, err := os.Stat(wtDir); err != nil || !info.IsDir() {
+		slog.Debug("skipping run cleanup command: worktree is gone", "run_id", runID, "path", wtDir)
+		return
+	}
+	started := time.Now()
+	output, exitCode, err := steps.RunRepoCleanupCommand(context.Background(), wtDir, cleanupCmd)
+	switch {
+	case err != nil:
+		slog.Warn("run cleanup command failed", "run_id", runID, "path", wtDir, "error", err, "output", cleanupOutputTail(output))
+	case exitCode != 0:
+		slog.Warn("run cleanup command exited non-zero", "run_id", runID, "path", wtDir, "exit_code", exitCode, "output", cleanupOutputTail(output))
+	default:
+		slog.Info("released external run resources", "run_id", runID, "duration_ms", time.Since(started).Milliseconds())
+	}
+}
+
+// cleanupCommand reads a resolved run configuration's commands.cleanup. The
+// value is already trusted-only (config.EffectiveRepoConfig takes the whole
+// Commands block from the default branch), and a nil config - a run torn down
+// before its configuration resolved - simply has no cleanup to run.
+func cleanupCommand(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Commands.Cleanup
+}
+
+// cleanupOutputLogRunes bounds what a chatty teardown script can write into the
+// daemon log. The tail is kept because that is where the failure is.
+const cleanupOutputLogRunes = 2000
+
+func cleanupOutputTail(output string) string {
+	runes := []rune(strings.TrimSpace(safeurl.RedactText(output)))
+	if len(runes) <= cleanupOutputLogRunes {
+		return string(runes)
+	}
+	return "..." + string(runes[len(runes)-cleanupOutputLogRunes:])
 }
 
 // closeSubscribers soft-closes every subscriber for a run and marks the run
@@ -1851,9 +1919,13 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// later would leave the directory behind - in the operator's own worktree
 	// root, unswept - for whichever failures happen in between.
 	bgOwnsWorktree := false
+	// setupCleanupCmd stays empty until the trusted configuration below
+	// resolves, which is correct rather than merely convenient: a setup failure
+	// before that point has run nothing that could have started a stack.
+	setupCleanupCmd := ""
 	defer func() {
 		if !bgOwnsWorktree {
-			m.removeRunWorktree(repo.ID, run.ID, gateDir, wtDir, "run_setup_failed")
+			m.removeRunWorktree(repo.ID, run.ID, gateDir, wtDir, "run_setup_failed", setupCleanupCmd)
 		}
 	}()
 
@@ -1931,6 +2003,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 		slog.Info("repo commands/agent loaded from default branch, not pushed branch", "run_id", run.ID, "branch", branch, "default_branch", repo.DefaultBranch)
 	}
 	cfg := config.Merge(globalCfg, effectiveRepoCfg)
+	setupCleanupCmd = cleanupCommand(cfg)
 	if err := m.paths.ValidateEvidenceRoot(cfg.Test.Evidence.LocalRoot); err != nil {
 		m.recordRunError(run.ID, err.Error())
 		trackStartFailure("evidence_root")

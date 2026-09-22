@@ -337,7 +337,7 @@ func TestInterruptedCIMonitorKeepsItsWorktreeAtStopTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	NewRunManager(d, p, nil).removeRunWorktree(repo.ID, run.ID, p.RepoDir(repo.ID), wtDir, "test")
+	NewRunManager(d, p, nil).removeRunWorktree(repo.ID, run.ID, p.RepoDir(repo.ID), wtDir, "test", "")
 
 	if _, err := os.Stat(wtDir); err != nil {
 		t.Fatalf("an interrupted ci monitor lost its worktree at stop time: %v", err)
@@ -370,7 +370,7 @@ func TestAFailedRunStillLosesItsWorktreeAtStopTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	NewRunManager(d, p, nil).removeRunWorktree(repo.ID, run.ID, p.RepoDir(repo.ID), wtDir, "test")
+	NewRunManager(d, p, nil).removeRunWorktree(repo.ID, run.ID, p.RepoDir(repo.ID), wtDir, "test", "")
 
 	if _, err := os.Stat(wtDir); !os.IsNotExist(err) {
 		t.Fatalf("os.Stat(worktree) error = %v, want the failed run's checkout reclaimed", err)

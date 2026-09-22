@@ -400,7 +400,7 @@ func TestRemoveRunWorktreeSweepsBeforeRemoving(t *testing.T) {
 	leakedPID := startOrphanInWorktree(t, wtDir)
 	operatorPID := startOrphanInWorktree(t, filepath.Join(root, "scratch-checkout"))
 
-	NewRunManager(d, p, nil).removeRunWorktree("repo1", runID, p.RepoDir("repo1"), wtDir, "test")
+	NewRunManager(d, p, nil).removeRunWorktree("repo1", runID, p.RepoDir("repo1"), wtDir, "test", "")
 
 	if !pidGoneWithin(leakedPID, 10*time.Second) {
 		t.Fatalf("orphan %d in the removed worktree survived removal", leakedPID)
