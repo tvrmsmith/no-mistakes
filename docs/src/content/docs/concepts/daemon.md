@@ -128,6 +128,7 @@ Configured commands and one-shot agent subprocesses are terminated as a process 
 Each process is asked to exit first and only forcibly killed if it is still running a few seconds later.
 A process can still escape that tree by detaching itself into its own session, so when a run finishes the daemon also terminates anything still standing in that run's worktree before removing the directory.
 That sweep is scoped by working directory: it never touches a worktree whose run is still active, and it can never reach a process working outside `~/.no-mistakes/worktrees/` or outside a run worktree a run record names in a configured worktree root.
+Resources a run started under some other supervisor, such as a container stack, are outside both mechanisms. After that sweep and before any retention decision, the daemon runs the repository's [`commands.cleanup`](/no-mistakes/reference/repo-config/#commandscleanup) in the worktree to release them. A worktree reclaimed by the startup orphan cleanup after a crash does not run it.
 
 ## Concurrent push handling
 

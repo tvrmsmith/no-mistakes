@@ -34,6 +34,8 @@ commands:
   format: "gofmt -w ."
   # Reads the coverage the Test step produced and reports per-function scores.
   metrics: "crap-report --coverage $NO_MISTAKES_COVERAGE_ROOT"
+  # Idempotent teardown for resources the run started outside its own process tree.
+  # cleanup: "./scripts/dev-down.sh"
 
 # Optional metrics gate settings, read only from the trusted default branch.
 metrics:
@@ -453,36 +455,6 @@ Setting this command while the Test step produces no coverage parks the run for 
 
 This command runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so it is honored only from the trusted default-branch copy of this file unless the repository opts in via [`allow_repo_commands: true`](#allow_repo_commands).
 
-### metrics
-
-Threshold and exemptions for the [Metrics step](/no-mistakes/reference/pipeline-steps/#metrics)'s verdict.
-
-| | |
-|---|---|
-| Type | `object` |
-
-| Field | Type | Default |
-| --- | --- | --- |
-| `metrics.threshold` | `float` | `30` |
-| `metrics.exempt_paths` | `list of string` | Empty (every measured function is judged) |
-
-```yaml
-metrics:
-  threshold: 30
-  exempt_paths:
-    - "internal/generated/**"
-```
-
-A function breaches when its score is **strictly above** `threshold`, so the threshold is the highest score the repository accepts. The default of `30` is the conventional CRAP ceiling. Zero is legal and means every measured function scoring above zero breaches, which is a real calibration value. A negative or non-finite threshold fails the config load. Advisory behavior, where the gate reports but never blocks, is reached by setting a high threshold rather than by a separate mode.
-
-`exempt_paths` entries match the same way `ignore_patterns` and `restart.exempt_paths` do: no slash matches by basename, a trailing `/**` matches an entire subtree, and anything else is a full-path glob. A function whose file matches any entry is not judged. An entry that is empty after trimming, or that is not a valid glob, fails the config load: a malformed pattern matches nothing, so the gate would park on the very file the waiver named.
-
-`threshold` is metric-blind. The `metric` field of the command's report is a free-form string the step only renders, so a repository that switches its command to a different metric must recalibrate its own threshold.
-
-The **whole block** is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`. The threshold is the strength of this gate and an exemption waives it for a path, so a contributor cannot raise the ceiling that judges their own breach. The block sits on the trusted side as a whole rather than field by field, so a `metrics.*` field added later lands on the safe side by default. With no trusted copy of this file, the block is unset and the defaults apply.
-
-There is deliberately no global `metrics` block. The threshold is a gate strength only the repository's own maintainer can calibrate, so an operator setting cannot supply one.
-
 ### commands.cleanup
 
 Teardown command that releases whatever a run left running outside its own process tree. Run via the platform shell - `sh -c` on POSIX, `cmd.exe /c` on Windows.
@@ -512,6 +484,36 @@ Leave the worktree as you found it. The push step refuses a dirty worktree, and 
 Because the worktree path is usually what identifies which resources belong to this run, the command must derive its target from its working directory rather than from an argument captured elsewhere.
 
 Like every `commands.*` value, `commands.cleanup` comes from the trusted default-branch configuration unless that trusted copy explicitly enables `allow_repo_commands: true`.
+
+### metrics
+
+Threshold and exemptions for the [Metrics step](/no-mistakes/reference/pipeline-steps/#metrics)'s verdict.
+
+| | |
+|---|---|
+| Type | `object` |
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `metrics.threshold` | `float` | `30` |
+| `metrics.exempt_paths` | `list of string` | Empty (every measured function is judged) |
+
+```yaml
+metrics:
+  threshold: 30
+  exempt_paths:
+    - "internal/generated/**"
+```
+
+A function breaches when its score is **strictly above** `threshold`, so the threshold is the highest score the repository accepts. The default of `30` is the conventional CRAP ceiling. Zero is legal and means every measured function scoring above zero breaches, which is a real calibration value. A negative or non-finite threshold fails the config load. Advisory behavior, where the gate reports but never blocks, is reached by setting a high threshold rather than by a separate mode.
+
+`exempt_paths` entries match the same way `ignore_patterns` and `restart.exempt_paths` do: no slash matches by basename, a trailing `/**` matches an entire subtree, and anything else is a full-path glob. A function whose file matches any entry is not judged. An entry that is empty after trimming, or that is not a valid glob, fails the config load: a malformed pattern matches nothing, so the gate would park on the very file the waiver named.
+
+`threshold` is metric-blind. The `metric` field of the command's report is a free-form string the step only renders, so a repository that switches its command to a different metric must recalibrate its own threshold.
+
+The **whole block** is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`. The threshold is the strength of this gate and an exemption waives it for a path, so a contributor cannot raise the ceiling that judges their own breach. The block sits on the trusted side as a whole rather than field by field, so a `metrics.*` field added later lands on the safe side by default. With no trusted copy of this file, the block is unset and the defaults apply.
+
+There is deliberately no global `metrics` block. The threshold is a gate strength only the repository's own maintainer can calibrate, so an operator setting cannot supply one.
 
 ### document.instructions
 
