@@ -416,6 +416,7 @@ const readingOutput = `# Reading AXI output
 - A final state shows ` + "`outcome: <checks-passed|passed|passed-with-skips|failed|cancelled>`" + ` with no ` + "`findings`" + ` table.
 - Field names and exact columns vary by step and version, so read the actual ` + "`findings`" + ` header rather than assuming a layout.
 - A successful outcome may carry a ` + "`fixes[N]{step,summary}:`" + ` table - one row per fix round the pipeline applied, in step then round order, where ` + "`summary`" + ` describes what that round changed (a round that recorded no summary shows ` + "`fix applied (no summary recorded)`" + `). Acknowledge those misses and list each fix for the user.
+- Every final state (an ` + "`outcome:`" + ` from ` + "`axi run`" + `, ` + "`axi respond`" + `, or ` + "`axi status`" + ` on a finished run) carries ` + "`finding_history[N]{step,round,id,severity,action,source,selected,file,line,description}:`" + ` - every finding every gate round raised, in step then round order, including rounds ` + "`--yes`" + ` resolved without printing. ` + "`selected`" + ` is true when that round's fix was dispatched for the finding; ` + "`source: user`" + ` rows are findings added with ` + "`--add-finding`" + `; ` + "`description`" + ` is never truncated. ` + "`finding_history[0]:`" + ` means nothing was found; ` + "`finding_history_error:`" + ` in its place means the history could not be read, so report it as unknown rather than empty.
 
 ## A gate block
 
