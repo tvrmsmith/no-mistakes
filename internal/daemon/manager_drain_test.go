@@ -224,6 +224,7 @@ func TestDrain_RefusesNewRunsImmediately(t *testing.T) {
 // TestDrain_GateParkedRunDoesNotHoldUpDrain covers scenario 2: a run parked
 // at an approval gate must never be waited on, cancelled, or reported.
 func TestDrain_GateParkedRunDoesNotHoldUpDrain(t *testing.T) {
+	shortenDrainReclassify(t, 10*time.Minute)
 	m, database, repo := newDrainTestManager(t)
 	run, _, _ := registerFakeRun(t, m, database, repo, "feature")
 	parkRunAwaitingAgent(t, database, run)
@@ -248,6 +249,7 @@ func TestDrain_GateParkedRunDoesNotHoldUpDrain(t *testing.T) {
 // releases it from the wait the way it releases a gate-parked run instead of
 // cancelling it.
 func TestDrain_CIMonitorIsExemptNotCut(t *testing.T) {
+	shortenDrainReclassify(t, 10*time.Minute)
 	m, database, repo := newDrainTestManager(t)
 	run, ctx, _ := registerFakeRun(t, m, database, repo, "feature")
 	markCIMonitorActive(t, database, run)
@@ -545,6 +547,7 @@ func TestDrain_ActiveCIStepWithoutPRURLIsNotCut(t *testing.T) {
 // it with the CI-monitor cause would fail a run that the clean-stop path
 // otherwise preserves and resumes with its PR re-checked on the next start.
 func TestDrain_ParkedCIGateWinsOverCIMonitorClassification(t *testing.T) {
+	shortenDrainReclassify(t, 10*time.Minute)
 	m, database, repo := newDrainTestManager(t)
 	run, ctx, _ := registerFakeRun(t, m, database, repo, "feature")
 	// done is never closed: a parked run's goroutine blocks until an operator

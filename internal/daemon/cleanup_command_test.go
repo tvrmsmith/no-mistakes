@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -200,10 +202,18 @@ func TestReleaseRunResourcesSkipsAMissingWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	m.releaseRunResources(run.ID, wtDir, recordCwdCleanupCommand(marker, 0))
 
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("cleanup command ran without a worktree: %v", err)
+	}
+	if out := logged.String(); !strings.Contains(out, "skipping run cleanup command: worktree is gone") || strings.Contains(out, "run cleanup command failed") {
+		t.Fatalf("log = %q, want the missing-worktree skip and no launch attempt", out)
 	}
 }
 

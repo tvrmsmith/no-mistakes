@@ -469,15 +469,15 @@ no-mistakes reaps the processes a run started, but only the ones descended from 
 It runs at two points, always inside the run worktree and always best effort:
 
 - On entry to the [Push](/no-mistakes/reference/pipeline-steps/#push) step, because nothing from push onward (push, PR, CI monitoring) needs a local dev stack, and CI monitoring is the long part of a run.
-- When the run worktree is removed, before every retention decision, so a preserved worktree does not also mean a preserved container stack.
+- When the run worktree is removed, before every retention decision, so a worktree kept for inspection does not also mean a kept container stack. A run parked at a gate when the daemon stops cleanly is not removed, because it resumes on the next start; it keeps its worktree and its resources until that resumed run finishes.
 
-The command therefore runs once each time the run enters push, which a CI repair that restarts validation makes more than once, plus once at teardown. A run that never reaches push invokes it once. It must be idempotent: the second call finds the resources the first one already released and has to exit cleanly anyway. The same applies to a run that started nothing to release.
+The command therefore runs once each time the run enters push, which a CI repair that restarts validation makes more than once, plus once at teardown. A run that never reaches push invokes it once, and a run whose setup fails before its trusted configuration resolves does not invoke it at all. It must be idempotent: the second call finds the resources the first one already released and has to exit cleanly anyway. The same applies to a run that started nothing to release.
 
 A non-zero exit, a launch failure, or a timeout is logged and otherwise ignored. It never fails a step and never changes a run's recorded outcome. One invocation is bounded at five minutes.
 
 Scope the command to this run's own resources. It runs on the daemon host with the maintainer's credentials, so a teardown that removes anything shared by name, a machine-wide cache volume for example, takes it from every other worktree and run on that host too.
 
-The daemon runs configured commands without sourcing a login shell, so the command has to resolve its own tooling; use absolute paths or set `PATH` in the command itself. The push-entry invocation sees the same environment `commands.test` and `commands.prepare` see. The teardown invocation runs outside any step, so it inherits the daemon process environment alone, without the step-scoped variables or forge-profile overlay. Neither invocation adds a `PATH` entry.
+The command sees the environment the daemon resolved from the login shell at startup, and only a daemon restart refreshes it. The push-entry invocation sees the same environment `commands.test` and `commands.prepare` see. The teardown invocation runs outside any step, so it inherits the daemon process environment alone, without the step-scoped variables or forge-profile overlay. Neither invocation adds a `PATH` entry.
 
 Leave the worktree as you found it. The push step refuses a dirty worktree, and the push-entry invocation runs just before that check, so a cleanup command that writes files into the worktree makes push refuse the run.
 
