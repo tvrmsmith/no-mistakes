@@ -35,6 +35,7 @@ func TestTestStep_VerifyApprovalOverride_FailingConfiguredCommand(t *testing.T) 
 	if runtime.GOOS == "windows" {
 		testCmd = "echo configured command broke && exit /b 7"
 	}
+	testCmd = failingTestsCommand(t, testCmd)
 	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: testCmd})
 	var logs []string
 	sctx.Log = func(line string) { logs = append(logs, line) }

@@ -45,11 +45,12 @@ type RunSharedStore interface {
 // is a private wire format between RunShared and the run row, so no other
 // package decodes it.
 type testDiscoveryRecord struct {
-	Fingerprint string            `json:"fingerprint"`
-	Units       []config.TestUnit `json:"units"`
-	Selected    []string          `json:"selected"`
-	Source      string            `json:"source"`
-	ScopeFaults int               `json:"scope_faults"`
+	Fingerprint  string            `json:"fingerprint"`
+	Units        []config.TestUnit `json:"units"`
+	Selected     []string          `json:"selected"`
+	Source       string            `json:"source"`
+	ScopeFaults  int               `json:"scope_faults"`
+	RunnerFaults int               `json:"runner_faults"`
 }
 
 // RunShared carries run-scoped results one step hands to a later step in the
@@ -76,6 +77,9 @@ type RunShared struct {
 	testDiscoveryFingerprint string
 	// testScopeFaults counts under-selection faults noticed so far this run.
 	testScopeFaults int
+	// testRunnerFaults counts agent-inferred unit commands that could not run
+	// any test so far this run.
+	testRunnerFaults int
 	// restartTrees remembers, per step, the tree its last restart-triggering
 	// commit produced, so a later round of that step committing an identical
 	// tree is recognised as churn rather than progress.
@@ -138,6 +142,7 @@ func RestoreRunShared(store RunSharedStore, runID string) *RunShared {
 		return s
 	}
 	s.testScopeFaults = record.ScopeFaults
+	s.testRunnerFaults = record.RunnerFaults
 	if record.Fingerprint != "" && len(record.Units) > 0 {
 		stored := TestDiscovery{Units: record.Units, Selected: record.Selected, Source: record.Source}.copy()
 		s.testDiscovery = &stored
@@ -156,7 +161,7 @@ func (s *RunShared) persistTestDiscoveryLocked() {
 	if s.store == nil || s.runID == "" {
 		return
 	}
-	record := testDiscoveryRecord{ScopeFaults: s.testScopeFaults}
+	record := testDiscoveryRecord{ScopeFaults: s.testScopeFaults, RunnerFaults: s.testRunnerFaults}
 	if s.testDiscovery != nil {
 		record.Fingerprint = s.testDiscoveryFingerprint
 		record.Units = s.testDiscovery.Units
@@ -221,6 +226,22 @@ func (s *RunShared) NoteTestScopeFault() int {
 	s.testScopeFaults++
 	s.persistTestDiscoveryLocked()
 	return s.testScopeFaults
+}
+
+// NoteTestRunnerFault records an agent-inferred unit command that could not
+// run any test and returns the run's running total. It persists with the
+// discovery so a daemon restart cannot refill the one rediscovery a run gets.
+// A nil receiver returns 1 on every call for the reason NoteTestScopeFault
+// does; the caller bounds rediscovery within one attempt on its own.
+func (s *RunShared) NoteTestRunnerFault() int {
+	if s == nil {
+		return 1
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.testRunnerFaults++
+	s.persistTestDiscoveryLocked()
+	return s.testRunnerFaults
 }
 
 // ValidationResidue is the exact worktree state a certifying step's round

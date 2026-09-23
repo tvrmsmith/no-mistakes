@@ -123,6 +123,7 @@ func TestTestStep_FailingBaselineStillRunsEvidenceTurn(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		testCmd = "echo baseline broke && exit /b 7"
 	}
+	testCmd = failingTestsCommand(t, testCmd)
 	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: testCmd})
 
 	outcome, err := (&TestStep{}).Execute(sctx)

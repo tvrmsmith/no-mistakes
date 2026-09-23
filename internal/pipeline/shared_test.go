@@ -138,6 +138,21 @@ func TestRestoreRunShared_ResumesWithTheDiscoveryTheRunAlreadyPaidFor(t *testing
 	}
 }
 
+// A daemon restart must not refill the one rediscovery a run gets for an
+// inferred test command that could not run any test.
+func TestRestoreRunShared_ResumedRunKeepsItsSpentRediscovery(t *testing.T) {
+	store := newFakeSharedStore()
+	started := NewRunShared(store, "run-1")
+	if count := started.NoteTestRunnerFault(); count != 1 {
+		t.Fatalf("first runner fault = %d, want 1", count)
+	}
+
+	resumed := RestoreRunShared(store, "run-1")
+	if count := resumed.NoteTestRunnerFault(); count != 2 {
+		t.Fatalf("resumed runner faults = %d, want 2", count)
+	}
+}
+
 func TestRestoreRunShared_DoesNotReuseADiscoveryFromAnotherChangedFileSet(t *testing.T) {
 	store := newFakeSharedStore()
 	NewRunShared(store, "run-1").SetTestDiscovery("fp-old", TestDiscovery{
@@ -206,5 +221,8 @@ func TestRunShared_NilReceiverIsSafe(t *testing.T) {
 	}
 	if got := s.NoteTestScopeFault(); got != 1 {
 		t.Fatalf("nil receiver NoteTestScopeFault = %d, want 1", got)
+	}
+	if got := s.NoteTestRunnerFault(); got != 1 {
+		t.Fatalf("nil receiver NoteTestRunnerFault = %d, want 1", got)
 	}
 }
