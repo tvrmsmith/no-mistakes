@@ -149,6 +149,8 @@ func TestNewWithOptions_RefusesUnmappableKnob(t *testing.T) {
 		{types.AgentRovoDev, agentcfg.Profile{Model: "x"}},
 		{types.AgentAntigravity, agentcfg.Profile{Effort: agentcfg.EffortHigh}},
 		{types.AgentCursor, agentcfg.Profile{Effort: agentcfg.EffortHigh}},
+		{types.AgentDevin, agentcfg.Profile{Effort: agentcfg.EffortHigh}},
+		{types.AgentDevin, agentcfg.Profile{Model: "gpt-6-luna-medium", Effort: agentcfg.EffortLow}},
 		{types.AgentOpenCode, agentcfg.Profile{Model: "gpt-5"}},
 	}
 	for _, tt := range tests {
@@ -164,7 +166,7 @@ func TestNewWithOptions_RefusesUnmappableKnob(t *testing.T) {
 // the model reaches acpx's own flag, positioned among acpx options rather than
 // after the target or the exec subcommand.
 func TestACPModelIsPinnedOnTheAcpxCommand(t *testing.T) {
-	for _, name := range []types.AgentName{types.AgentCursor, "acp:custom"} {
+	for _, name := range []types.AgentName{types.AgentCursor, types.AgentDevin, "acp:custom"} {
 		ag, err := NewWithOptions(name, "acpx", nil, Options{
 			Profile: agentcfg.Profile{Model: "gpt-5"},
 		})
@@ -172,7 +174,8 @@ func TestACPModelIsPinnedOnTheAcpxCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer ag.Close()
-		args := ag.(*acpxAgent).buildArgs(RunOpts{CWD: "/w"})
+		acpxAg := ag.(*acpxAgent)
+		args := acpxAg.buildArgs(acpxAg.rawCommand, RunOpts{CWD: "/w"})
 		modelIdx, execIdx := -1, -1
 		for i, arg := range args {
 			switch arg {
@@ -197,7 +200,8 @@ func TestACPWithoutModelKeepsItsPreviousArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer plain.Close()
-	for _, arg := range plain.(*acpxAgent).buildArgs(RunOpts{CWD: "/w"}) {
+	plainACPX := plain.(*acpxAgent)
+	for _, arg := range plainACPX.buildArgs(plainACPX.rawCommand, RunOpts{CWD: "/w"}) {
 		if arg == "--model" {
 			t.Fatal("acpx received --model with no model pinned")
 		}
