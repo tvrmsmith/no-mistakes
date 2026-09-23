@@ -263,17 +263,15 @@ Previous test findings to address:
 		}, nil
 	}
 
-	discovery, err := discoverTestUnits(sctx, baseSHA, changed)
-	if err != nil {
-		// A discovery failure parks rather than returning a Go error: a
-		// returned error would fail the run outright, while the acceptance
-		// criterion here is that an unreadable or invalid layout parks for a
-		// maintainer to fix the configuration or the inferred command.
-		//
-		// The exception is a failure to reach the discovery agent at all
-		// (budget expiry, transport error). Parking there would hold the run
-		// at a gate on an agent that never answered, so it fails the run like
-		// every other agent invocation in this step.
+	// discoveryFailure parks rather than returning a Go error: a returned
+	// error would fail the run outright, while an unreadable or invalid layout
+	// parks for a maintainer to fix the configuration or the inferred command.
+	//
+	// The exception is a failure to reach the discovery agent at all (budget
+	// expiry, transport error). Parking there would hold the run at a gate on
+	// an agent that never answered, so it fails the run like every other agent
+	// invocation in this step.
+	discoveryFailure := func(err error) (*pipeline.StepOutcome, error) {
 		var resultErr discoveryResultError
 		if !errors.As(err, &resultErr) {
 			return nil, err
@@ -281,27 +279,59 @@ Previous test findings to address:
 		return parkForMaintainer(fmt.Sprintf("test unit discovery failed: %v", err))
 	}
 
-	multiUnit := len(discovery.Units) > 1
-
-	// Resolve every selected name against the layout before running anything.
-	// A name with no unit behind it has no command to run, and executing an
-	// empty command would exit 0 and report the unit as tested, so an
-	// unresolvable selection parks instead.
-	selectedUnits := make([]config.TestUnit, 0, len(discovery.Selected))
-	for _, name := range discovery.Selected {
-		unit, ok := findTestUnit(discovery.Units, name)
-		if !ok {
-			return parkForMaintainer(fmt.Sprintf("test unit discovery selected %q, which is not in the discovered unit layout", name))
+	// parkDeadRunner is the maintainer park for a unit command that could not
+	// run any test. An agent fix round must not rewrite tests to satisfy a
+	// broken runner. It keeps the test-command category and the exit code,
+	// which VerifyApprovalOverride reads, so approving over a dead command is
+	// recorded as an override rather than reading as a clean pass.
+	parkDeadRunner := func(description string) (*pipeline.StepOutcome, error) {
+		sctx.Log(description)
+		findings := Findings{
+			Items: withOmission([]Finding{{
+				Severity:    types.FindingSeverityError,
+				Action:      types.ActionAskUser,
+				Category:    types.FindingCategoryTestCommand,
+				Description: description,
+			}}),
+			Summary: baselineSummary,
+			Tested:  tested(),
 		}
-		selectedUnits = append(selectedUnits, unit)
+		findingsJSON, _ := json.Marshal(findings)
+		return &pipeline.StepOutcome{
+			NeedsApproval: true,
+			AutoFixable:   false,
+			Findings:      string(findingsJSON),
+			ExitCode:      baselineExitCode,
+			FixSummary:    fixSummary,
+		}, nil
 	}
 
-	if len(discovery.Selected) == 0 {
-		sctx.Log(fmt.Sprintf("no test units selected for the changed files (%s)", discovery.Source))
-	} else {
-		sctx.Log(fmt.Sprintf("selected test units (%s): %s", discovery.Source, strings.Join(discovery.Selected, ", ")))
-		for _, unit := range selectedUnits {
-			sctx.Log(fmt.Sprintf("unit %s: %s", unit.Name, unit.Command))
+	discovery, err := discoverTestUnits(sctx, baseSHA, changed)
+	if err != nil {
+		return discoveryFailure(err)
+	}
+
+	var multiUnit bool
+	// dead is set when a unit exited non-zero without proving it ran a single
+	// test, which is a broken runner rather than a failing test.
+	var dead *deadTestRunner
+
+	// failedTests is the baseline finding for a unit whose tests ran and
+	// failed. The category is what configuredTestCommandOverrideReason matches
+	// on, so an approval over a failing unit is recorded as an override rather
+	// than reading like a genuinely green completion. The explicit action is
+	// what the executor's auto-fix filter selects on; an empty one reads as
+	// ask-user and parks with the auto_fix.test budget unspent.
+	failedTests := func(unit config.TestUnit, exitCode int) Finding {
+		description := fmt.Sprintf("tests failed with exit code %d", exitCode)
+		if multiUnit {
+			description = fmt.Sprintf("unit %s: tests failed with exit code %d", unit.Name, exitCode)
+		}
+		return Finding{
+			Severity:    types.FindingSeverityError,
+			Action:      types.ActionAutoFix,
+			Category:    types.FindingCategoryTestCommand,
+			Description: description,
 		}
 	}
 
@@ -349,64 +379,65 @@ Previous test findings to address:
 		if exitCode == 0 {
 			return false, nil
 		}
-		description := fmt.Sprintf("tests failed with exit code %d", exitCode)
-		if multiUnit {
-			description = fmt.Sprintf("unit %s: tests failed with exit code %d", unit.Name, exitCode)
-		}
-		// The category is what configuredTestCommandOverrideReason matches on, so
-		// an approval over a failing unit is recorded as an override rather than
-		// reading like a genuinely green completion. The explicit action is what
-		// the executor's auto-fix filter selects on; an empty one reads as
-		// ask-user and parks with the auto_fix.test budget unspent.
-		baselineFindings = []Finding{{
-			Severity:    types.FindingSeverityError,
-			Action:      types.ActionAutoFix,
-			Category:    types.FindingCategoryTestCommand,
-			Description: description,
-		}}
 		baselineSummary = logConfiguredCommandOutput(sctx, output, types.StepTest)
 		baselineExitCode = exitCode
+		// The directory was emptied just before the command ran, so a test
+		// report in it is this run's own proof that at least one test executed.
+		// Without one the command failed before any test ran.
+		artifacts, readErr := readCoverageArtifacts(unitDir)
+		if readErr != nil {
+			return false, fmt.Errorf("read test report for test unit %q: %w", unit.Name, readErr)
+		}
+		if artifacts.HasReport && artifacts.Report.Executed > 0 {
+			baselineFindings = []Finding{failedTests(unit, exitCode)}
+			return true, nil
+		}
+		reason := fmt.Sprintf("reported %d executed tests", artifacts.Report.Executed)
+		if !artifacts.HasReport {
+			reason = "wrote no test report"
+		}
+		dead = &deadTestRunner{
+			unit:     unit,
+			exitCode: exitCode,
+			output:   baselineSummary,
+			reason:   reason + unreadableArtifactNotes(artifacts),
+		}
 		return true, nil
 	}
 
-	for _, unit := range selectedUnits {
-		stop, runErr := runUnit(unit)
-		if runErr != nil {
-			return nil, runErr
-		}
-		if stop {
-			break
-		}
-	}
+	// Unit execution runs at most twice: once with the layout discovery gave,
+	// and once more with a replacement when an agent-inferred command could
+	// not run any test. Each pass starts from nothing, because a replacement
+	// layout may rename or regroup the units the first pass ran.
+	var replaced *deadTestRunner
+	for {
+		covered, ran = nil, map[string]bool{}
+		baselineFindings, baselineSummary, baselineExitCode, dead = nil, "", 0, nil
+		multiUnit = len(discovery.Units) > 1
 
-	if missing := underSelectedUnits(discovery.Units, changed, discovery.Selected); len(missing) > 0 && baselineExitCode == 0 {
-		missingNames := make([]string, len(missing))
-		for i, u := range missing {
-			missingNames[i] = u.Name
-		}
-		count := sctx.Shared.NoteTestScopeFault()
-		if count >= 2 {
-			// A second scope fault in the same run means discovery itself is
-			// unreliable, not merely incomplete this once: expanding again
-			// would keep papering over a systematic miss, so this parks for
-			// a maintainer instead of running the missing units.
-			return parkForMaintainer(fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")))
+		// Resolve every selected name against the layout before running
+		// anything. A name with no unit behind it has no command to run, and
+		// executing an empty command would exit 0 and report the unit as
+		// tested, so an unresolvable selection parks instead.
+		selectedUnits := make([]config.TestUnit, 0, len(discovery.Selected))
+		for _, name := range discovery.Selected {
+			unit, ok := findTestUnit(discovery.Units, name)
+			if !ok {
+				return parkForMaintainer(fmt.Sprintf("test unit discovery selected %q, which is not in the discovered unit layout", name))
+			}
+			selectedUnits = append(selectedUnits, unit)
 		}
 
-		sctx.Log(fmt.Sprintf("test scope fault: original selection %s", strings.Join(discovery.Selected, ", ")))
-		sctx.Log(fmt.Sprintf("expanding selection with %s", strings.Join(missingNames, ", ")))
-
-		expanded := discovery
-		expanded.Selected = append(append([]string{}, discovery.Selected...), missingNames...)
-		// Only the agent source reads the cache back; discoverTestUnits derives
-		// the config and command selections fresh every time, so re-caching
-		// them would write a record nothing consults.
-		if discovery.Source == "agent" {
-			sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), expanded)
+		if len(discovery.Selected) == 0 {
+			sctx.Log(fmt.Sprintf("no test units selected for the changed files (%s)", discovery.Source))
+		} else {
+			sctx.Log(fmt.Sprintf("selected test units (%s): %s", discovery.Source, strings.Join(discovery.Selected, ", ")))
+			for _, unit := range selectedUnits {
+				sctx.Log(fmt.Sprintf("unit %s: %s", unit.Name, unit.Command))
+			}
 		}
-		discovery = expanded
 
-		for _, unit := range missing {
+		for _, unit := range selectedUnits {
 			stop, runErr := runUnit(unit)
 			if runErr != nil {
 				return nil, runErr
@@ -415,6 +446,77 @@ Previous test findings to address:
 				break
 			}
 		}
+
+		if missing := underSelectedUnits(discovery.Units, changed, discovery.Selected); len(missing) > 0 && baselineExitCode == 0 {
+			missingNames := make([]string, len(missing))
+			for i, u := range missing {
+				missingNames[i] = u.Name
+			}
+			count := sctx.Shared.NoteTestScopeFault()
+			if count >= 2 {
+				// A second scope fault in the same run means discovery itself is
+				// unreliable, not merely incomplete this once: expanding again
+				// would keep papering over a systematic miss, so this parks for
+				// a maintainer instead of running the missing units.
+				return parkForMaintainer(fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")))
+			}
+
+			sctx.Log(fmt.Sprintf("test scope fault: original selection %s", strings.Join(discovery.Selected, ", ")))
+			sctx.Log(fmt.Sprintf("expanding selection with %s", strings.Join(missingNames, ", ")))
+
+			expanded := discovery
+			expanded.Selected = append(append([]string{}, discovery.Selected...), missingNames...)
+			// Only the agent source reads the cache back; discoverTestUnits derives
+			// the config and command selections fresh every time, so re-caching
+			// them would write a record nothing consults.
+			if discovery.Source == "agent" {
+				sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), expanded)
+			}
+			discovery = expanded
+
+			for _, unit := range missing {
+				stop, runErr := runUnit(unit)
+				if runErr != nil {
+					return nil, runErr
+				}
+				if stop {
+					break
+				}
+			}
+		}
+
+		if dead == nil {
+			break
+		}
+		description := dead.description(multiUnit)
+		// A configured command is the maintainer's to repair.
+		if discovery.Source != "agent" {
+			return parkDeadRunner(description)
+		}
+		// The run gets one rediscovery. A second dead command means discovery
+		// cannot find a runner that works here, so it parks rather than
+		// guessing again. The counter persists, so a later attempt of this run
+		// parks too, including one whose command a rediscovery kept.
+		if replaced != nil {
+			return parkDeadRunner(fmt.Sprintf("%s; it replaced an inferred command that could not run any test either: %s", description, replaced.unit.Command))
+		}
+		if sctx.Shared.NoteTestRunnerFault() >= 2 {
+			return parkDeadRunner(description + "; test unit discovery already replaced a dead inferred command once in this run")
+		}
+		replaced = dead
+		replacement, rediscoverErr := rediscoverTestUnits(sctx, baseSHA, changed, *dead)
+		if rediscoverErr != nil {
+			return discoveryFailure(rediscoverErr)
+		}
+		// Rediscovery kept the command after reading its output, so the runner
+		// is sound and the failure is in the code under test, such as a compile
+		// error in a changed file. That is an agent fix round's to repair.
+		if selectsCommand(replacement, dead.unit.Command) {
+			sctx.Log("test unit discovery kept the command, so its failure is treated as failing tests")
+			baselineFindings = []Finding{failedTests(dead.unit, dead.exitCode)}
+			break
+		}
+		discovery = replacement
 	}
 
 	// A cut repair turn parks only after the selected units ran once more, so

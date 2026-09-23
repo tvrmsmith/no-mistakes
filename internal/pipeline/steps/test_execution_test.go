@@ -1094,7 +1094,7 @@ func TestTestStep_FailingUnitCommandParksAutoFixable(t *testing.T) {
 	headSHA := changeUnitFile(t, dir, "services/api/main.go")
 
 	units := []config.TestUnit{
-		{Name: "api", Path: "services/api", Command: "exit 1"},
+		{Name: "api", Path: "services/api", Command: failingTestsCommand(t, "exit 1")},
 		{Name: "web", Path: "services/web", Command: "exit 0"},
 	}
 	sctx := unitTestContext(t, nil, dir, baseSHA, headSHA, units)
@@ -1167,7 +1167,7 @@ func TestTestStep_ConfiguredCommandStillBehavesAsOneRepositoryUnit(t *testing.T)
 	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
 		return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 	}}
-	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 1"})
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{Test: failingTestsCommand(t, "exit 1")})
 	sctx.Shared = &pipeline.RunShared{}
 	// The failing exit code returns before the vacuous-green guard ever reads
 	// a coverage artifact, but testUnitCoverageDir creates the unit's

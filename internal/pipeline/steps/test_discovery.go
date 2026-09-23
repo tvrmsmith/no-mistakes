@@ -300,21 +300,43 @@ func discoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []str
 		return d, nil
 	}
 
-	fingerprint := changedFilesFingerprint(changed)
-	if cached, ok := sctx.Shared.TestDiscovery(fingerprint); ok {
+	if cached, ok := sctx.Shared.TestDiscovery(changedFilesFingerprint(changed)); ok {
 		sctx.Log("reusing discovered test units from earlier in this run")
 		return cached, nil
 	}
 
 	sctx.Log("discovering test units...")
-	d, err := discoverTestUnitsViaAgent(sctx, baseSHA, changed)
+	return discoverAndCacheViaAgent(sctx, baseSHA, changed, "")
+}
+
+// rediscoverTestUnits replaces an agent-inferred layout whose command could
+// not run any test, showing the discovery agent the dead command and its
+// output so the replacement is not the same guess. It overwrites the cached
+// layout, so later attempts in the run reuse the replacement.
+func rediscoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []string, dead deadTestRunner) (pipeline.TestDiscovery, error) {
+	sctx.Log(fmt.Sprintf("test unit %q could not run any test, rediscovering test units...", dead.unit.Name))
+	failure := fmt.Sprintf(`
+
+The command previously inferred for unit %q could not run any test: it exited %d and %s.
+Command:
+%s
+Output:
+%s
+
+Report a command that can actually run this repository's tests on this machine. If the output shows the command itself is sound and the failure is in the code under test (for example a compile error in a changed file), report that same command unchanged.`,
+		dead.unit.Name, dead.exitCode, dead.reason, dead.unit.Command, dead.output)
+	return discoverAndCacheViaAgent(sctx, baseSHA, changed, failure)
+}
+
+func discoverAndCacheViaAgent(sctx *pipeline.StepContext, baseSHA string, changed []string, failureSection string) (pipeline.TestDiscovery, error) {
+	d, err := discoverTestUnitsViaAgent(sctx, baseSHA, changed, failureSection)
 	if err != nil {
 		return pipeline.TestDiscovery{}, err
 	}
 	if err := validateDiscovery(&d); err != nil {
 		return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
 	}
-	sctx.Shared.SetTestDiscovery(fingerprint, d)
+	sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), d)
 	return d, nil
 }
 
@@ -331,7 +353,7 @@ type discoveryAgentOutput struct {
 	Selected []string             `json:"selected"`
 }
 
-func discoverTestUnitsViaAgent(sctx *pipeline.StepContext, baseSHA string, changed []string) (pipeline.TestDiscovery, error) {
+func discoverTestUnitsViaAgent(sctx *pipeline.StepContext, baseSHA string, changed []string, failureSection string) (pipeline.TestDiscovery, error) {
 	discoveryCtx, cancel, timeout := testAgentContext(sctx)
 	defer cancel()
 
@@ -365,11 +387,12 @@ Rules for the command you report:
 - A command must NOT be the complete repository test suite, even when the unit is the repository itself. Name the specific test targets, directories, packages, or selectors the changed files reach.
 - The command runs with NO_MISTAKES_BASE_SHA set to the base commit and NO_MISTAKES_CHANGED_FILES set to the newline-separated changed paths, with NO_MISTAKES_CHANGED_FILE_COUNT carrying the true total. Read those variables in the command when that is how a unit's runner takes a target list.
 - A command that walks the whole repository is wrong even if it passes, because it spends the run's budget on work remote CI repeats.
-- The command also runs with NO_MISTAKES_COVERAGE_DIR set to a directory OUTSIDE the worktree. It must write a coverage profile (LCOV or Cobertura XML) and a test report (JUnit XML or Visual Studio TRX) into that directory, and must never write coverage output into the worktree. A command that reports neither cannot prove it exercised anything, so the run will park instead of reporting a pass.`,
+- The command also runs with NO_MISTAKES_COVERAGE_DIR set to a directory OUTSIDE the worktree. It must write a coverage profile (LCOV or Cobertura XML) and a test report (JUnit XML or Visual Studio TRX) into that directory, and must never write coverage output into the worktree. A command that reports neither cannot prove it exercised anything, so the run will park instead of reporting a pass.%s`,
 			sctx.Run.Branch,
 			baseSHA,
 			sctx.Run.HeadSHA,
 			changedList,
+			failureSection,
 		),
 		CWD:        sctx.WorkDir,
 		JSONSchema: testDiscoverySchema,
@@ -396,4 +419,36 @@ Rules for the command you report:
 		Selected: out.Selected,
 		Source:   "agent",
 	}, nil
+}
+
+// deadTestRunner is a unit command that exited non-zero without proving it ran
+// a single test: a runner that failed to build, a missing binary, or a shell
+// syntax error, rather than a failing test.
+type deadTestRunner struct {
+	unit     config.TestUnit
+	exitCode int
+	// output is the bounded projection of the command's output the step
+	// already logged, which the rediscovery prompt quotes.
+	output string
+	// reason says how the coverage directory failed to prove a test ran.
+	reason string
+}
+
+func (d deadTestRunner) description(multiUnit bool) string {
+	description := fmt.Sprintf("test command could not run any test: it exited %d and %s", d.exitCode, d.reason)
+	if multiUnit {
+		return fmt.Sprintf("unit %s: %s", d.unit.Name, description)
+	}
+	return description
+}
+
+// selectsCommand reports whether any unit the discovery selected runs command.
+func selectsCommand(d pipeline.TestDiscovery, command string) bool {
+	want := strings.TrimSpace(command)
+	for _, name := range d.Selected {
+		if unit, ok := findTestUnit(d.Units, name); ok && strings.TrimSpace(unit.Command) == want {
+			return true
+		}
+	}
+	return false
 }

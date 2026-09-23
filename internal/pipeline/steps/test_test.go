@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,6 +71,20 @@ func encodeOneUnitLayout(name, path, command, selected string) string {
 		panic(err)
 	}
 	return string(data)
+}
+
+// failingTestsCommand runs command after writing a test report naming one
+// executed test, so its non-zero exit reads as tests that ran and failed. A
+// bare failing command writes no report, which the step classifies as a
+// command that could not run any test.
+func failingTestsCommand(t *testing.T, command string) string {
+	t.Helper()
+	report := filepath.Join(t.TempDir(), "report.xml")
+	writeFile(t, report, `<testsuite tests="1" skipped="0"></testsuite>`)
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(`copy "%s" "%%NO_MISTAKES_COVERAGE_DIR%%\report.xml" >nul && %s`, report, command)
+	}
+	return fmt.Sprintf(`cp '%s' "$NO_MISTAKES_COVERAGE_DIR/report.xml"; %s`, report, command)
 }
 
 // newTestContextWithCoverage wraps newTestContextWithDBRecords and sets
