@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1114,6 +1115,46 @@ func TestTestStep_FailingUnitCommandParksAutoFixable(t *testing.T) {
 	}
 	if !strings.Contains(outcome.Findings, "unit api: tests failed with exit code 1") {
 		t.Errorf("findings missing unit-prefixed description, got: %s", outcome.Findings)
+	}
+}
+
+// A failing unit command must reach an agent fix round through the executor's
+// own filter, not merely set AutoFixable: an outcome whose findings carry no
+// auto-fix item parks for a human with the auto_fix.test budget unspent.
+func TestTestStep_FailingUnitCommandStartsAnAutoFixRound(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA := newUnitRepo(t)
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+
+	// The unit fails until the fix round leaves this marker behind, so the
+	// loop ends green only when a fix round actually ran.
+	marker := filepath.Join(t.TempDir(), "fixed")
+	units := []config.TestUnit{
+		{Name: "api", Path: "services/api", Command: coverageFor(fmt.Sprintf("[ -f %q ]", marker), "services/api/main.go")},
+	}
+	fixRounds := 0
+	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if strings.HasPrefix(opts.Prompt, testFixTask) {
+			fixRounds++
+			if err := os.WriteFile(marker, nil, 0o600); err != nil {
+				return nil, err
+			}
+			return &agent.Result{Output: json.RawMessage(`{"summary":"fix api test"}`)}, nil
+		}
+		return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
+	}}
+	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, units)
+	sctx.Config.AutoFix.Test = 3
+
+	outcome, err := stepstest.ExecuteWithAutoFix(t, &TestStep{}, sctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixRounds != 1 {
+		t.Fatalf("fix rounds = %d, want 1 (findings: %s)", fixRounds, outcome.Findings)
+	}
+	if outcome.NeedsApproval {
+		t.Fatalf("expected the repaired unit to pass, got: %s", outcome.Findings)
 	}
 }
 
