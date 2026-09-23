@@ -1,12 +1,15 @@
 package steps
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -120,13 +123,50 @@ func TestPushStep_RunsCleanupBeforeItsOwnEntryGuards(t *testing.T) {
 	}
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "out-of-band replacement")
-	sctx.Run.HeadSHA = gitCmd(t, dir, "rev-parse", "HEAD")
 
-	if _, err := (&PushStep{}).Execute(sctx); err == nil {
-		t.Fatal("expected the push step to refuse a divergent head")
+	_, err := (&PushStep{}).Execute(sctx)
+	if err == nil || !strings.Contains(err.Error(), "is not a descendant of the pipeline's recorded head") {
+		t.Fatalf("push error = %v, want the head-continuity refusal", err)
 	}
 
 	assertRanIn(t, readCleanupMarker(t, marker), dir)
+}
+
+// TestPushStep_CleanupSeesTheStepEnvironment keeps the push-entry invocation
+// on the environment commands.test and commands.prepare get, so a cleanup
+// command that needs a step-scoped variable finds it.
+func TestPushStep_CleanupSeesTheStepEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell expansion")
+	}
+	marker := filepath.Join(t.TempDir(), "cleanup.env")
+	sctx, _, _, _ := setupPushableWorktree(t, config.Commands{Cleanup: "printf %s \"$NM_CLEANUP_PROBE\" > " + marker})
+	sctx.Env = append(sctx.Env, "NM_CLEANUP_PROBE=step-scoped")
+
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatalf("push step failed: %v", err)
+	}
+
+	if got := readCleanupMarker(t, marker); got != "step-scoped" {
+		t.Fatalf("cleanup saw NM_CLEANUP_PROBE=%q, want the step environment's value", got)
+	}
+}
+
+// TestRunRepoCleanupCommand_ReportsAKilledCommand keeps a hung cleanup from
+// reading as an ordinary non-zero exit: the caller has to learn the command was
+// killed, because the resources it was releasing may still be running.
+func TestRunRepoCleanupCommand_ReportsAKilledCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX sleep")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	_, _, err := RunRepoCleanupCommand(ctx, t.TempDir(), nil, "sleep 30")
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want a deadline error", err)
+	}
 }
 
 // TestReleaseExternalRunResources_NoCommandConfiguredIsANoOp keeps the common

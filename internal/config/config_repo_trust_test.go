@@ -28,11 +28,11 @@ func TestLoadRepoFromBytes(t *testing.T) {
 }
 
 func TestLoadRepoFromBytes_CleanupCommand(t *testing.T) {
-	cfg, err := LoadRepoFromBytes([]byte("commands:\n  cleanup: \"docker compose down -v\"\n"))
+	cfg, err := LoadRepoFromBytes([]byte("commands:\n  cleanup: \"./scripts/dev-down.sh\"\n"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Commands.Cleanup != "docker compose down -v" {
+	if cfg.Commands.Cleanup != "./scripts/dev-down.sh" {
 		t.Errorf("cleanup = %q", cfg.Commands.Cleanup)
 	}
 }
@@ -65,7 +65,7 @@ func TestEffectiveRepoConfig_TrustedOverridesPushedCommands(t *testing.T) {
 			Lint:    "golangci-lint run",
 			Test:    "go test ./...",
 			Format:  "gofmt -w .",
-			Cleanup: "docker compose down -v",
+			Cleanup: "./scripts/dev-down.sh",
 		},
 		Commit: CommitRaw{FixMessage: &trustedTemplate},
 	}
@@ -87,7 +87,7 @@ func TestEffectiveRepoConfig_TrustedOverridesPushedCommands(t *testing.T) {
 	// commands.cleanup runs on the daemon host at push entry and again at run
 	// teardown, so it is trusted-only for the same reason the rest of the block
 	// is: a pushed branch must not choose what executes there.
-	if got.Commands.Cleanup != "docker compose down -v" {
+	if got.Commands.Cleanup != "./scripts/dev-down.sh" {
 		t.Errorf("cleanup = %q, want trusted value", got.Commands.Cleanup)
 	}
 	// Agent is code-executing selection: it comes from the trusted copy, not

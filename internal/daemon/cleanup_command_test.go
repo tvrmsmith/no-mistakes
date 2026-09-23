@@ -2,12 +2,14 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/db"
@@ -202,5 +204,98 @@ func TestReleaseRunResourcesSkipsAMissingWorktree(t *testing.T) {
 
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("cleanup command ran without a worktree: %v", err)
+	}
+}
+
+// cleanupCommandConfig is trusted repo config whose commands.cleanup records
+// the directory it runs in to marker.
+func cleanupCommandConfig(t *testing.T, marker string) string {
+	return "commands:\n  cleanup: " + testJSONString(t, recordCwdCleanupCommand(marker, 0)) + "\n"
+}
+
+// waitForCleanupMarker waits for teardown, which runs after the run row is
+// already terminal, to record where the cleanup command ran.
+func waitForCleanupMarker(t *testing.T, marker string) string {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if contents, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(contents)) != "" {
+			return strings.TrimSpace(string(contents))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("cleanup command never ran at teardown")
+	return ""
+}
+
+// resolvedWorktreeDir resolves a run worktree path that may already be gone by
+// resolving the managed worktree root it sits under.
+func resolvedWorktreeDir(t *testing.T, p *paths.Paths, wtDir string) string {
+	t.Helper()
+	rel, err := filepath.Rel(p.WorktreesDir(), wtDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(resolved(t, p.WorktreesDir()), rel)
+}
+
+// TestFinishedRunReleasesExternalResourcesFromItsTrustedConfig drives the
+// run-end wiring: the trusted default branch configures commands.cleanup, and
+// a run that finishes must run it in its own worktree at teardown.
+func TestFinishedRunReleasesExternalResourcesFromItsTrustedConfig(t *testing.T) {
+	t.Setenv("NM_DEMO", "1")
+	marker := filepath.Join(t.TempDir(), "cleanup.log")
+	p, database := newRefreshRunFixture(t)
+	repo, head := setupTestGitRepoWithConfig(t, p, database, "cleanup-run-end", cleanupCommandConfig(t, marker))
+	manager := NewRunManager(database, p, func() []pipeline.Step {
+		return []pipeline.Step{&mockPassStep{name: types.StepReview}}
+	})
+	t.Cleanup(manager.Shutdown)
+
+	runID, err := manager.startRun(t.Context(), repo, "main", head, refreshTestZeroSHA, "test", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := waitForRunTerminalState(t, database, runID)
+	if run.Status != types.RunCompleted {
+		t.Fatalf("run status = %s, want %s", run.Status, types.RunCompleted)
+	}
+
+	got := waitForCleanupMarker(t, marker)
+	if want := resolvedWorktreeDir(t, p, p.WorktreeDir(repo.ID, runID)); got != want {
+		t.Fatalf("cleanup ran in %q, want the run worktree %q", got, want)
+	}
+}
+
+// TestSetupFailureAfterTrustedConfigReleasesExternalResources drives the
+// setup-failure wiring: once the trusted configuration has resolved, a setup
+// failure that removes the worktree still runs the configured cleanup in it.
+func TestSetupFailureAfterTrustedConfigReleasesExternalResources(t *testing.T) {
+	t.Setenv("NM_DEMO", "1")
+	marker := filepath.Join(t.TempDir(), "cleanup.log")
+	p, database := newRefreshRunFixture(t)
+	repo, head := setupTestGitRepoWithConfig(t, p, database, "cleanup-setup-failure", cleanupCommandConfig(t, marker))
+	manager := NewRunManager(database, p, func() []pipeline.Step {
+		return []pipeline.Step{&mockPassStep{name: types.StepReview}}
+	})
+	t.Cleanup(manager.Shutdown)
+	manager.persistSkippedSteps = func(string, []types.StepName) error {
+		return errors.New("database is locked")
+	}
+
+	if _, err := manager.startRun(t.Context(), repo, "main", head, refreshTestZeroSHA, "test",
+		[]types.StepName{types.StepPush}, "", ""); err == nil {
+		t.Fatal("start run should fail when the skip set cannot be persisted")
+	}
+
+	runs, err := database.GetRunsByRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("repo has %d runs, want the one aborted run", len(runs))
+	}
+	if got, want := cleanupRanIn(t, marker), resolvedWorktreeDir(t, p, p.WorktreeDir(repo.ID, runs[0].ID)); got != want {
+		t.Fatalf("cleanup ran in %q, want the run worktree %q", got, want)
 	}
 }

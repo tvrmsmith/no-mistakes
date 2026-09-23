@@ -1143,12 +1143,20 @@ func (m *RunManager) releaseRunResources(runID, wtDir, cleanupCmd string) {
 	if cleanupCmd == "" {
 		return
 	}
-	if info, err := os.Stat(wtDir); err != nil || !info.IsDir() {
+	info, err := os.Stat(wtDir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		slog.Debug("skipping run cleanup command: worktree is gone", "run_id", runID, "path", wtDir)
+		return
+	case err != nil:
+		slog.Warn("skipping run cleanup command: cannot read worktree", "run_id", runID, "path", wtDir, "error", err)
+		return
+	case !info.IsDir():
+		slog.Warn("skipping run cleanup command: worktree path is not a directory", "run_id", runID, "path", wtDir)
 		return
 	}
 	started := time.Now()
-	output, exitCode, err := steps.RunRepoCleanupCommand(context.Background(), wtDir, cleanupCmd)
+	output, exitCode, err := steps.RunRepoCleanupCommand(context.Background(), wtDir, nil, cleanupCmd)
 	switch {
 	case err != nil:
 		slog.Warn("run cleanup command failed", "run_id", runID, "path", wtDir, "error", err, "output", cleanupOutputTail(output))
@@ -1160,7 +1168,8 @@ func (m *RunManager) releaseRunResources(runID, wtDir, cleanupCmd string) {
 }
 
 // cleanupCommand reads a resolved run configuration's commands.cleanup. The
-// value is already trusted-only (config.EffectiveRepoConfig takes the whole
+// value is already trusted-only unless the trusted config opts in via
+// allow_repo_commands (config.EffectiveRepoConfig otherwise takes the whole
 // Commands block from the default branch), and a nil config - a run torn down
 // before its configuration resolved - simply has no cleanup to run.
 func cleanupCommand(cfg *config.Config) string {

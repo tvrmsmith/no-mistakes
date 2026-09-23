@@ -24,8 +24,8 @@ import (
 const RepoCleanupTimeout = 5 * time.Minute
 
 // RunRepoCleanupCommand runs the repository's trusted commands.cleanup in
-// workDir and reports the output, exit code, and any launch failure. Callers
-// decide what to log; nothing here fails a run.
+// workDir and reports the output, exit code, and any launch failure or
+// timeout. Callers decide what to log; nothing here fails a run.
 //
 // workDir is the run worktree, and it is the whole point of the cwd: a cleanup
 // command typically resolves WHICH stack to tear down from the directory it
@@ -33,13 +33,19 @@ const RepoCleanupTimeout = 5 * time.Minute
 // to this run any more. Every caller must therefore run it before removing the
 // directory.
 //
-// The environment is inherited from the daemon process, exactly like every
-// other configured command, so a repository's cleanup command sees the same
-// PATH commands.test and commands.prepare see and nothing narrower.
-func RunRepoCleanupCommand(ctx context.Context, workDir, cmdStr string) (string, int, error) {
+// env is the caller's environment overlay on the daemon process environment,
+// nil for none. The push step passes stepEnvironment, so its invocation sees
+// exactly what commands.test and commands.prepare see. Run teardown has no step
+// context and passes nil, so that invocation inherits the daemon process
+// environment alone. Neither adds a PATH entry.
+func RunRepoCleanupCommand(ctx context.Context, workDir string, env []string, cmdStr string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, RepoCleanupTimeout)
 	defer cancel()
-	return runShellCommandWithProcessEnv(ctx, workDir, nil, cmdStr)
+	output, exitCode, err := runShellCommandWithProcessEnv(ctx, workDir, env, cmdStr)
+	if err == nil && ctx.Err() != nil {
+		return output, exitCode, fmt.Errorf("cleanup command killed before it finished: %w", ctx.Err())
+	}
+	return output, exitCode, err
 }
 
 // releaseExternalRunResources runs commands.cleanup from a pipeline step. It is
@@ -54,7 +60,7 @@ func releaseExternalRunResources(sctx *pipeline.StepContext, logStep types.StepN
 	}
 	sctx.Log(fmt.Sprintf("releasing external run resources: %s", cmdStr))
 	started := time.Now()
-	output, exitCode, err := RunRepoCleanupCommand(sctx.Ctx, sctx.WorkDir, cmdStr)
+	output, exitCode, err := RunRepoCleanupCommand(sctx.Ctx, sctx.WorkDir, stepEnvironment(sctx), cmdStr)
 	if output != "" {
 		logCommandOutput(sctx, output, "Cleanup", logStep)
 	}
