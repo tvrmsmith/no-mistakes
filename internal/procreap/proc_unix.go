@@ -21,10 +21,15 @@ const (
 	sigKill = syscall.SIGKILL
 )
 
-// cwdLookupTimeout bounds each external cwd lookup batch. It is a diagnostic
-// read on a cleanup path, so a wedged or missing helper must degrade to a
-// logged partial answer rather than stall daemon startup or a run's teardown.
-var cwdLookupTimeout = 10 * time.Second
+// cwdLookupTimeout bounds each external cwd lookup batch, and
+// cwdLookupTotalTimeout bounds every batch of one lookup together. It is a
+// diagnostic read on a cleanup path, so a wedged or missing helper must degrade
+// to a logged partial answer and stall daemon startup or a run's teardown for
+// at most the total, however many batches the candidates fill.
+var (
+	cwdLookupTimeout      = 10 * time.Second
+	cwdLookupTotalTimeout = 30 * time.Second
+)
 
 // listProcesses reads the whole process table. `ps` is used rather than /proc
 // so one implementation covers macOS and Linux, matching how the daemon's
@@ -201,17 +206,20 @@ func parseLsofCWD(out string) map[int]string {
 const lsofBatchSize = 256
 
 // lsofCWDs returns every cwd it could read plus an error naming each failed
-// batch by its first pid, so a partial answer still drives the sweep and the gap is logged.
+// batch by its first pid, so a partial answer still drives the sweep and the
+// gap is logged. A batch reached after the total deadline reports as timed out.
 func lsofCWDs(pids []int) (map[int]string, error) {
 	lsof, err := exec.LookPath("lsof")
 	if err != nil {
 		return nil, fmt.Errorf("resolve process cwds: %w", err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), cwdLookupTotalTimeout)
+	defer cancel()
 	cwds := make(map[int]string, len(pids))
 	var errs []error
 	for start := 0; start < len(pids); start += lsofBatchSize {
 		batch := pids[start:min(start+lsofBatchSize, len(pids))]
-		got, err := lsofBatchCWDs(lsof, batch)
+		got, err := lsofBatchCWDs(ctx, lsof, batch)
 		for pid, cwd := range got {
 			cwds[pid] = cwd
 		}
@@ -222,8 +230,8 @@ func lsofCWDs(pids []int) (map[int]string, error) {
 	return cwds, errors.Join(errs...)
 }
 
-func lsofBatchCWDs(lsof string, pids []int) (map[int]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), cwdLookupTimeout)
+func lsofBatchCWDs(parent context.Context, lsof string, pids []int) (map[int]string, error) {
+	ctx, cancel := context.WithTimeout(parent, cwdLookupTimeout)
 	defer cancel()
 	ids := make([]string, 0, len(pids))
 	for _, pid := range pids {
@@ -239,7 +247,7 @@ func lsofBatchCWDs(lsof string, pids []int) (map[int]string, error) {
 	switch {
 	// A killed lsof also yields an ExitError, so the timeout is checked first.
 	case ctx.Err() != nil:
-		return cwds, fmt.Errorf("lsof cwd lookup for %d pids from pid %d timed out after %s", len(pids), pids[0], cwdLookupTimeout)
+		return cwds, fmt.Errorf("lsof cwd lookup for %d pids from pid %d timed out", len(pids), pids[0])
 	case err != nil && !errors.As(err, &exitErr):
 		return cwds, fmt.Errorf("lsof cwd lookup for %d pids from pid %d: %w", len(pids), pids[0], err)
 	}

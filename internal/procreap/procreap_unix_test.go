@@ -180,7 +180,8 @@ func TestParseLsofCWDIgnoresAnUnterminatedFinalLine(t *testing.T) {
 // installFakeLsof puts an lsof on PATH that answers every pid it is asked for
 // with /wt/<pid>, records one line per invocation in the returned file, and
 // exits 1 the way real lsof does when some of the pids have already exited.
-// A batch holding $NM_FAKE_LSOF_HANG prints a cut-off record and hangs.
+// A batch holding $NM_FAKE_LSOF_HANG prints a cut-off record and hangs, and
+// every batch hangs when $NM_FAKE_LSOF_HANG_ALL is set.
 func installFakeLsof(t *testing.T) (calls string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -188,6 +189,7 @@ func installFakeLsof(t *testing.T) (calls string) {
 	script := `#!/bin/sh
 echo call >> "$NM_FAKE_LSOF_CALLS"
 for a; do list=$a; done
+[ -n "$NM_FAKE_LSOF_HANG_ALL" ] && exec sleep 30
 case ",$list," in *",$NM_FAKE_LSOF_HANG,"*) printf 'p%s\nn/wt/cut' "$NM_FAKE_LSOF_HANG"; exec sleep 30;; esac
 IFS=,
 for p in $list; do printf 'p%s\nn/wt/%s\n' "$p" "$p"; done
@@ -235,7 +237,7 @@ func TestLsofCWDsBatchesAndMergesEveryAnswer(t *testing.T) {
 func TestLsofCWDsMergesOtherBatchesWhenOneTimesOut(t *testing.T) {
 	installFakeLsof(t)
 	orig := cwdLookupTimeout
-	cwdLookupTimeout = 200 * time.Millisecond
+	cwdLookupTimeout = 2 * time.Second
 	t.Cleanup(func() { cwdLookupTimeout = orig })
 	pids := make([]int, lsofBatchSize+44)
 	for i := range pids {
@@ -257,9 +259,37 @@ func TestLsofCWDsMergesOtherBatchesWhenOneTimesOut(t *testing.T) {
 	}
 }
 
+// However many batches hang, one lookup stops at the total deadline and names
+// every batch it could not answer.
+func TestLsofCWDsStopsAtTheTotalDeadline(t *testing.T) {
+	installFakeLsof(t)
+	t.Setenv("NM_FAKE_LSOF_HANG_ALL", "1")
+	orig := cwdLookupTotalTimeout
+	cwdLookupTotalTimeout = time.Second
+	t.Cleanup(func() { cwdLookupTotalTimeout = orig })
+	pids := make([]int, 2*lsofBatchSize+1)
+	for i := range pids {
+		pids[i] = 1000 + i
+	}
+
+	start := time.Now()
+	cwds, err := lsofCWDs(pids)
+	if elapsed := time.Since(start); elapsed > 8*time.Second {
+		t.Fatalf("lsofCWDs took %s, want about the 1s total deadline", elapsed)
+	}
+	if len(cwds) != 0 {
+		t.Fatalf("lsofCWDs = %v, want no cwds from hung batches", cwds)
+	}
+	for _, first := range []int{pids[0], pids[lsofBatchSize], pids[2*lsofBatchSize]} {
+		if err == nil || !strings.Contains(err.Error(), "from pid "+strconv.Itoa(first)+" timed out") {
+			t.Fatalf("lsofCWDs error = %v, want the batch from pid %d reported as timed out", err, first)
+		}
+	}
+}
+
 // An lsof that cannot launch is an error, not an empty clean answer.
 func TestLsofBatchCWDsReportsALaunchFailure(t *testing.T) {
-	cwds, err := lsofBatchCWDs(filepath.Join(t.TempDir(), "lsof"), []int{os.Getpid()})
+	cwds, err := lsofBatchCWDs(t.Context(), filepath.Join(t.TempDir(), "lsof"), []int{os.Getpid()})
 	if err == nil || len(cwds) != 0 {
 		t.Fatalf("lsofBatchCWDs = %v, %v, want no cwds and an error", cwds, err)
 	}
