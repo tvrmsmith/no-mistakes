@@ -21,9 +21,9 @@ const (
 	sigKill = syscall.SIGKILL
 )
 
-// cwdLookupTimeout bounds the external cwd lookup. It is a diagnostic read on
-// a cleanup path, so a wedged or missing helper must degrade to "found
-// nothing" rather than stall daemon startup or a run's teardown.
+// cwdLookupTimeout bounds each external cwd lookup batch. It is a diagnostic
+// read on a cleanup path, so a wedged or missing helper must degrade to a
+// logged partial answer rather than stall daemon startup or a run's teardown.
 const cwdLookupTimeout = 10 * time.Second
 
 // listProcesses reads the whole process table. `ps` is used rather than /proc
@@ -193,11 +193,33 @@ func parseLsofCWD(out string) map[int]string {
 	return cwds
 }
 
-func lsofCWDs(pids []int) map[int]string {
+// lsofBatchSize caps the pids one lsof call carries, so on a loaded machine a
+// slow batch costs only its own pids instead of the whole sweep.
+const lsofBatchSize = 256
+
+// lsofCWDs returns every cwd it could read plus an error naming each batch that
+// failed, so a partial answer still drives the sweep and the gap is logged.
+func lsofCWDs(pids []int) (map[int]string, error) {
 	lsof, err := exec.LookPath("lsof")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("resolve process cwds: %w", err)
 	}
+	cwds := make(map[int]string, len(pids))
+	var errs []error
+	for start := 0; start < len(pids); start += lsofBatchSize {
+		batch := pids[start:min(start+lsofBatchSize, len(pids))]
+		got, err := lsofBatchCWDs(lsof, batch)
+		for pid, cwd := range got {
+			cwds[pid] = cwd
+		}
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return cwds, errors.Join(errs...)
+}
+
+func lsofBatchCWDs(lsof string, pids []int) (map[int]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cwdLookupTimeout)
 	defer cancel()
 	ids := make([]string, 0, len(pids))
@@ -206,8 +228,16 @@ func lsofCWDs(pids []int) map[int]string {
 	}
 	cmd := exec.CommandContext(ctx, lsof, "-a", "-d", "cwd", "-Fpn", "-p", strings.Join(ids, ","))
 	cmd.Env = cEnv()
+	out, err := cmd.Output()
+	cwds := parseLsofCWD(string(out))
 	// lsof exits nonzero when some of the pids are gone, which is expected
 	// while sweeping a dying tree; whatever it printed is still valid.
-	out, _ := cmd.Output()
-	return parseLsofCWD(string(out))
+	var exitErr *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		return cwds, fmt.Errorf("lsof cwd lookup for %d pids timed out after %s", len(pids), cwdLookupTimeout)
+	case err != nil && !errors.As(err, &exitErr):
+		return cwds, fmt.Errorf("lsof cwd lookup for %d pids: %w", len(pids), err)
+	}
+	return cwds, nil
 }

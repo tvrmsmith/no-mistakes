@@ -166,6 +166,67 @@ func TestParseLsofCWDKeepsDeletedDirectories(t *testing.T) {
 	}
 }
 
+// installFakeLsof puts an lsof on PATH that answers every pid it is asked for
+// with /wt/<pid>, records one line per invocation in the returned file, and
+// exits 1 the way real lsof does when some of the pids have already exited.
+func installFakeLsof(t *testing.T) (calls string) {
+	t.Helper()
+	dir := t.TempDir()
+	calls = filepath.Join(dir, "calls")
+	script := `#!/bin/sh
+echo call >> "$NM_FAKE_LSOF_CALLS"
+for a; do list=$a; done
+IFS=,
+for p in $list; do printf 'p%s\nn/wt/%s\n' "$p" "$p"; done
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(dir, "lsof"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake lsof: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+	t.Setenv("NM_FAKE_LSOF_CALLS", calls)
+	return calls
+}
+
+// A candidate set larger than one batch is split, every batch's answer is
+// merged, and lsof's routine nonzero exit for vanished pids is not an error.
+func TestLsofCWDsBatchesAndMergesEveryAnswer(t *testing.T) {
+	calls := installFakeLsof(t)
+	pids := make([]int, lsofBatchSize+44)
+	for i := range pids {
+		pids[i] = 1000 + i
+	}
+
+	cwds, err := lsofCWDs(pids)
+	if err != nil {
+		t.Fatalf("lsofCWDs error = %v, want nil for lsof's vanished-pid exit", err)
+	}
+	if len(cwds) != len(pids) {
+		t.Fatalf("resolved %d cwds, want %d", len(cwds), len(pids))
+	}
+	if got, want := cwds[pids[len(pids)-1]], "/wt/"+strconv.Itoa(pids[len(pids)-1]); got != want {
+		t.Fatalf("last pid cwd = %q, want %q", got, want)
+	}
+	recorded, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatalf("read fake lsof calls: %v", err)
+	}
+	if got := strings.Count(string(recorded), "call"); got != 2 {
+		t.Fatalf("lsof ran %d times, want 2 batches", got)
+	}
+}
+
+// A host without lsof reports the gap instead of passing for a sweep that
+// found nothing to reap.
+func TestLsofCWDsReportsAMissingLsof(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	cwds, err := lsofCWDs([]int{os.Getpid()})
+	if err == nil || len(cwds) != 0 {
+		t.Fatalf("lsofCWDs = %v, %v, want no cwds and an error", cwds, err)
+	}
+}
+
 func newFakeWorktree(t *testing.T) (root, worktree string) {
 	t.Helper()
 	root = filepath.Join(t.TempDir(), "worktrees")
@@ -219,7 +280,7 @@ func parseEscapedPID(t *testing.T, output string) int {
 func requireCWDLookup(t *testing.T) {
 	t.Helper()
 	self := os.Getpid()
-	cwds := processCWDs([]int{self})
+	cwds, _ := processCWDs([]int{self})
 	if _, ok := cwds[self]; !ok {
 		t.Skip("process working directories are not readable on this host")
 	}

@@ -41,6 +41,7 @@
 package procreap
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -144,7 +145,9 @@ var (
 )
 
 // Sweep terminates every process associated with a worktree that no run owns
-// any more. It returns the processes it signalled. An empty result with a nil
+// any more. It returns the processes it signalled. When some working
+// directories could not be read it still reaps what it could match and returns
+// the victims together with the lookup error. An empty result with a nil
 // error is the normal outcome and also what platforms without a process-table
 // reader (Windows, where job objects already contain the whole tree) return.
 func Sweep(opts Options) ([]Victim, error) {
@@ -179,7 +182,10 @@ func Sweep(opts Options) ([]Victim, error) {
 		return nil, nil
 	}
 
-	cwds := processCWDsFunc(candidates)
+	cwds, cwdErr := processCWDsFunc(candidates)
+	if cwdErr != nil {
+		cwdErr = fmt.Errorf("read process working directories: %w", cwdErr)
+	}
 	matchers := worktreeMatchers(opts)
 	var scopes []string
 	for _, scope := range opts.Scopes {
@@ -202,12 +208,12 @@ func Sweep(opts Options) ([]Victim, error) {
 		matched[pid] = dir
 	}
 	if len(matched) == 0 {
-		return nil, nil
+		return nil, cwdErr
 	}
 
 	victims := expandVictims(matched, procs, protected)
 	terminate(victims, opts.Grace)
-	return victims, nil
+	return victims, cwdErr
 }
 
 // SweepAndLog runs Sweep and reports the outcome on the daemon log. It is the
@@ -216,8 +222,7 @@ func Sweep(opts Options) ([]Victim, error) {
 func SweepAndLog(opts Options, reason string) {
 	victims, err := Sweep(opts)
 	if err != nil {
-		slog.Warn("orphan process sweep failed", "reason", reason, "error", err)
-		return
+		slog.Warn("orphan process sweep incomplete", "reason", reason, "error", err)
 	}
 	for _, v := range victims {
 		slog.Info("reaped orphaned run process",

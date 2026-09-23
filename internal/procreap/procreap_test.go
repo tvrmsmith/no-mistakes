@@ -1,6 +1,7 @@
 package procreap
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,6 +24,8 @@ type fakeSystem struct {
 	// sweep costs on a real machine (`ps` plus one cwd read per candidate).
 	listCalls int
 	cwdCalls  int
+	// cwdErr is what the cwd lookup reports alongside whatever it resolved.
+	cwdErr error
 }
 
 type signalRecord struct {
@@ -49,7 +52,7 @@ func (f *fakeSystem) install(t *testing.T) {
 		f.mu.Unlock()
 		return f.procs, nil
 	}
-	processCWDsFunc = func(pids []int) map[int]string {
+	processCWDsFunc = func(pids []int) (map[int]string, error) {
 		f.mu.Lock()
 		f.cwdCalls++
 		f.mu.Unlock()
@@ -59,7 +62,7 @@ func (f *fakeSystem) install(t *testing.T) {
 				out[pid] = cwd
 			}
 		}
-		return out
+		return out, f.cwdErr
 	}
 	signalProcessFunc = func(pid int, sig procSignal) error {
 		f.record(pid, false, sig)
@@ -141,6 +144,45 @@ func TestSweepReapsStaleWorktreeProcessAndSparesEverythingElse(t *testing.T) {
 	}
 	if fake.anySignalTo(200) {
 		t.Fatalf("process outside the worktrees root must never be signalled: %+v", fake.signals)
+	}
+}
+
+// A cwd lookup that times out on some batches must not hide the processes it
+// did resolve, and must not pass for a clean sweep either.
+func TestSweepReapsWhatAPartialCWDLookupResolvedAndReportsTheGap(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "worktrees")
+	lookupErr := errors.New("lsof cwd lookup for 256 pids timed out after 10s")
+	fake := &fakeSystem{
+		procs: []Process{
+			{PID: 100, PPID: 1, PGID: 100, Command: "stale-worker", Elapsed: 40 * time.Hour},
+		},
+		cwds:   map[int]string{100: filepath.Join(root, "repo1", "run1")},
+		cwdErr: lookupErr,
+	}
+	fake.install(t)
+
+	victims, err := Sweep(Options{WorktreesRoot: root, MinAge: DefaultMinAge})
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("Sweep error = %v, want the cwd lookup failure", err)
+	}
+	if got := victimPIDs(victims); len(got) != 1 || got[0] != 100 {
+		t.Fatalf("Sweep victims = %v, want [100]", got)
+	}
+}
+
+// A failed lookup that matched nothing still reports the failure.
+func TestSweepReportsCWDLookupFailureWithNoMatches(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "worktrees")
+	lookupErr := errors.New("resolve process cwds: lsof not found")
+	fake := &fakeSystem{
+		procs:  []Process{{PID: 100, PPID: 1, PGID: 100, Command: "stale-worker", Elapsed: 40 * time.Hour}},
+		cwdErr: lookupErr,
+	}
+	fake.install(t)
+
+	victims, err := Sweep(Options{WorktreesRoot: root, MinAge: DefaultMinAge})
+	if !errors.Is(err, lookupErr) || len(victims) != 0 {
+		t.Fatalf("Sweep = %v, %v, want no victims and the lookup failure", victims, err)
 	}
 }
 
