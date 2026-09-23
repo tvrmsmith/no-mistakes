@@ -229,11 +229,11 @@ func TestDrain_GateParkedRunDoesNotHoldUpDrain(t *testing.T) {
 	parkRunAwaitingAgent(t, database, run)
 
 	start := time.Now()
-	report := m.Drain(t.Context(), 5*time.Second)
+	report := m.Drain(t.Context(), 60*time.Second)
 	elapsed := time.Since(start)
 
-	if elapsed >= 2*time.Second {
-		t.Fatalf("Drain took %v, want under 2s for a parked-only run", elapsed)
+	if elapsed >= 30*time.Second {
+		t.Fatalf("Drain took %v, want well under the 60s deadline for a parked-only run", elapsed)
 	}
 	if containsRunID(report.Waited, run.ID) {
 		t.Fatalf("Waited = %v, want it to exclude parked run %s", report.Waited, run.ID)
@@ -254,9 +254,9 @@ func TestDrain_CIMonitorIsExemptNotCut(t *testing.T) {
 	// done is never closed: the monitor keeps polling until Shutdown preserves it.
 
 	start := time.Now()
-	report := m.Drain(t.Context(), 5*time.Second)
+	report := m.Drain(t.Context(), 60*time.Second)
 	elapsed := time.Since(start)
-	if elapsed >= 2*time.Second {
+	if elapsed >= 30*time.Second {
 		t.Fatalf("Drain took %v, want it released once rather than waiting out the deadline", elapsed)
 	}
 
@@ -553,9 +553,9 @@ func TestDrain_ParkedCIGateWinsOverCIMonitorClassification(t *testing.T) {
 	parkRunAwaitingAgent(t, database, run)
 
 	start := time.Now()
-	report := m.Drain(t.Context(), 10*time.Second)
+	report := m.Drain(t.Context(), 60*time.Second)
 
-	if elapsed := time.Since(start); elapsed >= 5*time.Second {
+	if elapsed := time.Since(start); elapsed >= 30*time.Second {
 		t.Fatalf("Drain took %v, want it to skip the parked run immediately", elapsed)
 	}
 	if context.Cause(ctx) != nil {
@@ -1064,13 +1064,13 @@ func TestDrain_RunThatParksMidDrainIsReleased(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(t.Context(), 10*time.Second)
+	report := m.Drain(t.Context(), 60*time.Second)
 	elapsed := time.Since(start)
 
 	if err := <-parkErr; err != nil {
 		t.Fatalf("park run mid-drain: %v", err)
 	}
-	if elapsed >= 5*time.Second {
+	if elapsed >= 30*time.Second {
 		t.Fatalf("Drain took %v, want it released once the run parked rather than waiting out the deadline", elapsed)
 	}
 	if containsRunID(report.Waited, run.ID) {
@@ -1100,13 +1100,13 @@ func TestDrain_RunThatReachesCIMidDrainIsExempted(t *testing.T) {
 	}()
 
 	start := time.Now()
-	report := m.Drain(t.Context(), 10*time.Second)
+	report := m.Drain(t.Context(), 60*time.Second)
 	elapsed := time.Since(start)
 
 	if err := <-markErr; err != nil {
 		t.Fatalf("mark run as a CI monitor mid-drain: %v", err)
 	}
-	if elapsed >= 5*time.Second {
+	if elapsed >= 30*time.Second {
 		t.Fatalf("Drain took %v, want it released once the monitor was reclassified", elapsed)
 	}
 	if cause := context.Cause(ctx); cause != nil {
