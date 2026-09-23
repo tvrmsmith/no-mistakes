@@ -355,9 +355,12 @@ Previous test findings to address:
 		}
 		// The category is what configuredTestCommandOverrideReason matches on, so
 		// an approval over a failing unit is recorded as an override rather than
-		// reading like a genuinely green completion.
+		// reading like a genuinely green completion. The explicit action is what
+		// the executor's auto-fix filter selects on; an empty one reads as
+		// ask-user and parks with the auto_fix.test budget unspent.
 		baselineFindings = []Finding{{
 			Severity:    types.FindingSeverityError,
+			Action:      types.ActionAutoFix,
 			Category:    types.FindingCategoryTestCommand,
 			Description: description,
 		}}
