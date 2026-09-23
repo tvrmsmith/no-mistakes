@@ -3,6 +3,7 @@
 package procreap
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -166,9 +167,20 @@ func TestParseLsofCWDKeepsDeletedDirectories(t *testing.T) {
 	}
 }
 
+// A killed lsof can stop partway through a name line; the cut-off path must
+// not be read as a real cwd.
+func TestParseLsofCWDIgnoresAnUnterminatedFinalLine(t *testing.T) {
+	cwds := parseLsofCWD("p123\nn/tmp\np124\nn/Users/x/.no-mistakes/worktrees/repo/01M36C3Q")
+	want := map[int]string{123: "/tmp"}
+	if !maps.Equal(cwds, want) {
+		t.Fatalf("parseLsofCWD = %v, want %v", cwds, want)
+	}
+}
+
 // installFakeLsof puts an lsof on PATH that answers every pid it is asked for
 // with /wt/<pid>, records one line per invocation in the returned file, and
 // exits 1 the way real lsof does when some of the pids have already exited.
+// A batch holding $NM_FAKE_LSOF_HANG prints a cut-off record and hangs.
 func installFakeLsof(t *testing.T) (calls string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -176,6 +188,7 @@ func installFakeLsof(t *testing.T) (calls string) {
 	script := `#!/bin/sh
 echo call >> "$NM_FAKE_LSOF_CALLS"
 for a; do list=$a; done
+case ",$list," in *",$NM_FAKE_LSOF_HANG,"*) printf 'p%s\nn/wt/cut' "$NM_FAKE_LSOF_HANG"; exec sleep 30;; esac
 IFS=,
 for p in $list; do printf 'p%s\nn/wt/%s\n' "$p" "$p"; done
 exit 1
@@ -201,11 +214,12 @@ func TestLsofCWDsBatchesAndMergesEveryAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lsofCWDs error = %v, want nil for lsof's vanished-pid exit", err)
 	}
-	if len(cwds) != len(pids) {
-		t.Fatalf("resolved %d cwds, want %d", len(cwds), len(pids))
+	want := make(map[int]string, len(pids))
+	for _, pid := range pids {
+		want[pid] = "/wt/" + strconv.Itoa(pid)
 	}
-	if got, want := cwds[pids[len(pids)-1]], "/wt/"+strconv.Itoa(pids[len(pids)-1]); got != want {
-		t.Fatalf("last pid cwd = %q, want %q", got, want)
+	if !maps.Equal(cwds, want) {
+		t.Fatalf("lsofCWDs = %v, want %v", cwds, want)
 	}
 	recorded, err := os.ReadFile(calls)
 	if err != nil {
@@ -213,6 +227,41 @@ func TestLsofCWDsBatchesAndMergesEveryAnswer(t *testing.T) {
 	}
 	if got := strings.Count(string(recorded), "call"); got != 2 {
 		t.Fatalf("lsof ran %d times, want 2 batches", got)
+	}
+}
+
+// A batch that times out costs only its own pids: the other batch's answer is
+// merged and the error names the batch that timed out.
+func TestLsofCWDsMergesOtherBatchesWhenOneTimesOut(t *testing.T) {
+	installFakeLsof(t)
+	orig := cwdLookupTimeout
+	cwdLookupTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { cwdLookupTimeout = orig })
+	pids := make([]int, lsofBatchSize+44)
+	for i := range pids {
+		pids[i] = 1000 + i
+	}
+	hung := pids[lsofBatchSize]
+	t.Setenv("NM_FAKE_LSOF_HANG", strconv.Itoa(hung))
+
+	cwds, err := lsofCWDs(pids)
+	if err == nil || !strings.Contains(err.Error(), "from pid "+strconv.Itoa(hung)+" timed out") {
+		t.Fatalf("lsofCWDs error = %v, want the second batch's timeout", err)
+	}
+	want := make(map[int]string, lsofBatchSize)
+	for _, pid := range pids[:lsofBatchSize] {
+		want[pid] = "/wt/" + strconv.Itoa(pid)
+	}
+	if !maps.Equal(cwds, want) {
+		t.Fatalf("lsofCWDs = %v, want only the first batch %v", cwds, want)
+	}
+}
+
+// An lsof that cannot launch is an error, not an empty clean answer.
+func TestLsofBatchCWDsReportsALaunchFailure(t *testing.T) {
+	cwds, err := lsofBatchCWDs(filepath.Join(t.TempDir(), "lsof"), []int{os.Getpid()})
+	if err == nil || len(cwds) != 0 {
+		t.Fatalf("lsofBatchCWDs = %v, %v, want no cwds and an error", cwds, err)
 	}
 }
 

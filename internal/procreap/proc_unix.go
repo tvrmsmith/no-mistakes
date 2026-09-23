@@ -24,7 +24,7 @@ const (
 // cwdLookupTimeout bounds each external cwd lookup batch. It is a diagnostic
 // read on a cleanup path, so a wedged or missing helper must degrade to a
 // logged partial answer rather than stall daemon startup or a run's teardown.
-const cwdLookupTimeout = 10 * time.Second
+var cwdLookupTimeout = 10 * time.Second
 
 // listProcesses reads the whole process table. `ps` is used rather than /proc
 // so one implementation covers macOS and Linux, matching how the daemon's
@@ -167,9 +167,12 @@ func trimDeletedSuffix(path string) string {
 	return strings.TrimSuffix(strings.TrimSpace(path), " (deleted)")
 }
 
+// parseLsofCWD reads only newline-terminated lines: a killed lsof can stop
+// mid-record, and a cut-off path would name a worktree that does not exist.
 func parseLsofCWD(out string) map[int]string {
 	cwds := make(map[int]string)
 	pid := 0
+	out = out[:strings.LastIndexByte(out, '\n')+1]
 	for _, line := range strings.Split(out, "\n") {
 		if len(line) < 2 {
 			continue
@@ -197,8 +200,8 @@ func parseLsofCWD(out string) map[int]string {
 // slow batch costs only its own pids instead of the whole sweep.
 const lsofBatchSize = 256
 
-// lsofCWDs returns every cwd it could read plus an error naming each batch that
-// failed, so a partial answer still drives the sweep and the gap is logged.
+// lsofCWDs returns every cwd it could read plus an error naming each failed
+// batch by its first pid, so a partial answer still drives the sweep and the gap is logged.
 func lsofCWDs(pids []int) (map[int]string, error) {
 	lsof, err := exec.LookPath("lsof")
 	if err != nil {
@@ -234,10 +237,11 @@ func lsofBatchCWDs(lsof string, pids []int) (map[int]string, error) {
 	// while sweeping a dying tree; whatever it printed is still valid.
 	var exitErr *exec.ExitError
 	switch {
+	// A killed lsof also yields an ExitError, so the timeout is checked first.
 	case ctx.Err() != nil:
-		return cwds, fmt.Errorf("lsof cwd lookup for %d pids timed out after %s", len(pids), cwdLookupTimeout)
+		return cwds, fmt.Errorf("lsof cwd lookup for %d pids from pid %d timed out after %s", len(pids), pids[0], cwdLookupTimeout)
 	case err != nil && !errors.As(err, &exitErr):
-		return cwds, fmt.Errorf("lsof cwd lookup for %d pids: %w", len(pids), err)
+		return cwds, fmt.Errorf("lsof cwd lookup for %d pids from pid %d: %w", len(pids), pids[0], err)
 	}
 	return cwds, nil
 }

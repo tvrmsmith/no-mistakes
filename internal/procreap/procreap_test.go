@@ -155,6 +155,7 @@ func TestSweepReapsWhatAPartialCWDLookupResolvedAndReportsTheGap(t *testing.T) {
 	fake := &fakeSystem{
 		procs: []Process{
 			{PID: 100, PPID: 1, PGID: 100, Command: "stale-worker", Elapsed: 40 * time.Hour},
+			{PID: 101, PPID: 1, PGID: 101, Command: "stale-worker", Elapsed: 40 * time.Hour},
 		},
 		cwds:   map[int]string{100: filepath.Join(root, "repo1", "run1")},
 		cwdErr: lookupErr,
