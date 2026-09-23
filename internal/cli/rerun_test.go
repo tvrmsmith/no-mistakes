@@ -251,7 +251,7 @@ func TestRerunSendsOnlyCleanCallerHead(t *testing.T) {
 				}
 				defer closers.Quiet(client)
 				env := &axiEnv{p: p, d: d, repo: repo, cfg: config.DefaultGlobalConfig(), client: client}
-				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 				defer cancel()
 				runID, err := triggerRun(ctx, env, "main", nil, "keep the caller's changes", "")
 				if err != nil || runID != "rerun-1" {

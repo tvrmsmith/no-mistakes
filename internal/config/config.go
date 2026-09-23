@@ -690,6 +690,14 @@ type Commands struct {
 	Test    string `yaml:"test"`
 	Format  string `yaml:"format"`
 	Metrics string `yaml:"metrics"`
+	// Cleanup releases whatever a run left running OUTSIDE its own process
+	// tree - a container stack, a daemonized service, a VM - which procreap
+	// cannot see because those processes are children of some other supervisor
+	// rather than of the run. The pipeline runs it on entry to push and again
+	// when the run worktree is removed, and never fails a run over its result.
+	// It is a code-executing field like the rest of Commands, so it is taken
+	// from the trusted default-branch copy (see EffectiveRepoConfig).
+	Cleanup string `yaml:"cleanup"`
 }
 
 // AutoFixRaw is the YAML representation of auto-fix config.

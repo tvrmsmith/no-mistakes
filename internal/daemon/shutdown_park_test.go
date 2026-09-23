@@ -290,6 +290,39 @@ func TestNextDaemonStartResumesRunPreservedByCleanStop(t *testing.T) {
 	}
 }
 
+// TestResumedRunReleasesExternalResourcesWhenItFinishes covers the only
+// release for a stack a gate-parked run holds across a clean stop: the stop
+// preserves the run without running commands.cleanup, and the resumed run runs
+// it in its worktree when it finishes.
+func TestResumedRunReleasesExternalResourcesWhenItFinishes(t *testing.T) {
+	steps := func() []pipeline.Step {
+		return []pipeline.Step{&mockApprovalStep{name: types.StepReview}}
+	}
+	marker := filepath.Join(t.TempDir(), "cleanup.log")
+	first := startTestDaemonInstance(t, steps)
+	p, d := first.paths, first.db
+
+	repo, runID := startParkedRunWithRepoConfig(t, p, d, "shutdown-park-cleanup-repo", cleanupCommandConfig(t, marker), nil)
+	wantDir := resolvedWorktreeDir(t, p, p.WorktreeDir(repo.ID, runID))
+
+	if err := first.stopAndWait(t); err != nil {
+		t.Fatalf("first daemon exited with error: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("clean stop ran the cleanup command for a preserved run: %v", err)
+	}
+
+	restartTestDaemonInstance(t, p, d, steps)
+	approveWhenResumed(t, p, runID, types.StepReview)
+
+	if completed := waitForRunTerminalState(t, d, runID); completed.Status != types.RunCompleted {
+		t.Fatalf("resumed run status = %s, want %s", completed.Status, types.RunCompleted)
+	}
+	if got := waitForCleanupMarker(t, marker); got != wantDir {
+		t.Fatalf("cleanup ran in %q, want the run worktree %q", got, wantDir)
+	}
+}
+
 // TestSecondCleanStopPreservesRunParkedAtALaterGate proves preservation is not
 // a one-shot property of the first stop: a run resumed from a preserved park,
 // then parked again at a later gate, survives a second clean stop with its

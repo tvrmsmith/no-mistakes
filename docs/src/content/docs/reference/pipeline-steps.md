@@ -302,6 +302,7 @@ Pushes the validated branch to the configured push target.
 
 **Behavior:**
 
+- On entry, before any of its own guards, runs [`commands.cleanup`](/no-mistakes/reference/repo-config/#commandscleanup) when configured, releasing a local dev stack nothing from push onward needs. Its result never affects the push
 - Refuses with an error if the worktree is dirty: every validation step commits its own work at its own exit, so a dirty tree here means an earlier step misreported its exit state. Push does not run a formatter and does not make a catch-all commit for leftover changes.
 - Without fork routing, successful run-start validation selects the upstream URL from the working clone; when it matches the gate worktree's `origin`, the worktree URL is used so embedded credentials retained outside the database can authenticate. If validation fails, the run continues with its prior routing.
 - With GitHub fork routing, the push target is `repos.fork_url`

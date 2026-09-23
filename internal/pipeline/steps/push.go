@@ -22,7 +22,23 @@ type PushStep struct{}
 
 func (s *PushStep) Name() types.StepName { return types.StepPush }
 
+// Execute first reclaims whatever the local gates left running outside this
+// run's process tree (commands.cleanup), before any of its own guards, so a
+// refused push still releases it. Everything from here on - push, pr, ci -
+// needs no local dev stack, and that window is the expensive one: across 557
+// local runs the ci step alone averaged 3.9 hours babysitting a PR (max 70.9h,
+// and ci_timeout defaults to 168h), so a stack held until teardown is held for
+// hours after the last thing that used it.
+//
+// Push is the earliest boundary that is actually safe. Test completion is not:
+// 259 of 296 runs finished the test step only after a later step had already
+// started, so tearing down there would pay a cold rebuild on most runs.
+// Nothing re-entered test after push in that corpus (0 of 236 runs reaching
+// push, 0 of 177 reaching ci). An auto_fix.ci round could in principle send a
+// run back through test; it never has, and the cost if it does is one cold
+// start, not a failed run.
 func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+	releaseExternalRunResources(sctx, s.Name())
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
