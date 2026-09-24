@@ -126,6 +126,9 @@ func renderRunAgentPerf(w *printer, database *db.DB, runID string) error {
 	}
 
 	w.Printf("run %s (%s), parked at gates %s total\n", run.ID, run.Status, formatMS(run.ParkedMS))
+	if run.PiProfile != nil {
+		w.Printf("pinned Pi profile: model=%s effort=%s (requested for every invocation; MODEL below is served evidence)\n", run.PiProfile.Model, run.PiProfile.Effort)
+	}
 	if len(invocations) == 0 {
 		w.Println("no agent invocations recorded for this run")
 		return w.Err()

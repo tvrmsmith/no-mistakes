@@ -20,10 +20,11 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps/internal/stepstest"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-var testGitExecutable, _ = exec.LookPath("git")
+var testGitExecutable, testGitErr = testgit.RealGit()
 
 type mockAgent struct {
 	name  string
@@ -185,24 +186,55 @@ func setupGitRepo(t *testing.T) (string, string, string) {
 	return dir, gitRepoTemplate.baseSHA, gitRepoTemplate.headSHA
 }
 
+// ensureHermeticOrigin gives a test repo that lacks an "origin" remote a
+// local one (itself) so incidental upstream fetches stay hermetic instead of
+// reaching the network. Without this, tests that never configure a real
+// remote fetch the placeholder github.com/test/repo URL - which used to be
+// harmless because a failed fetch degraded silently, but resolveBranchBaseSHA
+// now refuses on fetch failure (#997/#1147), so every step test needs a
+// fetchable base branch ref.
+func ensureHermeticOrigin(t *testing.T, workDir string) {
+	t.Helper()
+	if testGitExecutable == "" {
+		return
+	}
+	gitDir, err := os.Stat(filepath.Join(workDir, ".git"))
+	if err != nil || !gitDir.IsDir() {
+		return
+	}
+	if cmd := exec.Command(testGitExecutable, "-C", workDir, "remote", "get-url", "origin"); cmd.Run() != nil {
+		cmd = exec.Command(testGitExecutable, "-C", workDir, "remote", "add", "origin", workDir)
+		if output, addErr := cmd.CombinedOutput(); addErr != nil {
+			t.Fatalf("add hermetic test origin: %v: %s", addErr, output)
+		}
+	}
+}
+
+// ensureLocalBranch creates branch pointing at ref in workDir, unless it
+// already exists. Tests that configure a base branch other than "main" (e.g.
+// "develop", "epic/feature") need that ref to actually exist locally: with
+// ensureHermeticOrigin pointing "origin" at the worktree itself,
+// resolveBranchBaseSHA's base-branch fetch now fails closed on a missing ref
+// (#997/#1147) instead of silently degrading.
+func ensureLocalBranch(t *testing.T, workDir, branch, ref string) {
+	t.Helper()
+	check := exec.Command(testGitExecutable, "-C", workDir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if check.Run() == nil {
+		return
+	}
+	cmd := exec.Command(testGitExecutable, "-C", workDir, "branch", branch, ref)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create local branch %s: %v: %s", branch, err, output)
+	}
+}
+
 // newTestContext creates a StepContext for testing with optional config overrides.
 func newTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA string, cmds config.Commands) *pipeline.StepContext {
 	t.Helper()
-
-	// Most step tests do not exercise remote transport. Give repositories that
-	// lack an explicitly configured origin a local one so incidental upstream
-	// refreshes stay hermetic. Without this, CI monitor tests fetch the
-	// placeholder github.com/test/repo URL; under process-saturated macOS CI the
-	// fetch can consume their entire idle timeout before the fake provider is
-	// queried.
-	if gitDir, err := os.Stat(filepath.Join(workDir, ".git")); err == nil && gitDir.IsDir() && testGitExecutable != "" {
-		if cmd := exec.Command(testGitExecutable, "-C", workDir, "remote", "get-url", "origin"); cmd.Run() != nil {
-			cmd = exec.Command(testGitExecutable, "-C", workDir, "remote", "add", "origin", workDir)
-			if output, addErr := cmd.CombinedOutput(); addErr != nil {
-				t.Fatalf("add hermetic test origin: %v: %s", addErr, output)
-			}
-		}
+	if testGitErr != nil {
+		t.Fatal(testGitErr)
 	}
+	ensureHermeticOrigin(t, workDir)
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	database, err := db.Open(dbPath)
@@ -232,6 +264,9 @@ func newTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA stri
 // fakeCLIEnv builds environment variable entries for a fake CLI binary and PATH override.
 // Returns env entries that should be set on StepContext.Env for parallel-safe tests.
 func fakeCLIEnv(binDir string, vars map[string]string) []string {
+	if testGitErr != nil {
+		panic(testGitErr)
+	}
 	env := []string{
 		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"FAKE_CLI_REAL_GIT=" + testGitExecutable,

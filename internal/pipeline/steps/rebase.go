@@ -48,7 +48,7 @@ func (s *RebaseStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 
 	sctx.Log("fetching latest upstream state...")
 	if err := fetchRunUpstreamBranch(ctx, sctx, defaultBranch); err != nil {
-		sctx.LogFile(fmt.Sprintf("warning: could not fetch origin/%s: %v", defaultBranch, err))
+		return nil, fmt.Errorf("fetch base branch %q before rebase: %w", defaultBranch, err)
 	}
 	// Sync the push branch's remote-tracking ref only when we are about to rebase
 	// onto it (a normal push). On a force push we deliberately skip both the fetch
@@ -120,7 +120,7 @@ func (s *RebaseStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 		outcome, err := updateHeadSHA(ctx, sctx)
 		if err == nil {
 			if sctx.Run.HeadSHA == before {
-				outcome.FixSummary = noChangesAppliedSummary
+				outcome.FixSummary = NoChangesAppliedSummary
 				sctx.Log("no changes applied: branch already up to date")
 			} else {
 				outcome.FixSummary = changesAppliedSummary
@@ -192,22 +192,6 @@ func forcePushRebaseTargets(branch, defaultBranch string) []string {
 		return nil
 	}
 	return []string{"origin/" + defaultBranch}
-}
-
-// effectivePRBaseBranch resolves the branch used as the integration base for
-// rebases. Per-run overrides win over repo config; the repository default
-// remains the fallback when neither selects a separate PR target branch.
-func effectivePRBaseBranch(sctx *pipeline.StepContext) string {
-	defaultBranch := strings.TrimSpace(sctx.Repo.DefaultBranch)
-	if runBase := runPRBaseBranch(sctx); runBase != "" {
-		defaultBranch = runBase
-	} else if sctx.Config != nil && strings.TrimSpace(sctx.Config.PR.BaseBranch) != "" {
-		defaultBranch = strings.TrimSpace(sctx.Config.PR.BaseBranch)
-	}
-	if defaultBranch == "" {
-		defaultBranch = "main"
-	}
-	return defaultBranch
 }
 
 // detectBundledLocalDefaultCommits returns a blocking finding when the gated
@@ -294,7 +278,7 @@ func detectBundledLocalDefaultCommits(ctx context.Context, sctx *pipeline.StepCo
 	)
 	fixSummary := ""
 	if sctx.Fixing {
-		fixSummary = noChangesAppliedSummary
+		fixSummary = NoChangesAppliedSummary
 		const explanation = "no changes applied: bundled local-default commits require manual separation or explicit approval"
 		description += "\n\n" + explanation + "; the rebase conflict resolver cannot safely select commits to discard."
 		sctx.Log(explanation)
@@ -808,7 +792,8 @@ func dedupeRebaseFindings(findings []Finding) []Finding {
 }
 
 // updateHeadSHA syncs the run's head SHA after rebase and checks for an empty diff.
-// When the branch diff against the default branch is empty, SkipRemaining is set.
+// When the branch diff against its effective PR base branch is empty,
+// SkipRemaining is set.
 func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	headSHA, err := git.HeadSHA(ctx, sctx.WorkDir)
 	if err != nil {
@@ -824,10 +809,16 @@ func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.S
 		sctx.Log(fmt.Sprintf("updated head SHA to %s", shortSHA(headSHA)))
 	}
 
-	// Check if the branch has any diff against the default branch.
+	// Check if the branch has any diff against its PR base branch.
 	// If the diff is empty (e.g. branch was already merged), skip remaining steps.
+	// Execute already fetched the base branch (fail-closed) before integrating,
+	// so reuse that ref instead of fetching again after HEAD was rewritten and
+	// persisted: a failure here could not undo either.
 	defaultBranch := effectivePRBaseBranch(sctx)
-	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, defaultBranch)
+	baseSHA := mergeBaseWithDefaultBranch(ctx, sctx.WorkDir, defaultBranch)
+	if baseSHA == "" {
+		baseSHA = resolveBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, defaultBranch)
+	}
 	diff, err := git.Diff(ctx, sctx.WorkDir, baseSHA, "HEAD")
 	if err == nil && strings.TrimSpace(diff) == "" {
 		sctx.Log("empty diff after rebase, skipping remaining steps")

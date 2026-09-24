@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
 	"github.com/kunchenguid/no-mistakes/internal/closers"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -15,14 +16,20 @@ import (
 func newRerunCmd() *cobra.Command {
 	var intent string
 	var baseBranch string
+	var noPublishIntent bool
+	var model, effort string
 	cmd := &cobra.Command{
 		Use:   "rerun",
 		Short: "Rerun the pipeline for the current branch",
-		Long:  "Rerun the pipeline for the current branch. By default, an explicit intent from the selected prior run is inherited; otherwise intent is inferred afresh. Use --intent to replace either with a new explicit intent. A per-run PR base branch is inherited from the selected prior run unless --base-branch is set. The selected run's pull-request URL is inherited when that PR is not already merged or closed, so retarget can prove identity.",
+		Long:  "Rerun the pipeline for the current branch. By default, an explicit intent from the selected prior run is inherited; otherwise intent is inferred afresh. Use --intent to replace either with a new explicit intent. A per-run PR base branch is inherited from the selected prior run unless --base-branch is set. Omission of the generated Intent section is inherited from the selected prior run; --no-publish-intent additionally keeps it out of the PR body for this rerun (tighten-only; the full intent still reaches every step prompt except PR drafting). The selected run's pull-request URL is inherited when that PR is not already merged or closed, so retarget can prove identity. --model/--effort select a new immutable Pi profile (see axi run --help); a rerun is a NEW run and does not inherit the prior model pin. Without these flags it uses global configuration.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("intent") && strings.TrimSpace(intent) == "" {
 				return fmt.Errorf("--intent must not be empty")
+			}
+			profile, err := piProfileFromFlags(cmd, model, effort)
+			if err != nil {
+				return err
 			}
 			return trackCommand("rerun", func() error {
 				p, d, err := openResources()
@@ -52,13 +59,30 @@ func newRerunCmd() *cobra.Command {
 					return fmt.Errorf("connect to daemon: %w", err)
 				}
 				defer closers.Quiet(client)
+				// A rerun inherits omission from the selected prior run, and
+				// only the daemon knows that selection, so the caller can never
+				// rule omission out: probe unconditionally, whatever the flag
+				// or the global default says.
+				if err := probeDaemonOmitIntent(client); err != nil {
+					return err
+				}
+				if profile != nil {
+					var resolved agentcfg.PiProfile
+					if err := client.Call(ipc.MethodResolvePiProfile, profile, &resolved); err != nil {
+						return fmt.Errorf("resolve Pi profile: %w", err)
+					}
+					if err := resolved.Validate(); err != nil {
+						return err
+					}
+					profile = &resolved
+				}
 
 				callerHead, err := rerunCallerHead(cmd.Context())
 				if err != nil {
 					return err
 				}
 				var result ipc.RerunResult
-				if err := client.Call(ipc.MethodRerun, &ipc.RerunParams{RepoID: repo.ID, Branch: branch, Intent: intent, PRBaseBranch: baseBranch, CallerHeadSHA: callerHead}, &result); err != nil {
+				if err := client.Call(ipc.MethodRerun, &ipc.RerunParams{RepoID: repo.ID, Branch: branch, Intent: intent, PRBaseBranch: baseBranch, OmitIntent: noPublishIntent, CallerHeadSHA: callerHead, PiProfile: profile}, &result); err != nil {
 					return fmt.Errorf("rerun pipeline: %w", err)
 				}
 
@@ -70,6 +94,8 @@ func newRerunCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&intent, "intent", "", "explicit intent for this rerun (overrides inherited intent or fresh inference)")
 	cmd.Flags().StringVar(&baseBranch, "base-branch", "", "integration branch for the PR for this rerun only (overrides inherited per-run base branch)")
+	cmd.Flags().BoolVar(&noPublishIntent, "no-publish-intent", false, "keep the generated Intent section out of the PR body for this rerun (adds to the inherited decision; tighten-only)")
+	bindPiProfileFlags(cmd, &model, &effort)
 	return cmd
 }
 

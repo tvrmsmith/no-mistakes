@@ -150,7 +150,7 @@ func TestFindingSeverityGuidance_SyncedAcrossSurfaces(t *testing.T) {
 	}
 }
 
-const canonicalPipelineAgentPrerequisite = "a supported native agent binary, the `agent: cursor` ACP alias, or an explicit `acp:<target>` through `acpx`"
+const canonicalPipelineAgentPrerequisite = "a supported native agent binary, the `agent: cursor` or `agent: devin` ACP alias, or an explicit `acp:<target>` through `acpx`"
 
 const canonicalUnknownBranchRunRelationship = "An explicit `--run <id>` rendered under `run:` while the current branch is unknown (detached `HEAD` or a branch-lookup failure) encodes no branch relationship."
 
@@ -271,7 +271,7 @@ func TestStaleMonitorGuidance_InChecksPassedOutput(t *testing.T) {
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
-	if err := renderDriveResult(cmd, run, true); err != nil {
+	if err := renderDriveResult(cmd, run, true, findingHistory{}); err != nil {
 		t.Fatalf("checks-passed must exit 0, got error: %v", err)
 	}
 
@@ -434,7 +434,7 @@ func renderDriveResultForGuidanceTest(t *testing.T, ciReady bool, status types.R
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
-	err := renderDriveResult(cmd, run, ciReady)
+	err := renderDriveResult(cmd, run, ciReady, findingHistory{})
 	var exit *exitError
 	if err != nil && !errors.As(err, &exit) {
 		t.Fatalf("renderDriveResult returned unexpected error: %v", err)

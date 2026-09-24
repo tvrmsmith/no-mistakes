@@ -127,15 +127,18 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 			steps := []pipeline.Step{&FormatStep{}, &TestStep{}, &ReviewStep{}, reconcileEnvStep{step: &PushStep{}, env: green}, reconcileEnvStep{step: ci, env: green}}
 			reviews := 0
 			ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+				findings := cleanReviewFindings()
 				if strings.HasPrefix(opts.Purpose, "review") {
 					reviews++
+					findings.ReviewedPaths = fullReviewCoverage(t, f.dir, f.sctx.Run.BaseSHA)
+					findings.DecisionReviews = satisfiedDecisionReviews(t, opts.Prompt)
 				}
 				// The Test step's evidence turn is unconditional and reads a
 				// different contract than review's findings.
 				if strings.HasPrefix(opts.Purpose, "test") {
 					return &agent.Result{Output: json.RawMessage(neutralEvidenceFindingsJSON)}, nil
 				}
-				output, err := json.Marshal(cleanReviewFindings())
+				output, err := json.Marshal(findings)
 				return &agent.Result{Output: output}, err
 			}}
 			parked := make(chan struct{}, 1)
@@ -182,7 +185,7 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 				selected = []string{}
 				added = []types.Finding{{ID: "user-1", Severity: "info", Description: "publish the retained repair", Action: types.ActionAutoFix}}
 			}
-			if err := executor.RespondWithOverrides(types.StepCI, types.ActionFix, selected, nil, added); err != nil {
+			if err := executor.RespondWithOverrides(types.StepCI, types.ActionFix, selected, nil, added, ""); err != nil {
 				t.Fatal(err)
 			}
 			select {

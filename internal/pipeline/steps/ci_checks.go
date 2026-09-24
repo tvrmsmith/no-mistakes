@@ -38,6 +38,28 @@ func hasPendingChecks(checks []scm.Check) bool {
 	return false
 }
 
+// hasExecutingPendingChecks returns true if any CI check is still running or
+// queued on its own. A check the provider holds for maintainer approval is
+// pending but will not finish without a human, so it never defers escalation
+// of the other checks' failures.
+func hasExecutingPendingChecks(checks []scm.Check) bool {
+	for _, c := range checks {
+		if c.Pending() && !c.AwaitingApproval {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAwaitingApprovalChecks(checks []scm.Check) bool {
+	for _, c := range checks {
+		if c.AwaitingApproval && c.Pending() {
+			return true
+		}
+	}
+	return false
+}
+
 func hasUnresolvedChecks(checks []scm.Check) bool {
 	for _, c := range checks {
 		switch c.Bucket {
@@ -353,14 +375,15 @@ func ciCheckReadFailureOutcome(err error) *pipeline.StepOutcome {
 // its worktree alive rather than tearing them down, and leaves any further
 // attempt to the operator, who can respond with a fix selection to spend
 // another budget deliberately.
-func ciFixAgentTimeoutOutcome(issueDesc string, dirtyWorktree string, err error) *pipeline.StepOutcome {
+func ciFixAgentTimeoutOutcome(issueDesc string, leftover string, err error) *pipeline.StepOutcome {
 	description := fmt.Sprintf(
 		"The CI auto-fix agent did not finish within its invocation budget while repairing: %s. "+
-			"Reported: %v. Re-running the same request costs another full budget, so no further attempt is made automatically. "+
+			"Reported: %v. The cut itself reflects budget or provider slowness; it does not clear the findings listed with it. "+
+			"Re-running the same request costs another full budget, so no further attempt is made automatically. "+
 			"Check that the configured agent CLI is authenticated and responsive, then respond with a fix selection to spend another budget, or resolve the CI failure outside the pipeline.",
 		issueDesc, err)
-	if dirtyWorktree != "" {
-		description += fmt.Sprintf(" The timed-out agent left uncommitted changes in the run worktree at %s; they are not committed or pushed.", dirtyWorktree)
+	if leftover != "" {
+		description += " " + leftover
 	}
 	findings := Findings{
 		Summary: "CI auto-fix agent exceeded its invocation budget",

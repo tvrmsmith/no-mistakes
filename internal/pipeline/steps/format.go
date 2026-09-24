@@ -24,7 +24,10 @@ func (s *FormatStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
-	baseSHA := resolveBranchBaseSHA(sctx.Ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
+	baseSHA, err := runBranchBaseSHA(sctx)
+	if err != nil {
+		return nil, err
+	}
 	fmtCmd := sctx.Config.Commands.Format
 
 	var fixSummary string

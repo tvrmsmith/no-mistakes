@@ -178,7 +178,7 @@ func defaultRunIntent(ctx context.Context, sctx *pipeline.StepContext) (*intent.
 		gitWorkDir = repo.WorkingPath
 	}
 
-	resolvedBaseSHA := resolveIntentBaseSHA(ctx, gitWorkDir, run.BaseSHA, repo.DefaultBranch)
+	resolvedBaseSHA := intentBaseSHA(ctx, sctx, gitWorkDir)
 	diffFiles, err := diffFilesForIntentMatching(ctx, gitWorkDir, resolvedBaseSHA, run.HeadSHA)
 	if err != nil {
 		return nil, err
@@ -251,9 +251,30 @@ func splitDiffNameOnly(out string) []string {
 	return files
 }
 
+// intentBaseSHA is deliberately not runBranchBaseSHA: it prefers a reachable
+// pushed run.BaseSHA, so a follow-up push scopes intent to the pushed delta.
+// Only a new branch's zero-SHA fallback resolves against the effective PR
+// base branch. Intent runs before rebase, and the daemon fetches only the
+// default branch at run start, so a base branch this gate has never fetched is
+// fetched here, and only when the merge-base lookup finds nothing.
+func intentBaseSHA(ctx context.Context, sctx *pipeline.StepContext, workDir string) string {
+	baseBranch := effectivePRBaseBranch(sctx)
+	base := resolveIntentBaseSHA(ctx, workDir, sctx.Run.BaseSHA, baseBranch)
+	if base != git.EmptyTreeSHA || workDir != sctx.WorkDir {
+		return base
+	}
+	if err := fetchRunUpstreamBranch(ctx, sctx, baseBranch); err != nil {
+		if sctx.Log != nil {
+			sctx.Log(fmt.Sprintf("intent: fetch base branch %s: %v; matching against every file", baseBranch, err))
+		}
+		return base
+	}
+	return resolveIntentBaseSHA(ctx, workDir, sctx.Run.BaseSHA, baseBranch)
+}
+
 // resolveIntentBaseSHA returns a usable base SHA for diff'ing against head.
 // Prefers an explicit run.BaseSHA when reachable in the worktree, but falls
-// back to merge-base against the default branch when the SHA is the zero ref
+// back to merge-base against the PR base branch when the SHA is the zero ref
 // (new branch push) or has been orphaned by a force push that rewrote the
 // prior remote tip away. Final fallback is git's empty-tree SHA so the diff
 // always succeeds.

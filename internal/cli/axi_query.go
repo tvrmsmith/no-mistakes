@@ -111,6 +111,7 @@ func runAxiStatus(cmd *cobra.Command, runID string) error {
 		if rv.CIOverrideReason != "" {
 			fields = append(fields, toon.Field{Key: "ci_override_reason", Value: rv.CIOverrideReason})
 		}
+		fields = append(fields, loadFindingHistory(env.d, rv.Steps).field())
 	}
 	return emitDoc(cmd, fields...)
 }

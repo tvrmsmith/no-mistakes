@@ -49,7 +49,9 @@ func TestAgentCommitRestartsValidationEndToEnd(t *testing.T) {
 			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"docs already current"}`)}, nil
 		}
 		turns = append(turns, fmt.Sprintf("review agent turn %d", len(turns)+1-documentTurns))
-		output, err := json.Marshal(cleanReviewFindings())
+		findings := cleanReviewFindings()
+		findings.ReviewedPaths = fullReviewCoverage(t, dir, baseSHA)
+		output, err := json.Marshal(findings)
 		return &agent.Result{Output: output}, err
 	}}
 

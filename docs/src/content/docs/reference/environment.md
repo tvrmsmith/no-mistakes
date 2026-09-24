@@ -228,6 +228,17 @@ Directory holding Claude Code's `.claude.json`, consulted when checking gate-rep
 
 `no-mistakes doctor` and the Claude adapter's untrusted-workspace remedy read Claude Code's trust decisions from `$CLAUDE_CONFIG_DIR/.claude.json` when that file exists, falling back to `~/.claude.json` otherwise. Both surfaces are read-only; no-mistakes never writes a trust decision into that file. See [Choosing an Agent](/no-mistakes/guides/agents/#workspace-trust).
 
+## `COMPACT_ADVISER_DISABLE`
+
+Kill-switch injected into every pipeline agent subprocess so compact-adviser stays inert during unattended work.
+
+|         |                                      |
+| ------- | ------------------------------------ |
+| Type    | always `1` for agent subprocesses    |
+| Default | injected; not a daemon-wide setting  |
+
+no-mistakes stamps `COMPACT_ADVISER_DISABLE=1` onto every spawned gate agent, including ACP aliases and managed agent servers that can load host plugins. Forge and profile overlays cannot drop the flag. The daemon process itself is unchanged; this is agent-child policy only, not a user-facing knob for the service environment.
+
 ## `NO_MISTAKES_UMAMI_HOST`
 
 Override the telemetry collection host.

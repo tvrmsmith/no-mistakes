@@ -4,9 +4,10 @@
 - `axi status` is scoped to your current branch when `--run` is omitted: with a known current branch, an implicitly resolved `run:` is this branch's. A run under `other_branch_run:` is one you named with `--run <id>` that belongs to another branch - never read its status or outcome as your own work. An explicit `--run <id>` rendered under `run:` while the current branch is unknown (detached `HEAD` or a branch-lookup failure) encodes no branch relationship. In a successful status response, no run object at all means this branch has no run yet, whatever the recent-runs table lists; an `error:` response proves nothing about run ownership, so act on the error instead of concluding the branch is idle.
 - The `help` list at the bottom of most responses tells you the next commands to run.
 - Errors are printed as `error: ...` on stdout with a `help` list; act on the suggestion.
-- A final state shows `outcome: <checks-passed|passed|passed-with-skips|failed|cancelled>` with no `findings` table.
+- A final state shows `outcome: <checks-passed|passed|passed-with-override|passed-with-skips|failed|cancelled>` with no `findings` table.
 - Field names and exact columns vary by step and version, so read the actual `findings` header rather than assuming a layout.
 - A successful outcome may carry a `fixes[N]{step,summary}:` table - one row per fix round the pipeline applied, in step then round order, where `summary` describes what that round changed (a round that recorded no summary shows `fix applied (no summary recorded)`). Acknowledge those misses and list each fix for the user.
+- Every final state (an `outcome:` from `axi run`, `axi respond`, or `axi status` on a finished run) carries `finding_history[N]{step,round,id,severity,action,source,selected,file,line,description}:` - every finding every gate round raised, in step then round order, including rounds `--yes` resolved without printing. `selected` is true when that round's fix was dispatched for the finding; `source: user` rows are findings added with `--add-finding`; `description` is never truncated. `finding_history[0]:` means nothing was found; `finding_history_error:` in its place means the history could not be read, so report it as unknown rather than empty.
 
 ## A gate block
 

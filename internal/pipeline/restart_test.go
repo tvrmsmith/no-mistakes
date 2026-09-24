@@ -795,23 +795,25 @@ func TestExecutor_RestartDoesNotRefillAutoFixBudget(t *testing.T) {
 	workDir := t.TempDir()
 
 	documentCalls := 0
+	// An info finding on Lint, because a warning or error left over once the
+	// budget is spent parks the step, and so does Review's carry-forward.
 	steps := []Step{
-		&adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+		&adaptiveCallStep{name: types.StepLint, fn: func(*StepContext) (*StepOutcome, error) {
 			return &StepOutcome{
 				AutoFixable: true,
-				Findings:    `{"findings":[{"id":"f1","severity":"warning","description":"fixable","action":"auto-fix"}]}`,
+				Findings:    `{"findings":[{"id":"f1","severity":"info","description":"fixable","action":"auto-fix"}]}`,
 			}, nil
 		}},
 		&adaptiveCallStep{name: types.StepDocument, fn: func(*StepContext) (*StepOutcome, error) {
 			documentCalls++
 			if documentCalls == 1 {
-				return &StepOutcome{RestartFrom: types.StepReview}, nil
+				return &StepOutcome{RestartFrom: types.StepLint}, nil
 			}
 			return &StepOutcome{}, nil
 		}},
 	}
 
-	cfg := &config.Config{AutoFix: config.AutoFix{Review: 1}}
+	cfg := &config.Config{AutoFix: config.AutoFix{Lint: 1}}
 	exec := NewExecutor(database, p, cfg, nil, steps, nil)
 	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -823,7 +825,7 @@ func TestExecutor_RestartDoesNotRefillAutoFixBudget(t *testing.T) {
 	}
 	autoFixRounds := 0
 	for _, result := range results {
-		if result.StepName != types.StepReview {
+		if result.StepName != types.StepLint {
 			continue
 		}
 		rounds, err := database.GetRoundsByStep(result.ID)

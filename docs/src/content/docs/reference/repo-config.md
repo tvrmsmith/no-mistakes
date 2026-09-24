@@ -6,7 +6,7 @@ description: All fields for .no-mistakes.yaml.
 Per-repo configuration lives in `.no-mistakes.yaml` at the root of your repository.
 
 :::caution[Security: gate-control fields are read from the default branch]
-`commands.*` and `gates[].command` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
+`commands.*` and `gates[].command` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor` and `devin`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
 The daemon also reads `document.instructions`, `review.path_instructions`, `gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), the whole `metrics` block (`metrics.threshold`, `metrics.exempt_paths`), `rebase.strategy`, `restart.exempt_paths`, `test.instructions`, `test.allow_approve_over_failure`, `test.evidence.branch`, `pr.template`, `pr.publish_intent`, and `auto_fix.min_severity` only from that trusted copy.
 `pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
@@ -34,6 +34,8 @@ commands:
   format: "gofmt -w ."
   # Reads the coverage the Test step produced and reports per-function scores.
   metrics: "crap-report --coverage $NO_MISTAKES_COVERAGE_ROOT"
+  # Idempotent teardown for resources the run started outside its own process tree.
+  # cleanup: "./scripts/dev-down.sh"
 
 # Optional metrics gate settings, read only from the trusted default branch.
 metrics:
@@ -146,16 +148,10 @@ Override the default agent for this repo and its setup-wizard suggestions.
 | | |
 | --- | --- |
 | Type | `string` or `string[]` |
-| Values | `auto`, `claude`, `codex`, `grok`, `rovodev`, `opencode`, `pi`, `copilot`, `antigravity`, `cursor`, `acp:<target>` |
+| Values | Same as [global `agent`](/no-mistakes/reference/global-config/#agent) |
 | Default | Inherits from global config |
 
-`auto` resolves to the first supported native agent or ACP alias in this order: `claude`, `codex`, `grok`, `opencode`, `acli` with `rovodev` support, `pi`, `copilot`, `antigravity`, then `cursor`.
-`cursor` is an ACP alias for the `cursor` target with default command `cursor-agent acp`.
-Its availability uses the global `acpx_path` and `acp_registry_overrides.cursor` settings when present.
-`acp:<target>` uses the user-installed `acpx` binary configured in global config; `acp:cursor` uses the same default command as `cursor`.
-Arbitrary `acp:<target>` agents are opt-in and are not considered by `agent: auto`.
-The effective agent configuration must resolve to a runnable runner before a new validation gate starts.
-If the selected explicit agent or `auto` is unavailable, the gate fails before its first pipeline step rather than reporting partial validation as passed.
+The global [`agent` reference](/no-mistakes/reference/global-config/#agent) owns agent names, ACP alias defaults, `auto` resolution, availability, and fallback behavior.
 
 You can also set an ordered fallback list:
 
@@ -163,16 +159,11 @@ You can also set an ordered fallback list:
 agent: [codex, grok]
 ```
 
-The list is filtered to entries available to the daemon at run startup, and the first available entry becomes the primary agent.
-After resolving `auto`, entries that resolve to the same ACP target are deduplicated in list order, so `cursor` and `acp:cursor` provide one fallback and preserve whichever spelling appears first.
-If no entry is available, the gate fails before its first pipeline step.
-If a pipeline invocation fails because that agent process cannot start or exits with an error, no-mistakes retries that invocation with the next available fallback.
-Structured findings and schema/output validation problems do not trigger fallback.
 This per-repo `agent` value, including every fallback entry, is still read from the trusted default-branch `.no-mistakes.yaml` unless `allow_repo_commands` is enabled there.
 
 ### allow_repo_commands
 
-Opt in to honoring the code-executing selection fields (`commands.{prepare,test,lint,format}`, `test.units`, and `agent`) from a contributor's pushed branch instead of the trusted default-branch copy.
+Opt in to honoring the code-executing selection fields (`commands.{prepare,test,lint,format,metrics,cleanup}`, `test.units`, and `agent`) from a contributor's pushed branch instead of the trusted default-branch copy.
 
 | | |
 | --- | --- |
@@ -192,7 +183,8 @@ Suppress project-level agent settings and instructions for every gate-agent star
 
 This opt-in is intended for agent-orchestration repositories whose `AGENTS.md`, `CLAUDE.md`, or harness-specific project settings would give a validation agent an operator identity and authority that it must not adopt.
 When enabled, no-mistakes suppresses the target checkout's project settings for every agent-driven gate step while preserving user-level agent configuration.
-Codex, Claude, and Pi are the currently verified agents: Codex receives `project_doc_max_bytes=0` and `--ignore-rules`, Claude loads only its user setting source, and Pi runs with `--no-context-files` (preserving a pinned `--no-context-files` or `-nc` spelling).
+Codex, Claude, Pi, and the `acp:omp` target (Oh My Pi over ACP) are the currently verified agents: Codex receives `project_doc_max_bytes=0` and `--ignore-rules`, Claude loads only its user setting source, and Pi runs with `--no-context-files` (preserving a pinned `--no-context-files` or `-nc` spelling).
+`acp:omp` is launched as `omp acp` with a generated `--config` overlay that disables every omp context-file discovery provider (`native`, `claude`, `codex`, `gemini`, `opencode`, `github`, `agents`, `agents-md`, `claude-md`) and mnemopi memory, plus `--no-rules`, `--no-skills`, and `--no-extensions`. omp has no CLI flag to disable context files, and a CLI `--config` overlay is the highest settings layer, so the target repository's own `.omp/config.yml` cannot re-enable a provider the overlay disabled. Memory is disabled because a gate turn that reads the repo's `AGENTS.md` while reviewing could otherwise retain it and a later turn recall it around the provider suppression. Only the default `acp:omp` launch qualifies: an `acp_registry_overrides` entry for `omp` is an opaque custom command and fails closed. Other ACP targets (`acp:<target>`), including the `cursor` and `devin` aliases, remain unverified and are refused; Devin CLI loads the target repository's `AGENTS.md`, `CLAUDE.md`, and editor rule files with no verified off-switch.
 Grok 1.0.5 still discovers native project instructions and `.grok` project surfaces, so it is not a verified agent for this boundary. A configuration that resolves Grok while this option is enabled therefore fails closed before launch.
 The setting applies to both new and resumed sessions.
 
@@ -277,7 +269,7 @@ Select the branch that newly created pull requests target.
 | Trust | Trusted default branch, unless `allow_repo_commands: true` is explicitly enabled there |
 
 Use this when the repository's integration branch differs from its forge default branch, for example `develop` instead of `main`.
-The configured branch is used for PR creation, and as the integration base for the rebase step.
+The configured branch is used for PR creation, as the integration base for the rebase step, and as the diff base for every validation step: format, lint, test, metrics, document, review, and repository gates all scope to the commits since the branch forked from it. The intent step scopes a follow-up push to the pushed delta and uses this branch only for a new branch's first push.
 When unset, no-mistakes preserves the existing behavior and targets `Repo.DefaultBranch`.
 
 PR lookup matches an existing PR by branch alone, never filtered by base, so a `pr.base_branch` change after a PR was opened updates that PR instead of opening a duplicate against the new base.
@@ -347,9 +339,11 @@ Control publication of the **generated `Intent` section**, independently of inte
 | --- | --- |
 | Type | `bool` |
 | Default | `true` (missing or `null` also preserves the default) |
-| Trust | Trusted default branch only, regardless of `allow_repo_commands`; no global setting |
+| Trust | Trusted default branch only, regardless of `allow_repo_commands`; the caller-side counterpart is the global [`intent.publish_intent`](/no-mistakes/reference/global-config/#intent) default and the per-run `axi run --no-publish-intent` flag |
 
 `false` suppresses that section in ordinary drafting, fallback output, and template appendices. It works without `pr.template` and does not otherwise enable template mode. It never removes full intent from review or PR-drafting context, changes evidence/attestation policy, or erases author-written sections named `Intent`. Unconfigured defaults remain unchanged.
+
+A contributor can keep the section off for their own runs without touching this repository policy: `axi run --no-publish-intent` records a tighten-only omission on the run, and an operator can set the global `intent.publish_intent: false` default. Both compose with this field and can only reduce publication: the trusted repository policy is the ceiling, and a caller can never publish intent on a repository whose trusted config disabled it. Neither signal changes what review, test, document, lint, or CI auto-fix prompts receive. The caller-side omission goes one step further than this repository policy: the PR-drafting turns (ordinary narrative, title-only fallback, and repository-template narrative) receive no intent text at all and draft from the diff and commit messages only, so no paraphrase of the withheld intent can reach the public PR. The intent is withheld, never scanned for: there is no output filter.
 
 This is not a privacy filter: generated narrative and other evidence can still contain sensitive information, and LLM drafting is not a confidentiality guarantee. No caller-written public-body override is introduced by this setting.
 
@@ -364,7 +358,7 @@ Configure the title shape no-mistakes applies to newly created and updated pull 
 | Trust | Pushed branch, like other non-executing repository conventions |
 
 The template supports literal text and `{{.Branch}}` and `{{.Title}}` placeholders.
-`{{.Branch}}` is the normalized branch identifier resolved by [`commit.branch_pattern`](#commitbranch_pattern) when configured; an inherited [global `commit.branch_replacement`](/no-mistakes/reference/global-config/#commitbranch_replacement) can transform its capture before use.
+`{{.Branch}}` is the normalized branch identifier resolved by [`commit.branch_pattern`](#commitbranch_pattern) or a matching machine-local [`repository_overrides`](/no-mistakes/reference/global-config/#repository_overrides) entry; its capture can be transformed by `commit.branch_replacement` from global config or that entry.
 `{{.Title}}` is the bare concise title text returned by the PR agent, or `update pull request` when ordinary drafting uses its deterministic fallback.
 For example, `title_format: "{{.Branch}}: {{.Title}}"` can render `PROJ-123: add widget` from a matching branch.
 The format is applied deterministically after drafting; its literal text is not sent to the agent as an instruction.
@@ -376,6 +370,7 @@ Providers can impose lower publication limits. GitLab titles are checked at its 
 If a format requires `{{.Branch}}` but the branch pattern finds no identifier, PR publication fails safely instead of publishing a malformed title.
 
 When this setting is omitted, no-mistakes keeps its default conventional commit title behavior, including release type guidance and title tightening.
+For a machine-local title convention that does not require repository configuration, see global [`repository_overrides`](/no-mistakes/reference/global-config/#repository_overrides).
 
 ### commands.prepare
 
@@ -452,6 +447,36 @@ The command receives [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment
 Setting this command while the Test step produces no coverage parks the run for a maintainer rather than passing; the [Metrics step reference](/no-mistakes/reference/pipeline-steps/#metrics) owns the output contract, the verdict rules, and that park.
 
 This command runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so it is honored only from the trusted default-branch copy of this file unless the repository opts in via [`allow_repo_commands: true`](#allow_repo_commands).
+
+### commands.cleanup
+
+Teardown command that releases whatever a run left running outside its own process tree. Run via the platform shell - `sh -c` on POSIX, `cmd.exe /c` on Windows.
+
+| | |
+| --- | --- |
+| Type | `string` |
+| Default | Empty (no teardown command) |
+
+no-mistakes reaps the processes a run started, but only the ones descended from it. A container stack, a daemonized service, or a VM the run brought up is a child of some other supervisor, so the sweep cannot see it and it outlives the run worktree. `commands.cleanup` is how a repository releases those resources.
+
+It runs at two points, always inside the run worktree and always best effort:
+
+- On entry to the [Push](/no-mistakes/reference/pipeline-steps/#push) step, because nothing from push onward (push, PR, CI monitoring) needs a local dev stack, and CI monitoring is the long part of a run.
+- When the run worktree is removed, before every retention decision, so a worktree kept for inspection does not also mean a kept container stack. A run parked at a gate when the daemon stops cleanly is not removed, because it resumes on the next start; it keeps its worktree and its resources until that resumed run finishes.
+
+The command therefore runs once each time the run enters push, which a CI repair that restarts validation makes more than once, plus once at teardown. A run that never reaches push invokes it once, and a run whose setup fails before its trusted configuration resolves does not invoke it at all. It must be idempotent: the second call finds the resources the first one already released and has to exit cleanly anyway. The same applies to a run that started nothing to release.
+
+A non-zero exit, a launch failure, or a timeout is logged and otherwise ignored. It never fails a step and never changes a run's recorded outcome. One invocation is bounded at five minutes.
+
+Scope the command to this run's own resources. It runs on the daemon host with the maintainer's credentials, so a teardown that removes anything shared by name, a machine-wide cache volume for example, takes it from every other worktree and run on that host too.
+
+The command sees the environment the daemon resolved from the login shell at startup, and only a daemon restart refreshes it. The push-entry invocation sees the same environment `commands.test` and `commands.prepare` see. The teardown invocation runs outside any step, so it inherits the daemon process environment alone, without the step-scoped variables or forge-profile overlay. Neither invocation adds a `PATH` entry.
+
+Leave the worktree as you found it. The push step refuses a dirty worktree, and the push-entry invocation runs just before that check, so a cleanup command that writes files into the worktree makes push refuse the run.
+
+Because the worktree path is usually what identifies which resources belong to this run, the command must derive its target from its working directory rather than from an argument captured elsewhere.
+
+Like every `commands.*` value, `commands.cleanup` comes from the trusted default-branch configuration unless that trusted copy explicitly enables `allow_repo_commands: true`.
 
 ### metrics
 
@@ -617,6 +642,7 @@ What that boundary protects is the gate's *declaration*, not the repository file
 
 All configured `commands.*` entries and repository gate commands are scoped to their step.
 After no-mistakes starts one of these commands, it terminates any remaining child processes from that command when the command exits, fails, or the step is cancelled.
+On Windows, cancellation first sends `CTRL_BREAK` to the command's isolated process group and allows up to three seconds for cleanup before forcibly terminating the job. A command that owns external resources should handle its runtime's break signal and exit after cleanup; in Node.js, register a `process.on('SIGBREAK', handler)` listener. If the command does not exit before the window closes, expect forced termination.
 Do not rely on a configured command to leave a background server or watcher running after it returns; keep that service inside the command lifetime or start it outside no-mistakes.
 
 ### ignore_patterns
@@ -725,6 +751,10 @@ With a positive budget, a rerun is requested when the provider attributes the ou
 The remaining outcomes are the job's own verdict on the commit and are never re-run:
 
 - `failure`, `error`, `action_required`, and `startup_failure` (after any repository step ran) are the job's verdict, so they escalate on the first failure with no added latency.
+  One GitHub outcome is not a verdict at all: a workflow run that concluded `action_required` without running a single job is the forge holding a first-time contributor's workflows until a maintainer approves them.
+  Nothing ran, so there is nothing to escalate and no rerun that could clear it; that run is reported as pending, and the monitor names the hold and keeps waiting for the maintainer instead of spending auto-fix rounds on work that never executed. A held run never defers another check's genuine failure: that failure escalates as it would without the hold, and the hold itself still produces no finding.
+  The distinction is read from the run's own job list, so a run that concluded `action_required` after executing jobs keeps escalating as before.
+  Only a job list the provider actually returned, and returned empty, is evidence of the hold: a read that fails, and a response carrying no job list at all, are unreadable job data and fail closed to the same unchanged behavior.
 - `timed_out` means the job exceeded its own `timeout-minutes`, which is usually the branch's own code hanging. Re-running it burns another full timeout window reproducing the same failure, so it is treated as a genuine failure and is not opt-in.
 - `stale` is already treated as skipped rather than failed, so it never reaches this decision.
 - An outcome no-mistakes recognizes as none of the above never earns a rerun either.
@@ -859,6 +889,7 @@ That includes the 1,024-byte template limit, 16-placeholder limit, 4,096-byte su
 The setting applies to the Review, Test, Metrics, Document, Lint, and CI repair paths, plus operator-authorized repository gate repairs. It does not apply to commits created by the Rebase or Push steps.
 
 This non-executing field is read from the pushed branch, so a branch can adopt its own commit-subject convention without enabling `allow_repo_commands`.
+To apply a machine-local convention without adding it to the repository, see global [`repository_overrides`](/no-mistakes/reference/global-config/#repository_overrides).
 
 ### commit.branch_pattern
 

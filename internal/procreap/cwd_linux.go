@@ -9,7 +9,7 @@ import (
 
 // processCWDs resolves each pid's working directory from /proc, which is both
 // cheaper and more reliable than shelling out on Linux.
-func processCWDs(pids []int) map[int]string {
+func processCWDs(pids []int) (map[int]string, error) {
 	cwds := make(map[int]string, len(pids))
 	for _, pid := range pids {
 		target, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/cwd")
@@ -18,5 +18,5 @@ func processCWDs(pids []int) map[int]string {
 		}
 		cwds[pid] = trimDeletedSuffix(target)
 	}
-	return cwds
+	return cwds, nil
 }
