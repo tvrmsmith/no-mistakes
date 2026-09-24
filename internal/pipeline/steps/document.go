@@ -53,7 +53,7 @@ func (s *DocumentStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 		return nil, err
 	}
 	ctx := sctx.Ctx
-	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
+	baseSHA := runBranchBaseSHA(sctx)
 
 	ignorePatterns := "none"
 	if len(sctx.Config.IgnorePatterns) > 0 {
@@ -127,7 +127,7 @@ Context:
 - branch: %s
 - base commit: %s
 - target commit: %s
-- default branch: %s
+- base branch: %s
 - ignore patterns: %s
 
 %s
@@ -160,7 +160,7 @@ Rules:
 		sctx.Run.Branch,
 		baseSHA,
 		sctx.Run.HeadSHA,
-		sctx.Repo.DefaultBranch,
+		effectivePRBaseBranch(sctx),
 		ignorePatterns,
 		documentPlacementPolicy,
 		documentScopeDiscipline,

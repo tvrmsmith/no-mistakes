@@ -27,26 +27,27 @@ func reviewWorkload(ctx context.Context, workDir, base, head string) *agent.Invo
 
 // resolveBaseSHA returns a usable base SHA for diff/log operations.
 // When baseSHA is the zero ref (new branch push), it tries git merge-base
-// against the default branch, falling back to the empty tree SHA.
-func resolveBaseSHA(ctx context.Context, workDir, baseSHA, defaultBranch string) string {
+// against baseBranch, falling back to the empty tree SHA.
+func resolveBaseSHA(ctx context.Context, workDir, baseSHA, baseBranch string) string {
 	if !git.IsZeroSHA(baseSHA) {
 		return baseSHA
 	}
-	if mb := mergeBaseWithDefaultBranch(ctx, workDir, defaultBranch); mb != "" {
+	if mb := mergeBaseWithDefaultBranch(ctx, workDir, baseBranch); mb != "" {
 		return mb
 	}
 	return git.EmptyTreeSHA
 }
 
-// resolveBranchBaseSHA returns the branch base commit relative to the default
-// branch when possible. This keeps pipeline steps scoped to the full branch,
-// not just the last pushed delta. If merge-base cannot be determined, it falls
-// back to resolveBaseSHA.
-func resolveBranchBaseSHA(ctx context.Context, workDir, fallbackBaseSHA, defaultBranch string) string {
-	if mb := mergeBaseWithDefaultBranch(ctx, workDir, defaultBranch); mb != "" {
+// resolveBranchBaseSHA returns the branch base commit relative to baseBranch
+// when possible. This keeps pipeline steps scoped to the full branch, not just
+// the last pushed delta. If merge-base cannot be determined, it falls back to
+// resolveBaseSHA. Steps call runBranchBaseSHA, which supplies the run's
+// effective PR base branch.
+func resolveBranchBaseSHA(ctx context.Context, workDir, fallbackBaseSHA, baseBranch string) string {
+	if mb := mergeBaseWithDefaultBranch(ctx, workDir, baseBranch); mb != "" {
 		return mb
 	}
-	return resolveBaseSHA(ctx, workDir, fallbackBaseSHA, defaultBranch)
+	return resolveBaseSHA(ctx, workDir, fallbackBaseSHA, baseBranch)
 }
 
 func resolveDefaultBranchTipSHA(ctx context.Context, workDir, upstreamURL, fallbackBaseSHA, defaultBranch string) string {

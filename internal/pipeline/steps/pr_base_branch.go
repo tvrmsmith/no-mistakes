@@ -47,3 +47,27 @@ func runPRBaseBranch(sctx *pipeline.StepContext) string {
 	}
 	return strings.TrimSpace(*sctx.Run.PRBaseBranch)
 }
+
+// effectivePRBaseBranch is the one owner of "which branch is this run's
+// base": rebase integrates onto it and every validation step diffs against
+// it, so a run never validates a scope other than the one it integrates.
+// Per-run overrides win over repo config; the repository default remains the
+// fallback when neither selects a separate PR target branch.
+func effectivePRBaseBranch(sctx *pipeline.StepContext) string {
+	defaultBranch := strings.TrimSpace(sctx.Repo.DefaultBranch)
+	if runBase := runPRBaseBranch(sctx); runBase != "" {
+		defaultBranch = runBase
+	} else if sctx.Config != nil && strings.TrimSpace(sctx.Config.PR.BaseBranch) != "" {
+		defaultBranch = strings.TrimSpace(sctx.Config.PR.BaseBranch)
+	}
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+	return defaultBranch
+}
+
+// runBranchBaseSHA returns the commit the run's branch forked from its
+// effective PR base branch, the base every validation step diffs against.
+func runBranchBaseSHA(sctx *pipeline.StepContext) string {
+	return resolveBranchBaseSHA(sctx.Ctx, sctx.WorkDir, sctx.Run.BaseSHA, effectivePRBaseBranch(sctx))
+}

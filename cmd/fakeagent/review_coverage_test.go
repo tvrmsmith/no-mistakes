@@ -20,7 +20,7 @@ func reviewPromptFor(base, ignore string) string {
 		"- base commit: " + base,
 		"- target commit: HEAD",
 		"- review scope: incremental",
-		"- default branch: main",
+		"- base branch: main",
 		"- ignore patterns: " + ignore,
 		"",
 		"Task:",

@@ -43,7 +43,7 @@ func (s *MetricsStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome
 	}
 
 	metricsCmd := sctx.Config.Commands.Metrics
-	baseSHA := resolveBranchBaseSHA(sctx.Ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
+	baseSHA := runBranchBaseSHA(sctx)
 
 	var fixSummary string
 	if sctx.Fixing {
