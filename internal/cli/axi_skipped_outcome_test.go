@@ -125,7 +125,7 @@ func TestAxiDriveAutomaticSkips(t *testing.T) {
 			cmd.SetOut(&out)
 			r := &ipc.RunInfo{ID: "skip-run", Status: tc.status, HeadSHA: strings.Repeat("a", 40), CIOverrideReason: tc.override,
 				Steps: []ipc.StepResultInfo{{StepName: types.StepCI, Status: tc.stepStatus, SkipReason: tc.reason}}}
-			err := renderDriveResult(cmd, r, false)
+			err := renderDriveResult(cmd, r, false, findingHistory{})
 			if (err == nil) != (tc.status == types.RunCompleted) {
 				t.Fatalf("renderDriveResult error = %v for %s", err, tc.status)
 			}
