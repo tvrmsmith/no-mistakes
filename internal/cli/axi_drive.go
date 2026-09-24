@@ -361,7 +361,7 @@ func runAxiRunWithLaunchProof(cmd *cobra.Command, autoYes bool, skipSteps []type
 		}
 		return emitError(cmd, 1, fmt.Sprintf("drive run: %v", err))
 	}
-	return renderDriveResult(cmd, run, ciReady)
+	return renderDriveResult(cmd, run, ciReady, loadFindingHistory(env.d, runViewFromIPC(run).Steps))
 }
 
 func digestLaunchIntent(intent string) string {
@@ -1047,8 +1047,10 @@ func sendRespond(client *ipc.Client, runID string, step types.StepName, action t
 // ready for a human to merge), or the terminal outcome (exit 0 when passed,
 // exit 1 when blocked, failed, or cancelled). Successful outcomes also carry
 // the fixes the pipeline applied and reporting instructions, so the agent
-// closes the loop with the user instead of stopping at "it passed".
-func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error {
+// closes the loop with the user instead of stopping at "it passed". Every
+// result except a gate carries the run's finding history, because under --yes
+// the gates it resolved are never printed.
+func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool, history findingHistory) error {
 	rv := runViewFromIPC(run)
 	fields := []toon.Field{runObjectField(rv)}
 	hasBranchSync := false
@@ -1072,6 +1074,7 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 		}
 		fixes := rv.fixRows()
 		fields = appendFixesField(fields, fixes)
+		fields = append(fields, history.field())
 		help := append([]string{merge}, successReportHelp(fixes)...)
 		if rv.TestOverrideReason != "" {
 			help = append(help, "Report the approved Test exception, not a clean Test pass: "+rv.TestOverrideReason)
@@ -1093,6 +1096,7 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 	if run.Error != nil && *run.Error != "" {
 		fields = append(fields, toon.Field{Key: "error", Value: *run.Error})
 	}
+	fields = append(fields, history.field())
 
 	if rv.Status == string(types.RunCompleted) {
 		fixes := rv.fixRows()
@@ -1337,7 +1341,7 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 		}
 		return emitError(cmd, 1, fmt.Sprintf("drive run: %v", err))
 	}
-	return renderDriveResult(cmd, final, ciReady)
+	return renderDriveResult(cmd, final, ciReady, loadFindingHistory(env.d, runViewFromIPC(final).Steps))
 }
 
 // gateStatusFor returns the current status of step in rv, defaulting to the

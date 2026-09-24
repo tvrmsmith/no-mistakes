@@ -483,7 +483,7 @@ func TestRenderDriveResult_ProtectedPathGateHelp(t *testing.T) {
 				if err := renderDriveResult(cmd, &ipc.RunInfo{
 					ID: "run-1", Status: types.RunRunning,
 					Steps: []ipc.StepResultInfo{{StepName: types.StepDocument, Status: status, FindingsJSON: &tc.findings}},
-				}, false); err != nil {
+				}, false, findingHistory{}); err != nil {
 					t.Fatal(err)
 				}
 				var doc struct {

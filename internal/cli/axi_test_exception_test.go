@@ -33,7 +33,7 @@ func TestAxiTestExceptionOutput(t *testing.T) {
 			const reason = "approved synthetic Test exception"
 			run := &ipc.RunInfo{ID: "synthetic", Status: tc.status, TestOverrideReason: reason,
 				Steps: []ipc.StepResultInfo{{StepName: types.StepCI, Status: types.StepStatusSkipped, SkipReason: "provider unavailable"}}}
-			_ = renderDriveResult(cmd, run, tc.ciReady)
+			_ = renderDriveResult(cmd, run, tc.ciReady, findingHistory{})
 			var doc struct {
 				Outcome string `toon:"outcome"`
 				Run     struct {

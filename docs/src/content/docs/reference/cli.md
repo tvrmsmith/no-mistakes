@@ -186,6 +186,9 @@ Explicit per-run skips retain their existing behavior.
 If the run also has a Test or CI approval override, `passed-with-override` takes precedence and the automatic skip causes remain visible.
 Legacy rows without a recorded skip cause keep their prior classification; their logs remain inspectable.
 When the pipeline applied fixes, they include a `fixes` table and a `help` instruction to acknowledge the misses and list those fixes for the user's review.
+Every final result (`checks-passed`, the `passed` variants, `failed`, `cancelled`, and `ci-monitor-interrupted`), and `axi status` for a finished run, also carries `finding_history[N]{step,round,id,severity,action,source,selected,file,line,description}`: one row per finding each step's rounds recorded, in step then round order, so a `--yes` run's auto-resolved gates stay auditable.
+`action` is the effective action (`auto-fix`, `no-op`, or `ask-user`), `source` is `agent` or `user` (a finding added with `--add-finding`), `selected` is true when that round's fix was dispatched for the finding by auto-fix, `--yes`, or a hand-picked `--findings`, and `description` is never truncated.
+A run with no findings renders `finding_history[0]:`, and a history that could not be read renders `finding_history_error: <reason>` in its place.
 
 ### Strict launch receipts
 
@@ -281,7 +284,8 @@ Each row reports the whole step's elapsed time as `active_for`, the displayed ex
 `round_active_for` resets when a fix round starts; older active runs created before this timing was recorded show it as empty.
 If no activity arrives for longer than `step_quiet_warning`, `last_activity` is prefixed with `quiet`; this is only a liveness signal and does not cancel the step.
 For older active runs with no recorded activity timestamp, AXI falls back to the step log file modification time.
-Gate summaries and finding descriptions are bounded in this default status view; truncated values disclose their original length, and the gate help points to `no-mistakes axi logs --step <step> --full` for an implicitly resolved run or `no-mistakes axi logs --run <id> --step <step> --full` for an explicitly selected run.
+A finished run also carries the untruncated `finding_history` table that [`axi run`](#no-mistakes-axi-run) describes.
+Gate summaries and gate finding descriptions are bounded in this default status view; truncated values disclose their original length, and the gate help points to `no-mistakes axi logs --step <step> --full` for an implicitly resolved run or `no-mistakes axi logs --run <id> --step <step> --full` for an explicitly selected run.
 Relevant current-branch states also include a cached `branch_sync` object with full SHAs, the run's status, the persisted pipeline push binding, target kind and ref, relation, safety result, PR lifecycle, and a structured next action.
 Cached home and status rendering performs no network read and labels the remote observation `pipeline_push`; only explicit sync check or apply reports `live` freshness.
 

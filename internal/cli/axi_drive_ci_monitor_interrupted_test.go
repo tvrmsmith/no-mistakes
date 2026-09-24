@@ -43,7 +43,7 @@ func TestRenderDriveResult_CIMonitorInterrupted(t *testing.T) {
 
 	// A non-failure terminal outcome must NOT return a non-zero exit error the
 	// way RunFailed does; the PR is intact.
-	if err := renderDriveResult(cmd, run, false); err != nil {
+	if err := renderDriveResult(cmd, run, false, findingHistory{}); err != nil {
 		var exit *exitError
 		if errors.As(err, &exit) {
 			t.Fatalf("interrupted CI monitor must not exit non-zero (PR remains open); got exit code %d", exit.code)
@@ -95,7 +95,7 @@ func TestRenderDriveResult_CIMonitorDeclinedWithAConcreteReason(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	if err := renderDriveResult(cmd, run, false); err != nil {
+	if err := renderDriveResult(cmd, run, false, findingHistory{}); err != nil {
 		t.Fatalf("renderDriveResult returned unexpected error: %v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestRenderDriveResult_CIMonitorDeclinedReasonTrimsTrailingPeriod(t *testing
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	if err := renderDriveResult(cmd, run, false); err != nil {
+	if err := renderDriveResult(cmd, run, false, findingHistory{}); err != nil {
 		t.Fatalf("renderDriveResult returned unexpected error: %v", err)
 	}
 

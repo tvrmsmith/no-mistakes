@@ -479,7 +479,7 @@ func TestDriveRun_YesLeavesRefusalGatesAwaitingResponse(t *testing.T) {
 				var output bytes.Buffer
 				cmd := &cobra.Command{}
 				cmd.SetOut(&output)
-				if err := renderDriveResult(cmd, run, ciReady); err != nil {
+				if err := renderDriveResult(cmd, run, ciReady, findingHistory{}); err != nil {
 					t.Fatal(err)
 				}
 				for _, want := range []string{"gate:", refusal.awaiting, refusal.want, string(status)} {
@@ -594,7 +594,7 @@ func TestRenderDriveResult_ChecksPassed(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	if err := renderDriveResult(cmd, run, true); err != nil {
+	if err := renderDriveResult(cmd, run, true, findingHistory{}); err != nil {
 		t.Fatalf("checks-passed must exit 0, got error: %v", err)
 	}
 
@@ -654,7 +654,7 @@ func TestRenderDriveResult_DeclaredNoCIChecksPassed(t *testing.T) {
 	}
 
 	run.CIReady = true
-	if err := renderDriveResult(cmd, run, true); err != nil {
+	if err := renderDriveResult(cmd, run, true, findingHistory{}); err != nil {
 		t.Fatalf("declared no_ci checks-passed must exit 0, got error: %v", err)
 	}
 	got := out.String()
@@ -691,7 +691,7 @@ func TestRenderDriveResult_ChecksPassedWithFixes(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	if err := renderDriveResult(cmd, run, true); err != nil {
+	if err := renderDriveResult(cmd, run, true, findingHistory{}); err != nil {
 		t.Fatalf("checks-passed must exit 0, got error: %v", err)
 	}
 
@@ -721,7 +721,7 @@ func TestRenderDriveResult_TerminalPassedUnaffected(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	if err := renderDriveResult(cmd, run, false); err != nil {
+	if err := renderDriveResult(cmd, run, false, findingHistory{}); err != nil {
 		t.Fatalf("terminal passed must exit 0, got error: %v", err)
 	}
 	got := out.String()
@@ -747,7 +747,7 @@ func TestRenderDriveResult_TerminalPassedWithFixes(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	if err := renderDriveResult(cmd, run, false); err != nil {
+	if err := renderDriveResult(cmd, run, false, findingHistory{}); err != nil {
 		t.Fatalf("terminal passed must exit 0, got error: %v", err)
 	}
 	got := out.String()
@@ -777,7 +777,7 @@ func TestRenderDriveResult_NoChangeFixRoundIsNotReportedAsAFix(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	if err := renderDriveResult(cmd, run, false); err != nil {
+	if err := renderDriveResult(cmd, run, false, findingHistory{}); err != nil {
 		t.Fatalf("terminal passed must exit 0, got error: %v", err)
 	}
 	got := out.String()
@@ -801,7 +801,7 @@ func TestRenderDriveResult_FailedHasNoSummarizeInstruction(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 
-	err := renderDriveResult(cmd, run, false)
+	err := renderDriveResult(cmd, run, false, findingHistory{})
 	if err == nil {
 		t.Fatal("failed outcome must exit non-zero")
 	}
