@@ -292,7 +292,7 @@ Configure the title shape no-mistakes applies to newly created and updated pull 
 | Trust | Pushed branch, like other non-executing repository conventions |
 
 The template supports literal text and `{{.Branch}}` and `{{.Title}}` placeholders.
-`{{.Branch}}` is the normalized branch identifier resolved by [`commit.branch_pattern`](#commitbranch_pattern) when configured; an inherited [global `commit.branch_replacement`](/no-mistakes/reference/global-config/#commitbranch_replacement) can transform its capture before use.
+`{{.Branch}}` is the normalized branch identifier resolved by [`commit.branch_pattern`](#commitbranch_pattern) or a matching machine-local [`repository_overrides`](/no-mistakes/reference/global-config/#repository_overrides) entry; its capture can be transformed by `commit.branch_replacement` from global config or that entry.
 `{{.Title}}` is the bare concise title text returned by the PR agent, or `update pull request` when ordinary drafting uses its deterministic fallback.
 For example, `title_format: "{{.Branch}}: {{.Title}}"` can render `PROJ-123: add widget` from a matching branch.
 The format is applied deterministically after drafting; its literal text is not sent to the agent as an instruction.
@@ -304,6 +304,7 @@ Providers can impose lower publication limits. GitLab titles are checked at its 
 If a format requires `{{.Branch}}` but the branch pattern finds no identifier, PR publication fails safely instead of publishing a malformed title.
 
 When this setting is omitted, no-mistakes keeps its default conventional commit title behavior, including release type guidance and title tightening.
+For a machine-local title convention that does not require repository configuration, see global [`repository_overrides`](/no-mistakes/reference/global-config/#repository_overrides).
 
 ### commands.prepare
 
@@ -600,6 +601,10 @@ With a positive budget, a rerun is requested when the provider attributes the ou
 The remaining outcomes are the job's own verdict on the commit and are never re-run:
 
 - `failure`, `error`, `action_required`, and `startup_failure` (after any repository step ran) are the job's verdict, so they escalate on the first failure with no added latency.
+  One GitHub outcome is not a verdict at all: a workflow run that concluded `action_required` without running a single job is the forge holding a first-time contributor's workflows until a maintainer approves them.
+  Nothing ran, so there is nothing to escalate and no rerun that could clear it; that run is reported as pending, and the monitor names the hold and keeps waiting for the maintainer instead of spending auto-fix rounds on work that never executed. A held run never defers another check's genuine failure: that failure escalates as it would without the hold, and the hold itself still produces no finding.
+  The distinction is read from the run's own job list, so a run that concluded `action_required` after executing jobs keeps escalating as before.
+  Only a job list the provider actually returned, and returned empty, is evidence of the hold: a read that fails, and a response carrying no job list at all, are unreadable job data and fail closed to the same unchanged behavior.
 - `timed_out` means the job exceeded its own `timeout-minutes`, which is usually the branch's own code hanging. Re-running it burns another full timeout window reproducing the same failure, so it is treated as a genuine failure and is not opt-in.
 - `stale` is already treated as skipped rather than failed, so it never reaches this decision.
 - An outcome no-mistakes recognizes as none of the above never earns a rerun either.
@@ -734,6 +739,7 @@ That includes the 1,024-byte template limit, 16-placeholder limit, 4,096-byte su
 The setting applies to the Review, Test, Document, Lint, and CI repair paths, plus operator-authorized repository gate repairs. It does not apply to commits created by the Rebase or Push steps.
 
 This non-executing field is read from the pushed branch, so a branch can adopt its own commit-subject convention without enabling `allow_repo_commands`.
+To apply a machine-local convention without adding it to the repository, see global [`repository_overrides`](/no-mistakes/reference/global-config/#repository_overrides).
 
 ### commit.branch_pattern
 

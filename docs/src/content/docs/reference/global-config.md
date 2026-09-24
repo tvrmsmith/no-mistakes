@@ -851,7 +851,7 @@ A per-repo [`commit.branch_pattern`](/no-mistakes/reference/repo-config/#commitb
 
 ### commit.branch_replacement
 
-Optional global-only expression that adds literal text around the branch pattern's capture group before exposing it as `{{.Branch}}`.
+Optional expression that adds literal text around the branch pattern's capture group before exposing it as `{{.Branch}}`. Set it under global `commit` for the machine-wide default, or under a matching [`repository_overrides`](#repository_overrides) entry for one remote. It is not available in a repository's `.no-mistakes.yaml`.
 
 | | |
 | --- | --- |
@@ -859,11 +859,40 @@ Optional global-only expression that adds literal text around the branch pattern
 | Default | Unset, so the capture group is used unchanged |
 
 Use exactly one `${1}` reference to insert the capture group; other dollar syntax is rejected.
-The replacement must be configured with `commit.branch_pattern` in the same global configuration.
+Under global `commit`, the replacement must be configured with `commit.branch_pattern` in that block. Under `repository_overrides`, pair it with `commit.branch_pattern` in the same remote entry.
 It is limited to 1,024 bytes, must be valid UTF-8, and must exclude the same control and unsafe Unicode format characters as `commit.fix_message`.
 Malformed replacement syntax fails configuration loading with an actionable error.
 The expanded identifier is subject to the existing UTF-8, control-character, unsafe-Unicode, and rendered-subject validation.
-A repository `commit.branch_pattern` override disables this machine-local replacement so it cannot be applied to a different pattern.
+A `commit.branch_pattern` in `.no-mistakes.yaml` takes precedence and clears any inherited machine-wide replacement, including one from a matching repository override, so a replacement cannot be applied to a different pattern.
+
+### repository_overrides
+
+Machine-local settings scoped to one repository by remote host and full repository path.
+This lets one machine apply ticket conventions to a single repository without adding settings to that repository.
+Remote hosts are matched case-insensitively.
+HTTP, HTTPS, SSH, and Git-protocol URLs, plus scp-style remotes, are accepted; the transport scheme is not part of the match.
+A URL's scheme-default port (80, 443, 22, or 9418 for HTTP, HTTPS, SSH, or Git) matches an omitted port; non-default ports remain distinct.
+IPv6 addresses are canonicalized, with bracket boundaries preserved so a port cannot be confused with address text.
+For `github.com`, `gitlab.com`, and `bitbucket.org`, repository paths are also matched case-insensitively and without a trailing `.git`, across equivalent HTTPS, SSH URL, and scp-style remotes.
+On every other host, repository path case and a trailing `.git` are significant.
+GitLab subgroup paths are preserved.
+On other SSH hosts, rooted paths (`host:/...` or `ssh://host/...`) remain distinct from home-relative scp paths (`host:...`).
+
+```yaml
+repository_overrides:
+  https://github.com/acme/widget.git:
+    commit:
+      branch_pattern: '([A-Z]+-[0-9]+)'
+      fix_message: '{{.Branch}}: {{.Summary}}'
+    pr:
+      title_format: '{{.Branch}}: {{.Title}}'
+```
+
+Supported fields are `commit.branch_pattern`, `commit.branch_replacement`, `commit.fix_message`, and `pr.title_format`; each retains the same fail-closed validation as its global or repository-config equivalent.
+A `commit.branch_replacement` must be paired with `commit.branch_pattern` in the same override.
+Precedence is explicit: `.no-mistakes.yaml` wins for every field it sets, then a matching machine-local override, then the plain global value, then the built-in default.
+As with the global replacement, a repository `commit.branch_pattern` replaces the matching machine-local pattern and clears its replacement.
+Repositories matching no block keep existing global and built-in behavior.
 
 ### intent
 
