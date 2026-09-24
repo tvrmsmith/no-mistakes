@@ -75,7 +75,7 @@ Core steps use these outcomes as applicable:
 - **Complete** cleanly and advance the pipeline.
 - **Return findings** with severity (`error`, `warning`, `info`) and an action (`auto-fix`, `ask-user`, `no-op`).
 - **Trigger auto-fix** if the step's `auto_fix` limit is above 0, the step result is auto-fixable, and any finding is `auto-fix`-eligible. The document step applies safe documentation fixes during its initial pass, and the lint step applies safe lint fixes during its own initial pass when `commands.lint` is empty.
-- **Pause for approval** if blocking findings remain after auto-fix, or if any finding is `ask-user`.
+- **Pause for approval** if blocking findings remain after auto-fix, any finding is `ask-user`, or Review has a selected finding still awaiting positive rereview verification. The [Review step reference](/no-mistakes/reference/pipeline-steps/#review) owns that carry-forward rule.
 - **Send the run back through validation** when Lint, Test, Metrics, Document, or Review commits work an agent produced, so the new head is linted, tested, documented, and reviewed rather than shipped unjudged. [Validation restart](/no-mistakes/reference/pipeline-steps/#validation-restart) owns the attribution rule, the churn and residue gates, and the `restarts` count.
 - **Skip** when there's nothing to do (e.g., no diff, unsupported host).
 - **Fail** on fatal errors and stop the pipeline.

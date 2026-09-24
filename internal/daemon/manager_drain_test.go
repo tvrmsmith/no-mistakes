@@ -202,7 +202,7 @@ func TestDrain_RefusesNewRunsImmediately(t *testing.T) {
 		t.Fatalf("Waited = %v, want empty (no runs registered)", report.Waited)
 	}
 
-	_, err := m.startRun(t.Context(), repo, "main", "deadbeef", "cafef00d", "push", nil, "", "")
+	_, err := m.startRun(t.Context(), repo, "main", "deadbeef", "cafef00d", "push", nil, "", "", false)
 	if err == nil {
 		t.Fatal("startRun after Drain: got nil error, want refusal")
 	}

@@ -203,8 +203,8 @@ branch, marking the remaining steps as skipped.
 
 1. Execute the step
 2. If the step finds `action: auto-fix` findings, the step result is auto-fixable, and auto-fix is enabled, loop back with the agent to fix them (up to the configured limit)
-3. If blocking findings remain, or any finding has `action: ask-user`, pause and wait for user action
-4. `action: no-op` findings are informational only; the user can approve, fix selected findings, skip, or cancel the run when the step pauses
+3. If blocking findings remain, any finding has `action: ask-user`, or Review has a selected finding still awaiting positive rereview verification, pause and wait for user action. The Review carry-forward rule is detailed in the [pipeline-step reference](/no-mistakes/reference/pipeline-steps/#review).
+4. `action: no-op` findings are informational only unless a Review finding was selected for fixing and remains outstanding; the user can approve, fix selected findings, skip, or cancel the run when the step pauses
 
 While the executor is paused at an approval or fix-review gate, it persists a run-level awaiting-agent timestamp that AXI renders as `awaiting_agent: parked <duration>`.
 That timestamp does not alter approval behavior, but it is not observability only: together with the gate step row it is the evidence that the run survives a clean daemon stop, which [Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping) owns.

@@ -262,7 +262,7 @@ func TestFinishedRunReleasesExternalResourcesFromItsTrustedConfig(t *testing.T) 
 	})
 	t.Cleanup(manager.Shutdown)
 
-	runID, err := manager.startRun(t.Context(), repo, "main", head, refreshTestZeroSHA, "test", nil, "", "")
+	runID, err := manager.startRun(t.Context(), repo, "main", head, refreshTestZeroSHA, "test", nil, "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestSetupFailureAfterTrustedConfigReleasesExternalResources(t *testing.T) {
 	}
 
 	if _, err := manager.startRun(t.Context(), repo, "main", head, refreshTestZeroSHA, "test",
-		[]types.StepName{types.StepPush}, "", ""); err == nil {
+		[]types.StepName{types.StepPush}, "", "", false); err == nil {
 		t.Fatal("start run should fail when the skip set cannot be persisted")
 	}
 

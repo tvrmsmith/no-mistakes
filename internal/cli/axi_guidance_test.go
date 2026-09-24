@@ -150,7 +150,7 @@ func TestFindingSeverityGuidance_SyncedAcrossSurfaces(t *testing.T) {
 	}
 }
 
-const canonicalPipelineAgentPrerequisite = "a supported native agent binary, the `agent: cursor` ACP alias, or an explicit `acp:<target>` through `acpx`"
+const canonicalPipelineAgentPrerequisite = "a supported native agent binary, the `agent: cursor` or `agent: devin` ACP alias, or an explicit `acp:<target>` through `acpx`"
 
 const canonicalUnknownBranchRunRelationship = "An explicit `--run <id>` rendered under `run:` while the current branch is unknown (detached `HEAD` or a branch-lookup failure) encodes no branch relationship."
 

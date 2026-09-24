@@ -185,6 +185,9 @@ committed, carry out the task first and come back to this loop - see
 
    Extra flags on ` + "`respond`" + `:
    - ` + "`--wait`" + ` bounds the hold (default 8m).
+    - ` + "`--reason \"the operator's explanation\"`" + ` records an explicitly authorized Test exception with ` + "`--step test --action approve`" + `.
+      This does not grant approval authority; escalate ask-user findings as before.
+      Without a reason, Test approval remains effective; an approval past a failing command, ` + "`no-go`" + `, or ` + "`inconclusive`" + ` verdict is reported as an exception with no operator reason supplied.
    - ` + "`--add-finding '<json>'`" + ` (with ` + "`--action fix`" + `) folds a finding you
      spotted yourself - one the pipeline did not surface - into the fix round,
      as a JSON finding object. Use it for a problem you noticed that is not in
@@ -211,6 +214,9 @@ committed, carry out the task first and come back to this loop - see
      it in the TUI.
    - ` + "`passed`" + ` - the pipeline completed under the requested steps, including any
      explicit per-run skips. This alone is not evidence that a PR was merged.
+   - ` + "`passed-with-override`" + ` - the pipeline completed with an explicitly approved Test exception or CI failure.
+     Report the exception, not a clean pass.
+     Test evidence is in ` + "`run.test_override_reason`" + `, including when CI readiness returns ` + "`checks-passed`" + `; do not omit it from the summary.
    - ` + "`passed-with-skips`" + ` - publication or CI verification automatically skipped.
      Report the missing evidence and its cause from ` + "`run.automatic_skips`" + `,
      bound to the full ` + "`run.head_sha`" + `. This is neither CI readiness nor a
@@ -315,7 +321,7 @@ flags yourself - for example, "skip the lint step" becomes ` + "`--skip=lint`" +
 - The repository must already be initialized with ` + "`no-mistakes init`" + `; run
   ` + "`no-mistakes init`" + ` if it is not.
 - The daemon must have a runnable configured pipeline agent: a supported native
-  agent binary, the ` + "`agent: cursor`" + ` ACP alias, or an explicit ` + "`acp:<target>`" + ` through
+  agent binary, the ` + "`agent: cursor`" + ` or ` + "`agent: devin`" + ` ACP alias, or an explicit ` + "`acp:<target>`" + ` through
   ` + "`acpx`" + `. You are the AXI driver, not
   an implicit pipeline-agent backend. If none is available, the run fails
   before its first step; ` + "`no-mistakes doctor`" + ` reports the configuration problem.
@@ -391,6 +397,13 @@ reported edit, then send ` + "`--action fix`" + ` to retry the unfinished step.
 The [protected-path reference](https://kunchenguid.github.io/no-mistakes/reference/repo-config/#protected_paths)
 owns the staging guard's scope and limitations.
 
+A ` + "`test-agent-unvalidated-work`" + ` finding means a timed-out Test agent left
+commits or changes no Test turn validated. Approval is rejected, so ` + "`--yes`" + `
+stops at that gate without responding. Relay what the finding names and do
+not skip Test, which would publish that work. Ask the operator to choose:
+` + "`--action fix`" + ` spends another agent budget to validate the work, and
+` + "`no-mistakes axi abort`" + ` stops the run.
+
 ## Inspecting state
 
 ` + "```sh" + `
@@ -413,7 +426,7 @@ const readingOutput = `# Reading AXI output
 - ` + "`axi status`" + ` is scoped to your current branch when ` + "`--run`" + ` is omitted: with a known current branch, an implicitly resolved ` + "`run:`" + ` is this branch's. A run under ` + "`other_branch_run:`" + ` is one you named with ` + "`--run <id>`" + ` that belongs to another branch - never read its status or outcome as your own work. An explicit ` + "`--run <id>`" + ` rendered under ` + "`run:`" + ` while the current branch is unknown (detached ` + "`HEAD`" + ` or a branch-lookup failure) encodes no branch relationship. In a successful status response, no run object at all means this branch has no run yet, whatever the recent-runs table lists; an ` + "`error:`" + ` response proves nothing about run ownership, so act on the error instead of concluding the branch is idle.
 - The ` + "`help`" + ` list at the bottom of most responses tells you the next commands to run.
 - Errors are printed as ` + "`error: ...`" + ` on stdout with a ` + "`help`" + ` list; act on the suggestion.
-- A final state shows ` + "`outcome: <checks-passed|passed|passed-with-skips|failed|cancelled>`" + ` with no ` + "`findings`" + ` table.
+- A final state shows ` + "`outcome: <checks-passed|passed|passed-with-override|passed-with-skips|failed|cancelled>`" + ` with no ` + "`findings`" + ` table.
 - Field names and exact columns vary by step and version, so read the actual ` + "`findings`" + ` header rather than assuming a layout.
 - A successful outcome may carry a ` + "`fixes[N]{step,summary}:`" + ` table - one row per fix round the pipeline applied, in step then round order, where ` + "`summary`" + ` describes what that round changed (a round that recorded no summary shows ` + "`fix applied (no summary recorded)`" + `). Acknowledge those misses and list each fix for the user.
 
@@ -452,6 +465,7 @@ const syncRecovery = `# Branch synchronization and custody recovery
 no-mistakes axi sync --check    # freshly verify an offered synchronization plan
 no-mistakes axi sync            # apply only an offered guarded synchronization
 no-mistakes axi sync --recover  # return custody after a terminal run left unpublished pipeline commits
+no-mistakes axi sync --adopt-published  # adopt an exactly published rebased head into its stale gate lane
 ` + "```" + `
 
 Every ` + "`next_action`" + ` carries both a ` + "`code`" + ` and the exact ` + "`command`" + ` to run, and an object with no ` + "`next_action`" + ` needs nothing from you (the branch is already synchronized, or the state is purely informational). Run the reported command for whatever code you get, including any code not listed below; the notes here only add what the command alone does not tell you:
@@ -462,6 +476,7 @@ Every ` + "`next_action`" + ` carries both a ` + "`code`" + ` and the exact ` + 
 - ` + "`continue_active_run`" + ` - the pipeline still owns the branch: keep driving the active run rather than making local follow-up commits.
 - ` + "`recover_custody`" + ` - a terminal run left unpublished pipeline commits preserved in the local gate. Recover custody first with ` + "`no-mistakes axi sync --recover`" + `: it returns custody and moves a clean worktree to the preserved pipeline head, by fast-forward or by adopting a diverged preserved head proven to carry every local change - the ordinary result of the pipeline rebasing your commits onto a newer base - after anchoring your pre-recovery head under ` + "`refs/no-mistakes/recover-local/<run>`" + `. That proof is deliberately narrow, so a rebase whose fix rounds also rewrote your own lines refuses instead of being adopted: when nothing can tell a deliberate pipeline fix from a dropped change, the decision is yours. Then validate that head with ` + "`no-mistakes axi run --intent \"...\"`" + `, which starts and drives the run in one command. ` + "`no-mistakes rerun`" + ` also re-runs the preserved pipeline head, but it returns immediately without driving, and a following ` + "`no-mistakes axi run`" + ` reattaches only while your local HEAD equals that preserved head - so use it only after the recovery moved your worktree there. A dirty worktree, or divergence that cannot be proven contained, makes the recovery refuse with explicit choices; ` + "`--keep-local`" + ` keeps your current head while the preserved commits stay anchored under ` + "`refs/no-mistakes/recover/<run>`" + `.
   Run the exact reported ` + "`next_action.command`" + ` rather than reconstructing one. It is ` + "`no-mistakes axi sync --recover --keep-local`" + ` in two cases: when an accessible gate confirms the verified preserved head is missing and you are explicitly discarding those unpublished commits, or when a bound archive proves divergent later work remains preserved while recovery keeps the branch at the exact reported required head and never selects, merges, or replays the archive. Do not substitute plain ` + "`--recover`" + ` or ` + "`rerun`" + ` for a reported keep-local action.
+- ` + "`adopt_published`" + ` - a custody-returned branch was rebased after its gate lane stopped moving: run ` + "`no-mistakes axi sync --adopt-published`" + `. It verifies the configured push target already has the exact rebased local head, preserves the old lane head, and updates only that stale gate lane. If the target differs or changes during verification, it refuses without replacing the lane.
 - ` + "`inspect_worktree`" + ` and ` + "`inspect_and_reconcile_manually`" + ` - the operation refused and changed nothing. The reported command only shows you the situation; it does not resolve it.
 
 A ` + "`branch_sync.state`" + ` of ` + "`user_owned`" + ` means the run went terminal before changing the submitted head and cancellation released the branch: the exact branch and head are yours and immediately usable for whichever delivery path is authorized - no sync action is needed, and a repeated ` + "`--recover`" + ` there is a harmless no-op.

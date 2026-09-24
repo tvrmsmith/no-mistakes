@@ -12,6 +12,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 )
 
 func setupGateMirror(t *testing.T, sctx *pipeline.StepContext) string {
@@ -205,7 +206,7 @@ func TestAssertReviewApprovedPushHead_UsesStepScopedGit(t *testing.T) {
 	gitCmd(t, dir, "commit", "-m", "descendant")
 	proposedHead := gitCmd(t, dir, "rev-parse", "HEAD")
 
-	realGit, err := exec.LookPath("git")
+	realGit, err := testgit.RealGit()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +258,7 @@ func TestPushStep_BindsRemoteAndDatabaseToVerifiedCommitWhenHEADMovesDuringPush(
 	replacementHead := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "checkout", "--detach", approvedHead)
 
-	realGit, err := exec.LookPath("git")
+	realGit, err := testgit.RealGit()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +477,7 @@ func TestPushStep_TargetsForkWhenConfigured(t *testing.T) {
 func TestPushStep_RedactsForkURLInGitErrors(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
-	realGit, err := exec.LookPath("git")
+	realGit, err := testgit.RealGit()
 	if err != nil {
 		t.Fatal(err)
 	}

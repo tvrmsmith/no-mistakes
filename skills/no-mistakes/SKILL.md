@@ -113,6 +113,9 @@ committed, carry out the task first and come back to this loop - see
 
    Extra flags on `respond`:
    - `--wait` bounds the hold (default 8m).
+    - `--reason "the operator's explanation"` records an explicitly authorized Test exception with `--step test --action approve`.
+      This does not grant approval authority; escalate ask-user findings as before.
+      Without a reason, Test approval remains effective; an approval past a failing command, `no-go`, or `inconclusive` verdict is reported as an exception with no operator reason supplied.
    - `--add-finding '<json>'` (with `--action fix`) folds a finding you
      spotted yourself - one the pipeline did not surface - into the fix round,
      as a JSON finding object. Use it for a problem you noticed that is not in
@@ -139,6 +142,9 @@ committed, carry out the task first and come back to this loop - see
      it in the TUI.
    - `passed` - the pipeline completed under the requested steps, including any
      explicit per-run skips. This alone is not evidence that a PR was merged.
+   - `passed-with-override` - the pipeline completed with an explicitly approved Test exception or CI failure.
+     Report the exception, not a clean pass.
+     Test evidence is in `run.test_override_reason`, including when CI readiness returns `checks-passed`; do not omit it from the summary.
    - `passed-with-skips` - publication or CI verification automatically skipped.
      Report the missing evidence and its cause from `run.automatic_skips`,
      bound to the full `run.head_sha`. This is neither CI readiness nor a
@@ -270,7 +276,7 @@ fail before the fix and pass after it.
 - The repository must already be initialized with `no-mistakes init`; run
   `no-mistakes init` if it is not.
 - The daemon must have a runnable configured pipeline agent: a supported native
-  agent binary, the `agent: cursor` ACP alias, or an explicit `acp:<target>` through
+  agent binary, the `agent: cursor` or `agent: devin` ACP alias, or an explicit `acp:<target>` through
   `acpx`. You are the AXI driver, not
   an implicit pipeline-agent backend. If none is available, the run fails
   before its first step; `no-mistakes doctor` reports the configuration problem.
@@ -345,6 +351,13 @@ or skip it. Approval is rejected. Have the operator inspect and resolve the
 reported edit, then send `--action fix` to retry the unfinished step.
 The [protected-path reference](https://kunchenguid.github.io/no-mistakes/reference/repo-config/#protected_paths)
 owns the staging guard's scope and limitations.
+
+A `test-agent-unvalidated-work` finding means a timed-out Test agent left
+commits or changes no Test turn validated. Approval is rejected, so `--yes`
+stops at that gate without responding. Relay what the finding names and do
+not skip Test, which would publish that work. Ask the operator to choose:
+`--action fix` spends another agent budget to validate the work, and
+`no-mistakes axi abort` stops the run.
 
 ## Inspecting state
 

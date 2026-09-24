@@ -166,8 +166,10 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			}
 			updated, err = host.UpdatePR(ctx, existing, scm.PRContent(content))
 			if err != nil {
-				sctx.Log(fmt.Sprintf("warning: failed to update PR: %v", err))
-				updated = existing
+				// A revalidation cycle may already have pushed a repaired head. Its
+				// attestation is part of delivery, so CI must not run after a failed
+				// update while the existing body still binds the previous head.
+				return nil, fmt.Errorf("update existing pull request: %w", err)
 			}
 		}
 		if updated != nil && updated.URL != "" {
@@ -441,7 +443,7 @@ Diff stat:
 %s
 
 Final diff paths and statuses:
-%s%s%s`, branch, baseSHA, sctx.Run.HeadSHA, baseBranch, titleRules, scopeRules, diffStat, finalDiff, userIntentPromptSection(sctx), executionContextPromptSection(sctx.WorkDir))
+%s%s%s`, branch, baseSHA, sctx.Run.HeadSHA, baseBranch, titleRules, scopeRules, diffStat, finalDiff, prDraftIntentPromptSection(sctx), executionContextPromptSection(sctx.WorkDir))
 
 	prompt += prBodyBudgetPromptSection(bodyLimit)
 
@@ -507,7 +509,7 @@ Rules:
 - Do not invent behavior.
 
 Final diff paths and statuses:
-%s%s%s`, branch, baseSHA, sctx.Run.HeadSHA, baseBranch, paths, userIntentPromptSection(sctx), executionContextPromptSection(sctx.WorkDir))
+%s%s%s`, branch, baseSHA, sctx.Run.HeadSHA, baseBranch, paths, prDraftIntentPromptSection(sctx), executionContextPromptSection(sctx.WorkDir))
 	result, err := sctx.RunAgentContext(sctx.Ctx, agent.RunOpts{
 		Prompt:     prompt,
 		CWD:        sctx.WorkDir,

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -35,7 +36,10 @@ func TestMain(m *testing.M) {
 	switch os.Getenv("NM_DAEMON_HELPER_PROCESS") {
 	case "1":
 		if capturePath := os.Getenv("NM_CAPTURE_NM_HOME_FILE"); capturePath != "" {
-			_ = os.WriteFile(capturePath, []byte(os.Getenv("NM_HOME")), 0o600)
+			// Atomic rename so a poller that treats "file exists" as "content
+			// ready" cannot observe the empty create-before-write window that
+			// os.WriteFile leaves open (TestStartDetachedDaemonUsesProvidedRootViaNMHome).
+			_ = writeFileAtomic(capturePath, []byte(os.Getenv("NM_HOME")), 0o600)
 		}
 		// Stay alive long enough for tests with a synthetic health transition
 		// to distinguish launch from readiness. The production exit regression
@@ -160,6 +164,77 @@ func startTestDaemon(t *testing.T) (*paths.Paths, *db.DB) {
 	})
 
 	return p, d
+}
+
+// TestRunTestDaemonStartupError exercises the helper through a failed daemon
+// startup in a child test process, so its fatal diagnostic can be asserted.
+func TestRunTestDaemonStartupError(t *testing.T) {
+	const childEnv = "NM_TEST_DAEMON_STARTUP_ERROR"
+	if os.Getenv(childEnv) == "1" {
+		p := paths.WithRoot(t.TempDir())
+		if err := p.EnsureDirs(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p.ConfigFile(), []byte("agent: [invalid\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		d, err := db.Open(p.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = d.Close() })
+		runTestDaemon(t, p, d, nil, time.Second)
+		t.Fatal("daemon unexpectedly became ready")
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRunTestDaemonStartupError$")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("failed startup did not stop the readiness wait: %v", ctx.Err())
+	}
+	if err == nil {
+		t.Fatalf("expected failed daemon startup, got success: %s", output)
+	}
+	if !strings.Contains(string(output), "load config:") {
+		t.Fatalf("startup error was not surfaced: %s", output)
+	}
+}
+
+// runTestDaemon runs RunWithOptions for the rest of the test and returns only
+// once the daemon answers a health probe. Startup recovery (stale runs, orphan
+// processes, orphan worktrees) completes before the IPC socket is bound, so a
+// returned call is a barrier after which recovery results can be asserted, and
+// the registered cleanup can reach a daemon that is still serving. The
+// cleanup asks the daemon to shut down when reachable and waits for
+// RunWithOptions to return. stopWithin only bounds how long a daemon that
+// never exits can stall the test. Register cleanup for resources that must
+// outlive the daemon (d and its root) before calling this.
+func runTestDaemon(t *testing.T, p *paths.Paths, d *db.DB, sf StepFactory, stopWithin time.Duration) {
+	t.Helper()
+
+	stopped := make(chan struct{})
+	exited := make(chan error, 1)
+	go func() {
+		exited <- RunWithOptions(p, d, sf)
+		close(stopped)
+	}()
+
+	t.Cleanup(func() {
+		if client, err := ipc.Dial(p.Socket()); err == nil {
+			_ = client.Call(ipc.MethodShutdown, &ipc.ShutdownParams{}, nil)
+			closers.Quiet(client)
+		}
+		select {
+		case <-stopped:
+		case <-time.After(stopWithin):
+			t.Errorf("daemon did not stop within %s", stopWithin)
+		}
+	})
+
+	waitForDaemonReadyOrExit(t, p, exited)
 }
 
 // --- Mock steps and helpers for RunManager tests ---
@@ -580,6 +655,11 @@ func waitForRunTerminalState(t *testing.T, d *db.DB, runID string) *db.Run {
 // process-spawn-bound Windows runner and made the wait flaky.
 func waitForDaemonReady(t *testing.T, p *paths.Paths) {
 	t.Helper()
+	waitForDaemonReadyOrExit(t, p, nil)
+}
+
+func waitForDaemonReadyOrExit(t *testing.T, p *paths.Paths, exited <-chan error) {
+	t.Helper()
 
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
@@ -592,7 +672,14 @@ func waitForDaemonReady(t *testing.T, p *paths.Paths) {
 				return
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case err := <-exited:
+			if err != nil {
+				t.Fatalf("daemon at %s exited before ready: %v", p.Socket(), err)
+			}
+			t.Fatalf("daemon at %s exited before ready without error", p.Socket())
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 	t.Fatalf("daemon at %s never became ready", p.Socket())
 }

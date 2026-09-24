@@ -41,7 +41,7 @@ const custodyRecoveryGuidance = "Recover custody first with `no-mistakes axi syn
 const refusedRecoveryRerunGuidance = "Do not reach for `no-mistakes rerun` here: it makes the run active again and the exits named above are then refused. It also refuses a known clean caller HEAD mismatch against the selected preserved head, so if the heads differ, inspect `no-mistakes axi status` and follow its exact `branch_sync.next_action.command` for custody or synchronization, then submit intended local commits with a fresh `no-mistakes axi run` once custody permits."
 
 func newSyncCmd() *cobra.Command {
-	var check, yes, recoverCustody, keepLocal bool
+	var check, yes, recoverCustody, keepLocal, adoptPublished bool
 	var bindArchiveRef string
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -63,19 +63,22 @@ func newSyncCmd() *cobra.Command {
 			"stay anchored, while genuinely missing preserved commits are discarded.\n" +
 			"--bind-archive-ref records one exact existing refs/heads/archive/* commit as\n" +
 			"evidence for the narrow keep-local recovery that stays at a required head while\n" +
-			"a divergent later head remains archived; it never creates or moves a Git ref.",
+			"a divergent later head remains archived; it never creates or moves a Git ref.\n" +
+			"--adopt-published moves a stale custody-returned gate lane only after the\n" +
+			"configured push target proves the exact divergent local head is already\n" +
+			"published there.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if check && yes {
 				return &exitError{code: 2, err: fmt.Errorf("--check and --yes cannot be used together")}
 			}
-			if check && recoverCustody {
-				return &exitError{code: 2, err: fmt.Errorf("--check and --recover cannot be used together")}
+			if (check && recoverCustody) || (check && adoptPublished) || (recoverCustody && adoptPublished) {
+				return &exitError{code: 2, err: fmt.Errorf("choose only one of --check, --recoverCustody, and --adopt-published")}
 			}
 			if keepLocal && !recoverCustody {
 				return &exitError{code: 2, err: fmt.Errorf("--keep-local requires --recover")}
 			}
-			if bindArchiveRef != "" && (check || yes || recoverCustody || keepLocal) {
+			if bindArchiveRef != "" && (check || yes || recoverCustody || keepLocal || adoptPublished) {
 				return &exitError{code: 2, err: fmt.Errorf("--bind-archive-ref cannot be combined with synchronization or recovery flags")}
 			}
 			if bindArchiveRef != "" {
@@ -84,6 +87,9 @@ func newSyncCmd() *cobra.Command {
 			if recoverCustody {
 				return runHumanRecover(cmd, keepLocal, yes)
 			}
+			if adoptPublished {
+				return runHumanAdoptPublished(cmd, yes)
+			}
 			return runHumanSync(cmd, check, yes)
 		},
 	}
@@ -91,12 +97,13 @@ func newSyncCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply an eligible guarded synchronization without prompting")
 	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
+	cmd.Flags().BoolVar(&adoptPublished, "adopt-published", false, "adopt a clean diverged local head into its stale gate lane only when the configured push target already has that exact head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
 	return cmd
 }
 
 func newAxiSyncCmd() *cobra.Command {
-	var check, recoverCustody, keepLocal bool
+	var check, recoverCustody, keepLocal, adoptPublished bool
 	var bindArchiveRef string
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -111,26 +118,29 @@ func newAxiSyncCmd() *cobra.Command {
 			"--recover performs the guarded custody return offered by\n" +
 			"next_action.code: recover_custody; --keep-local keeps the current local head.\n" +
 			"--bind-archive-ref binds one exact existing refs/heads/archive/* commit to\n" +
-			"the selected terminal run; it never creates or moves a Git ref.",
+			"the selected terminal run; it never creates or moves a Git ref.\n" +
+			"--adopt-published performs the guarded gate-lane recovery offered by\n" +
+			"next_action.code: adopt_published.",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if check && recoverCustody {
-				return emitError(cmd, 2, "--check and --recover cannot be used together")
+			if (check && recoverCustody) || (check && adoptPublished) || (recoverCustody && adoptPublished) {
+				return emitError(cmd, 2, "choose only one of --check, --recoverCustody, and --adopt-published")
 			}
 			if keepLocal && !recoverCustody {
 				return emitError(cmd, 2, "--keep-local requires --recover")
 			}
-			if bindArchiveRef != "" && (check || recoverCustody || keepLocal) {
+			if bindArchiveRef != "" && (check || recoverCustody || keepLocal || adoptPublished) {
 				return emitError(cmd, 2, "--bind-archive-ref cannot be combined with synchronization or recovery flags")
 			}
-			return runAxiSync(cmd, check, recoverCustody, keepLocal, bindArchiveRef)
+			return runAxiSync(cmd, check, recoverCustody, keepLocal, adoptPublished, bindArchiveRef)
 		},
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "freshly verify and return the plan without changing HEAD")
 	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
+	cmd.Flags().BoolVar(&adoptPublished, "adopt-published", false, "adopt a clean diverged local head into its stale gate lane only when the configured push target already has that exact head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
 	return cmd
 }
@@ -332,6 +342,53 @@ func runHumanRecover(cmd *cobra.Command, keepLocal, yes bool) error {
 	return &exitError{code: 1}
 }
 
+func runHumanAdoptPublished(cmd *cobra.Command, yes bool) error {
+	w := newPrinter(cmd.OutOrStdout())
+	started := time.Now()
+	var observed branchsync.State
+	result := "error"
+	defer func() { trackSyncAttempt("sync", "human_cli", "adopt_published", observed, result, started) }()
+
+	service, closeFn, err := openSyncService()
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	observed = service.InspectCached(cmd.Context())
+	if !yes {
+		printHumanSyncState(w, observed)
+		if !syncInteractive() {
+			w.Println("  Non-interactive input cannot confirm this recovery. Re-run with `no-mistakes sync --adopt-published --yes`.")
+			result = "refused"
+			return &exitError{code: 1}
+		}
+		w.Println("  This verifies that the configured push target already has your exact rebased head,")
+		w.Println("  then updates only this stale local gate lane. It never changes the target or worktree.")
+		w.Print("  Adopt the published head into this gate lane? [y/N] ")
+		line, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		if readErr != nil && strings.TrimSpace(line) == "" {
+			return readErr
+		}
+		answer := strings.ToLower(strings.TrimSpace(line))
+		if answer != "y" && answer != "yes" {
+			w.Println("  Cancelled; no files or refs were changed.")
+			result = "cancelled"
+			return w.Err()
+		}
+	}
+
+	state := service.AdoptPublished(cmd.Context())
+	observed = state
+	printHumanSyncState(w, state)
+	if state.Changed {
+		result = "applied"
+		return w.Err()
+	}
+	result = "refused"
+	return &exitError{code: 1}
+}
+
 func printHumanSyncState(w *printer, state branchsync.State) {
 	w.Printf("\n  Local branch: %s\n", humanSyncSummary(state))
 	if state.Local.Head != "" {
@@ -368,6 +425,12 @@ func humanSyncSummary(state branchsync.State) string {
 		}
 		return "pipeline fix is not pushed yet; do not make local follow-up commits"
 	case branchsync.StateCustodyReturned:
+		if state.Safety == "recovery_required" && state.NextAction != nil {
+			return "a rebased local head needs guarded gate-lane adoption before it can start a fresh run"
+		}
+		if state.Safety == "gate_ready" {
+			return "the published rebased head is present in this gate lane; start a fresh run when ready"
+		}
 		return "custody returned; the branch is yours - start a fresh run when ready"
 	case branchsync.StateUserOwned:
 		return "run ended before the pipeline changed anything; the branch and head are yours and immediately usable"
@@ -399,7 +462,7 @@ func humanSyncSummary(state branchsync.State) string {
 	}
 }
 
-func runAxiSync(cmd *cobra.Command, check, recoverCustody, keepLocal bool, bindArchiveRef string) error {
+func runAxiSync(cmd *cobra.Command, check, recoverCustody, keepLocal, adoptPublished bool, bindArchiveRef string) error {
 	started := time.Now()
 	mode := "apply"
 	switch {
@@ -411,6 +474,8 @@ func runAxiSync(cmd *cobra.Command, check, recoverCustody, keepLocal bool, bindA
 		mode = "recover_keep_local"
 	case recoverCustody:
 		mode = "recover"
+	case adoptPublished:
+		mode = "adopt_published"
 	}
 	var state branchsync.State
 	result := "error"
@@ -429,6 +494,8 @@ func runAxiSync(cmd *cobra.Command, check, recoverCustody, keepLocal bool, bindA
 		state = service.Refresh(cmd.Context())
 	case recoverCustody:
 		state = service.Recover(cmd.Context(), keepLocal)
+	case adoptPublished:
+		state = service.AdoptPublished(cmd.Context())
 	default:
 		state = service.Apply(cmd.Context())
 	}
@@ -456,6 +523,9 @@ func runAxiSync(cmd *cobra.Command, check, recoverCustody, keepLocal bool, bindA
 	}
 	if bindArchiveRef != "" {
 		successful = verifiedArchiveRecovery(state)
+	}
+	if adoptPublished {
+		successful = state.Changed
 	}
 	if successful {
 		if state.Changed {

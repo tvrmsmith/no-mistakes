@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"strings"
 	"unicode/utf8"
 
@@ -48,14 +49,16 @@ type commitSummary struct {
 var errRejectedCommitSummary = errors.New("rejected commit summary")
 
 const (
-	noChangesAppliedSummary = "no changes applied"
+	// NoChangesAppliedSummary is the fix result of a round that changed
+	// nothing; it is not a fix the pipeline applied.
+	NoChangesAppliedSummary = "no changes applied"
 	changesAppliedSummary   = "changes applied"
 )
 
 const fixerRemovalRule = `
 
 Removal-first rule:
-- When a problem can be solved by removing a code path that is not strictly required to satisfy the intent - an extra acceptance or matching branch, a fallback, an alias, a second definition of something the code already defines once, or handling for an input nobody intends - fix it by removing that path, not by validating, hardening, or documenting it. Judge what the intent strictly requires against the User intent section when present, otherwise against the change's own stated purpose. Removal is the smallest fix for such a path: hardening it leaves the unrequired path in place for the next review to find another hole in.`
+- When a problem can be solved by removing a code path that is not strictly required to satisfy the intent - an extra acceptance or matching branch, a fallback, an alias, a second definition of something the code already defines once, or handling for an input nobody intends - fix it by removing that path, not by validating, hardening, or documenting it. Judge what the intent strictly requires against the User intent section when present, otherwise against the change's own stated purpose. Later recorded human fix decisions supersede conflicting original intent. Removal is the smallest fix for such a path: hardening it leaves the unrequired path in place for the next review to find another hole in.`
 
 func fixerPrompt(prompt string) string {
 	return prompt + fixerRemovalRule
@@ -77,6 +80,84 @@ func hasBlockingFindings(items []Finding) bool {
 		}
 	}
 	return false
+}
+
+// reviewedPathsCoverReviewable reports whether reviewedPaths (a review turn's
+// self-reported coverage) exactly covers reviewablePaths. Comparison is by
+// cleaned path so "./x" and "x" match.
+func reviewedPathsCoverReviewable(reviewedPaths, reviewablePaths []string) bool {
+	allowed := make(map[string]bool, len(reviewablePaths))
+	for _, candidate := range reviewablePaths {
+		normalized := normalizeReviewedPath(candidate)
+		if normalized == "" {
+			return false
+		}
+		allowed[normalized] = true
+	}
+	covered := make(map[string]bool, len(reviewedPaths))
+	for _, reviewed := range reviewedPaths {
+		normalized := normalizeReviewedPath(reviewed)
+		if normalized == "" || !allowed[normalized] {
+			return false
+		}
+		covered[normalized] = true
+	}
+	for candidate := range allowed {
+		if !covered[candidate] {
+			return false
+		}
+	}
+	return true
+}
+
+// uncoveredReviewMessage names why a clean review round is parked instead of
+// certifying the head: the reviewable files its reviewed_paths did not cover
+// (or the whole set when the field was omitted), and any path it claimed that
+// is not a reviewable changed file.
+func uncoveredReviewMessage(reviewedPaths, reviewablePaths []string) string {
+	if reviewedPaths == nil {
+		return fmt.Sprintf("review reported no reviewed_paths; parking for approval with %d reviewable file(s) unverified: %s", len(reviewablePaths), strings.Join(reviewablePaths, ", "))
+	}
+	allowed := make(map[string]bool, len(reviewablePaths))
+	for _, candidate := range reviewablePaths {
+		allowed[normalizeReviewedPath(candidate)] = true
+	}
+	covered := make(map[string]bool, len(reviewedPaths))
+	var outOfScope []string
+	for _, reviewed := range reviewedPaths {
+		normalized := normalizeReviewedPath(reviewed)
+		if normalized == "" || !allowed[normalized] {
+			outOfScope = append(outOfScope, reviewed)
+			continue
+		}
+		covered[normalized] = true
+	}
+	var missing []string
+	for _, candidate := range reviewablePaths {
+		if !covered[normalizeReviewedPath(candidate)] {
+			missing = append(missing, candidate)
+		}
+	}
+	msg := "review coverage is incomplete; parking for approval"
+	if len(missing) > 0 {
+		msg += fmt.Sprintf(" with %d reviewable file(s) unverified: %s", len(missing), strings.Join(missing, ", "))
+	}
+	if len(outOfScope) > 0 {
+		msg += fmt.Sprintf("; %d reviewed_paths entry(ies) outside the reviewable set: %s", len(outOfScope), strings.Join(outOfScope, ", "))
+	}
+	return msg
+}
+
+func normalizeReviewedPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	cleaned := path.Clean(value)
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
 }
 
 // assertPipelineHeadContinuity fails closed when the worktree HEAD is no longer
@@ -303,7 +384,7 @@ func fixResultSummary(committed bool) string {
 	if committed {
 		return changesAppliedSummary
 	}
-	return noChangesAppliedSummary
+	return NoChangesAppliedSummary
 }
 
 // runValidationStep is the single exit path of every validation step: it runs
@@ -357,6 +438,12 @@ func runValidationStep(
 		// exit; it parks over the residue instead. See residueGateOutcome and
 		// pipeline.ApprovalResidueDiscarder.
 		return residueGateOutcome(sctx, name, outcome)
+	}
+	if dirty && pipeline.HasUnvalidatedWorkRefusal(outcome.Findings) {
+		// A budget-cut Test round parks over work no turn validated, possibly
+		// a half-finished rebase. Its gate names that worktree state for the
+		// operator; committing it here would record exactly what it refuses.
+		return outcome, nil
 	}
 	if dirty {
 		fallback := "commit " + string(name) + " changes"

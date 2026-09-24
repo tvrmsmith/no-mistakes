@@ -10,6 +10,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 )
 
 // hangingGitRemote accepts TCP connections and then says nothing, which is what
@@ -35,7 +36,8 @@ func hangingGitRemote(t *testing.T) string {
 }
 
 func TestFetchRunUpstreamBranch_TimesOutAndSaysSo(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
+	realGit, err := testgit.RealGit()
+	if err != nil {
 		t.Skip("git not available")
 	}
 
@@ -44,7 +46,7 @@ func TestFetchRunUpstreamBranch_TimesOutAndSaysSo(t *testing.T) {
 	t.Cleanup(func() { fetchUpstreamTimeout = original })
 
 	workDir := t.TempDir()
-	if out, err := exec.Command("git", "-C", workDir, "init", "-q").CombinedOutput(); err != nil {
+	if out, err := exec.Command(realGit, "-C", workDir, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 
@@ -56,7 +58,7 @@ func TestFetchRunUpstreamBranch_TimesOutAndSaysSo(t *testing.T) {
 
 	start := time.Now()
 	// No deadline on the caller context: the fetch must impose its own.
-	err := fetchRunUpstreamBranch(t.Context(), sctx, "main")
+	err = fetchRunUpstreamBranch(t.Context(), sctx, "main")
 	elapsed := time.Since(start)
 
 	if err == nil {
