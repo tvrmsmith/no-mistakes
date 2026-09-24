@@ -306,13 +306,14 @@ func discoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []str
 	}
 
 	sctx.Log("discovering test units...")
-	return discoverAndCacheViaAgent(sctx, baseSHA, changed, "")
+	return discoverAndCacheViaAgent(sctx, baseSHA, changed)
 }
 
-// rediscoverTestUnits replaces an agent-inferred layout whose command could
-// not run any test, showing the discovery agent the dead command and its
-// output so the replacement is not the same guess. It overwrites the cached
-// layout, so later attempts in the run reuse the replacement.
+// rediscoverTestUnits asks the discovery agent again after an agent-inferred
+// command could not run any test, showing it the dead command and its output.
+// The agent may report a replacement or keep the same command when the output
+// shows the runner is sound. It does not cache the answer: the caller adopts a
+// replacement only once it knows the answer selects something to run.
 func rediscoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []string, dead deadTestRunner) (pipeline.TestDiscovery, error) {
 	sctx.Log(fmt.Sprintf("test unit %q could not run any test, rediscovering test units...", dead.unit.Name))
 	failure := fmt.Sprintf(`
@@ -325,10 +326,19 @@ Output:
 
 Report a command that can actually run this repository's tests on this machine. If the output shows the command itself is sound and the failure is in the code under test (for example a compile error in a changed file), report that same command unchanged.`,
 		dead.unit.Name, dead.exitCode, dead.reason, dead.unit.Command, dead.output)
-	return discoverAndCacheViaAgent(sctx, baseSHA, changed, failure)
+	return discoverValidatedViaAgent(sctx, baseSHA, changed, failure)
 }
 
-func discoverAndCacheViaAgent(sctx *pipeline.StepContext, baseSHA string, changed []string, failureSection string) (pipeline.TestDiscovery, error) {
+func discoverAndCacheViaAgent(sctx *pipeline.StepContext, baseSHA string, changed []string) (pipeline.TestDiscovery, error) {
+	d, err := discoverValidatedViaAgent(sctx, baseSHA, changed, "")
+	if err != nil {
+		return pipeline.TestDiscovery{}, err
+	}
+	sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), d)
+	return d, nil
+}
+
+func discoverValidatedViaAgent(sctx *pipeline.StepContext, baseSHA string, changed []string, failureSection string) (pipeline.TestDiscovery, error) {
 	d, err := discoverTestUnitsViaAgent(sctx, baseSHA, changed, failureSection)
 	if err != nil {
 		return pipeline.TestDiscovery{}, err
@@ -336,7 +346,6 @@ func discoverAndCacheViaAgent(sctx *pipeline.StepContext, baseSHA string, change
 	if err := validateDiscovery(&d); err != nil {
 		return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
 	}
-	sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), d)
 	return d, nil
 }
 
@@ -442,13 +451,19 @@ func (d deadTestRunner) description(multiUnit bool) string {
 	return description
 }
 
-// selectsCommand reports whether any unit the discovery selected runs command.
-func selectsCommand(d pipeline.TestDiscovery, command string) bool {
+// selectsOnlyCommand reports whether the discovery selects at least one unit
+// and every selected unit runs command, so running it would run exactly that
+// command again.
+func selectsOnlyCommand(d pipeline.TestDiscovery, command string) bool {
+	if len(d.Selected) == 0 {
+		return false
+	}
 	want := strings.TrimSpace(command)
 	for _, name := range d.Selected {
-		if unit, ok := findTestUnit(d.Units, name); ok && strings.TrimSpace(unit.Command) == want {
-			return true
+		unit, ok := findTestUnit(d.Units, name)
+		if !ok || strings.TrimSpace(unit.Command) != want {
+			return false
 		}
 	}
-	return false
+	return true
 }

@@ -284,15 +284,18 @@ Previous test findings to address:
 	// broken runner. It keeps the test-command category and the exit code,
 	// which VerifyApprovalOverride reads, so approving over a dead command is
 	// recorded as an override rather than reading as a clean pass.
+	deadRunnerFinding := func(description string) Finding {
+		return Finding{
+			Severity:    types.FindingSeverityError,
+			Action:      types.ActionAskUser,
+			Category:    types.FindingCategoryTestCommand,
+			Description: description,
+		}
+	}
 	parkDeadRunner := func(description string) (*pipeline.StepOutcome, error) {
 		sctx.Log(description)
 		findings := Findings{
-			Items: withOmission([]Finding{{
-				Severity:    types.FindingSeverityError,
-				Action:      types.ActionAskUser,
-				Category:    types.FindingCategoryTestCommand,
-				Description: description,
-			}}),
+			Items:   withOmission([]Finding{deadRunnerFinding(description)}),
 			Summary: baselineSummary,
 			Tested:  tested(),
 		}
@@ -335,9 +338,9 @@ Previous test findings to address:
 		}
 	}
 
-	// runUnit runs one unit's command exactly once per attempt, tracked by
-	// name in ran so the under-selection expansion below can never re-run a
-	// unit the first pass already covered. It reports stop=true once a unit
+	// runUnit runs one unit's command at most once per pass, tracked by name
+	// in ran so the under-selection expansion below can never re-run a unit
+	// the same pass already covered. It reports stop=true once a unit
 	// failed, so the remaining units are not run, and records that failure in
 	// the baseline state the evidence turn folds in.
 	runUnit := func(unit config.TestUnit) (bool, error) {
@@ -408,7 +411,8 @@ Previous test findings to address:
 	// Unit execution runs at most twice: once with the layout discovery gave,
 	// and once more with a replacement when an agent-inferred command could
 	// not run any test. Each pass starts from nothing, because a replacement
-	// layout may rename or regroup the units the first pass ran.
+	// layout may rename or regroup the units the first pass ran, so the second
+	// pass may run again a unit that already passed in the first.
 	var replaced *deadTestRunner
 	for {
 		covered, ran = nil, map[string]bool{}
@@ -489,17 +493,33 @@ Previous test findings to address:
 			break
 		}
 		description := dead.description(multiUnit)
+		// A cut repair turn may have left the runner broken mid-edit, so the
+		// cut outranks every dead-runner verdict: the park below then carries
+		// the timeout finding and refuses approval over unvalidated work.
+		if repairCut != nil {
+			baselineFindings = []Finding{deadRunnerFinding(description)}
+			break
+		}
 		// A configured command is the maintainer's to repair.
 		if discovery.Source != "agent" {
 			return parkDeadRunner(description)
 		}
-		// The run gets one rediscovery. A second dead command means discovery
-		// cannot find a runner that works here, so it parks rather than
-		// guessing again. The counter persists, so a later attempt of this run
-		// parks too, including one whose command a rediscovery kept.
+		// An earlier rediscovery in this run kept this command after reading
+		// its output, so the runner is sound and the failure is in the code
+		// under test, such as a compile error in a changed file. That is an
+		// agent fix round's to repair, bounded by auto_fix.test.
+		if sctx.Shared.TestKeptCommand(dead.unit.Command) {
+			sctx.Log("test unit discovery kept this command earlier in the run, so its failure is treated as failing tests")
+			baselineFindings = []Finding{failedTests(dead.unit, dead.exitCode)}
+			break
+		}
 		if replaced != nil {
 			return parkDeadRunner(fmt.Sprintf("%s; it replaced an inferred command that could not run any test either: %s", description, replaced.unit.Command))
 		}
+		// The run gets one rediscovery. A second dead command means discovery
+		// cannot find a runner that works here, so it parks rather than
+		// guessing again. The counter persists on the run row, so a later
+		// attempt of this run parks too.
 		if sctx.Shared.NoteTestRunnerFault() >= 2 {
 			return parkDeadRunner(description + "; test unit discovery already replaced a dead inferred command once in this run")
 		}
@@ -508,14 +528,16 @@ Previous test findings to address:
 		if rediscoverErr != nil {
 			return discoveryFailure(rediscoverErr)
 		}
-		// Rediscovery kept the command after reading its output, so the runner
-		// is sound and the failure is in the code under test, such as a compile
-		// error in a changed file. That is an agent fix round's to repair.
-		if selectsCommand(replacement, dead.unit.Command) {
+		if selectsOnlyCommand(replacement, dead.unit.Command) {
 			sctx.Log("test unit discovery kept the command, so its failure is treated as failing tests")
+			sctx.Shared.SetTestKeptCommand(dead.unit.Command)
 			baselineFindings = []Finding{failedTests(dead.unit, dead.exitCode)}
 			break
 		}
+		if len(replacement.Selected) == 0 {
+			return parkDeadRunner(description + "; rediscovery selected no replacement unit")
+		}
+		sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), replacement)
 		discovery = replacement
 	}
 
@@ -551,7 +573,7 @@ Previous test findings to address:
 	// Whenever the selected units' commands already ran, the prompt tells the
 	// agent to read and judge those results instead of running tests again and
 	// not to widen past the selection. The step itself runs each unit's command
-	// exactly once per attempt; the evidence half of that bound is a prompt
+	// at most once per pass, and a second pass happens only after a rediscovery; the evidence half of that bound is a prompt
 	// contract, not an enforced sandbox, and the pinned regression tests guard
 	// the wording.
 	{

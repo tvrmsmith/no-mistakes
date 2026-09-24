@@ -1123,6 +1123,9 @@ func TestTestStep_FailingUnitCommandParksAutoFixable(t *testing.T) {
 // auto-fix item parks for a human with the auto_fix.test budget unspent.
 func TestTestStep_FailingUnitCommandStartsAnAutoFixRound(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the unit command is POSIX shell")
+	}
 	dir, baseSHA := newUnitRepo(t)
 	headSHA := changeUnitFile(t, dir, "services/api/main.go")
 

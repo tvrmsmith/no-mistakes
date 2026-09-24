@@ -440,7 +440,7 @@ func TestTestStep_EvidenceCutKeepsTheFailingConfiguredCommand(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		testCmd = "echo TestCheckout failed && exit /b 3"
 	}
-	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: testCmd})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: failingTestsCommand(t, testCmd)})
 	sctx.Config.TestAgentTimeout = 20 * time.Millisecond
 
 	outcome, err := (&TestStep{}).Execute(sctx)
@@ -475,7 +475,7 @@ func TestTestStep_RepairCutRecordsTheConfiguredCommandResult(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}}
-	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "exit 4"})
+	sctx := newTestContextWithCoverage(t, ag, dir, baseSHA, headSHA, config.Commands{Test: failingTestsCommand(t, "exit 4")})
 	sctx.Fixing = true
 	sctx.PreviousFindings = `{"findings":[{"id":"test-1","severity":"error","category":"test-command","description":"configured test command failed with exit code 4"}]}`
 	sctx.Config.TestAgentTimeout = 20 * time.Millisecond
