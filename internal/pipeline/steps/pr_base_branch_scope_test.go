@@ -12,6 +12,8 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // newIntegrationBranchRepo builds the shape that exposed issue #39: an
@@ -107,5 +109,94 @@ func TestIntentBaseSHA_NewBranchFollowsTheConfiguredPRBaseBranch(t *testing.T) {
 	}
 	if want := []string{"services/api/main.go"}; !slices.Equal(files, want) {
 		t.Errorf("intent diff files = %q, want %q", files, want)
+	}
+}
+
+func TestMetricsStep_ChangedFilesFollowTheConfiguredPRBaseBranch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the command reads the variables through POSIX shell interpolation")
+	}
+	t.Parallel()
+	dir, developSHA, headSHA := newIntegrationBranchRepo(t)
+	outFile := filepath.Join(t.TempDir(), "env.out")
+	command := `printf '%s\n' "$NO_MISTAKES_BASE_SHA" "$NO_MISTAKES_CHANGED_FILES" > ` + outFile + "\n" +
+		echoMetricsReport(`{"metric":"crap","functions":[]}`)
+	sctx := coveredMetricsContext(t, &mockAgent{name: "test"}, dir, zeroSHA, headSHA, command, 30)
+	sctx.Config.PR.BaseBranch = "develop"
+
+	if _, err := (&MetricsStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	if want := []string{developSHA, "services/api/main.go"}; !slices.Equal(lines, want) {
+		t.Errorf("base SHA and changed files = %q, want %q", lines, want)
+	}
+}
+
+func TestLintStep_ExtraLinterBaseFollowsTheConfiguredPRBaseBranch(t *testing.T) {
+	t.Parallel()
+	dir, developSHA, headSHA := newIntegrationBranchRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, zeroSHA, headSHA, config.Commands{Lint: "exit 0"})
+	sctx.Config.PR.BaseBranch = "develop"
+	sctx.Config.Lint = config.Lint{ExtraLinters: []config.ExtraLinter{{
+		Name:            "probe",
+		Command:         `echo "base=$NO_MISTAKES_BASE_SHA"`,
+		FindingsPattern: `^(?P<message>base=.*)$`,
+	}}}
+
+	outcome, err := (&LintStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := outcomeFindings(t, outcome)
+	if len(findings.Items) != 1 {
+		t.Fatalf("expected the probe finding, got %s", outcome.Findings)
+	}
+	if got, want := findings.Items[0].Description, "probe: base="+developSHA; got != want {
+		t.Errorf("extra linter saw %q, want %q", got, want)
+	}
+}
+
+func TestAgentPromptsCarryTheConfiguredPRBaseBranchMergeBase(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		output string
+		fixing bool
+		step   func() pipeline.Step
+	}{
+		{"format fix", `{"summary":"repair source"}`, true, func() pipeline.Step { return &FormatStep{} }},
+		{"document", `{"findings":[],"summary":"docs current"}`, false, func() pipeline.Step { return &DocumentStep{} }},
+		{"custom gate fix", `{"summary":"satisfy gate"}`, true, func() pipeline.Step {
+			return &CustomGateStep{Gate: config.Gate{Name: "probe", After: types.StepTest, Command: "exit 0"}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir, developSHA, headSHA := newIntegrationBranchRepo(t)
+			ag := &mockAgent{
+				name: "test",
+				runFn: func(_ context.Context, _ agent.RunOpts) (*agent.Result, error) {
+					return &agent.Result{Output: json.RawMessage(tc.output)}, nil
+				},
+			}
+			sctx := newTestContextWithDBRecords(t, ag, dir, zeroSHA, headSHA, config.Commands{})
+			sctx.Config.PR.BaseBranch = "develop"
+			sctx.Fixing = tc.fixing
+
+			if _, err := tc.step().Execute(sctx); err != nil {
+				t.Fatal(err)
+			}
+			if len(ag.calls) == 0 {
+				t.Fatal("the step never prompted the agent")
+			}
+			if want := "- base commit: " + developSHA; !strings.Contains(ag.calls[0].Prompt, want) {
+				t.Errorf("prompt does not carry %q:\n%s", want, ag.calls[0].Prompt)
+			}
+		})
 	}
 }
