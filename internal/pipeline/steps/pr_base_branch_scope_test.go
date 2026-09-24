@@ -90,3 +90,22 @@ func TestReviewStep_DiffFollowsTheConfiguredPRBaseBranch(t *testing.T) {
 		t.Fatalf("review prompt does not scope the diff to the develop merge-base %s:\n%s", developSHA, prompt)
 	}
 }
+
+func TestIntentBaseSHA_NewBranchFollowsTheConfiguredPRBaseBranch(t *testing.T) {
+	t.Parallel()
+	dir, developSHA, headSHA := newIntegrationBranchRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, zeroSHA, headSHA, config.Commands{})
+	sctx.Config.PR.BaseBranch = "develop"
+
+	base := intentBaseSHA(context.Background(), sctx, dir)
+	if base != developSHA {
+		t.Errorf("intent base = %s, want the develop merge-base %s", base, developSHA)
+	}
+	files, err := diffFilesForIntentMatching(context.Background(), dir, base, headSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"services/api/main.go"}; !slices.Equal(files, want) {
+		t.Errorf("intent diff files = %q, want %q", files, want)
+	}
+}

@@ -41,8 +41,10 @@ func resolveBaseSHA(ctx context.Context, workDir, baseSHA, baseBranch string) st
 // resolveBranchBaseSHA returns the branch base commit relative to baseBranch
 // when possible. This keeps pipeline steps scoped to the full branch, not just
 // the last pushed delta. If merge-base cannot be determined, it falls back to
-// resolveBaseSHA. Steps call runBranchBaseSHA, which supplies the run's
-// effective PR base branch.
+// resolveBaseSHA. Validation steps call runBranchBaseSHA, which supplies the
+// run's effective PR base branch. The PR step and CI merge-conflict repair
+// call this directly on purpose, because an existing PR's live forge base
+// must win over pr.base_branch there.
 func resolveBranchBaseSHA(ctx context.Context, workDir, fallbackBaseSHA, baseBranch string) string {
 	if mb := mergeBaseWithDefaultBranch(ctx, workDir, baseBranch); mb != "" {
 		return mb

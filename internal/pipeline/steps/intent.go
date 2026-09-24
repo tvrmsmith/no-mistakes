@@ -178,7 +178,7 @@ func defaultRunIntent(ctx context.Context, sctx *pipeline.StepContext) (*intent.
 		gitWorkDir = repo.WorkingPath
 	}
 
-	resolvedBaseSHA := resolveIntentBaseSHA(ctx, gitWorkDir, run.BaseSHA, effectivePRBaseBranch(sctx))
+	resolvedBaseSHA := intentBaseSHA(ctx, sctx, gitWorkDir)
 	diffFiles, err := diffFilesForIntentMatching(ctx, gitWorkDir, resolvedBaseSHA, run.HeadSHA)
 	if err != nil {
 		return nil, err
@@ -257,6 +257,14 @@ func splitDiffNameOnly(out string) []string {
 // (new branch push) or has been orphaned by a force push that rewrote the
 // prior remote tip away. Final fallback is git's empty-tree SHA so the diff
 // always succeeds.
+// intentBaseSHA is deliberately not runBranchBaseSHA: it prefers a reachable
+// pushed run.BaseSHA, so a follow-up push scopes intent to the pushed delta.
+// Only a new branch's zero-SHA fallback resolves against the effective PR
+// base branch.
+func intentBaseSHA(ctx context.Context, sctx *pipeline.StepContext, workDir string) string {
+	return resolveIntentBaseSHA(ctx, workDir, sctx.Run.BaseSHA, effectivePRBaseBranch(sctx))
+}
+
 func resolveIntentBaseSHA(ctx context.Context, workDir, baseSHA, defaultBranch string) string {
 	if !git.IsZeroSHA(baseSHA) && commitReachable(ctx, workDir, baseSHA) {
 		return baseSHA

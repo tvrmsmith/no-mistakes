@@ -222,3 +222,30 @@ func TestPublishRunEvidence_DisabledDoesNotTouchTheRemote(t *testing.T) {
 		t.Errorf("remote refs changed: %q", refs)
 	}
 }
+
+func TestPublishRunEvidence_RefusesThePRBaseBranchAsTheEvidenceBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*pipeline.StepContext)
+	}{
+		{"repo config", func(sctx *pipeline.StepContext) { sctx.Config.PR.BaseBranch = "develop" }},
+		{"run override", func(sctx *pipeline.StepContext) {
+			base := "develop"
+			sctx.Run.PRBaseBranch = &base
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sctx, remote := newEvidencePublishContext(t, "feature/add-login")
+			sctx.Config.Test.Evidence.Branch = "develop"
+			tc.set(sctx)
+			writeRunEvidence(t, sctx, map[string]string{"cli-run.txt": "it works\n"})
+
+			if links := publishRunEvidence(sctx); links != nil {
+				t.Fatal("evidence must not be published to the PR base branch")
+			}
+			if refs := gitCmd(t, remote, "for-each-ref", "refs/heads/develop"); refs != "" {
+				t.Errorf("the PR base branch was created on the remote: %s", refs)
+			}
+		})
+	}
+}

@@ -792,7 +792,8 @@ func dedupeRebaseFindings(findings []Finding) []Finding {
 }
 
 // updateHeadSHA syncs the run's head SHA after rebase and checks for an empty diff.
-// When the branch diff against the default branch is empty, SkipRemaining is set.
+// When the branch diff against its effective PR base branch is empty,
+// SkipRemaining is set.
 func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	headSHA, err := git.HeadSHA(ctx, sctx.WorkDir)
 	if err != nil {
