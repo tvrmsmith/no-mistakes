@@ -194,22 +194,6 @@ func forcePushRebaseTargets(branch, defaultBranch string) []string {
 	return []string{"origin/" + defaultBranch}
 }
 
-// effectivePRBaseBranch resolves the branch used as the integration base for
-// rebases. Per-run overrides win over repo config; the repository default
-// remains the fallback when neither selects a separate PR target branch.
-func effectivePRBaseBranch(sctx *pipeline.StepContext) string {
-	defaultBranch := strings.TrimSpace(sctx.Repo.DefaultBranch)
-	if runBase := runPRBaseBranch(sctx); runBase != "" {
-		defaultBranch = runBase
-	} else if sctx.Config != nil && strings.TrimSpace(sctx.Config.PR.BaseBranch) != "" {
-		defaultBranch = strings.TrimSpace(sctx.Config.PR.BaseBranch)
-	}
-	if defaultBranch == "" {
-		defaultBranch = "main"
-	}
-	return defaultBranch
-}
-
 // detectBundledLocalDefaultCommits returns a blocking finding when the gated
 // branch carries commits that exist on the contributor's local default branch
 // but were never pushed to origin/<default>. In multi-session / monorepo setups
@@ -808,7 +792,8 @@ func dedupeRebaseFindings(findings []Finding) []Finding {
 }
 
 // updateHeadSHA syncs the run's head SHA after rebase and checks for an empty diff.
-// When the branch diff against the default branch is empty, SkipRemaining is set.
+// When the branch diff against its effective PR base branch is empty,
+// SkipRemaining is set.
 func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	headSHA, err := git.HeadSHA(ctx, sctx.WorkDir)
 	if err != nil {
@@ -824,10 +809,9 @@ func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.S
 		sctx.Log(fmt.Sprintf("updated head SHA to %s", shortSHA(headSHA)))
 	}
 
-	// Check if the branch has any diff against the default branch.
+	// Check if the branch has any diff against its PR base branch.
 	// If the diff is empty (e.g. branch was already merged), skip remaining steps.
-	defaultBranch := effectivePRBaseBranch(sctx)
-	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, defaultBranch)
+	baseSHA := runBranchBaseSHA(sctx)
 	diff, err := git.Diff(ctx, sctx.WorkDir, baseSHA, "HEAD")
 	if err == nil && strings.TrimSpace(diff) == "" {
 		sctx.Log("empty diff after rebase, skipping remaining steps")

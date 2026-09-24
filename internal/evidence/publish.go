@@ -53,7 +53,8 @@ type Request struct {
 	// Message is the evidence commit message.
 	Message string
 	// ForbiddenBranches names branches that must never receive evidence (the
-	// run's own branch and the repository default branch). The marker check
+	// run's own branch, the repository default branch, and its PR base
+	// branch). The marker check
 	// already refuses them; this turns the refusal into a message that names
 	// the misconfiguration.
 	ForbiddenBranches []string
