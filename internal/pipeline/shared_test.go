@@ -153,6 +153,20 @@ func TestRestoreRunShared_ResumedRunKeepsItsSpentRediscovery(t *testing.T) {
 	}
 }
 
+// A command a rediscovery kept stays failing tests after a daemon restart.
+func TestRestoreRunShared_ResumedRunRemembersTheKeptCommand(t *testing.T) {
+	store := newFakeSharedStore()
+	NewRunShared(store, "run-1").SetTestKeptCommand("go test ./services/api")
+
+	resumed := RestoreRunShared(store, "run-1")
+	if !resumed.TestKeptCommand(" go test ./services/api ") {
+		t.Fatal("resumed run forgot the kept command")
+	}
+	if resumed.TestKeptCommand("go test ./web") {
+		t.Fatal("resumed run treats another command as kept")
+	}
+}
+
 func TestRestoreRunShared_DoesNotReuseADiscoveryFromAnotherChangedFileSet(t *testing.T) {
 	store := newFakeSharedStore()
 	NewRunShared(store, "run-1").SetTestDiscovery("fp-old", TestDiscovery{

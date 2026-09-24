@@ -51,6 +51,7 @@ type testDiscoveryRecord struct {
 	Source       string            `json:"source"`
 	ScopeFaults  int               `json:"scope_faults"`
 	RunnerFaults int               `json:"runner_faults"`
+	KeptCommand  string            `json:"kept_command,omitempty"`
 }
 
 // RunShared carries run-scoped results one step hands to a later step in the
@@ -80,6 +81,10 @@ type RunShared struct {
 	// testRunnerFaults counts agent-inferred unit commands that could not run
 	// any test so far this run.
 	testRunnerFaults int
+	// testKeptCommand is the dead inferred command a rediscovery kept after
+	// reading its output, judging the runner sound and the code under test
+	// broken.
+	testKeptCommand string
 	// restartTrees remembers, per step, the tree its last restart-triggering
 	// commit produced, so a later round of that step committing an identical
 	// tree is recognised as churn rather than progress.
@@ -143,6 +148,7 @@ func RestoreRunShared(store RunSharedStore, runID string) *RunShared {
 	}
 	s.testScopeFaults = record.ScopeFaults
 	s.testRunnerFaults = record.RunnerFaults
+	s.testKeptCommand = record.KeptCommand
 	if record.Fingerprint != "" && len(record.Units) > 0 {
 		stored := TestDiscovery{Units: record.Units, Selected: record.Selected, Source: record.Source}.copy()
 		s.testDiscovery = &stored
@@ -161,7 +167,7 @@ func (s *RunShared) persistTestDiscoveryLocked() {
 	if s.store == nil || s.runID == "" {
 		return
 	}
-	record := testDiscoveryRecord{ScopeFaults: s.testScopeFaults, RunnerFaults: s.testRunnerFaults}
+	record := testDiscoveryRecord{ScopeFaults: s.testScopeFaults, RunnerFaults: s.testRunnerFaults, KeptCommand: s.testKeptCommand}
 	if s.testDiscovery != nil {
 		record.Fingerprint = s.testDiscoveryFingerprint
 		record.Units = s.testDiscovery.Units
@@ -230,8 +236,9 @@ func (s *RunShared) NoteTestScopeFault() int {
 
 // NoteTestRunnerFault records an agent-inferred unit command that could not
 // run any test and returns the run's running total. It persists with the
-// discovery so a daemon restart cannot refill the one rediscovery a run gets.
-// A nil receiver returns 1 on every call for the reason NoteTestScopeFault
+// discovery so a daemon restart does not refill the one rediscovery a run
+// gets, as far as that best-effort record survives: a write or decode failure
+// restores the count as zero. A nil receiver returns 1 on every call for the reason NoteTestScopeFault
 // does; the caller bounds rediscovery within one attempt on its own.
 func (s *RunShared) NoteTestRunnerFault() int {
 	if s == nil {
@@ -242,6 +249,30 @@ func (s *RunShared) NoteTestRunnerFault() int {
 	s.testRunnerFaults++
 	s.persistTestDiscoveryLocked()
 	return s.testRunnerFaults
+}
+
+// SetTestKeptCommand records the dead inferred command a rediscovery kept, so
+// every later attempt of the run treats that command failing as failing tests.
+// It persists with the discovery on the same best-effort terms.
+func (s *RunShared) SetTestKeptCommand(command string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.testKeptCommand = strings.TrimSpace(command)
+	s.persistTestDiscoveryLocked()
+}
+
+// TestKeptCommand reports whether command is the one a rediscovery kept
+// earlier in this run.
+func (s *RunShared) TestKeptCommand(command string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.testKeptCommand != "" && s.testKeptCommand == strings.TrimSpace(command)
 }
 
 // ValidationResidue is the exact worktree state a certifying step's round
