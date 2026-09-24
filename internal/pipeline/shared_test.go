@@ -162,8 +162,10 @@ func TestRestoreRunShared_ResumedRunRemembersTheKeptCommand(t *testing.T) {
 	if !resumed.TestKeptCommand(" go test ./services/api ") {
 		t.Fatal("resumed run forgot the kept command")
 	}
-	if resumed.TestKeptCommand("go test ./web") {
-		t.Fatal("resumed run treats another command as kept")
+	for _, other := range []string{"go test ./web", "go test ./services/api/...", "go test ./services/api ./web"} {
+		if resumed.TestKeptCommand(other) {
+			t.Fatalf("resumed run treats %q as the kept command", other)
+		}
 	}
 }
 
