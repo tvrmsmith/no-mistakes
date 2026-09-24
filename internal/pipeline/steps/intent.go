@@ -251,12 +251,6 @@ func splitDiffNameOnly(out string) []string {
 	return files
 }
 
-// resolveIntentBaseSHA returns a usable base SHA for diff'ing against head.
-// Prefers an explicit run.BaseSHA when reachable in the worktree, but falls
-// back to merge-base against the PR base branch when the SHA is the zero ref
-// (new branch push) or has been orphaned by a force push that rewrote the
-// prior remote tip away. Final fallback is git's empty-tree SHA so the diff
-// always succeeds.
 // intentBaseSHA is deliberately not runBranchBaseSHA: it prefers a reachable
 // pushed run.BaseSHA, so a follow-up push scopes intent to the pushed delta.
 // Only a new branch's zero-SHA fallback resolves against the effective PR
@@ -265,6 +259,12 @@ func intentBaseSHA(ctx context.Context, sctx *pipeline.StepContext, workDir stri
 	return resolveIntentBaseSHA(ctx, workDir, sctx.Run.BaseSHA, effectivePRBaseBranch(sctx))
 }
 
+// resolveIntentBaseSHA returns a usable base SHA for diff'ing against head.
+// Prefers an explicit run.BaseSHA when reachable in the worktree, but falls
+// back to merge-base against the PR base branch when the SHA is the zero ref
+// (new branch push) or has been orphaned by a force push that rewrote the
+// prior remote tip away. Final fallback is git's empty-tree SHA so the diff
+// always succeeds.
 func resolveIntentBaseSHA(ctx context.Context, workDir, baseSHA, defaultBranch string) string {
 	if !git.IsZeroSHA(baseSHA) && commitReachable(ctx, workDir, baseSHA) {
 		return baseSHA

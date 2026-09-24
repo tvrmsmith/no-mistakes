@@ -269,7 +269,7 @@ Select the branch that newly created pull requests target.
 | Trust | Trusted default branch, unless `allow_repo_commands: true` is explicitly enabled there |
 
 Use this when the repository's integration branch differs from its forge default branch, for example `develop` instead of `main`.
-The configured branch is used for PR creation, as the integration base for the rebase step, and as the diff base for every validation step: intent, format, lint, test, metrics, document, review, and repository gates all scope to the commits since the branch forked from it.
+The configured branch is used for PR creation, as the integration base for the rebase step, and as the diff base for every validation step: format, lint, test, metrics, document, review, and repository gates all scope to the commits since the branch forked from it. The intent step scopes a follow-up push to the pushed delta and uses this branch only for a new branch's first push.
 When unset, no-mistakes preserves the existing behavior and targets `Repo.DefaultBranch`.
 
 PR lookup matches an existing PR by branch alone, never filtered by base, so a `pr.base_branch` change after a PR was opened updates that PR instead of opening a duplicate against the new base.
