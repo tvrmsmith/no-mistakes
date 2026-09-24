@@ -59,6 +59,14 @@ install: build
 		echo "refreshing managed binary $(MANAGED_BIN)"; \
 		install -m 755 bin/no-mistakes "$(MANAGED_BIN)"; \
 	fi
+	@# Refresh the user-level skill `no-mistakes init` installs, so agents read
+	@# guidance matching the new binary instead of waiting for the next init.
+	@# Sweeping plain files first drops a reference file this version retired.
+	@for base in "$(HOME)/.claude/skills" "$(HOME)/.agents/skills"; do \
+		dir="$$base/no-mistakes"; \
+		echo "refreshing skill $$dir"; \
+		mkdir -p "$$dir" && find "$$dir/" -maxdepth 1 -type f -delete && cp skills/no-mistakes/* "$$dir/"; \
+	done
 	@start="$(INSTALL_BIN)"; \
 	if [ -x "$(LAUNCHER_BIN)" ]; then start="$(LAUNCHER_BIN)"; fi; \
 	echo "starting daemon via $$start"; \
