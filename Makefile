@@ -59,11 +59,11 @@ install: build
 		echo "refreshing managed binary $(MANAGED_BIN)"; \
 		install -m 755 bin/no-mistakes "$(MANAGED_BIN)"; \
 	fi
-	@$(MAKE) --no-print-directory install-skill
 	@start="$(INSTALL_BIN)"; \
 	if [ -x "$(LAUNCHER_BIN)" ]; then start="$(LAUNCHER_BIN)"; fi; \
 	echo "starting daemon via $$start"; \
 	"$$start" daemon start
+	@$(MAKE) --no-print-directory install-skill
 
 # Refresh the user-level skill `no-mistakes init` installs, so agents read
 # guidance matching the new binary instead of waiting for the next init.
