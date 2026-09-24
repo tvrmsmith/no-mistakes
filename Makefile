@@ -13,7 +13,7 @@ LDFLAGS := -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Version=$(VE
            -X github.com/kunchenguid/no-mistakes/internal/buildinfo.TelemetryHost=$(UMAMI_HOST) \
            -X github.com/kunchenguid/no-mistakes/internal/buildinfo.TelemetryWebsiteID=$(UMAMI_WEBSITE_ID)
 
-.PHONY: build dist install test e2e e2e-record lint fmt clean docs docs-build docs-preview demo skill skill-check
+.PHONY: build dist install install-skill test e2e e2e-record lint fmt clean docs docs-build docs-preview demo skill skill-check
 
 DIST_DIR ?= dist
 INSTALL_BIN := $(shell go env GOPATH)/bin/no-mistakes
@@ -59,18 +59,21 @@ install: build
 		echo "refreshing managed binary $(MANAGED_BIN)"; \
 		install -m 755 bin/no-mistakes "$(MANAGED_BIN)"; \
 	fi
-	@# Refresh the user-level skill `no-mistakes init` installs, so agents read
-	@# guidance matching the new binary instead of waiting for the next init.
-	@# Sweeping plain files first drops a reference file this version retired.
+	@$(MAKE) --no-print-directory install-skill
+	@start="$(INSTALL_BIN)"; \
+	if [ -x "$(LAUNCHER_BIN)" ]; then start="$(LAUNCHER_BIN)"; fi; \
+	echo "starting daemon via $$start"; \
+	"$$start" daemon start
+
+# Refresh the user-level skill `no-mistakes init` installs, so agents read
+# guidance matching the new binary instead of waiting for the next init.
+# Sweeping plain files first drops a reference file this version retired.
+install-skill:
 	@for base in "$(HOME)/.claude/skills" "$(HOME)/.agents/skills"; do \
 		dir="$$base/no-mistakes"; \
 		echo "refreshing skill $$dir"; \
 		mkdir -p "$$dir" && find "$$dir/" -maxdepth 1 -type f -delete && cp skills/no-mistakes/* "$$dir/"; \
 	done
-	@start="$(INSTALL_BIN)"; \
-	if [ -x "$(LAUNCHER_BIN)" ]; then start="$(LAUNCHER_BIN)"; fi; \
-	echo "starting daemon via $$start"; \
-	"$$start" daemon start
 
 test:
 	go test -race ./...

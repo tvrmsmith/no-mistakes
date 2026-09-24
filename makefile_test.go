@@ -167,6 +167,93 @@ func TestMakeBuildPreservesQuotedHashInDotEnvUmamiWebsiteID(t *testing.T) {
 	}
 }
 
+func TestMakeInstallSkillRefreshesUserLevelSkill(t *testing.T) {
+	skipMakeBuildTestsOnWindows(t)
+
+	makePath, err := exec.LookPath("make")
+	if err != nil {
+		t.Skip("make not available")
+	}
+
+	home := t.TempDir()
+	claudeSkill := filepath.Join(home, ".claude", "skills", "no-mistakes")
+	agentsSkill := filepath.Join(home, ".agents", "skills", "no-mistakes")
+	retired := filepath.Join(claudeSkill, "retired-reference.md")
+	keptDir := filepath.Join(claudeSkill, "operator-notes")
+	if err := os.MkdirAll(keptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(retired, []byte("retired\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runMakeInstallSkill(t, makePath, home)
+
+	if _, err := os.Stat(retired); !os.IsNotExist(err) {
+		t.Fatalf("retired plain file should be swept, stat err = %v", err)
+	}
+	if info, err := os.Stat(keptDir); err != nil || !info.IsDir() {
+		t.Fatalf("non-file entry should survive the sweep, stat err = %v", err)
+	}
+	want := readSkillFiles(t, filepath.Join("skills", "no-mistakes"))
+	assertSkillFiles(t, claudeSkill, want)
+	assertSkillFiles(t, agentsSkill, want)
+
+	runMakeInstallSkill(t, makePath, home)
+	assertSkillFiles(t, claudeSkill, want)
+	assertSkillFiles(t, agentsSkill, want)
+}
+
+func runMakeInstallSkill(t *testing.T, makePath, home string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, makePath, "install-skill")
+	cmd.Env = append(filteredEnv(os.Environ(), "HOME"), "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("make install-skill failed: %v\n%s", err, out)
+	}
+}
+
+// readSkillFiles returns the plain files directly under dir keyed by name.
+func readSkillFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := make(map[string]string)
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[entry.Name()] = string(data)
+	}
+	return files
+}
+
+func assertSkillFiles(t *testing.T, dir string, want map[string]string) {
+	t.Helper()
+
+	got := readSkillFiles(t, dir)
+	if len(got) != len(want) {
+		t.Fatalf("%s holds %d files, want %d", dir, len(got), len(want))
+	}
+	for name, content := range want {
+		if got[name] != content {
+			t.Fatalf("%s/%s does not match the committed skill", dir, name)
+		}
+	}
+}
+
 func skipMakeBuildTestsOnWindows(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
