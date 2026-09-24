@@ -316,7 +316,9 @@ func TestTestStep_RediscoveryInvalidLayoutParks(t *testing.T) {
 		encodeOneUnitLayout("api", "services/api", deadRunnerCommand, "api"),
 		encodeOneUnitLayout("api", "services/api", "true", "missing"),
 	)
-	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Shared = &pipeline.RunShared{}
+	sctx.CoverageDir = filepath.Join(t.TempDir(), "coverage", "run-1")
 
 	outcome, err := (&TestStep{}).Execute(sctx)
 	if err != nil {
@@ -325,8 +327,20 @@ func TestTestStep_RediscoveryInvalidLayoutParks(t *testing.T) {
 	if !outcome.NeedsApproval || outcome.AutoFixable {
 		t.Fatalf("outcome = %+v, want a maintainer park", outcome)
 	}
-	if finding := onlyFinding(t, outcome.Findings); !strings.Contains(finding.Description, "test unit discovery failed") {
-		t.Fatalf("description = %q", finding.Description)
+	if outcome.ExitCode != 2 {
+		t.Fatalf("ExitCode = %d, want the dead command's 2", outcome.ExitCode)
+	}
+	finding := onlyFinding(t, outcome.Findings)
+	if finding.Category != types.FindingCategoryTestCommand || !strings.Contains(finding.Description, "test unit discovery failed") {
+		t.Fatalf("finding = %+v, want a test-command finding naming the failed rediscovery", finding)
+	}
+	persistTestStepFindings(t, sctx, outcome.ExitCode, outcome.Findings)
+	reason, err := (&TestStep{}).VerifyApprovalOverride(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason == "" {
+		t.Fatal("override reason is empty, want approving over the dead command recorded as an override")
 	}
 }
 

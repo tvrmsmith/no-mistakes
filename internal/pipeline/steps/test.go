@@ -292,11 +292,11 @@ Previous test findings to address:
 			Description: description,
 		}
 	}
-	parkDeadRunner := func(description string) (*pipeline.StepOutcome, error) {
+	parkDeadRunner := func(d *deadTestRunner, description string) (*pipeline.StepOutcome, error) {
 		sctx.Log(description)
 		findings := Findings{
 			Items:   withOmission([]Finding{deadRunnerFinding(description)}),
-			Summary: baselineSummary,
+			Summary: d.output,
 			Tested:  tested(),
 		}
 		findingsJSON, _ := json.Marshal(findings)
@@ -304,7 +304,7 @@ Previous test findings to address:
 			NeedsApproval: true,
 			AutoFixable:   false,
 			Findings:      string(findingsJSON),
-			ExitCode:      baselineExitCode,
+			ExitCode:      d.exitCode,
 			FixSummary:    fixSummary,
 		}, nil
 	}
@@ -414,6 +414,16 @@ Previous test findings to address:
 	// layout may rename or regroup the units the first pass ran, so the second
 	// pass may run again a unit that already passed in the first.
 	var replaced *deadTestRunner
+	var replacedDescription string
+	// parkInPass parks for a maintainer from inside a pass. After a
+	// rediscovery it keeps the replaced dead command's category and exit code,
+	// which the second pass's reset baseline no longer carries.
+	parkInPass := func(description string) (*pipeline.StepOutcome, error) {
+		if replaced != nil {
+			return parkDeadRunner(replaced, replacedDescription+"; "+description)
+		}
+		return parkForMaintainer(description)
+	}
 	for {
 		covered, ran = nil, map[string]bool{}
 		baselineFindings, baselineSummary, baselineExitCode, dead = nil, "", 0, nil
@@ -427,7 +437,7 @@ Previous test findings to address:
 		for _, name := range discovery.Selected {
 			unit, ok := findTestUnit(discovery.Units, name)
 			if !ok {
-				return parkForMaintainer(fmt.Sprintf("test unit discovery selected %q, which is not in the discovered unit layout", name))
+				return parkInPass(fmt.Sprintf("test unit discovery selected %q, which is not in the discovered unit layout", name))
 			}
 			selectedUnits = append(selectedUnits, unit)
 		}
@@ -462,7 +472,7 @@ Previous test findings to address:
 				// unreliable, not merely incomplete this once: expanding again
 				// would keep papering over a systematic miss, so this parks for
 				// a maintainer instead of running the missing units.
-				return parkForMaintainer(fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")))
+				return parkInPass(fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")))
 			}
 
 			sctx.Log(fmt.Sprintf("test scope fault: original selection %s", strings.Join(discovery.Selected, ", ")))
@@ -502,7 +512,7 @@ Previous test findings to address:
 		}
 		// A configured command is the maintainer's to repair.
 		if discovery.Source != "agent" {
-			return parkDeadRunner(description)
+			return parkDeadRunner(dead, description)
 		}
 		// An earlier rediscovery in this run kept this command after reading
 		// its output, so the runner is sound and the failure is in the code
@@ -514,19 +524,23 @@ Previous test findings to address:
 			break
 		}
 		if replaced != nil {
-			return parkDeadRunner(fmt.Sprintf("%s; it replaced an inferred command that could not run any test either: %s", description, replaced.unit.Command))
+			return parkDeadRunner(dead, fmt.Sprintf("%s; it replaced an inferred command that could not run any test either: %s", description, replaced.unit.Command))
 		}
 		// The run gets one rediscovery. A second dead command means discovery
 		// cannot find a runner that works here, so it parks rather than
 		// guessing again. The counter persists on the run row, so a later
 		// attempt of this run parks too.
 		if sctx.Shared.NoteTestRunnerFault() >= 2 {
-			return parkDeadRunner(description + "; test unit discovery already replaced a dead inferred command once in this run")
+			return parkDeadRunner(dead, description+"; test unit discovery already replaced a dead inferred command once in this run")
 		}
-		replaced = dead
+		replaced, replacedDescription = dead, description
 		replacement, rediscoverErr := rediscoverTestUnits(sctx, baseSHA, changed, *dead)
 		if rediscoverErr != nil {
-			return discoveryFailure(rediscoverErr)
+			var resultErr discoveryResultError
+			if !errors.As(rediscoverErr, &resultErr) {
+				return nil, rediscoverErr
+			}
+			return parkDeadRunner(dead, fmt.Sprintf("%s; test unit discovery failed: %v", description, rediscoverErr))
 		}
 		if selectsOnlyCommand(replacement, dead.unit.Command) {
 			sctx.Log("test unit discovery kept the command, so its failure is treated as failing tests")
@@ -535,7 +549,7 @@ Previous test findings to address:
 			break
 		}
 		if len(replacement.Selected) == 0 {
-			return parkDeadRunner(description + "; rediscovery selected no replacement unit")
+			return parkDeadRunner(dead, description+"; rediscovery selected no replacement unit")
 		}
 		sctx.Shared.SetTestDiscovery(changedFilesFingerprint(changed), replacement)
 		discovery = replacement
