@@ -199,7 +199,10 @@ type GlobalConfig struct {
 	// must never be able to turn the maintainer's signing off.
 	SignCommits   bool          `yaml:"-"`
 	ForgeProfiles ForgeProfiles `yaml:"forge_profiles"`
-	AutoFix       AutoFixRaw
+	// RepositoryOverrides scopes machine-local commit and PR-title formats to
+	// canonicalized remote host/owner/repository identities.
+	RepositoryOverrides RepositoryOverrides `yaml:"repository_overrides"`
+	AutoFix             AutoFixRaw
 	// CI is the operator's own CI-step floor. It is the only place the rerun
 	// budget can be set for a repository whose default branch this machine's
 	// user does not control (the common case when contributing to someone
@@ -303,10 +306,11 @@ type globalConfigRaw struct {
 	// otherwise reject the whole document as an unknown field. Setting either
 	// key is reported as deprecated at load and has no effect; the resolved
 	// config has no Jev to configure.
-	Jev                    retiredJev    `yaml:"jev"`
-	ForgeProfiles          ForgeProfiles `yaml:"forge_profiles"`
-	TrustWorkingPathConfig bool          `yaml:"trust_working_path_config"`
-	Providers              ProvidersRaw  `yaml:"providers"`
+	Jev                    retiredJev          `yaml:"jev"`
+	ForgeProfiles          ForgeProfiles       `yaml:"forge_profiles"`
+	RepositoryOverrides    RepositoryOverrides `yaml:"repository_overrides"`
+	TrustWorkingPathConfig bool                `yaml:"trust_working_path_config"`
+	Providers              ProvidersRaw        `yaml:"providers"`
 }
 
 // ForgeProfile selects one isolated provider CLI configuration directory.
@@ -321,6 +325,20 @@ type ForgeProfile struct {
 
 // ForgeProfiles maps a remote host token to its machine-local provider profile.
 type ForgeProfiles map[string]ForgeProfile
+
+// RepositoryOverride contains machine-local settings for one normalized remote.
+type RepositoryOverride struct {
+	Commit GlobalCommitRaw `yaml:"commit"`
+	PR     RepositoryPRRaw `yaml:"pr"`
+}
+
+// RepositoryPRRaw contains machine-local per-repository PR title settings.
+type RepositoryPRRaw struct {
+	TitleFormat *string `yaml:"title_format"`
+}
+
+// RepositoryOverrides maps remote URLs to machine-local per-repository settings.
+type RepositoryOverrides map[string]RepositoryOverride
 
 // RepoConfig represents .no-mistakes.yaml in a repo root.
 type RepoConfig struct {
@@ -2569,6 +2587,13 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 		}
 		cfg.ForgeProfiles = profiles
 	}
+	if raw.RepositoryOverrides != nil {
+		overrides, err := normalizeRepositoryOverrides(raw.RepositoryOverrides)
+		if err != nil {
+			return nil, err
+		}
+		cfg.RepositoryOverrides = overrides
+	}
 	if raw.AutoFix.CI == nil {
 		raw.AutoFix.CI = raw.AutoFix.Babysit
 	}
@@ -3611,6 +3636,24 @@ func (c *Config) AutoFixLimit(step types.StepName) int {
 // ordered fallback lists, override global agent values when non-empty. Commands
 // and ignore patterns come from repo config only.
 func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
+	return merge(global, repo, nil)
+}
+
+// MergeForRemote combines global and per-repo config, applying a matching
+// machine-local repository override between the global defaults and repo config.
+func MergeForRemote(global *GlobalConfig, repo *RepoConfig, remote string) *Config {
+	var override *RepositoryOverride
+	if global != nil {
+		if key, err := normalizeRepositoryRemote(remote); err == nil {
+			if found, ok := global.RepositoryOverrides[key]; ok {
+				override = &found
+			}
+		}
+	}
+	return merge(global, repo, override)
+}
+
+func merge(global *GlobalConfig, repo *RepoConfig, override *RepositoryOverride) *Config {
 	af := autoFixDefaults()
 	applyAutoFixOverrides(&af, &global.AutoFix)
 	applyAutoFixOverrides(&af, &repo.AutoFix)
@@ -3688,6 +3731,18 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	if global.Commit.BranchReplacement != nil {
 		commit.BranchReplacement = *global.Commit.BranchReplacement
 	}
+	if override != nil {
+		if override.Commit.FixMessage != nil {
+			commit.FixMessage = *override.Commit.FixMessage
+		}
+		if override.Commit.BranchPattern != nil {
+			commit.BranchPattern = *override.Commit.BranchPattern
+			commit.BranchReplacement = ""
+		}
+		if override.Commit.BranchReplacement != nil {
+			commit.BranchReplacement = *override.Commit.BranchReplacement
+		}
+	}
 	if repo.Commit.FixMessage != nil {
 		commit.FixMessage = *repo.Commit.FixMessage
 	}
@@ -3704,6 +3759,9 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		BaseBranch:    strings.TrimSpace(repo.PR.BaseBranch),
 		Template:      repo.PR.Template,
 		PublishIntent: repo.PR.PublishIntent,
+	}
+	if override != nil && override.PR.TitleFormat != nil {
+		pr.TitleFormat = *override.PR.TitleFormat
 	}
 	if repo.PR.TitleFormat != nil {
 		pr.TitleFormat = *repo.PR.TitleFormat

@@ -23,7 +23,10 @@ func (s *LintStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
-	baseSHA := runBranchBaseSHA(sctx)
+	baseSHA, err := runBranchBaseSHA(sctx)
+	if err != nil {
+		return nil, err
+	}
 	outcome, err := s.lintDuty(sctx, baseSHA)
 	if err != nil {
 		return nil, err

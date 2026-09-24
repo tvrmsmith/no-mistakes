@@ -256,7 +256,10 @@ func (s *ReviewStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 		return nil, err
 	}
 	ctx := sctx.Ctx
-	baseSHA := runBranchBaseSHA(sctx)
+	baseSHA, err := runBranchBaseSHA(sctx)
+	if err != nil {
+		return nil, err
+	}
 	branch := sctx.Run.Branch
 	ignorePatterns := "none"
 	if len(sctx.Config.IgnorePatterns) > 0 {

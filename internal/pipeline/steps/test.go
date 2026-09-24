@@ -82,7 +82,10 @@ func (s *TestStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	}
 	ctx := sctx.Ctx
 	startHead := sctx.Run.HeadSHA
-	baseSHA := runBranchBaseSHA(sctx)
+	baseSHA, err := runBranchBaseSHA(sctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// In fix mode, ask agent to fix test failures first.
 	//

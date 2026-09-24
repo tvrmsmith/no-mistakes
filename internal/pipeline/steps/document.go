@@ -53,7 +53,10 @@ func (s *DocumentStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 		return nil, err
 	}
 	ctx := sctx.Ctx
-	baseSHA := runBranchBaseSHA(sctx)
+	baseSHA, err := runBranchBaseSHA(sctx)
+	if err != nil {
+		return nil, err
+	}
 
 	ignorePatterns := "none"
 	if len(sctx.Config.IgnorePatterns) > 0 {

@@ -68,6 +68,7 @@ func effectivePRBaseBranch(sctx *pipeline.StepContext) string {
 
 // runBranchBaseSHA returns the commit the run's branch forked from its
 // effective PR base branch, the base every validation step diffs against.
-func runBranchBaseSHA(sctx *pipeline.StepContext) string {
-	return resolveBranchBaseSHA(sctx.Ctx, sctx.WorkDir, sctx.Run.BaseSHA, effectivePRBaseBranch(sctx))
+// It fails when that branch's current tip cannot be fetched.
+func runBranchBaseSHA(sctx *pipeline.StepContext) (string, error) {
+	return resolveBranchBaseSHA(sctx.Ctx, sctx, sctx.Run.BaseSHA, effectivePRBaseBranch(sctx))
 }
