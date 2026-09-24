@@ -68,11 +68,13 @@ install: build
 # Refresh the user-level skill `no-mistakes init` installs, so agents read
 # guidance matching the new binary instead of waiting for the next init.
 # Sweeping plain files first drops a reference file this version retired.
+# A symlinked destination gets its target created, as skill.Install does.
 install-skill:
 	@for base in "$(HOME)/.claude/skills" "$(HOME)/.agents/skills"; do \
 		dir="$$base/no-mistakes"; \
 		echo "refreshing skill $$dir"; \
-		mkdir -p "$$dir" && find "$$dir/" -maxdepth 1 -type f -delete && cp skills/no-mistakes/* "$$dir/"; \
+		if [ -L "$$dir" ]; then (cd "$$base" && mkdir -p "$$(readlink no-mistakes)") || exit 1; fi; \
+		mkdir -p "$$dir" && find "$$dir/" -maxdepth 1 -type f -delete && cp skills/no-mistakes/* "$$dir/" || exit 1; \
 	done
 
 test:

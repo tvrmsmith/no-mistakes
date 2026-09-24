@@ -204,7 +204,61 @@ func TestMakeInstallSkillRefreshesUserLevelSkill(t *testing.T) {
 	assertSkillFiles(t, agentsSkill, want)
 }
 
+func TestMakeInstallSkillCreatesADanglingSymlinkTarget(t *testing.T) {
+	skipMakeBuildTestsOnWindows(t)
+
+	makePath, err := exec.LookPath("make")
+	if err != nil {
+		t.Skip("make not available")
+	}
+
+	home := t.TempDir()
+	claudeBase := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(claudeBase, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "..", "vendor", "no-mistakes"), filepath.Join(claudeBase, "no-mistakes")); err != nil {
+		t.Fatal(err)
+	}
+
+	runMakeInstallSkill(t, makePath, home)
+
+	want := readSkillFiles(t, filepath.Join("skills", "no-mistakes"))
+	assertSkillFiles(t, filepath.Join(home, "vendor", "no-mistakes"), want)
+	assertSkillFiles(t, filepath.Join(claudeBase, "no-mistakes"), want)
+}
+
+func TestMakeInstallSkillFailsWhenTheFirstDestinationFails(t *testing.T) {
+	skipMakeBuildTestsOnWindows(t)
+
+	makePath, err := exec.LookPath("make")
+	if err != nil {
+		t.Skip("make not available")
+	}
+
+	home := t.TempDir()
+	claudeBase := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(claudeBase, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeBase, "no-mistakes"), []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := makeInstallSkill(t, makePath, home); err == nil {
+		t.Fatalf("make install-skill should fail when the ~/.claude destination is a plain file, got:\n%s", out)
+	}
+}
+
 func runMakeInstallSkill(t *testing.T, makePath, home string) {
+	t.Helper()
+
+	if out, err := makeInstallSkill(t, makePath, home); err != nil {
+		t.Fatalf("make install-skill failed: %v\n%s", err, out)
+	}
+}
+
+func makeInstallSkill(t *testing.T, makePath, home string) ([]byte, error) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -212,10 +266,7 @@ func runMakeInstallSkill(t *testing.T, makePath, home string) {
 
 	cmd := exec.CommandContext(ctx, makePath, "install-skill")
 	cmd.Env = append(filteredEnv(os.Environ(), "HOME"), "HOME="+home)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("make install-skill failed: %v\n%s", err, out)
-	}
+	return cmd.CombinedOutput()
 }
 
 // readSkillFiles returns the plain files directly under dir keyed by name.
