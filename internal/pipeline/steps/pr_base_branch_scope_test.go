@@ -99,11 +99,11 @@ func TestIntentBaseSHA_NewBranchFollowsTheConfiguredPRBaseBranch(t *testing.T) {
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, zeroSHA, headSHA, config.Commands{})
 	sctx.Config.PR.BaseBranch = "develop"
 
-	base := intentBaseSHA(context.Background(), sctx, dir)
+	base := intentBaseSHA(t.Context(), sctx, dir)
 	if base != developSHA {
 		t.Errorf("intent base = %s, want the develop merge-base %s", base, developSHA)
 	}
-	files, err := diffFilesForIntentMatching(context.Background(), dir, base, headSHA)
+	files, err := diffFilesForIntentMatching(t.Context(), dir, base, headSHA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +163,7 @@ func TestLintStep_ExtraLinterBaseFollowsTheConfiguredPRBaseBranch(t *testing.T) 
 }
 
 func TestAgentPromptsCarryTheConfiguredPRBaseBranchMergeBase(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		output string
@@ -198,5 +199,23 @@ func TestAgentPromptsCarryTheConfiguredPRBaseBranchMergeBase(t *testing.T) {
 				t.Errorf("prompt does not carry %q:\n%s", want, ag.calls[0].Prompt)
 			}
 		})
+	}
+}
+
+// Intent runs before rebase, and the daemon fetches only the default branch at
+// run start, so on a gate that has never fetched the PR base branch intent
+// must fetch it itself rather than diff against the empty tree.
+func TestIntentBaseSHA_NewBranchFetchesAnUnfetchedPRBaseBranch(t *testing.T) {
+	t.Parallel()
+	dir, developSHA, headSHA := newIntegrationBranchRepo(t)
+	remote := t.TempDir()
+	gitCmd(t, remote, "clone", "--bare", "--quiet", dir, ".")
+	gitCmd(t, dir, "remote", "add", "origin", remote)
+	gitCmd(t, dir, "branch", "-D", "develop")
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, zeroSHA, headSHA, config.Commands{})
+	sctx.Config.PR.BaseBranch = "develop"
+
+	if base := intentBaseSHA(t.Context(), sctx, dir); base != developSHA {
+		t.Errorf("intent base = %s, want the develop merge-base %s fetched from origin", base, developSHA)
 	}
 }
