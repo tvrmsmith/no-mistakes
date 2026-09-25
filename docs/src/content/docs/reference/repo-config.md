@@ -119,7 +119,7 @@ intent:
   disabled_readers: []
 
 test:
-  # Product startup and live-validation runbook, read only from the trusted default branch.
+  # Test runbook (runner, product startup), read only from the trusted default branch.
   instructions: |
     Start the app with `make dev`, then drive the checkout flow in a browser.
   evidence:
