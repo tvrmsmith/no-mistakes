@@ -1142,6 +1142,18 @@ Validation errors:
 }
 
 func trustedTestInstructionsSection(sctx *pipeline.StepContext) string {
+	runbook := trustedTestRunbook(sctx)
+	if runbook == "" {
+		return ""
+	}
+	return "\nRepository live-validation runbook (trusted, from the default branch):\n" + runbook + "\n"
+}
+
+// trustedTestRunbook is the prompt-safe test.instructions text, or "" when
+// none is set. sctx.Config already holds only the trusted value
+// (EffectiveRepoConfig), so every prompt that reads it here keeps the trust
+// boundary without re-deciding it.
+func trustedTestRunbook(sctx *pipeline.StepContext) string {
 	if sctx.Config == nil {
 		return ""
 	}
@@ -1149,8 +1161,7 @@ func trustedTestInstructionsSection(sctx *pipeline.StepContext) string {
 	if instructions == "" {
 		return ""
 	}
-	return "\nRepository live-validation runbook (trusted, from the default branch):\n" +
-		sanitizePromptMultilineText(instructions) + "\n"
+	return sanitizePromptMultilineText(instructions)
 }
 
 // verdictFindings turns the evidence turn's own verdict into findings, which

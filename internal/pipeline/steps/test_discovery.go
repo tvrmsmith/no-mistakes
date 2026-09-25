@@ -349,6 +349,19 @@ func discoverValidatedViaAgent(sctx *pipeline.StepContext, baseSHA string, chang
 	return d, nil
 }
 
+// discoveryRunbookSection tells the discovery agent how this repository runs
+// its tests, so an inferred command uses the runner the maintainer pinned
+// instead of improvising one each run. The prompt's own rules stay binding:
+// a runbook written for live validation must not widen a unit command past
+// the changed files or drop the coverage artifacts the vacuous-green guard reads.
+func discoveryRunbookSection(sctx *pipeline.StepContext) string {
+	runbook := trustedTestRunbook(sctx)
+	if runbook == "" {
+		return ""
+	}
+	return "\nRepository test runbook (trusted, from the default branch). Follow it for how this repository runs its tests; where it conflicts with them, the rules below still bind:\n" + runbook + "\n"
+}
+
 // discoveryAgentUnit and discoveryAgentOutput mirror the discovery agent's
 // structured output shape (testDiscoverySchema) for decoding.
 type discoveryAgentUnit struct {
@@ -384,7 +397,7 @@ Context:
 
 Changed files:
 %s
-
+%s
 Task:
 - Examine the repository and identify every independently testable unit.
 - For each unit, report its name, its path, and the command that tests it.
@@ -401,6 +414,7 @@ Rules for the command you report:
 			baseSHA,
 			sctx.Run.HeadSHA,
 			changedList,
+			discoveryRunbookSection(sctx),
 			failureSection,
 		),
 		CWD:        sctx.WorkDir,

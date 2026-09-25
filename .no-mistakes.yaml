@@ -55,3 +55,21 @@ document:
     stand and place what you write in the owners above. When a change belongs in
     one of them, report it as a finding naming the file and the exact text you
     would add, and let it reach him.
+
+# Test runbook. With commands.test unset, the Test step's discovery pass infers
+# each unit command, and without this it improvised a runner every run (often
+# one that no longer builds). The runner is pinned as go.mod tool directives.
+test:
+  instructions: |
+    Run Go tests through the toolchain pinned in go.mod: `go tool gotestsum`
+    for the JUnit report and `go tool gocover-cobertura` to convert coverage.
+    Never `go run` a versioned runner, and never install one.
+    Scope the command to the packages holding the changed .go files, read from
+    NO_MISTAKES_CHANGED_FILES, skipping directories the change deleted. Do not
+    pass -coverpkg. Keep the test exit code as the command's exit code. Use
+    this shape:
+
+      pkgs=$(printf '%s\n' "$NO_MISTAKES_CHANGED_FILES" | grep '\.go$' | xargs -n1 dirname | sort -u | while read -r d; do [ -d "$d" ] && echo "./$d"; done)
+      go tool gotestsum --junitfile "$NO_MISTAKES_COVERAGE_DIR/junit.xml" -- -coverprofile="$NO_MISTAKES_COVERAGE_DIR/cover.out" $pkgs; rc=$?
+      go tool gocover-cobertura < "$NO_MISTAKES_COVERAGE_DIR/cover.out" > "$NO_MISTAKES_COVERAGE_DIR/coverage.xml"
+      exit $rc

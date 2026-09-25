@@ -66,6 +66,10 @@ _Avoid_: module, package, project, component
 Deriving which units a change touches and what command tests each one. Separate from execution so the scope a run tested is auditable.
 _Avoid_: detection, resolution
 
+**Test runbook**:
+The maintainer's trusted description of how this repository is tested: which runner to use and how to stand the product up. It steers both discovery and live validation, and never outranks their own rules.
+_Avoid_: test instructions, live-validation instructions
+
 **Under-selection**:
 Discovery omitting a unit that the changed files belong to. A scope fault, not a coverage finding.
 _Avoid_: missed unit, gap
