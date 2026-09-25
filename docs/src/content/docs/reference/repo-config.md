@@ -119,7 +119,7 @@ intent:
   disabled_readers: []
 
 test:
-  # Product startup and live-validation runbook, read only from the trusted default branch.
+  # Test runbook (runner, product startup), read only from the trusted default branch.
   instructions: |
     Start the app with `make dev`, then drive the checkout flow in a browser.
   evidence:
@@ -943,7 +943,7 @@ When `test.units` is empty, `commands.test` (or, failing that, an agent inferenc
 
 ### test.instructions
 
-Repository-specific runbook for standing the product up during live validation.
+Repository-specific runbook for how the Test step tests this repository: which runner to use and how to stand the product up during live validation.
 
 | | |
 | --- | --- |
@@ -951,6 +951,7 @@ Repository-specific runbook for standing the product up during live validation.
 | Default | Empty |
 
 The Test step injects these instructions into its evidence prompt so the agent can start and drive the real product the way an end user would.
+It also injects them into the discovery prompt that infers unit commands when neither `test.units` nor `commands.test` is set, so an inferred command uses the runner you name instead of improvising one each run. Discovery's own rules still bind over the runbook: an inferred command stays scoped to the changed files and must still write its coverage profile and test report to `NO_MISTAKES_COVERAGE_DIR`.
 Like `document.instructions`, this field steers its own gate, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`. A contributor's pushed branch cannot rewrite the runbook that validates that branch.
 
 ### test.allow_approve_over_failure

@@ -1046,10 +1046,11 @@ type TestRaw struct {
 	// Units lists the repository's independently testable units. See
 	// TestUnit for why the whole list is trusted-only.
 	Units []TestUnit `yaml:"units"`
-	// Instructions is the repository's live-validation runbook: how to stand
-	// the product up in an isolated environment so the test step can drive
-	// end-user scenarios against the real thing. It is injected into the test
-	// gate's prompt, so like document.instructions it is honored ONLY from the
+	// Instructions is the repository's test runbook: which runner the test
+	// step's discovery pass should use for an inferred unit command, and how
+	// to stand the product up in an isolated environment so the test step can
+	// drive end-user scenarios against the real thing. It is injected into the
+	// test gate's discovery and evidence prompts, so like document.instructions it is honored ONLY from the
 	// trusted default-branch copy of .no-mistakes.yaml (see
 	// EffectiveRepoConfig): a contributor's pushed branch must not be able to
 	// rewrite the runbook the agent that validates it follows.
