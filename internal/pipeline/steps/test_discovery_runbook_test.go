@@ -53,7 +53,46 @@ func TestDiscoverTestUnits_PromptOmitsTheRunbookSectionWhenUnset(t *testing.T) {
 	if _, err := discoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"internal/x/x.go"}); err != nil {
 		t.Fatal(err)
 	}
+	if len(ag.calls) != 1 {
+		t.Fatalf("agent calls = %d, want 1", len(ag.calls))
+	}
 	if strings.Contains(ag.calls[0].Prompt, "test runbook") {
 		t.Fatalf("discovery prompt rendered a runbook section with no runbook configured:\n%s", ag.calls[0].Prompt)
+	}
+}
+
+// Rediscovery replaces a dead inferred command, which is exactly when the
+// pinned runner matters most, so its prompt carries the runbook too, ahead of
+// the dead command's failure report.
+func TestRediscoverTestUnits_PromptCarriesTheTrustedRunbookBeforeTheFailure(t *testing.T) {
+	const runbook = "Run Go tests with go tool gotestsum."
+
+	ag := discoveryAgent(t, `{
+		"units": [{"name": "repository", "path": ".", "command": "go tool gotestsum -- ./internal/x"}],
+		"selected": ["repository"]
+	}`)
+	sctx := discoveryTestContext(t, ag)
+	sctx.Config.Test.Instructions = runbook
+	dead := deadTestRunner{
+		unit:     config.TestUnit{Name: "repository", Path: ".", Command: "go run gotest.tools/gotestsum@v1.12.0 ./internal/x"},
+		exitCode: 1,
+		output:   "build failed",
+		reason:   "wrote no test report",
+	}
+
+	if _, err := rediscoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"internal/x/x.go"}, dead); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.calls) != 1 {
+		t.Fatalf("agent calls = %d, want 1", len(ag.calls))
+	}
+	prompt := ag.calls[0].Prompt
+	runbookAt := strings.Index(prompt, runbook)
+	failureAt := strings.Index(prompt, dead.unit.Command)
+	if runbookAt < 0 || failureAt < 0 {
+		t.Fatalf("rediscovery prompt must carry both the runbook and the dead command:\n%s", prompt)
+	}
+	if runbookAt > failureAt {
+		t.Fatalf("rediscovery prompt put the runbook after the failure report:\n%s", prompt)
 	}
 }
