@@ -1317,7 +1317,8 @@ func TestGetChecksReadsHiddenNodesAcrossRollupPages(t *testing.T) {
 // A later run the rollup does not count (a pull_request_review_comment run
 // whose jobs all skip) must not mask the failed or pending job GitHub holds
 // against the commit: the name collapse keeps the newer skipped job, so the
-// rollup state backstops the read with an unreadable check in its bucket.
+// rollup state brings the masked job back by name, with its link as the rerun
+// and log target.
 func TestGetChecksKeepsRollupVerdictACollapsedJobMasked(t *testing.T) {
 	t.Parallel()
 
@@ -1359,10 +1360,40 @@ func TestGetChecksKeepsRollupVerdictACollapsedJobMasked(t *testing.T) {
 					matching = append(matching, c)
 				}
 			}
-			if len(matching) != 1 || !matching[0].Unreadable || matching[0].State != tc.state {
-				t.Fatalf("checks = %+v, want one unreadable %s check under the %s rollup", checks, tc.wantBucket, tc.state)
+			if len(matching) != 1 || matching[0].Unreadable || matching[0].Name != "build" ||
+				matching[0].ProviderID != "github-check-run:201" || matching[0].State != tc.jobState ||
+				matching[0].Link != "https://github.com/test/repo/actions/runs/101/job/201" {
+				t.Fatalf("checks = %+v, want job 201 as the one named %s check under the %s rollup", checks, tc.wantBucket, tc.state)
 			}
 		})
+	}
+}
+
+// When the rollup state is failing but no check the read produced, kept or
+// collapsed, agrees, an unreadable placeholder carries the rollup's verdict so
+// the read never reports green over it.
+func TestGetChecksBackstopsAnUnexplainedRollupVerdict(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"):               githubForbiddenRollupResponse("FAILURE", map[string]int{"SUCCESS": 1}, `[null]`, 0),
+		forbiddenRunsCommand: {stdout: forbiddenRunsBody},
+		forbiddenJobsCommand: {stdout: forbiddenOneJobBody},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	var failing []scm.Check
+	for _, c := range checks {
+		if c.Bucket == scm.CheckBucketFail {
+			failing = append(failing, c)
+		}
+	}
+	if len(checks) != 2 || len(failing) != 1 || !failing[0].Unreadable || failing[0].State != "FAILURE" {
+		t.Fatalf("checks = %+v, want the passing build job plus one unreadable FAILURE check", checks)
 	}
 }
 

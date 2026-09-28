@@ -475,10 +475,11 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 			checks = append(checks, rollup.unexplainedCheckRuns(visible)...)
 		}
 		checks = h.appendUnrepresentedWorkflowRuns(checks, runs)
-		checks = h.collapseLatestByName(checks)
+		collapsed := h.collapseLatestByName(checks)
 		if rollup.hidden > 0 {
-			checks = append(checks, rollup.maskedVerdict(checks)...)
+			collapsed = append(collapsed, rollup.maskedVerdict(checks, collapsed)...)
 		}
+		checks = collapsed
 		currentHeadSHA, err := h.getPRHeadSHA(ctx, selector)
 		if err != nil {
 			return nil, err
@@ -804,9 +805,11 @@ func (r commitRollup) unexplainedCheckRuns(visible []scm.Check) []scm.Check {
 // run whose jobs all skip), and the name collapse lets such a newer same-named
 // job replace the failed or pending one GitHub still holds against the commit.
 // When the rollup state is failing or pending and no collapsed check agrees,
-// one Unreadable placeholder carries that verdict, so a hidden read never
-// reports green over a state GitHub itself does not.
-func (r commitRollup) maskedVerdict(checks []scm.Check) []scm.Check {
+// the checks the collapse dropped in that bucket come back by name, so a job
+// with logs and a rerun target stays fixable. Only when none exists does one
+// Unreadable placeholder carry that verdict, so a hidden read never reports
+// green over a state GitHub itself does not.
+func (r commitRollup) maskedVerdict(all, collapsed []scm.Check) []scm.Check {
 	var want scm.CheckBucket
 	switch r.state {
 	case "FAILURE", "ERROR":
@@ -816,10 +819,24 @@ func (r commitRollup) maskedVerdict(checks []scm.Check) []scm.Check {
 	default:
 		return nil
 	}
-	for _, check := range checks {
-		if check.Bucket == want || (want == scm.CheckBucketFail && check.Bucket == scm.CheckBucketCancel) {
+	agrees := func(check scm.Check) bool {
+		return check.Bucket == want || (want == scm.CheckBucketFail && check.Bucket == scm.CheckBucketCancel)
+	}
+	kept := make(map[string]bool, len(collapsed))
+	for _, check := range collapsed {
+		if agrees(check) {
 			return nil
 		}
+		kept[check.ProviderID] = true
+	}
+	var dropped []scm.Check
+	for _, check := range all {
+		if check.ProviderID != "" && !kept[check.ProviderID] && agrees(check) {
+			dropped = append(dropped, check)
+		}
+	}
+	if len(dropped) > 0 {
+		return dropped
 	}
 	return []scm.Check{{Name: "unreadable check run", Kind: scm.CheckKindRun, State: r.state, Bucket: want, Unreadable: true}}
 }
