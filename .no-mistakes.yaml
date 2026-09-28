@@ -66,10 +66,12 @@ test:
     Never `go run` a versioned runner, and never install one.
     Scope the command to the packages holding the changed .go files, read from
     NO_MISTAKES_CHANGED_FILES, skipping directories the change deleted. Do not
-    pass -coverpkg. Keep the test exit code as the command's exit code. Use
+    pass -coverpkg. Keep the test exit code as the command's exit code. Pass
+    -timeout 30m: internal/pipeline/steps and internal/daemon each take 8-10
+    minutes on a loaded laptop, right at go test's 10-minute default. Use
     this shape:
 
       pkgs=$(printf '%s\n' "$NO_MISTAKES_CHANGED_FILES" | grep '\.go$' | xargs -n1 dirname | sort -u | while read -r d; do [ -d "$d" ] && echo "./$d"; done)
-      go tool gotestsum --junitfile "$NO_MISTAKES_COVERAGE_DIR/junit.xml" -- -coverprofile="$NO_MISTAKES_COVERAGE_DIR/cover.out" $pkgs; rc=$?
+      go tool gotestsum --junitfile "$NO_MISTAKES_COVERAGE_DIR/junit.xml" -- -timeout 30m -coverprofile="$NO_MISTAKES_COVERAGE_DIR/cover.out" $pkgs; rc=$?
       go tool gocover-cobertura < "$NO_MISTAKES_COVERAGE_DIR/cover.out" > "$NO_MISTAKES_COVERAGE_DIR/coverage.xml"
       exit $rc
