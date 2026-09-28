@@ -746,11 +746,14 @@ func forbiddenContextNodes(errs []graphQLError) (map[int]bool, bool) {
 // every check the Actions API could name, since only Actions jobs are
 // recoverable; what remains belongs to third-party apps.
 //
-// Only a failing or pending count the rollup state agrees with is reported. The
-// counts include every run the commit ever had, so a failure a later rerun
-// superseded still counts as FAILURE under a SUCCESS rollup; reporting it
-// would block the gate on something GitHub itself no longer holds against the
-// commit. A hidden success carries nothing to act on and is dropped.
+// A failing or pending count is reported only when the rollup state agrees
+// with it. The counts include every run the commit ever had, so a failure a
+// later rerun superseded still counts as FAILURE under a SUCCESS rollup;
+// reporting it would block the gate on something GitHub itself no longer holds
+// against the commit. A passing or skipped count is always reported in its own
+// bucket: it cannot block the gate, and a commit whose only check runs belong
+// to third-party apps would otherwise read as having no checks at all, so the
+// CI step would wait for checks to register until its timeout.
 func (r commitRollup) unexplainedCheckRuns(visible []scm.Check) []scm.Check {
 	seen := make(map[string]int, len(visible))
 	for _, check := range visible {
@@ -776,6 +779,7 @@ func (r commitRollup) unexplainedCheckRuns(visible []scm.Check) []scm.Check {
 			if r.state != "PENDING" && r.state != "EXPECTED" {
 				continue
 			}
+		case scm.CheckBucketPass, scm.CheckBucketSkip:
 		default:
 			continue
 		}

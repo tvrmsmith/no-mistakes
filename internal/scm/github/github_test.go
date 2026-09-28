@@ -1062,7 +1062,8 @@ func TestGetChecksReadsForbiddenCheckRunsFromActionsJobs(t *testing.T) {
 // the rollup still counts them by state. A failing or pending one the rollup
 // state confirms becomes an unreadable placeholder, so the gate never reports
 // green over a hidden failure. A count the rollup state contradicts is a run
-// a later rerun superseded, and reporting it would block the gate forever.
+// a later rerun superseded, and reporting it would block the gate forever. A
+// passing or skipped one is always reported in its own bucket.
 func TestGetChecksReportsCheckRunsTheJobsCannotExplain(t *testing.T) {
 	t.Parallel()
 
@@ -1078,7 +1079,8 @@ func TestGetChecksReportsCheckRunsTheJobsCannotExplain(t *testing.T) {
 		{"hidden cancellation", "FAILURE", map[string]int{"SUCCESS": 1, "CANCELLED": 1}, scm.CheckBucketFail, "CANCELLED"},
 		{"hidden pending", "PENDING", map[string]int{"SUCCESS": 1, "IN_PROGRESS": 1}, scm.CheckBucketPending, "IN_PROGRESS"},
 		{"superseded failure", "SUCCESS", map[string]int{"SUCCESS": 1, "FAILURE": 1}, "", ""},
-		{"hidden success", "SUCCESS", map[string]int{"SUCCESS": 2}, "", ""},
+		{"hidden success", "SUCCESS", map[string]int{"SUCCESS": 2}, scm.CheckBucketPass, "SUCCESS"},
+		{"hidden skipped", "SUCCESS", map[string]int{"SUCCESS": 1, "SKIPPED": 1}, scm.CheckBucketSkip, "SKIPPED"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1114,6 +1116,32 @@ func TestGetChecksReportsCheckRunsTheJobsCannotExplain(t *testing.T) {
 				t.Fatalf("placeholder = %+v, want bucket %s state %s and no identity", got, tc.wantBucket, tc.wantState)
 			}
 		})
+	}
+}
+
+// A commit whose only check runs are a third-party app's hidden successes
+// still reports passing checks, so the CI step does not wait for checks to
+// register until its timeout.
+func TestGetChecksReportsHiddenSuccessesWithoutWorkflowRuns(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"):               githubForbiddenRollupResponse("SUCCESS", map[string]int{"SUCCESS": 2}, `[null,null]`, 0, 1),
+		forbiddenRunsCommand: {stdout: `[{"total_count":0,"workflow_runs":[]}]` + "\n"},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("checks = %+v, want one passing placeholder per hidden success", checks)
+	}
+	for _, c := range checks {
+		if !c.Unreadable || c.Bucket != scm.CheckBucketPass || c.State != "SUCCESS" {
+			t.Fatalf("checks = %+v, want only passing unreadable placeholders", checks)
+		}
 	}
 }
 

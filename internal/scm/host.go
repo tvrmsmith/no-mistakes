@@ -198,8 +198,9 @@ type Check struct {
 	// this credential: a GitHub fine-grained token has no Checks permission,
 	// so a third-party app's check run shows up only as a count by state. It
 	// carries that state and nothing else - no name of its own, no logs, no
-	// rerun target - so the CI step asks a human rather than spending a fix
-	// round or a rerun on it.
+	// rerun target - so when it fails the CI step asks a human rather than
+	// spending a fix round or a rerun on it. A passing or skipped one counts
+	// like any other.
 	Unreadable bool
 	// App identifies the provider application that published the check, when
 	// the provider reports one: on GitHub it is the check suite's app slug

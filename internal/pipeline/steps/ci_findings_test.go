@@ -171,6 +171,27 @@ func TestCIObservationFindings_UnreadableFailingCheckAsksTheUser(t *testing.T) {
 	}
 }
 
+// A passing or skipped check the token cannot read counts like any other, so
+// a commit whose only checks are hidden successes reads as green.
+func TestCIObservationFindings_UnreadablePassingChecksCountAsPassed(t *testing.T) {
+	t.Parallel()
+	checks := []scm.Check{
+		{Name: "unreadable check run", Bucket: scm.CheckBucketPass, State: "SUCCESS", Kind: scm.CheckKindRun, Unreadable: true},
+		{Name: "unreadable check run", Bucket: scm.CheckBucketSkip, State: "SKIPPED", Kind: scm.CheckKindRun, Unreadable: true},
+	}
+	if !allChecksPassed(checks) {
+		t.Fatalf("allChecksPassed(%+v) = false, want true", checks)
+	}
+	findings := ciObservationFindings(ciIssues{
+		checks:  checks,
+		failing: failingCheckNames(checks),
+		reruns:  func(string) int { return 0 },
+	})
+	if len(findings.Items) != 0 {
+		t.Fatalf("findings = %+v, want none", findings.Items)
+	}
+}
+
 func TestCIObservationFindings_PreservesSameNamedCheckIdentityAndClassification(t *testing.T) {
 	t.Parallel()
 	findings := ciObservationFindings(ciIssues{
