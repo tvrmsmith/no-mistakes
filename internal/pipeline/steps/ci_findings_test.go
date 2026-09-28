@@ -139,6 +139,59 @@ func TestCIObservationFindings_ClassifiesEachIssueByProviderStructure(t *testing
 	}
 }
 
+// A check run the token cannot read has no name, logs, or rerun target, so
+// a fix agent would spend its round on no evidence. It parks for a human, and
+// still blocks: a hidden failure is still a failure.
+func TestCIObservationFindings_UnreadableFailingCheckAsksTheUser(t *testing.T) {
+	t.Parallel()
+	findings := ciObservationFindings(ciIssues{
+		checks: []scm.Check{
+			{Name: "unreadable check run", Bucket: scm.CheckBucketFail, State: "FAILURE", Kind: scm.CheckKindRun, Unreadable: true},
+		},
+		failing: []string{"unreadable check run"},
+		reruns:  func(string) int { return 0 },
+	})
+
+	if len(findings.Items) != 1 {
+		t.Fatalf("findings = %+v, want one", findings.Items)
+	}
+	item := findings.Items[0]
+	if item.Action != types.ActionAskUser || item.Severity != types.FindingSeverityError || item.Category != types.FindingCategoryCICheck {
+		t.Fatalf("finding = %+v, want a blocking ask-user CI check finding", item)
+	}
+	if !strings.Contains(item.Description, "cannot read") {
+		t.Fatalf("description = %q, want it to say the check cannot be read", item.Description)
+	}
+	if !strings.Contains(findings.Summary, "1 unreadable CI check failing") {
+		t.Fatalf("summary = %q, want the unreadable check counted", findings.Summary)
+	}
+	outcome := ciObservationOutcome(findings)
+	if !outcome.NeedsApproval || outcome.AutoFixable {
+		t.Fatalf("outcome = %+v, want blocking and not auto-fixable", outcome)
+	}
+}
+
+// A passing or skipped check the token cannot read counts like any other, so
+// a commit whose only checks are hidden successes reads as green.
+func TestCIObservationFindings_UnreadablePassingChecksCountAsPassed(t *testing.T) {
+	t.Parallel()
+	checks := []scm.Check{
+		{Name: "unreadable check run", Bucket: scm.CheckBucketPass, State: "SUCCESS", Kind: scm.CheckKindRun, Unreadable: true},
+		{Name: "unreadable check run", Bucket: scm.CheckBucketSkip, State: "SKIPPED", Kind: scm.CheckKindRun, Unreadable: true},
+	}
+	if !allChecksPassed(checks) {
+		t.Fatalf("allChecksPassed(%+v) = false, want true", checks)
+	}
+	findings := ciObservationFindings(ciIssues{
+		checks:  checks,
+		failing: failingCheckNames(checks),
+		reruns:  func(string) int { return 0 },
+	})
+	if len(findings.Items) != 0 {
+		t.Fatalf("findings = %+v, want none", findings.Items)
+	}
+}
+
 func TestCIObservationFindings_PreservesSameNamedCheckIdentityAndClassification(t *testing.T) {
 	t.Parallel()
 	findings := ciObservationFindings(ciIssues{
