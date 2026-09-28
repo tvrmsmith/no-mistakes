@@ -1008,6 +1008,148 @@ func containsArg(args []string, want string) bool {
 	return false
 }
 
+const (
+	forbiddenRunsCommand = "gh api --method GET repos/test/repo/actions/runs -f head_sha=deadbeef -f per_page=100 --paginate --slurp"
+	forbiddenJobsCommand = "gh api --method GET repos/test/repo/actions/runs/101/jobs -f filter=all -f per_page=100 --paginate --slurp"
+	forbiddenRunsBody    = `[{"total_count":1,"workflow_runs":[{"id":101,"workflow_id":1001,"name":"ci","status":"completed","conclusion":"success","run_started_at":"2026-09-25T18:00:00Z","html_url":"https://github.com/test/repo/actions/runs/101"}]}]` + "\n"
+)
+
+// A fine-grained token reads every CheckRun node as null, so the Actions jobs
+// behind them stand in: a job's id is its check run id, and its details URL is
+// the one the rollup would have carried.
+func TestGetChecksReadsForbiddenCheckRunsFromActionsJobs(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+		githubCommitChecksCommand("", "test/repo", "deadbeef"): githubForbiddenRollupResponse("SUCCESS",
+			map[string]int{"SUCCESS": 2},
+			`[null,null,{"__typename":"StatusContext","id":"S1","context":"security/snyk","state":"SUCCESS"}]`, 0, 1),
+		forbiddenRunsCommand: {stdout: forbiddenRunsBody},
+		forbiddenJobsCommand: {stdout: `[{"total_count":2,"jobs":[
+			{"id":201,"name":"build","status":"completed","conclusion":"success","started_at":"2026-09-25T18:00:05Z","completed_at":"2026-09-25T18:03:00Z","html_url":"https://github.com/test/repo/actions/runs/101/job/201"},
+			{"id":202,"name":"lint","status":"completed","conclusion":"success","started_at":"2026-09-25T18:00:05Z","completed_at":"2026-09-25T18:01:00Z","html_url":"https://github.com/test/repo/actions/runs/101/job/202"}
+		]}]` + "\n"},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	byName := map[string]scm.Check{}
+	for _, c := range checks {
+		byName[c.Name] = c
+	}
+	if len(checks) != 3 {
+		t.Fatalf("checks = %+v, want the status plus both jobs and no duplicate run", checks)
+	}
+	if byName["security/snyk"].Kind != scm.CheckKindStatus {
+		t.Fatalf("checks = %+v, want the readable status context kept", checks)
+	}
+	build := byName["build"]
+	if build.Kind != scm.CheckKindRun || build.ProviderID != "github-check-run:201" || build.App != "github-actions" ||
+		build.Bucket != scm.CheckBucketPass || build.WorkflowID != 1001 || build.Link != "https://github.com/test/repo/actions/runs/101/job/201" {
+		t.Fatalf("build = %+v, want the job as a check run with its identity", build)
+	}
+	for _, c := range checks {
+		if c.Unreadable {
+			t.Fatalf("checks = %+v, want no unreadable placeholder when the jobs explain every count", checks)
+		}
+	}
+}
+
+// Check runs no Actions job explains (a third-party app's) stay nameless, but
+// the rollup still counts them by state. A failing or pending one the rollup
+// state confirms becomes an unreadable placeholder, so the gate never reports
+// green over a hidden failure. A count the rollup state contradicts is a run
+// a later rerun superseded, and reporting it would block the gate forever.
+func TestGetChecksReportsCheckRunsTheJobsCannotExplain(t *testing.T) {
+	t.Parallel()
+
+	jobs := `[{"total_count":1,"jobs":[{"id":201,"name":"build","status":"completed","conclusion":"success","started_at":"2026-09-25T18:00:05Z","completed_at":"2026-09-25T18:03:00Z","html_url":"https://github.com/test/repo/actions/runs/101/job/201"}]}]` + "\n"
+	cases := []struct {
+		name       string
+		state      string
+		counts     map[string]int
+		wantBucket scm.CheckBucket
+		wantState  string
+	}{
+		{"hidden failure", "FAILURE", map[string]int{"SUCCESS": 1, "FAILURE": 1}, scm.CheckBucketFail, "FAILURE"},
+		{"hidden cancellation", "FAILURE", map[string]int{"SUCCESS": 1, "CANCELLED": 1}, scm.CheckBucketFail, "CANCELLED"},
+		{"hidden pending", "PENDING", map[string]int{"SUCCESS": 1, "IN_PROGRESS": 1}, scm.CheckBucketPending, "IN_PROGRESS"},
+		{"superseded failure", "SUCCESS", map[string]int{"SUCCESS": 1, "FAILURE": 1}, "", ""},
+		{"hidden success", "SUCCESS", map[string]int{"SUCCESS": 2}, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			host := New(githubTestCmdFactory(map[string]githubTestResponse{
+				"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+				githubCommitChecksCommand("", "test/repo", "deadbeef"):               githubForbiddenRollupResponse(tc.state, tc.counts, `[null,null]`, 0, 1),
+				forbiddenRunsCommand: {stdout: forbiddenRunsBody},
+				forbiddenJobsCommand: {stdout: jobs},
+			}), nil, "", "test/repo")
+
+			checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+			if err != nil {
+				t.Fatalf("GetChecks() error = %v", err)
+			}
+			var unreadable []scm.Check
+			for _, c := range checks {
+				if c.Unreadable {
+					unreadable = append(unreadable, c)
+				}
+			}
+			if tc.wantBucket == "" {
+				if len(unreadable) != 0 {
+					t.Fatalf("checks = %+v, want no placeholder", checks)
+				}
+				return
+			}
+			if len(unreadable) != 1 {
+				t.Fatalf("checks = %+v, want one unreadable placeholder", checks)
+			}
+			got := unreadable[0]
+			if got.Bucket != tc.wantBucket || got.State != tc.wantState || got.Kind != scm.CheckKindRun || got.ProviderID != "" || got.Link != "" {
+				t.Fatalf("placeholder = %+v, want bucket %s state %s and no identity", got, tc.wantBucket, tc.wantState)
+			}
+		})
+	}
+}
+
+// Only the Checks-permission gap is tolerated. Any other GraphQL error, and a
+// hidden node GitHub gave no counts for, still fail the read rather than
+// report a partial picture as complete.
+func TestGetChecksRejectsPartialRollupsItCannotAccountFor(t *testing.T) {
+	t.Parallel()
+
+	notFound := githubForbiddenRollupResponse("SUCCESS", map[string]int{"SUCCESS": 1}, `[null]`)
+	notFound.stdout = strings.Replace(notFound.stdout, `"errors":null`,
+		`"errors":[{"type":"NOT_FOUND","path":["repository","object","statusCheckRollup","contexts","nodes",0],"message":"gone"}]`, 1)
+	cases := []struct {
+		name     string
+		response githubTestResponse
+	}{
+		{"error of another type", notFound},
+		{"hidden node without counts", githubForbiddenRollupResponse("SUCCESS", nil, `[null]`, 0)},
+		{"forbidden error that nulls no node", githubForbiddenRollupResponse("SUCCESS", map[string]int{"SUCCESS": 1}, `[{"__typename":"StatusContext","id":"S1","context":"snyk","state":"SUCCESS"}]`, 0)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			host := New(githubTestCmdFactory(map[string]githubTestResponse{
+				"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+				githubCommitChecksCommand("", "test/repo", "deadbeef"):               tc.response,
+				forbiddenRunsCommand: {stdout: forbiddenRunsBody},
+			}), nil, "", "test/repo")
+
+			if _, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"}); err == nil {
+				t.Fatal("GetChecks() error = nil, want the partial rollup rejected")
+			}
+		})
+	}
+}
+
 func TestGetChecksFallsBackToStateWhenBucketMissing(t *testing.T) {
 	t.Parallel()
 
@@ -1839,6 +1981,46 @@ func githubTestCmdFactory(responses map[string]githubTestResponse) CmdFactory {
 			fmt.Sprintf("GITHUB_TEST_EXIT_CODE=%d", response.code),
 		)
 		return cmd
+	}
+}
+
+// githubForbiddenRollupResponse is the rollup a fine-grained token gets back:
+// GitHub gives those tokens no Checks permission, so each CheckRun node listed
+// in forbidden comes back null with a FORBIDDEN error, while the rollup state
+// and the per-state check run counts still resolve.
+func githubForbiddenRollupResponse(state string, counts map[string]int, nodes string, forbidden ...int) githubTestResponse {
+	var countList []map[string]any
+	for s, n := range counts {
+		countList = append(countList, map[string]any{"state": s, "count": n})
+	}
+	contexts := map[string]any{
+		"nodes":    json.RawMessage(nodes),
+		"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+	}
+	if counts != nil {
+		contexts["checkRunCountsByState"] = countList
+	}
+	var errs []map[string]any
+	for _, i := range forbidden {
+		errs = append(errs, map[string]any{
+			"type":    "FORBIDDEN",
+			"path":    []any{"repository", "object", "statusCheckRollup", "contexts", "nodes", i},
+			"message": "Resource not accessible by personal access token",
+		})
+	}
+	encoded, err := json.Marshal(map[string]any{
+		"data": map[string]any{"repository": map[string]any{"object": map[string]any{
+			"statusCheckRollup": map[string]any{"state": state, "contexts": contexts},
+		}}},
+		"errors": errs,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return githubTestResponse{
+		stdout: string(encoded) + "\n",
+		stderr: "gh: Resource not accessible by personal access token",
+		code:   1,
 	}
 }
 

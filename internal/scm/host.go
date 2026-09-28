@@ -194,6 +194,13 @@ type Check struct {
 	// check is reported pending, never failing, so the CI step waits for the
 	// approval instead of spending auto-fix rounds on work that never ran.
 	AwaitingApproval bool
+	// Unreadable marks a check the provider counted but would not describe to
+	// this credential: a GitHub fine-grained token has no Checks permission,
+	// so a third-party app's check run shows up only as a count by state. It
+	// carries that state and nothing else - no name of its own, no logs, no
+	// rerun target - so the CI step asks a human rather than spending a fix
+	// round or a rerun on it.
+	Unreadable bool
 	// App identifies the provider application that published the check, when
 	// the provider reports one: on GitHub it is the check suite's app slug
 	// ("github-actions" for every Actions job, "greptile-apps" for Greptile's

@@ -65,6 +65,9 @@ type ciIssues struct {
 //   - a provider-attributed outcome no rerun will replace is an ask-user
 //     warning, exactly as before findings existed: nothing a fix agent does
 //     can clear it.
+//   - a failing check the token cannot read (scm.Check.Unreadable) is an
+//     ask-user error: it still blocks, but with no name, logs, or rerun
+//     target there is nothing to hand a fix agent.
 //
 // The classification reads provider structure only - bucket, state, the
 // check suite's app identity - never check names or log text, so it is as
@@ -72,9 +75,20 @@ type ciIssues struct {
 // review bot.
 func ciObservationFindings(issues ciIssues) Findings {
 	var items []Finding
-	codeChecks := 0
+	codeChecks, unreadableChecks := 0, 0
 	var botChecks []reviewBotCheck
 	for _, check := range selectedFailingChecks(issues.checks, issues.failing) {
+		if check.Unreadable {
+			unreadableChecks++
+			items = append(items, Finding{
+				Severity:    types.FindingSeverityError,
+				Action:      types.ActionAskUser,
+				Category:    types.FindingCategoryCICheck,
+				Check:       check.Name,
+				Description: unreadableCheckDescription(check),
+			})
+			continue
+		}
 		if bot, ok := scm.ReviewBotForApp(check.App); ok {
 			botChecks = append(botChecks, reviewBotCheck{check: check, bot: bot})
 			continue
@@ -102,12 +116,17 @@ func ciObservationFindings(issues ciIssues) Findings {
 	items = append(items, transient...)
 
 	var parts []string
-	switch codeChecks {
-	case 0:
-	case 1:
-		parts = append(parts, "1 CI check failing")
-	default:
-		parts = append(parts, fmt.Sprintf("%d CI checks failing", codeChecks))
+	for _, count := range []struct {
+		n    int
+		noun string
+	}{{codeChecks, "CI check"}, {unreadableChecks, "unreadable CI check"}} {
+		switch count.n {
+		case 0:
+		case 1:
+			parts = append(parts, "1 "+count.noun+" failing")
+		default:
+			parts = append(parts, fmt.Sprintf("%d %ss failing", count.n, count.noun))
+		}
 	}
 	if issues.mergeConflict {
 		parts = append(parts, "PR has merge conflicts with the base branch")
@@ -177,6 +196,12 @@ func ciCheckDescription(check scm.Check) string {
 		description += " - " + link
 	}
 	return description
+}
+
+func unreadableCheckDescription(check scm.Check) string {
+	return fmt.Sprintf("A check run on this commit reported %s, but the GitHub token cannot read check runs "+
+		"(fine-grained tokens have no Checks permission), so its name and logs are unavailable - see the PR's checks page",
+		strings.ToLower(strings.TrimSpace(check.State)))
 }
 
 // reviewBotFindings renders red review-bot checks as ask-user findings for

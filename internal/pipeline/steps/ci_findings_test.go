@@ -139,6 +139,38 @@ func TestCIObservationFindings_ClassifiesEachIssueByProviderStructure(t *testing
 	}
 }
 
+// A check run the token cannot read has no name, logs, or rerun target, so
+// a fix agent would spend its round on no evidence. It parks for a human, and
+// still blocks: a hidden failure is still a failure.
+func TestCIObservationFindings_UnreadableFailingCheckAsksTheUser(t *testing.T) {
+	t.Parallel()
+	findings := ciObservationFindings(ciIssues{
+		checks: []scm.Check{
+			{Name: "unreadable check run", Bucket: scm.CheckBucketFail, State: "FAILURE", Kind: scm.CheckKindRun, Unreadable: true},
+		},
+		failing: []string{"unreadable check run"},
+		reruns:  func(string) int { return 0 },
+	})
+
+	if len(findings.Items) != 1 {
+		t.Fatalf("findings = %+v, want one", findings.Items)
+	}
+	item := findings.Items[0]
+	if item.Action != types.ActionAskUser || item.Severity != types.FindingSeverityError || item.Category != types.FindingCategoryCICheck {
+		t.Fatalf("finding = %+v, want a blocking ask-user CI check finding", item)
+	}
+	if !strings.Contains(item.Description, "cannot read") {
+		t.Fatalf("description = %q, want it to say the check cannot be read", item.Description)
+	}
+	if !strings.Contains(findings.Summary, "1 unreadable CI check failing") {
+		t.Fatalf("summary = %q, want the unreadable check counted", findings.Summary)
+	}
+	outcome := ciObservationOutcome(findings)
+	if !outcome.NeedsApproval || outcome.AutoFixable {
+		t.Fatalf("outcome = %+v, want blocking and not auto-fixable", outcome)
+	}
+}
+
 func TestCIObservationFindings_PreservesSameNamedCheckIdentityAndClassification(t *testing.T) {
 	t.Parallel()
 	findings := ciObservationFindings(ciIssues{

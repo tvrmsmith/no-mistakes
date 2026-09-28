@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -449,8 +450,10 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 		pr.HeadSHA = headSHA
 	}
 	var checks []scm.Check
+	var rollup commitRollup
 	if headSHA != "" {
-		checks, err = h.getCommitChecks(ctx, headSHA)
+		rollup, err = h.getCommitChecks(ctx, headSHA)
+		checks = rollup.checks
 	} else {
 		checks, err = h.getPRChecks(ctx, selector)
 	}
@@ -461,6 +464,14 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 		runs, err := h.getWorkflowRunChecks(ctx, headSHA)
 		if err != nil {
 			return nil, err
+		}
+		if rollup.hidden > 0 {
+			jobs, err := h.getWorkflowJobChecks(ctx, runs, checks)
+			if err != nil {
+				return nil, err
+			}
+			checks = append(checks, jobs...)
+			checks = append(checks, rollup.unexplainedCheckRuns(checks)...)
 		}
 		checks = h.appendUnrepresentedWorkflowRuns(checks, runs)
 		checks = h.collapseLatestByName(checks)
@@ -519,16 +530,35 @@ func (h *Host) getPRChecks(ctx context.Context, selector string) ([]scm.Check, e
 // commitChecksQuery reads the head commit's check rollup. A CheckRun also
 // carries its check suite's app slug: that is the structural identity the CI
 // step uses to tell a third-party review bot's check (scm.ReviewBots) from the
-// repository's own Actions jobs, without matching check names.
-const commitChecksQuery = `query($owner:String!,$name:String!,$oid:String!,$cursor:String){repository(owner:$owner,name:$name){object(expression:$oid){... on Commit{statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{databaseId name status conclusion completedAt startedAt detailsUrl checkSuite{app{slug}}} ... on StatusContext{id context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}`
+// repository's own Actions jobs, without matching check names. The rollup
+// state and the per-state check run counts resolve even for a token that
+// cannot read a single CheckRun node (see commitRollup).
+const commitChecksQuery = `query($owner:String!,$name:String!,$oid:String!,$cursor:String){repository(owner:$owner,name:$name){object(expression:$oid){... on Commit{statusCheckRollup{state contexts(first:100,after:$cursor){checkRunCountsByState{state count} nodes{__typename ... on CheckRun{databaseId name status conclusion completedAt startedAt detailsUrl checkSuite{app{slug}}} ... on StatusContext{id context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}`
 
 const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{isResolved comments(first:100){nodes{databaseId body path line url createdAt author{login}}}} pageInfo{hasNextPage endCursor}}}}}`
 
-func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check, error) {
+// commitRollup is one read of the head commit's check rollup.
+//
+// GitHub gives fine-grained personal access tokens no Checks permission, so
+// for such a token every CheckRun node on a private repository comes back null
+// with a FORBIDDEN error, while status contexts, the rollup state, and the
+// per-state check run counts still resolve. hidden counts those nulled nodes;
+// GetChecks recovers the Actions ones from the Actions API, and
+// unexplainedCheckRuns turns what remains into Unreadable placeholders.
+type commitRollup struct {
+	checks []scm.Check
+	// state is GitHub's own verdict over every context, readable or not.
+	state          string
+	hidden         int
+	checkRunCounts map[string]int
+}
+
+func (h *Host) getCommitChecks(ctx context.Context, headSHA string) (commitRollup, error) {
+	var rollup commitRollup
 	repo := h.repoSlug()
 	parts := strings.Split(repo, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, fmt.Errorf("resolve GitHub repository for commit checks: invalid repository %q", repo)
+		return rollup, fmt.Errorf("resolve GitHub repository for commit checks: invalid repository %q", repo)
 	}
 	var checks []scm.Check
 	cursor := ""
@@ -542,17 +572,22 @@ func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check
 		if cursor != "" {
 			args = append(args, "-F", "cursor="+cursor)
 		}
-		out, err := h.cmd(ctx, "gh", args...).CombinedOutput()
-		if err != nil {
-			return nil, fmt.Errorf("gh api checks for head commit: %s: %w", strings.TrimSpace(string(out)), err)
-		}
+		cmd := h.cmd(ctx, "gh", args...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
 		var response struct {
 			Data struct {
 				Repository *struct {
 					Object *struct {
 						Rollup *struct {
+							State    string `json:"state"`
 							Contexts struct {
-								Nodes []struct {
+								CheckRunCountsByState *[]struct {
+									State string `json:"state"`
+									Count int    `json:"count"`
+								} `json:"checkRunCountsByState"`
+								Nodes []*struct {
 									Type        string `json:"__typename"`
 									DatabaseID  int64  `json:"databaseId"`
 									ID          string `json:"id"`
@@ -580,18 +615,51 @@ func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check
 					} `json:"object"`
 				} `json:"repository"`
 			} `json:"data"`
+			Errors []graphQLError `json:"errors"`
 		}
-		if err := json.Unmarshal(out, &response); err != nil {
-			return nil, fmt.Errorf("parse checks for head commit: %w", err)
+		parseErr := json.Unmarshal(out, &response)
+		// gh exits non-zero whenever the response carries errors, even with data
+		// beside them. The Checks-permission gap is the one partial answer worth
+		// keeping; anything else fails the read as before.
+		forbidden, onlyForbidden := forbiddenContextNodes(response.Errors)
+		if err != nil && (parseErr != nil || !onlyForbidden) {
+			detail := strings.TrimSpace(stderr.String())
+			if detail == "" {
+				detail = strings.TrimSpace(string(out))
+			}
+			return rollup, fmt.Errorf("gh api checks for head commit: %s: %w", detail, err)
+		}
+		if parseErr != nil {
+			return rollup, fmt.Errorf("parse checks for head commit: %w", parseErr)
 		}
 		if response.Data.Repository == nil || response.Data.Repository.Object == nil {
-			return nil, errors.New("head commit check discovery returned no commit")
+			return rollup, errors.New("head commit check discovery returned no commit")
 		}
 		if response.Data.Repository.Object.Rollup == nil {
-			return checks, nil
+			rollup.checks = checks
+			return rollup, nil
 		}
+		rollup.state = strings.ToUpper(strings.TrimSpace(response.Data.Repository.Object.Rollup.State))
 		contexts := response.Data.Repository.Object.Rollup.Contexts
-		for _, node := range contexts.Nodes {
+		if counts := contexts.CheckRunCountsByState; counts != nil && rollup.checkRunCounts == nil {
+			rollup.checkRunCounts = make(map[string]int, len(*counts))
+			for _, c := range *counts {
+				rollup.checkRunCounts[strings.ToUpper(strings.TrimSpace(c.State))] = c.Count
+			}
+		}
+		for i := range forbidden {
+			if i >= len(contexts.Nodes) || contexts.Nodes[i] != nil {
+				return rollup, fmt.Errorf("head commit check discovery reported context %d forbidden but returned it", i)
+			}
+		}
+		for i, node := range contexts.Nodes {
+			if node == nil {
+				if !forbidden[i] {
+					return rollup, errors.New("head commit check discovery returned an incomplete context")
+				}
+				rollup.hidden++
+				continue
+			}
 			check := scm.Check{}
 			switch node.Type {
 			case "CheckRun":
@@ -628,21 +696,96 @@ func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check
 				check.Bucket = normalizeCheckBucket("", node.State)
 				check.Link = strings.TrimSpace(node.TargetURL)
 			default:
-				return nil, fmt.Errorf("head commit check discovery returned unsupported context type %q", node.Type)
+				return rollup, fmt.Errorf("head commit check discovery returned unsupported context type %q", node.Type)
 			}
 			if check.Name == "" || check.Bucket == "" {
-				return nil, errors.New("head commit check discovery returned an incomplete context")
+				return rollup, errors.New("head commit check discovery returned an incomplete context")
 			}
 			checks = append(checks, check)
 		}
 		if !contexts.PageInfo.HasNextPage {
-			return checks, nil
+			if rollup.hidden > 0 && rollup.checkRunCounts == nil {
+				return rollup, fmt.Errorf("head commit check discovery could not read %d check runs and reported no counts for them", rollup.hidden)
+			}
+			rollup.checks = checks
+			return rollup, nil
 		}
 		if contexts.PageInfo.EndCursor == "" || contexts.PageInfo.EndCursor == cursor {
-			return nil, errors.New("head commit check discovery returned an invalid page cursor")
+			return rollup, errors.New("head commit check discovery returned an invalid page cursor")
 		}
 		cursor = contexts.PageInfo.EndCursor
 	}
+}
+
+type graphQLError struct {
+	Type string `json:"type"`
+	Path []any  `json:"path"`
+}
+
+// forbiddenContextNodes collects the rollup context indexes GitHub refused to
+// return. ok is false when any error is something else, which the caller must
+// not mistake for the Checks-permission gap.
+func forbiddenContextNodes(errs []graphQLError) (map[int]bool, bool) {
+	forbidden := make(map[int]bool, len(errs))
+	for _, e := range errs {
+		n := len(e.Path)
+		if e.Type != "FORBIDDEN" || n < 3 || e.Path[n-3] != "contexts" || e.Path[n-2] != "nodes" {
+			return nil, false
+		}
+		index, isNumber := e.Path[n-1].(float64)
+		if !isNumber {
+			return nil, false
+		}
+		forbidden[int(index)] = true
+	}
+	return forbidden, true
+}
+
+// unexplainedCheckRuns reports the check runs GitHub counted that no readable
+// check accounts for, one Unreadable placeholder each. visible must already hold
+// every check the Actions API could name, since only Actions jobs are
+// recoverable; what remains belongs to third-party apps.
+//
+// Only a failing or pending count the rollup state agrees with is reported. The
+// counts include every run the commit ever had, so a failure a later rerun
+// superseded still counts as FAILURE under a SUCCESS rollup; reporting it
+// would block the gate on something GitHub itself no longer holds against the
+// commit. A hidden success carries nothing to act on and is dropped.
+func (r commitRollup) unexplainedCheckRuns(visible []scm.Check) []scm.Check {
+	seen := make(map[string]int, len(visible))
+	for _, check := range visible {
+		if check.Kind == scm.CheckKindRun {
+			seen[check.State]++
+		}
+	}
+	states := make([]string, 0, len(r.checkRunCounts))
+	for state := range r.checkRunCounts {
+		states = append(states, state)
+	}
+	sort.Strings(states)
+	var placeholders []scm.Check
+	for _, state := range states {
+		bucket := normalizeCheckBucket("", state)
+		switch bucket {
+		case scm.CheckBucketFail, scm.CheckBucketCancel:
+			if r.state != "FAILURE" && r.state != "ERROR" {
+				continue
+			}
+			bucket = scm.CheckBucketFail
+		case scm.CheckBucketPending:
+			if r.state != "PENDING" && r.state != "EXPECTED" {
+				continue
+			}
+		default:
+			continue
+		}
+		for range r.checkRunCounts[state] - seen[state] {
+			placeholders = append(placeholders, scm.Check{
+				Name: "unreadable check run", Kind: scm.CheckKindRun, State: state, Bucket: bucket, Unreadable: true,
+			})
+		}
+	}
+	return placeholders
 }
 
 func (h *Host) repoSlug() string {
@@ -908,6 +1051,89 @@ func (h *Host) getWorkflowRunChecks(ctx context.Context, headSHA string) ([]scm.
 			link = fmt.Sprintf("https://%s/%s/actions/runs/%d", host, repo, run.ID)
 		}
 		checks = append(checks, scm.Check{Name: name, ProviderID: fmt.Sprintf("github-workflow-run:%d", run.ID), Bucket: bucket, Kind: scm.CheckKindRun, State: state, CompletedAt: completedAt, StartedAt: startedAt, WorkflowID: run.WorkflowID, Link: link, AwaitingApproval: awaitingApproval})
+	}
+	return checks, nil
+}
+
+// getWorkflowJobChecks reads every job of every run as the check run it is: an
+// Actions job's id is its check run id, and its details URL is the one the
+// rollup would carry. filter=all keeps superseded attempts, matching the
+// rollup, so collapseLatestByName settles them the same way. Jobs already
+// present in known are skipped.
+func (h *Host) getWorkflowJobChecks(ctx context.Context, runs, known []scm.Check) ([]scm.Check, error) {
+	have := make(map[string]bool, len(known))
+	for _, check := range known {
+		have[check.ProviderID] = true
+	}
+	repo := h.repoSlug()
+	if repo == "" {
+		repo = "{owner}/{repo}"
+	}
+	var checks []scm.Check
+	for _, run := range runs {
+		runID, ok := strings.CutPrefix(run.ProviderID, "github-workflow-run:")
+		if !ok {
+			continue
+		}
+		args := []string{"api"}
+		if h.host != "" {
+			args = append(args, "--hostname", h.host)
+		}
+		args = append(args, "--method", "GET", "repos/"+repo+"/actions/runs/"+runID+"/jobs",
+			"-f", "filter=all", "-f", "per_page=100", "--paginate", "--slurp")
+		out, err := h.cmd(ctx, "gh", args...).CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("gh api jobs for workflow run %s: %s: %w", runID, strings.TrimSpace(string(out)), err)
+		}
+		var pages []struct {
+			TotalCount int `json:"total_count"`
+			Jobs       []struct {
+				ID          int64  `json:"id"`
+				Name        string `json:"name"`
+				Status      string `json:"status"`
+				Conclusion  string `json:"conclusion"`
+				StartedAt   string `json:"started_at"`
+				CompletedAt string `json:"completed_at"`
+				HTMLURL     string `json:"html_url"`
+			} `json:"jobs"`
+		}
+		if err := json.Unmarshal(out, &pages); err != nil {
+			return nil, fmt.Errorf("parse jobs for workflow run %s: %w", runID, err)
+		}
+		count := 0
+		for _, page := range pages {
+			for _, job := range page.Jobs {
+				count++
+				providerID := fmt.Sprintf("github-check-run:%d", job.ID)
+				if job.ID == 0 || have[providerID] {
+					continue
+				}
+				state := strings.ToUpper(strings.TrimSpace(job.Conclusion))
+				if state == "" {
+					state = strings.ToUpper(strings.TrimSpace(job.Status))
+				}
+				bucket := normalizeCheckBucket("", state)
+				if bucket == "" {
+					// Same rule as a workflow run: an unrecognized state must not
+					// certify the commit as green.
+					bucket = scm.CheckBucketPending
+				}
+				check := scm.Check{
+					Name: strings.TrimSpace(job.Name), ProviderID: providerID, Kind: scm.CheckKindRun,
+					State: state, Bucket: bucket, Link: strings.TrimSpace(job.HTMLURL), App: "github-actions",
+				}
+				if parsed, parseErr := time.Parse(time.RFC3339, job.StartedAt); parseErr == nil {
+					check.StartedAt = parsed
+				}
+				if parsed, parseErr := time.Parse(time.RFC3339, job.CompletedAt); parseErr == nil {
+					check.CompletedAt = parsed
+				}
+				checks = append(checks, check)
+			}
+		}
+		if len(pages) == 0 || count != pages[0].TotalCount {
+			return nil, fmt.Errorf("jobs for workflow run %s returned %d jobs, want the reported total", runID, count)
+		}
 	}
 	return checks, nil
 }

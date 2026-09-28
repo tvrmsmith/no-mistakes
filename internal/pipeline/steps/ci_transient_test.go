@@ -153,6 +153,9 @@ func TestClassifyCheckFailure(t *testing.T) {
 		// reproducing it.
 		{"timed out job", scm.Check{Name: "test", Bucket: scm.CheckBucketFail, State: "TIMED_OUT"}, classGenuine},
 
+		// A check the token cannot read names no job, so nothing can rerun it,
+		// whatever state the provider counted it in.
+		{"unreadable cancelled check", scm.Check{Name: "unreadable check run", Bucket: scm.CheckBucketFail, State: "CANCELLED", Unreadable: true}, classUnknown},
 		{"failed with no reported state", scm.Check{Name: "test", Bucket: scm.CheckBucketFail}, classUnknown},
 		{"failed with an unrecognized state", scm.Check{Name: "test", Bucket: scm.CheckBucketFail, State: "QUARANTINED"}, classUnknown},
 		// STALE has one owner: normalizeCheckBucket treats it as skipped, so it

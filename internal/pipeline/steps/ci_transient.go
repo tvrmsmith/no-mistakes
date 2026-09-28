@@ -61,6 +61,10 @@ func classifyCheckFailure(check scm.Check) failureClass {
 	if check.PreRunFailure {
 		return classTransient
 	}
+	// A check the token cannot read names no job, so there is nothing to rerun.
+	if check.Unreadable {
+		return classUnknown
+	}
 	switch strings.ToUpper(strings.TrimSpace(check.State)) {
 	case "CANCELLED", "CANCELED":
 		return classTransient
