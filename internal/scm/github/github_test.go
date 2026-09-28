@@ -1314,6 +1314,58 @@ func TestGetChecksReadsHiddenNodesAcrossRollupPages(t *testing.T) {
 	}
 }
 
+// A later run the rollup does not count (a pull_request_review_comment run
+// whose jobs all skip) must not mask the failed or pending job GitHub holds
+// against the commit: the name collapse keeps the newer skipped job, so the
+// rollup state backstops the read with an unreadable check in its bucket.
+func TestGetChecksKeepsRollupVerdictACollapsedJobMasked(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		state      string
+		conclusion string
+		jobState   string
+		wantBucket scm.CheckBucket
+	}{
+		{"masked failure", "FAILURE", "failure", "FAILURE", scm.CheckBucketFail},
+		{"masked pending", "PENDING", "", "IN_PROGRESS", scm.CheckBucketPending},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			status := "completed"
+			if tc.conclusion == "" {
+				status = "in_progress"
+			}
+			host := New(githubTestCmdFactory(map[string]githubTestResponse{
+				"gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid": {stdout: "deadbeef\n"},
+				githubCommitChecksCommand("", "test/repo", "deadbeef"):               githubForbiddenRollupResponse(tc.state, map[string]int{tc.jobState: 1}, `[null]`, 0),
+				forbiddenRunsCommand: {stdout: `[{"total_count":2,"workflow_runs":[
+					{"id":101,"workflow_id":1001,"name":"ci","status":"` + status + `","conclusion":"` + tc.conclusion + `","run_started_at":"2026-09-25T18:00:00Z","html_url":"https://github.com/test/repo/actions/runs/101"},
+					{"id":102,"workflow_id":1001,"name":"ci","status":"completed","conclusion":"skipped","run_started_at":"2026-09-25T18:10:00Z","html_url":"https://github.com/test/repo/actions/runs/102"}
+				]}]` + "\n"},
+				forbiddenJobsCommand: {stdout: `[{"total_count":1,"jobs":[{"id":201,"run_attempt":1,"name":"build","status":"` + status + `","conclusion":"` + tc.conclusion + `","started_at":"2026-09-25T18:00:05Z","html_url":"https://github.com/test/repo/actions/runs/101/job/201"}]}]` + "\n"},
+				strings.Replace(forbiddenJobsCommand, "/101/", "/102/", 1): {stdout: `[{"total_count":1,"jobs":[{"id":301,"run_attempt":1,"name":"build","status":"completed","conclusion":"skipped","started_at":"2026-09-25T18:10:05Z","completed_at":"2026-09-25T18:10:06Z","html_url":"https://github.com/test/repo/actions/runs/102/job/301"}]}]` + "\n"},
+			}), nil, "", "test/repo")
+
+			checks, err := host.GetChecks(t.Context(), &scm.PR{Number: "123", HeadSHA: "deadbeef"})
+			if err != nil {
+				t.Fatalf("GetChecks() error = %v", err)
+			}
+			var matching []scm.Check
+			for _, c := range checks {
+				if c.Bucket == tc.wantBucket {
+					matching = append(matching, c)
+				}
+			}
+			if len(matching) != 1 || !matching[0].Unreadable || matching[0].State != tc.state {
+				t.Fatalf("checks = %+v, want one unreadable %s check under the %s rollup", checks, tc.wantBucket, tc.state)
+			}
+		})
+	}
+}
+
 func TestGetChecksFallsBackToStateWhenBucketMissing(t *testing.T) {
 	t.Parallel()
 

@@ -476,6 +476,9 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 		}
 		checks = h.appendUnrepresentedWorkflowRuns(checks, runs)
 		checks = h.collapseLatestByName(checks)
+		if rollup.hidden > 0 {
+			checks = append(checks, rollup.maskedVerdict(checks)...)
+		}
 		currentHeadSHA, err := h.getPRHeadSHA(ctx, selector)
 		if err != nil {
 			return nil, err
@@ -794,6 +797,31 @@ func (r commitRollup) unexplainedCheckRuns(visible []scm.Check) []scm.Check {
 		}
 	}
 	return placeholders
+}
+
+// maskedVerdict backstops the rollup state against the collapsed checks. The
+// Actions API lists runs the rollup never counts (a pull_request_review_comment
+// run whose jobs all skip), and the name collapse lets such a newer same-named
+// job replace the failed or pending one GitHub still holds against the commit.
+// When the rollup state is failing or pending and no collapsed check agrees,
+// one Unreadable placeholder carries that verdict, so a hidden read never
+// reports green over a state GitHub itself does not.
+func (r commitRollup) maskedVerdict(checks []scm.Check) []scm.Check {
+	var want scm.CheckBucket
+	switch r.state {
+	case "FAILURE", "ERROR":
+		want = scm.CheckBucketFail
+	case "PENDING", "EXPECTED":
+		want = scm.CheckBucketPending
+	default:
+		return nil
+	}
+	for _, check := range checks {
+		if check.Bucket == want || (want == scm.CheckBucketFail && check.Bucket == scm.CheckBucketCancel) {
+			return nil
+		}
+	}
+	return []scm.Check{{Name: "unreadable check run", Kind: scm.CheckKindRun, State: r.state, Bucket: want, Unreadable: true}}
 }
 
 func (h *Host) repoSlug() string {
