@@ -466,12 +466,13 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 			return nil, err
 		}
 		if rollup.hidden > 0 {
-			jobs, err := h.getWorkflowJobChecks(ctx, runs, checks)
+			jobs, superseded, err := h.getWorkflowJobChecks(ctx, runs, checks)
 			if err != nil {
 				return nil, err
 			}
 			checks = append(checks, jobs...)
-			checks = append(checks, rollup.unexplainedCheckRuns(checks)...)
+			visible := append(append([]scm.Check(nil), checks...), superseded...)
+			checks = append(checks, rollup.unexplainedCheckRuns(visible)...)
 		}
 		checks = h.appendUnrepresentedWorkflowRuns(checks, runs)
 		checks = h.collapseLatestByName(checks)
@@ -723,9 +724,12 @@ type graphQLError struct {
 }
 
 // forbiddenContextNodes collects the rollup context indexes GitHub refused to
-// return. ok is false when any error is something else, which the caller must
-// not mistake for the Checks-permission gap.
+// return. ok is false when there are no errors or any error is something else,
+// which the caller must not mistake for the Checks-permission gap.
 func forbiddenContextNodes(errs []graphQLError) (map[int]bool, bool) {
+	if len(errs) == 0 {
+		return nil, false
+	}
 	forbidden := make(map[int]bool, len(errs))
 	for _, e := range errs {
 		n := len(e.Path)
@@ -1062,9 +1066,11 @@ func (h *Host) getWorkflowRunChecks(ctx context.Context, headSHA string) ([]scm.
 // getWorkflowJobChecks reads every job of every run as the check run it is: an
 // Actions job's id is its check run id, and its details URL is the one the
 // rollup would carry. filter=all keeps superseded attempts, matching the
-// rollup, so collapseLatestByName settles them the same way. Jobs already
-// present in known are skipped.
-func (h *Host) getWorkflowJobChecks(ctx context.Context, runs, known []scm.Check) ([]scm.Check, error) {
+// rollup's counts, but every attempt of a run shares the run's id, so only a
+// job name's jobs from its run's latest attempt are checks. The earlier
+// attempts come back as superseded, for balancing the rollup's counts only.
+// Jobs already present in known are skipped.
+func (h *Host) getWorkflowJobChecks(ctx context.Context, runs, known []scm.Check) (checks, superseded []scm.Check, err error) {
 	have := make(map[string]bool, len(known))
 	for _, check := range known {
 		have[check.ProviderID] = true
@@ -1073,7 +1079,6 @@ func (h *Host) getWorkflowJobChecks(ctx context.Context, runs, known []scm.Check
 	if repo == "" {
 		repo = "{owner}/{repo}"
 	}
-	var checks []scm.Check
 	for _, run := range runs {
 		runID, ok := strings.CutPrefix(run.ProviderID, "github-workflow-run:")
 		if !ok {
@@ -1087,12 +1092,13 @@ func (h *Host) getWorkflowJobChecks(ctx context.Context, runs, known []scm.Check
 			"-f", "filter=all", "-f", "per_page=100", "--paginate", "--slurp")
 		out, err := h.cmd(ctx, "gh", args...).CombinedOutput()
 		if err != nil {
-			return nil, fmt.Errorf("gh api jobs for workflow run %s: %s: %w", runID, strings.TrimSpace(string(out)), err)
+			return nil, nil, fmt.Errorf("gh api jobs for workflow run %s: %s: %w", runID, strings.TrimSpace(string(out)), err)
 		}
 		var pages []struct {
 			TotalCount int `json:"total_count"`
 			Jobs       []struct {
 				ID          int64  `json:"id"`
+				RunAttempt  int    `json:"run_attempt"`
 				Name        string `json:"name"`
 				Status      string `json:"status"`
 				Conclusion  string `json:"conclusion"`
@@ -1102,7 +1108,14 @@ func (h *Host) getWorkflowJobChecks(ctx context.Context, runs, known []scm.Check
 			} `json:"jobs"`
 		}
 		if err := json.Unmarshal(out, &pages); err != nil {
-			return nil, fmt.Errorf("parse jobs for workflow run %s: %w", runID, err)
+			return nil, nil, fmt.Errorf("parse jobs for workflow run %s: %w", runID, err)
+		}
+		latestAttempt := make(map[string]int)
+		for _, page := range pages {
+			for _, job := range page.Jobs {
+				name := strings.TrimSpace(job.Name)
+				latestAttempt[name] = max(latestAttempt[name], job.RunAttempt)
+			}
 		}
 		count := 0
 		for _, page := range pages {
@@ -1132,14 +1145,18 @@ func (h *Host) getWorkflowJobChecks(ctx context.Context, runs, known []scm.Check
 				if parsed, parseErr := time.Parse(time.RFC3339, job.CompletedAt); parseErr == nil {
 					check.CompletedAt = parsed
 				}
+				if job.RunAttempt < latestAttempt[check.Name] {
+					superseded = append(superseded, check)
+					continue
+				}
 				checks = append(checks, check)
 			}
 		}
 		if len(pages) == 0 || count != pages[0].TotalCount {
-			return nil, fmt.Errorf("jobs for workflow run %s returned %d jobs, want the reported total", runID, count)
+			return nil, nil, fmt.Errorf("jobs for workflow run %s returned %d jobs, want the reported total", runID, count)
 		}
 	}
-	return checks, nil
+	return checks, superseded, nil
 }
 
 // RerunCheck re-runs the Actions work behind check for the same commit, so a
