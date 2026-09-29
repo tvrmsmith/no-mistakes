@@ -55,7 +55,9 @@ func newDaemonAdmitPushCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			p, err := paths.New()
+			// Resolve the daemon root from the gate itself, not NM_HOME: this
+			// runs as a git hook helper, and git sets no NM_HOME for a hook.
+			p, err := paths.ForGate(gatePath)
 			if err != nil {
 				return err
 			}
@@ -131,6 +133,10 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			verificationPlanID, err := parseVerificationPlanPushOptions(pushOptions)
+			if err != nil {
+				return err
+			}
 			reconciledPreviousHead, err := parseReconciledPreviousHeadPushOptions(pushOptions)
 			if err != nil {
 				return err
@@ -140,7 +146,9 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 				return err
 			}
 
-			p, err := paths.New()
+			// Same as admit-push: the owning root is a property of the gate,
+			// not of whatever the pushing shell exported.
+			p, err := paths.ForGate(gatePath)
 			if err != nil {
 				return err
 			}
@@ -164,6 +172,7 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 				PRBaseBranch:           prBaseBranch,
 				OmitIntent:             omitIntent,
 				PiProfile:              piProfile,
+				VerificationPlanID:     verificationPlanID,
 				ReconciledPreviousHead: reconciledPreviousHead,
 			}, &result)
 		},

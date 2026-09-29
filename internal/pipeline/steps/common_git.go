@@ -53,7 +53,9 @@ func resolveBaseSHA(ctx context.Context, workDir, baseSHA, defaultBranch string)
 // layer down. Callers return the error, which fails the step instead of
 // validating or drafting content against unverified base state.
 func resolveBranchBaseSHA(ctx context.Context, sctx *pipeline.StepContext, fallbackBaseSHA, defaultBranch string) (string, error) {
-	if strings.TrimSpace(defaultBranch) != "" {
+	// Eval replay has no upstream to fetch: it pins origin/<base> to the
+	// captured commit in its isolated worktree, which is the base to use.
+	if strings.TrimSpace(defaultBranch) != "" && !sctx.EvalReplay {
 		if err := fetchRunUpstreamBranch(ctx, sctx, defaultBranch); err != nil {
 			return "", fmt.Errorf("fetch default branch %q to resolve branch base: %w", defaultBranch, err)
 		}
