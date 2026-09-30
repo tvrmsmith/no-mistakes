@@ -1,11 +1,15 @@
 package steps
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -338,15 +342,87 @@ func discoverAndCacheViaAgent(sctx *pipeline.StepContext, baseSHA string, change
 	return d, nil
 }
 
+// maxDiscoveryAnswers bounds how many layouts one discovery asks the agent for:
+// its answer, and one re-ask naming the command that answer was rejected for.
+const maxDiscoveryAnswers = 2
+
+// discoverValidatedViaAgent asks the agent for a layout. A layout whose
+// command check fails is re-asked once, naming the rejected command, before it
+// parks: nothing has run by then, so the re-ask costs one agent turn and no
+// side effects. Every other rejection parks on the first answer.
 func discoverValidatedViaAgent(sctx *pipeline.StepContext, baseSHA string, changed []string, failureSection string) (pipeline.TestDiscovery, error) {
-	d, err := discoverTestUnitsViaAgent(sctx, baseSHA, changed, failureSection)
-	if err != nil {
-		return pipeline.TestDiscovery{}, err
+	section := failureSection
+	for answer := 1; ; answer++ {
+		d, err := discoverTestUnitsViaAgent(sctx, baseSHA, changed, section)
+		if err != nil {
+			return pipeline.TestDiscovery{}, err
+		}
+		if err := validateDiscovery(&d); err != nil {
+			return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
+		}
+		err = checkInferredCommands(sctx.Ctx, d.Units)
+		if err == nil {
+			return d, nil
+		}
+		var rejection discoveryResultError
+		if !errors.As(err, &rejection) || answer == maxDiscoveryAnswers {
+			return pipeline.TestDiscovery{}, err
+		}
+		sctx.Log(fmt.Sprintf("test unit discovery answer rejected, asking again: %v", err))
+		section = failureSection + fmt.Sprintf(`
+
+Your previous answer was rejected before anything ran: %v
+Report the complete layout and selection again with that corrected.`, err)
 	}
-	if err := validateDiscovery(&d); err != nil {
-		return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
+}
+
+// checkInferredCommands checks every unit's command, selected or not, because
+// under-selection can run an unselected unit's command with no agent turn in
+// between. Only an agent-written layout gets the check: a configured command
+// that does not parse already parks as a dead runner with sh's own error, and
+// the placeholder pattern could misread a legitimate redirect in trusted
+// configuration.
+func checkInferredCommands(ctx context.Context, units []config.TestUnit) error {
+	for _, unit := range units {
+		if err := checkInferredCommand(ctx, unit); err != nil {
+			return err
+		}
 	}
-	return d, nil
+	return nil
+}
+
+// templatePlaceholder matches a <...> placeholder that is not glued to a
+// preceding identifier, so <svc>/<name>.csproj matches and a generic type in a
+// test filter such as Cache<Key> does not. sh -n alone misses a placeholder
+// like <svc>, which parses as a redirect.
+var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(<[A-Za-z][A-Za-z0-9 ._-]*>)`)
+
+// checkInferredCommand rejects an agent-written command that describes a
+// command instead of being one. It proves only that the command parses;
+// whether it can run a test stays with the dead-runner path. A failure to run
+// the parse check at all is returned unwrapped, so it fails the run like any
+// other invocation failure instead of being blamed on the agent's answer.
+func checkInferredCommand(ctx context.Context, unit config.TestUnit) error {
+	if m := templatePlaceholder.FindStringSubmatch(unit.Command); m != nil {
+		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command still carries the template placeholder %s; report the literal command to run", unit.Name, m[1]))
+	}
+	// Unit commands run through cmd.exe on Windows, which has no parse-only mode.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	out, runErr := exec.CommandContext(ctx, "sh", "-n", "-c", unit.Command).CombinedOutput()
+	exitCode, execErr := shellCommandExitCode("sh -n", runErr)
+	// A cancelled run kills sh, which is not a verdict on the command.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("check discovered unit %q command: %w", unit.Name, ctxErr)
+	}
+	if execErr != nil {
+		return fmt.Errorf("check discovered unit %q command: %w", unit.Name, execErr)
+	}
+	if exitCode != 0 {
+		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command is not a valid shell command (sh -n: %s)", unit.Name, strings.TrimSpace(string(out))))
+	}
+	return nil
 }
 
 // discoveryRunbookSection tells the discovery agent how this repository runs
@@ -410,6 +486,7 @@ Task:
 - Do not run any test now. Only report the layout and the selection.
 
 Rules for the command you report:
+- Report a runnable command for every unit, including the units you do not select: when a changed file turns out to belong to an unselected unit, its command runs through the shell as written. Each command is the literal shell text to run, with every path and name filled in.
 - Each command must scope itself to the changed files under its unit. Local Test is targeted validation of this change; remote CI owns broad regression.
 - A command must NOT be the complete repository test suite, even when the unit is the repository itself. Name the specific test targets, directories, packages, or selectors the changed files reach.
 - The command runs with NO_MISTAKES_BASE_SHA set to the base commit and NO_MISTAKES_CHANGED_FILES set to the newline-separated changed paths, with NO_MISTAKES_CHANGED_FILE_COUNT carrying the true total. Read those variables in the command when that is how a unit's runner takes a target list.
