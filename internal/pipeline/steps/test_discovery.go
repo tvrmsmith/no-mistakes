@@ -392,12 +392,14 @@ func checkInferredCommands(ctx context.Context, units []config.TestUnit) error {
 }
 
 // templatePlaceholder matches a <...> placeholder that is not glued to a
-// preceding identifier or to a heredoc's <<, so <svc>/<name>.csproj matches
-// and a generic type in a test filter such as Cache<Key> does not. A space may
-// separate words but never precedes the closing >, so an input redirect
-// followed by an output redirect (<in.txt >out.txt) is not a placeholder.
-// sh -n alone misses a placeholder like <svc>, which parses as a redirect.
-var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_<])(<[A-Za-z][A-Za-z0-9._-]*(?: [A-Za-z0-9._-]+)*>)`)
+// preceding identifier or to a heredoc's <<, so <svc>/<name>.csproj,
+// <path/to/project.csproj> and <crate::module> match and a generic type in a
+// test filter such as Cache<Key> does not. A space may separate words but never
+// precedes the closing >, and a later word needs a non-digit, so an input
+// redirect followed by an output redirect (<in.txt >out.txt, <in.txt 2>err.txt)
+// is not a placeholder. sh -n alone misses a placeholder like <svc>, which
+// parses as a redirect.
+var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_<])(<[A-Za-z][A-Za-z0-9._/:-]*(?: [A-Za-z0-9._/:-]*[A-Za-z._/:-][A-Za-z0-9._/:-]*)*>)`)
 
 // checkInferredCommand rejects an agent-written command that describes a
 // command instead of being one. It proves only that the command parses;
