@@ -39,6 +39,13 @@ func (s *TestStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 // reworded.
 const vacuousGreenFindingID = "vacuous-green"
 
+// testScopeFaultFindingID marks the park a second under-selection fault
+// raises. Approving it accepts the gap for the changed-file set
+// (RunShared.AcceptParkedTestScopeGap); a fix round that selects it forgets
+// the run's discovered layout and discovers again instead of running a repair
+// turn, which is the operator's way to force rediscovery without aborting.
+const testScopeFaultFindingID = "test-scope-fault"
+
 const (
 	testFixTask = `Fix the failing tests in this repository. Reproduce the specific failure, identify the root cause, and fix either the tests or the code so that failure passes.`
 
@@ -83,6 +90,12 @@ func (s *TestStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		return nil, err
 	}
 
+	sctx.Shared.ClearParkedTestScopeGap()
+	if sctx.Fixing && selectsTestScopeFault(sctx.PreviousFindings) {
+		sctx.Log("fix selection holds the test scope fault; forgetting this run's discovered test units so discovery runs again...")
+		sctx.Shared.ResetTestDiscovery()
+	}
+
 	// Agent-only preparation is an explicit eager opt-in, not a claim from
 	// the agent that dependencies exist. Use the same worktree receipt and
 	// restoration lifecycle as configured commands, before even a repair turn.
@@ -111,8 +124,8 @@ func (s *TestStep) execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 	var newTestsFromFix []string
 	var fixSummary string
 	var repairCut error
-	if sctx.Fixing && onlyTestBudgetCutFindings(sctx.PreviousFindings) {
-		sctx.Log("fix selection holds only the Test agent budget cut; re-running validation without a repair turn...")
+	if sctx.Fixing && onlyNonRepairTestFindings(sctx.PreviousFindings) {
+		sctx.Log("fix selection holds nothing for a repair turn; re-running validation without one...")
 		fixSummary = NoChangesAppliedSummary
 	} else if sctx.Fixing {
 		historySection := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + planSection + testguidance.Rule
@@ -198,14 +211,26 @@ Previous test findings to address:
 	var baselineExitCode int
 
 	changedFilesEnv, omissionFindings := changedFilesEnvAdvisory(sctx, changed, "validates")
+	// acceptedScopeGap names the units an operator already accepted leaving
+	// out for this changed-file set, once this attempt relies on that.
+	var acceptedScopeGap []string
 
-	// withOmission puts the changed-file omission in front of whatever a path
-	// found, so every outcome the step can return carries it.
-	withOmission := func(items []Finding) []Finding {
-		if len(omissionFindings) == 0 {
+	// withAdvisories puts the changed-file omission and any accepted scope gap
+	// in front of whatever a path found, so every outcome the step can return
+	// carries them.
+	withAdvisories := func(items []Finding) []Finding {
+		advisories := append([]Finding{}, omissionFindings...)
+		if len(acceptedScopeGap) > 0 {
+			advisories = append(advisories, Finding{
+				Severity:    "info",
+				Action:      types.ActionNoOp,
+				Description: fmt.Sprintf("changed files belong to test units that did not run, as an operator accepted at an earlier scope-fault park in this run: %s", strings.Join(acceptedScopeGap, ", ")),
+			})
+		}
+		if len(advisories) == 0 {
 			return items
 		}
-		return append(append([]Finding{}, omissionFindings...), items...)
+		return append(advisories, items...)
 	}
 
 	// tested renders the durable record a reviewer reads on the outcome and in
@@ -219,28 +244,36 @@ Previous test findings to address:
 		return entries
 	}
 
-	// parkForMaintainer stops the step at a gate with one error finding rather
-	// than failing the run, the posture every unusable discovery answer takes:
-	// a maintainer fixes the configuration or the inferred layout and resumes.
-	// It carries whatever already ran this attempt, so a park that follows a
-	// green unit still names what it covered.
-	parkForMaintainer := func(description string) (*pipeline.StepOutcome, error) {
-		sctx.Log(description)
+	maintainerFinding := func(description string) Finding {
+		return Finding{
+			Severity:    types.FindingSeverityError,
+			Action:      types.ActionAskUser,
+			Description: description,
+		}
+	}
+	parkOnFinding := func(finding Finding, summary string, exitCode int) (*pipeline.StepOutcome, error) {
+		sctx.Log(finding.Description)
 		findings := Findings{
-			Items: withOmission([]Finding{{
-				Severity:    types.FindingSeverityError,
-				Action:      types.ActionAskUser,
-				Description: description,
-			}}),
-			Tested: tested(),
+			Items:   withAdvisories([]Finding{finding}),
+			Summary: summary,
+			Tested:  tested(),
 		}
 		findingsJSON, _ := json.Marshal(findings)
 		return &pipeline.StepOutcome{
 			NeedsApproval: true,
 			AutoFixable:   false,
 			Findings:      string(findingsJSON),
+			ExitCode:      exitCode,
 			FixSummary:    fixSummary,
 		}, nil
+	}
+	// parkForMaintainer stops the step at a gate with one error finding rather
+	// than failing the run, the posture every unusable discovery answer takes:
+	// a maintainer fixes the configuration or the inferred layout and resumes.
+	// It carries whatever already ran this attempt, so a park that follows a
+	// green unit still names what it covered.
+	parkForMaintainer := func(description string) (*pipeline.StepOutcome, error) {
+		return parkOnFinding(maintainerFinding(description), "", 0)
 	}
 
 	// parkVacuousGreen stops the step at an auto-fixable gate when the units
@@ -251,7 +284,7 @@ Previous test findings to address:
 	parkVacuousGreen := func(description string) (*pipeline.StepOutcome, error) {
 		sctx.Log(description)
 		findings := Findings{
-			Items: withOmission([]Finding{{
+			Items: withAdvisories([]Finding{{
 				ID:          vacuousGreenFindingID,
 				Severity:    types.FindingSeverityError,
 				Action:      types.ActionAutoFix,
@@ -298,20 +331,7 @@ Previous test findings to address:
 		}
 	}
 	parkDeadRunner := func(d *deadTestRunner, description string) (*pipeline.StepOutcome, error) {
-		sctx.Log(description)
-		findings := Findings{
-			Items:   withOmission([]Finding{deadRunnerFinding(description)}),
-			Summary: d.output,
-			Tested:  tested(),
-		}
-		findingsJSON, _ := json.Marshal(findings)
-		return &pipeline.StepOutcome{
-			NeedsApproval: true,
-			AutoFixable:   false,
-			Findings:      string(findingsJSON),
-			ExitCode:      d.exitCode,
-			FixSummary:    fixSummary,
-		}, nil
+		return parkOnFinding(deadRunnerFinding(description), d.output, d.exitCode)
 	}
 
 	discovery, err := discoverTestUnits(sctx, baseSHA, changed)
@@ -430,9 +450,25 @@ Previous test findings to address:
 		}
 		return parkForMaintainer(description)
 	}
+	// parkScopeFault is parkInPass for the second under-selection fault. It
+	// records the gap so approving the park accepts it, and marks the finding
+	// so a fix round that selects it rediscovers instead of repairing code.
+	parkScopeFault := func(missing []string, description string) (*pipeline.StepOutcome, error) {
+		sctx.Shared.SetParkedTestScopeGap(pipeline.TestScopeGap{Fingerprint: changedFilesFingerprint(changed), Units: missing})
+		description += "; approve to accept leaving these units out for this changed-file set, or select this finding for a fix to discover the test units again"
+		if replaced != nil {
+			finding := deadRunnerFinding(replacedDescription + "; " + description)
+			finding.ID = testScopeFaultFindingID
+			return parkOnFinding(finding, replaced.output, replaced.exitCode)
+		}
+		finding := maintainerFinding(description)
+		finding.ID = testScopeFaultFindingID
+		return parkOnFinding(finding, "", 0)
+	}
 	for {
 		covered, ran = nil, map[string]bool{}
 		baselineFindings, baselineSummary, baselineExitCode, dead = nil, "", 0, nil
+		acceptedScopeGap = nil
 		multiUnit = len(discovery.Units) > 1
 
 		// Resolve every selected name against the layout before running
@@ -467,7 +503,16 @@ Previous test findings to address:
 			}
 		}
 
-		if missing := underSelectedUnits(discovery.Units, changed, discovery.Selected); len(missing) > 0 && baselineExitCode == 0 {
+		missing := underSelectedUnits(discovery.Units, changed, discovery.Selected)
+		// An operator who approved this exact gap at an earlier park already
+		// decided these units need not run for this changed-file set, so a
+		// re-test neither parks on it again nor runs them.
+		if len(missing) > 0 && baselineExitCode == 0 && sctx.Shared.TestScopeGapAccepted(changedFilesFingerprint(changed), testUnitNames(missing)) {
+			acceptedScopeGap = testUnitNames(missing)
+			sctx.Log(fmt.Sprintf("not running %s: an operator accepted this scope gap earlier in the run", strings.Join(acceptedScopeGap, ", ")))
+			missing = nil
+		}
+		if len(missing) > 0 && baselineExitCode == 0 {
 			missingNames := make([]string, len(missing))
 			for i, u := range missing {
 				missingNames[i] = u.Name
@@ -478,7 +523,7 @@ Previous test findings to address:
 				// unreliable, not merely incomplete this once: expanding again
 				// would keep papering over a systematic miss, so this parks for
 				// a maintainer instead of running the missing units.
-				return parkInPass(fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")))
+				return parkScopeFault(missingNames, fmt.Sprintf("test unit discovery under-selected twice in this run; changed files belong to units it did not select: %s", strings.Join(missingNames, ", ")))
 			}
 
 			sctx.Log(fmt.Sprintf("test scope fault: original selection %s", strings.Join(discovery.Selected, ", ")))
@@ -750,7 +795,7 @@ Previous test findings to address:
 			findings.Tested = append(tested(), findings.Tested...)
 		}
 		findings.TestedHeadSHA = sctx.Run.HeadSHA
-		findings.Items = withOmission(append(append([]Finding{}, baselineFindings...), findings.Items...))
+		findings.Items = withAdvisories(append(append([]Finding{}, baselineFindings...), findings.Items...))
 		findings.Items = append(findings.Items, verdictFindings(findings)...)
 		if baselineSummary != "" {
 			findings.Summary = strings.TrimSpace(strings.Join([]string{baselineSummary, findings.Summary}, "\n"))
@@ -1126,7 +1171,7 @@ func parseTestAnalyzerOutput(result *agent.Result) (Findings, error) {
 		return Findings{}, err
 	}
 	for i := range findings.Items {
-		if slices.Contains(testBudgetCutIDs, findings.Items[i].ID) {
+		if slices.Contains(testNonRepairIDs, findings.Items[i].ID) {
 			findings.Items[i].ID = ""
 		}
 	}
@@ -1421,11 +1466,24 @@ func answeredTestGate(sctx *pipeline.StepContext) Findings {
 // own finding can never claim them.
 var testBudgetCutIDs = []string{types.FindingIDTestAgentTimeout, types.FindingIDTestAgentUnvalidatedWork}
 
-// onlyTestBudgetCutFindings reports whether a fix selection holds nothing but
-// a Test budget cut, which leaves the repair turn nothing to repair.
-func onlyTestBudgetCutFindings(raw string) bool {
+// testNonRepairIDs are the step-owned findings a repair turn has nothing to
+// do with: the budget cut, and the scope-fault park, which a fix answers by
+// discovering the test units again. An agent's own finding can never claim
+// them either.
+var testNonRepairIDs = []string{types.FindingIDTestAgentTimeout, types.FindingIDTestAgentUnvalidatedWork, testScopeFaultFindingID}
+
+// onlyNonRepairTestFindings reports whether a fix selection holds nothing but
+// step-owned findings, which leaves the repair turn nothing to repair.
+func onlyNonRepairTestFindings(raw string) bool {
 	findings, err := types.ParseFindingsJSON(raw)
-	return err == nil && len(findings.Items) > 0 && len(types.ExcludeFindings(findings, testBudgetCutIDs).Items) == 0
+	return err == nil && len(findings.Items) > 0 && len(types.ExcludeFindings(findings, testNonRepairIDs).Items) == 0
+}
+
+// selectsTestScopeFault reports whether a fix selection holds the scope-fault
+// park's finding, the operator's request to discover the test units again.
+func selectsTestScopeFault(raw string) bool {
+	findings, err := types.ParseFindingsJSON(raw)
+	return err == nil && len(types.FilterFindings(findings, []string{testScopeFaultFindingID}).Items) > 0
 }
 
 // budgetCutGuidanceSection renders the operator's instructions attached to
@@ -1462,7 +1520,7 @@ func testRepairFindings(raw string) string {
 	if err != nil {
 		return raw
 	}
-	repair := types.ExcludeFindings(findings, testBudgetCutIDs)
+	repair := types.ExcludeFindings(findings, testNonRepairIDs)
 	if len(repair.Items) == 0 {
 		return ""
 	}

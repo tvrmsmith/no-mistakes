@@ -3,6 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -52,6 +53,22 @@ type testDiscoveryRecord struct {
 	ScopeFaults  int               `json:"scope_faults"`
 	RunnerFaults int               `json:"runner_faults"`
 	KeptCommand  string            `json:"kept_command,omitempty"`
+	ParkedGap    *TestScopeGap     `json:"parked_scope_gap,omitempty"`
+	AcceptedGap  *TestScopeGap     `json:"accepted_scope_gap,omitempty"`
+}
+
+// TestScopeGap is a set of units a changed-file set belongs to that the Test
+// step's selection left out, keyed by the fingerprint of that changed-file set.
+type TestScopeGap struct {
+	Fingerprint string   `json:"fingerprint"`
+	Units       []string `json:"units"`
+}
+
+func (g *TestScopeGap) copy() *TestScopeGap {
+	if g == nil {
+		return nil
+	}
+	return &TestScopeGap{Fingerprint: g.Fingerprint, Units: append([]string{}, g.Units...)}
 }
 
 // RunShared carries run-scoped results one step hands to a later step in the
@@ -85,6 +102,11 @@ type RunShared struct {
 	// reading its output, judging the runner sound and the code under test
 	// broken.
 	testKeptCommand string
+	// testParkedScopeGap is the gap the Test step's current round parked on as
+	// a scope fault, and testAcceptedScopeGap is a gap an operator approved at
+	// such a park. See AcceptParkedTestScopeGap.
+	testParkedScopeGap   *TestScopeGap
+	testAcceptedScopeGap *TestScopeGap
 	// restartTrees remembers, per step, the tree its last restart-triggering
 	// commit produced, so a later round of that step committing an identical
 	// tree is recognised as churn rather than progress.
@@ -149,6 +171,8 @@ func RestoreRunShared(store RunSharedStore, runID string) *RunShared {
 	s.testScopeFaults = record.ScopeFaults
 	s.testRunnerFaults = record.RunnerFaults
 	s.testKeptCommand = record.KeptCommand
+	s.testParkedScopeGap = record.ParkedGap
+	s.testAcceptedScopeGap = record.AcceptedGap
 	if record.Fingerprint != "" && len(record.Units) > 0 {
 		stored := TestDiscovery{Units: record.Units, Selected: record.Selected, Source: record.Source}.copy()
 		s.testDiscovery = &stored
@@ -167,7 +191,13 @@ func (s *RunShared) persistTestDiscoveryLocked() {
 	if s.store == nil || s.runID == "" {
 		return
 	}
-	record := testDiscoveryRecord{ScopeFaults: s.testScopeFaults, RunnerFaults: s.testRunnerFaults, KeptCommand: s.testKeptCommand}
+	record := testDiscoveryRecord{
+		ScopeFaults:  s.testScopeFaults,
+		RunnerFaults: s.testRunnerFaults,
+		KeptCommand:  s.testKeptCommand,
+		ParkedGap:    s.testParkedScopeGap,
+		AcceptedGap:  s.testAcceptedScopeGap,
+	}
 	if s.testDiscovery != nil {
 		record.Fingerprint = s.testDiscoveryFingerprint
 		record.Units = s.testDiscovery.Units
@@ -273,6 +303,98 @@ func (s *RunShared) TestKeptCommand(command string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.testKeptCommand != "" && s.testKeptCommand == strings.TrimSpace(command)
+}
+
+// ResetTestDiscovery forgets everything the run learned about its test
+// layout: the cached discovery, both fault counts, the kept command, and any
+// scope gap parked on or accepted. It is the operator's way to force a fresh
+// discovery pass without aborting the run, so the new layout starts with the
+// expansion and rediscovery budget a fresh run has.
+func (s *RunShared) ResetTestDiscovery() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.testDiscovery = nil
+	s.testDiscoveryFingerprint = ""
+	s.testScopeFaults = 0
+	s.testRunnerFaults = 0
+	s.testKeptCommand = ""
+	s.testParkedScopeGap = nil
+	s.testAcceptedScopeGap = nil
+	s.persistTestDiscoveryLocked()
+}
+
+// SetParkedTestScopeGap records the gap the Test step is about to park on as a
+// scope fault, so approving that park can accept it.
+func (s *RunShared) SetParkedTestScopeGap(gap TestScopeGap) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.testParkedScopeGap = gap.copy()
+	s.persistTestDiscoveryLocked()
+}
+
+// ClearParkedTestScopeGap forgets the parked gap. Every Test round clears it
+// before it starts, so the record only ever describes the round parked right
+// now and an approval of any other Test gate accepts nothing.
+func (s *RunShared) ClearParkedTestScopeGap() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.testParkedScopeGap == nil {
+		return
+	}
+	s.testParkedScopeGap = nil
+	s.persistTestDiscoveryLocked()
+}
+
+// AcceptParkedTestScopeGap turns the gap the current Test round parked on into
+// an accepted one. The executor calls it when an operator approves a Test
+// gate, and it does nothing when that gate was not a scope-fault park.
+//
+// Without it the parked layout stays cached for the changed-file set, and the
+// run-wide fault count already stands at the park threshold, so every re-test
+// of the same set would find the same gap and park on a question the operator
+// already answered.
+func (s *RunShared) AcceptParkedTestScopeGap() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.testParkedScopeGap == nil {
+		return
+	}
+	s.testAcceptedScopeGap = s.testParkedScopeGap
+	s.testParkedScopeGap = nil
+	s.persistTestDiscoveryLocked()
+}
+
+// TestScopeGapAccepted reports whether an operator already accepted leaving
+// every one of units out for the changed-file set fingerprint names. A moved
+// changed-file set, or a unit the approval never saw, is a new question.
+func (s *RunShared) TestScopeGapAccepted(fingerprint string, units []string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accepted := s.testAcceptedScopeGap
+	if accepted == nil || accepted.Fingerprint != fingerprint || len(units) == 0 {
+		return false
+	}
+	for _, unit := range units {
+		if !slices.Contains(accepted.Units, unit) {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidationResidue is the exact worktree state a certifying step's round

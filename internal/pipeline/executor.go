@@ -2219,6 +2219,9 @@ func (e *Executor) applyApprovalOverride(step Step, sctx *StepContext, stepResul
 		if err := e.db.SetTestApprovalReason(stepResultID, approvalReason); err != nil {
 			return err
 		}
+		// Approving a scope-fault park accepts that gap for the changed-file
+		// set, so a re-test of the same set does not park on it again.
+		e.shared.AcceptParkedTestScopeGap()
 	}
 	verifier, ok := step.(ApprovalOverrideVerifier)
 	if !ok {
