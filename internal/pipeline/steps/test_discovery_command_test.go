@@ -39,6 +39,10 @@ func TestCheckInferredCommand(t *testing.T) {
 		{name: "input and output redirects", command: "sort <input.txt >out.txt"},
 		{name: "redirects around a runner", command: "./t <cases.json >report.txt"},
 		{name: "heredoc", command: "cat <<EOF >out\nok\nEOF"},
+		{name: "input redirect before an fd redirect", command: "./t <in.txt 2>err.txt"},
+		{name: "input redirect before stderr joins stdout", command: "./run <cases.json 2>&1 | tee out"},
+		{name: "path placeholder", command: "dotnet test <path/to/project.csproj> --no-build", rejectedWith: "template placeholder <path/to/project.csproj>"},
+		{name: "module path placeholder", command: "cargo test <crate::module>", rejectedWith: "template placeholder <crate::module>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
