@@ -30,7 +30,7 @@ User-facing semantics live in `docs/src/content/docs/reference/pipeline-steps.md
 - Fix mode adds untracked files to the changed set, because a new test file is the common repair.
 - Unit commands receive `NO_MISTAKES_BASE_SHA`, `NO_MISTAKES_CHANGED_FILES`, and `NO_MISTAKES_CHANGED_FILE_COUNT`. `changedFilesEnvValue` drops paths containing a newline and empties a list over 96 KiB instead of truncating it; either omission emits a warning finding on every outcome.
 - The discovery prompt carries the targeted-validation boundary (never the full suite, even for `.`), and `test.instructions` feeds both discovery and the evidence turn.
-- Regressions: `internal/pipeline/steps/test_discovery_test.go`, `internal/pipeline/steps/test_execution_test.go`, `internal/pipeline/steps/test_scope_gap_test.go` (the scope-fault park's approve and fix answers, and the runbook-template prompt rule), `internal/pipeline/shared_test.go`, `internal/pipeline/test_scope_gap_test.go` (approval wiring on the live and recovered gate), `internal/pipeline/executor_shared_restore_test.go`.
+- Regressions: `internal/pipeline/steps/test_discovery_test.go`, `internal/pipeline/steps/test_execution_test.go`, `internal/pipeline/steps/test_scope_gap_test.go` (the scope-fault park's approve and fix answers, and the runbook-template prompt rule), `internal/pipeline/shared_test.go`, `internal/pipeline/test_scope_gap_test.go` (approval wiring on the live and recovered gate), `internal/pipeline/executor_shared_restore_test.go`, `internal/e2e/test_scope_gap_journey_test.go` (both park answers through the real CLI, daemon, and a review-fix restart).
 
 **Vacuous-green guard (`guardVacuousGreen`, `internal/pipeline/steps/coverage_*.go`)**
 
