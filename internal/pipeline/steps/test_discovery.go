@@ -392,37 +392,40 @@ func checkInferredCommands(ctx context.Context, units []config.TestUnit) error {
 }
 
 // templatePlaceholder matches a <...> placeholder that is not glued to a
-// preceding identifier, so <svc>/<name>.csproj matches and a generic type in a
-// test filter such as Cache<Key> does not. sh -n alone misses a placeholder
-// like <svc>, which parses as a redirect.
-var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(<[A-Za-z][A-Za-z0-9 ._-]*>)`)
+// preceding identifier or to a heredoc's <<, so <svc>/<name>.csproj matches
+// and a generic type in a test filter such as Cache<Key> does not. A space may
+// separate words but never precedes the closing >, so an input redirect
+// followed by an output redirect (<in.txt >out.txt) is not a placeholder.
+// sh -n alone misses a placeholder like <svc>, which parses as a redirect.
+var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_<])(<[A-Za-z][A-Za-z0-9._-]*(?: [A-Za-z0-9._-]+)*>)`)
 
 // checkInferredCommand rejects an agent-written command that describes a
 // command instead of being one. It proves only that the command parses;
 // whether it can run a test stays with the dead-runner path. A failure to run
-// the parse check at all is returned unwrapped, so it fails the run like any
-// other invocation failure instead of being blamed on the agent's answer.
+// the parse check at all, including sh killed by a signal, is returned as a
+// plain error rather than a discovery result, so it fails the run instead of
+// being re-asked or parked.
 func checkInferredCommand(ctx context.Context, unit config.TestUnit) error {
 	if m := templatePlaceholder.FindStringSubmatch(unit.Command); m != nil {
-		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command still carries the template placeholder %s; report the literal command to run", unit.Name, m[1]))
+		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command %q still carries the template placeholder %s; report the literal command to run", unit.Name, unit.Command, m[1]))
 	}
 	// Unit commands run through cmd.exe on Windows, which has no parse-only mode.
 	if runtime.GOOS == "windows" {
 		return nil
 	}
 	out, runErr := exec.CommandContext(ctx, "sh", "-n", "-c", unit.Command).CombinedOutput()
-	exitCode, execErr := shellCommandExitCode("sh -n", runErr)
 	// A cancelled run kills sh, which is not a verdict on the command.
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("check discovered unit %q command: %w", unit.Name, ctxErr)
 	}
-	if execErr != nil {
-		return fmt.Errorf("check discovered unit %q command: %w", unit.Name, execErr)
+	if runErr == nil {
+		return nil
 	}
-	if exitCode != 0 {
-		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command is not a valid shell command (sh -n: %s)", unit.Name, strings.TrimSpace(string(out))))
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) || exitErr.ExitCode() < 0 {
+		return fmt.Errorf("check discovered unit %q command: %w", unit.Name, runErr)
 	}
-	return nil
+	return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command %q is not a valid shell command (sh -n: %s)", unit.Name, unit.Command, strings.TrimSpace(string(out))))
 }
 
 // discoveryRunbookSection tells the discovery agent how this repository runs

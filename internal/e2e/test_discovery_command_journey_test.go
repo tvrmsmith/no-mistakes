@@ -102,12 +102,13 @@ func TestDiscoveryCommandJourney_UnselectedPlaceholderIsReasked(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		first func(marker string) string
-		want  string
+		// writesMarker marks a command that parses, so sh would touch its
+		// marker if the command ever reached it.
+		writesMarker bool
+		want         string
 	}{
 		{name: "prose", first: func(string) string { return issuePlaceholderProse }, want: "template placeholder <cli>"},
-		// This one parses, so without the check sh would run it and the marker
-		// it touches first would prove the command reached sh.
-		{name: "parses", first: func(marker string) string { return "touch " + marker + "; dotnet test <svc>/<name>.csproj" }, want: "template placeholder <svc>"},
+		{name: "parses", first: func(marker string) string { return "touch " + marker + "; dotnet test <svc>/<name>.csproj" }, writesMarker: true, want: "template placeholder <svc>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			marker := filepath.Join(t.TempDir(), "placeholder.ran")
@@ -131,7 +132,7 @@ func TestDiscoveryCommandJourney_UnselectedPlaceholderIsReasked(t *testing.T) {
 					t.Fatalf("re-ask prompt lacks %q", want)
 				}
 			}
-			if _, err := os.Stat(marker); err == nil {
+			if _, err := os.Stat(marker); tc.writesMarker && err == nil {
 				t.Fatal("the placeholder command reached sh")
 			}
 			t.Logf("=== test.log ===\n%s", testLogLines(t, h, run.ID, "rejected", "under-selected", "unit web", "unit api", "expand", "scope fault"))
@@ -163,8 +164,8 @@ func TestDiscoveryCommandJourney_SecondRejectionParks(t *testing.T) {
 	logStatus(t, h)
 	rec := readTestStep(t, h, "rejected-twice")
 	t.Logf("test step findings: %s", rec.findingsJSON)
-	if len(rec.findings) == 0 {
-		t.Fatal("parked with no finding")
+	if len(rec.findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly one", rec.findings)
 	}
 	f := rec.findings[0]
 	if f.Action != types.ActionAskUser || !strings.Contains(f.Description, "template placeholder <project>") {
@@ -185,14 +186,17 @@ func TestDiscoveryCommandJourney_SecondRejectionParks(t *testing.T) {
 }
 
 // #59 boundary: a configured command skips the placeholder check, so a
-// legitimate redirect shaped like <in.txt > still runs.
+// legitimate redirect shaped like <in.txt web> still runs.
 func TestDiscoveryCommandJourney_ConfiguredRedirectIsNotRejected(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude"})
-	h.WriteTestCommand("nm-configured-redirect", `cat; echo configured-redirect-ran >&2`)
+	// The command copies its redirected input to a marker, which proves it ran
+	// with the redirect intact.
+	marker := filepath.Join(t.TempDir(), "configured-redirect.ran")
+	h.WriteTestCommand("nm-configured-redirect", `cat > '`+marker+`'`)
 	if out, err := h.Run("init"); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
-	h.CommitChange("configured", ".no-mistakes.yaml", "commands:\n  test: 'nm-configured-redirect <in.txt >\"$NO_MISTAKES_COVERAGE_DIR/out.txt\"'\n  lint: 'exit 0'\n", "configure test command")
+	h.CommitChange("configured", ".no-mistakes.yaml", "commands:\n  test: 'nm-configured-redirect <in.txt web>\"$NO_MISTAKES_COVERAGE_DIR/out.txt\"'\n  lint: 'exit 0'\n", "configure test command")
 	h.CommitChange("configured", "in.txt", "redirected input\n", "add input")
 	out, err := h.Run("axi", "run", "--intent", "Validate the synthetic feature", "--skip", "pr,ci")
 	t.Logf("=== axi run ===\n%s", out)
@@ -210,6 +214,9 @@ func TestDiscoveryCommandJourney_ConfiguredRedirectIsNotRejected(t *testing.T) {
 		t.Fatalf("the configured redirect was rejected as a placeholder: %s", rec.findingsJSON)
 	}
 	t.Logf("=== test.log ===\n%s", testLogLines(t, h, run.ID, "configured-redirect", "unit repository", "exit"))
+	if got, err := os.ReadFile(marker); err != nil || string(got) != "redirected input\n" {
+		t.Fatalf("configured redirect command input = %q, %v; want it to have run on in.txt", got, err)
+	}
 	if run.Status != types.RunCompleted {
 		t.Fatalf("run status = %s, want completed", run.Status)
 	}

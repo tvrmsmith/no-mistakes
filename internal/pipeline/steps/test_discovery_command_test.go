@@ -3,10 +3,14 @@ package steps
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 )
@@ -32,6 +36,9 @@ func TestCheckInferredCommand(t *testing.T) {
 		{name: "placeholder that parses", command: "dotnet test <svc>/<name>.csproj", rejectedWith: "template placeholder <svc>"},
 		{name: "placeholder with a space", command: "dotnet test --settings <nearest coverlet.runsettings>", rejectedWith: "template placeholder <nearest coverlet.runsettings>"},
 		{name: "prose that does not parse", command: "run the api tests (per changed service): go test", rejectedWith: "is not a valid shell command", needsSh: true},
+		{name: "input and output redirects", command: "sort <input.txt >out.txt"},
+		{name: "redirects around a runner", command: "./t <cases.json >report.txt"},
+		{name: "heredoc", command: "cat <<EOF >out\nok\nEOF"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -68,13 +75,18 @@ func TestTestStep_UnselectedUnitsPlaceholderCommandIsReaskedBeforeItRuns(t *test
 	for _, tc := range []struct {
 		name        string
 		placeholder func(marker string) string
+		// writesMarker marks a command that parses, so sh would write its
+		// marker if the command ever reached it.
+		writesMarker bool
+		rejectedWith string
 	}{
-		{name: "prose that does not parse", placeholder: func(string) string { return issuePlaceholderCommand }},
-		// This one parses, so without the check sh would run it and the
-		// marker it writes first would prove the command reached sh.
+		{name: "prose placeholder", placeholder: func(string) string { return issuePlaceholderCommand }, rejectedWith: "template placeholder <cli>"},
+		{name: "prose that does not parse", placeholder: func(string) string {
+			return "run the api tests (per changed service): go test"
+		}, rejectedWith: "is not a valid shell command"},
 		{name: "placeholder that parses", placeholder: func(marker string) string {
 			return markerCommand(marker) + "; dotnet test <svc>/<name>.csproj"
-		}},
+		}, writesMarker: true, rejectedWith: "template placeholder <svc>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -89,8 +101,9 @@ func TestTestStep_UnselectedUnitsPlaceholderCommandIsReaskedBeforeItRuns(t *test
 			layout := func(webCommand string) string {
 				return `{"units":[{"name":"api","path":"services/api","command":` + jsonString(t, apiCommand) + `},{"name":"web","path":"services/web","command":` + jsonString(t, webCommand) + `}],"selected":["api"]}`
 			}
+			placeholder := tc.placeholder(placeholderMarker)
 			ag := sequencedDiscoveryAgent(
-				layout(tc.placeholder(placeholderMarker)),
+				layout(placeholder),
 				layout(coverageFor(markerCommand(webMarker), "services/web/main.go")),
 			)
 			sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
@@ -103,7 +116,7 @@ func TestTestStep_UnselectedUnitsPlaceholderCommandIsReaskedBeforeItRuns(t *test
 			if outcome.NeedsApproval {
 				t.Fatalf("expected the corrected layout to pass, got: %s", outcome.Findings)
 			}
-			if fileExists(placeholderMarker) {
+			if tc.writesMarker && fileExists(placeholderMarker) {
 				t.Error("the placeholder command reached sh")
 			}
 			if log := joinedLog(*lines); strings.Contains(log, "could not run any test") {
@@ -113,7 +126,7 @@ func TestTestStep_UnselectedUnitsPlaceholderCommandIsReaskedBeforeItRuns(t *test
 			if len(calls) != 2 {
 				t.Fatalf("discovery calls = %d, want 2: the rejected answer is re-asked once", len(calls))
 			}
-			for _, want := range []string{"previous answer was rejected", `discovered unit "web"`} {
+			for _, want := range []string{"previous answer was rejected", `discovered unit "web"`, strconv.Quote(placeholder), tc.rejectedWith} {
 				if !strings.Contains(calls[1].Prompt, want) {
 					t.Errorf("re-ask prompt missing %q", want)
 				}
@@ -129,7 +142,10 @@ func TestTestStep_RepeatedlyRejectedDiscoveryAnswerParks(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA := newUnitRepo(t)
 	headSHA := changeUnitFile(t, dir, "services/api/main.go")
-	ag := sequencedDiscoveryAgent(encodeOneUnitLayout("api", "services/api", "dotnet test <svc>/<name>.csproj", "api"))
+	ag := sequencedDiscoveryAgent(
+		encodeOneUnitLayout("api", "services/api", "dotnet test <svc>/<name>.csproj", "api"),
+		encodeOneUnitLayout("api", "services/api", "dotnet test <project>/tests.csproj", "api"),
+	)
 	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
 
 	outcome, err := (&TestStep{}).Execute(sctx)
@@ -139,8 +155,8 @@ func TestTestStep_RepeatedlyRejectedDiscoveryAnswerParks(t *testing.T) {
 	if !outcome.NeedsApproval || outcome.AutoFixable {
 		t.Fatalf("outcome = %+v, want a maintainer park", outcome)
 	}
-	if finding := onlyFinding(t, outcome.Findings); !strings.Contains(finding.Description, "template placeholder <svc>") {
-		t.Errorf("finding %q does not name the rejection", finding.Description)
+	if finding := onlyFinding(t, outcome.Findings); !strings.Contains(finding.Description, "template placeholder <project>") {
+		t.Errorf("finding %q does not name the second answer's rejection", finding.Description)
 	}
 	if n := len(discoveryCalls(ag)); n != 2 {
 		t.Fatalf("discovery calls = %d, want 2: one answer and one re-ask", n)
@@ -159,27 +175,61 @@ func TestCheckInferredCommand_MissingShIsNotARejection(t *testing.T) {
 	if err == nil {
 		t.Fatal("checkInferredCommand accepted a command it could not parse-check")
 	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("checkInferredCommand = %v, want the missing sh", err)
+	}
 	var rejection discoveryResultError
 	if errors.As(err, &rejection) {
 		t.Fatalf("a missing sh was reported as a rejected answer: %v", err)
 	}
 }
 
-// TestCheckInferredCommand_CancelledRunIsNotARejection keeps a parse check the
-// run's cancellation killed from reading as a verdict on the agent's answer.
-func TestCheckInferredCommand_CancelledRunIsNotARejection(t *testing.T) {
-	t.Parallel()
+// fakeShOnPath puts an executable sh running body first on PATH, so a parse
+// check reaches a shell that misbehaves the way body does.
+func fakeShOnPath(t *testing.T, body string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sh"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestCheckInferredCommand_TimedOutRunIsNotARejection keeps a parse check the
+// run's deadline killed mid-run from reading as a verdict on the agent's
+// answer.
+func TestCheckInferredCommand_TimedOutRunIsNotARejection(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cmd.exe runs unit commands on Windows, so there is no sh -n parse")
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+	fakeShOnPath(t, "exec sleep 30")
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
 	err := checkInferredCommand(ctx, config.TestUnit{Name: "api", Path: "services/api", Command: "go test ./services/api/..."})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("checkInferredCommand = %v, want the cancellation", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("checkInferredCommand = %v, want the deadline", err)
 	}
 	var rejection discoveryResultError
 	if errors.As(err, &rejection) {
-		t.Fatalf("a cancelled check was reported as a rejected answer: %v", err)
+		t.Fatalf("a timed-out check was reported as a rejected answer: %v", err)
+	}
+}
+
+// TestCheckInferredCommand_SignalledShIsNotARejection keeps an sh that
+// something outside the run killed from reading as a verdict on the agent's
+// answer.
+func TestCheckInferredCommand_SignalledShIsNotARejection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cmd.exe runs unit commands on Windows, so there is no sh -n parse")
+	}
+	fakeShOnPath(t, "kill -KILL $$")
+	err := checkInferredCommand(t.Context(), config.TestUnit{Name: "api", Path: "services/api", Command: "go test ./services/api/..."})
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() >= 0 {
+		t.Fatalf("checkInferredCommand = %v, want the signalled sh", err)
+	}
+	var rejection discoveryResultError
+	if errors.As(err, &rejection) {
+		t.Fatalf("a signalled check was reported as a rejected answer: %v", err)
 	}
 }
