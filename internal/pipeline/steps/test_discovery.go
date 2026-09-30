@@ -16,6 +16,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
 // testDiscoverySchema is the JSON schema for the discovery agent pass,
@@ -415,7 +416,9 @@ func checkInferredCommand(ctx context.Context, unit config.TestUnit) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	out, runErr := exec.CommandContext(ctx, "sh", "-n", "-c", unit.Command).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "sh", "-n", "-c", unit.Command)
+	shellenv.ConfigureShellCommand(cmd)
+	out, runErr := shellenv.CombinedOutputShellCommand(cmd)
 	// A cancelled run kills sh, which is not a verdict on the command.
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("check discovered unit %q command: %w", unit.Name, ctxErr)
