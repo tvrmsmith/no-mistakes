@@ -23,7 +23,7 @@ help[4]:
   Run `no-mistakes axi respond --action approve` to accept this step and continue
   Run `no-mistakes axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself)
   Run `no-mistakes axi respond --action skip` to skip this step
-  Run `no-mistakes axi logs --step review --full` to read the full step log
+  Run `no-mistakes axi logs --step review --full` to read the complete step summary and log
 ```
 
 ## Run-progress fields

@@ -130,6 +130,12 @@ A process can still escape that tree by detaching itself into its own session, s
 That sweep is scoped by working directory: it never touches a worktree whose run is still active, and it can never reach a process working outside `~/.no-mistakes/worktrees/` or outside a run worktree a run record names in a configured worktree root.
 Resources a run started under some other supervisor, such as a container stack, are outside both mechanisms. After that sweep and before any retention decision, the daemon runs the repository's [`commands.cleanup`](/no-mistakes/reference/repo-config/#commandscleanup) in the worktree to release them. Two routes do not run it: a run parked at a gate during a clean stop, which keeps its worktree and resources until it resumes and finishes, and a worktree reclaimed by the startup orphan cleanup after a crash.
 
+On Linux, a step that exhausts memory fails only its own run.
+Configured commands, agent subprocesses, and managed agent servers raise their `oom_score_adj` so the kernel OOM killer picks them before the daemon.
+The generated systemd unit sets `OOMPolicy=continue`, so one killed step no longer stops the whole service and fails every other in-flight run with "daemon shutting down".
+When a step process is killed and the daemon's cgroup records a new `oom_kill`, the step fails with "ran out of memory" appended to its original error text, and the step log keeps the command output printed before the kill.
+An existing unit picks up the policy when `no-mistakes daemon start` or `restart` refreshes the service definition.
+
 ## Concurrent push handling
 
 If you push to the same branch while a run is already active, the daemon:

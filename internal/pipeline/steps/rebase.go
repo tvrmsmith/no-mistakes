@@ -441,6 +441,7 @@ Instructions:
 		targetRef,
 		strings.Join(conflictFiles, "\n- "),
 	)
+	prompt += "\n" + agent.MemoryFilesConflictRule
 	if sctx.PreviousFindings != "" {
 		prompt += "\n\nPrevious findings:\n" + sctx.PreviousFindings
 	}
@@ -583,6 +584,7 @@ Instructions:
 		targetRef,
 		strings.Join(conflictFiles, "\n- "),
 	)
+	prompt += "\n" + agent.MemoryFilesConflictRule
 	if sctx.PreviousFindings != "" {
 		prompt += "\n\nPrevious findings:\n" + sctx.PreviousFindings
 	}

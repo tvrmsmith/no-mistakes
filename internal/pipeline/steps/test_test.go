@@ -148,13 +148,18 @@ func evidenceCalls(ag *mockAgent) []agent.RunOpts {
 // discovery whenever the repository configured no unit layout.
 func evidencePrompt(t *testing.T, ag *mockAgent) string {
 	t.Helper()
+	return evidenceCall(t, ag).Prompt
+}
+
+func evidenceCall(t *testing.T, ag *mockAgent) agent.RunOpts {
+	t.Helper()
 	for _, call := range ag.calls {
 		if !isDiscoveryCall(call) {
-			return call.Prompt
+			return call
 		}
 	}
 	t.Fatalf("agent was never called for evidence, calls = %d", len(ag.calls))
-	return ""
+	return agent.RunOpts{}
 }
 
 func TestTestStep_HangingEvidenceAgentParksForADecision(t *testing.T) {

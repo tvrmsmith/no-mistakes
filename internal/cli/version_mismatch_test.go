@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -499,6 +500,13 @@ func TestInitSkewNoticeNamesTheRemedyForTheStaleSide(t *testing.T) {
 	}
 }
 
+// hookGateDir names a managed gate under p, because the hook commands resolve
+// their daemon from the gate's own location (<root>/repos/<id>.git) and
+// refuse any other path.
+func hookGateDir(p *paths.Paths) string {
+	return filepath.Join(p.Root(), "repos", "hook.git")
+}
+
 // startHookDaemonSocket serves the two methods the git hooks call, with
 // caller-chosen results, so a test can present either a current daemon or one
 // whose reply carries no protocol version at all.
@@ -537,12 +545,10 @@ func runHookCommand(t *testing.T, cmd *cobra.Command, args ...string) (string, e
 // against the still-old daemon. Without a version check on the reply, a
 // drifted AdmitPushResult decodes as not-nested and the push is admitted.
 func TestHookCommandsFailClosedAgainstAnUnversionedDaemonReply(t *testing.T) {
-	gateDir := t.TempDir()
-
 	t.Run("admit-push", func(t *testing.T) {
-		startHookDaemonSocket(t,
+		gateDir := hookGateDir(startHookDaemonSocket(t,
 			ipc.AdmitPushResult{}, // legacy reply: no protocol_version
-			ipc.PushReceivedResult{RunID: "r1"})
+			ipc.PushReceivedResult{RunID: "r1"}))
 
 		out, err := runHookCommand(t, newDaemonAdmitPushCmd(), "--gate", gateDir)
 		if err == nil {
@@ -554,9 +560,9 @@ func TestHookCommandsFailClosedAgainstAnUnversionedDaemonReply(t *testing.T) {
 	})
 
 	t.Run("notify-push", func(t *testing.T) {
-		startHookDaemonSocket(t,
+		gateDir := hookGateDir(startHookDaemonSocket(t,
 			ipc.AdmitPushResult{ProtocolVersion: ipc.ProtocolVersion},
-			ipc.PushReceivedResult{RunID: "r1"}) // legacy reply: no protocol_version
+			ipc.PushReceivedResult{RunID: "r1"})) // legacy reply: no protocol_version
 
 		_, err := runHookCommand(t, newDaemonNotifyPushCmd(),
 			"--gate", gateDir, "--ref", "refs/heads/x", "--old", "a", "--new", "b")
@@ -569,12 +575,10 @@ func TestHookCommandsFailClosedAgainstAnUnversionedDaemonReply(t *testing.T) {
 // The check costs the hooks nothing on the happy path: it reads a field of the
 // reply they already wait for, and a current daemon's verdict still decides.
 func TestHookCommandsHonorACurrentDaemonsVerdict(t *testing.T) {
-	gateDir := t.TempDir()
-
 	t.Run("admits a non-nested push", func(t *testing.T) {
-		startHookDaemonSocket(t,
+		gateDir := hookGateDir(startHookDaemonSocket(t,
 			ipc.AdmitPushResult{ProtocolVersion: ipc.ProtocolVersion},
-			ipc.PushReceivedResult{RunID: "r1", ProtocolVersion: ipc.ProtocolVersion})
+			ipc.PushReceivedResult{RunID: "r1", ProtocolVersion: ipc.ProtocolVersion}))
 
 		if out, err := runHookCommand(t, newDaemonAdmitPushCmd(), "--gate", gateDir); err != nil {
 			t.Fatalf("a current daemon's not-nested verdict must admit the push, got %v:\n%s", err, out)
@@ -586,12 +590,12 @@ func TestHookCommandsHonorACurrentDaemonsVerdict(t *testing.T) {
 	})
 
 	t.Run("refuses a nested push", func(t *testing.T) {
-		startHookDaemonSocket(t,
+		gateDir := hookGateDir(startHookDaemonSocket(t,
 			ipc.AdmitPushResult{
 				Context:         ipc.GateContextResult{Nested: true, RunID: "outer-run"},
 				ProtocolVersion: ipc.ProtocolVersion,
 			},
-			ipc.PushReceivedResult{RunID: "r1", ProtocolVersion: ipc.ProtocolVersion})
+			ipc.PushReceivedResult{RunID: "r1", ProtocolVersion: ipc.ProtocolVersion}))
 
 		out, err := runHookCommand(t, newDaemonAdmitPushCmd(), "--gate", gateDir)
 		if err == nil {

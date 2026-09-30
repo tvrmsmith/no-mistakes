@@ -405,7 +405,7 @@ func TestRunSessions_ResetDropsStoredIdentity(t *testing.T) {
 		t.Fatalf("fix: %v", err)
 	}
 
-	rs.Reset(SessionRoleReviewer)
+	rs.Forget(SessionRoleReviewer)
 
 	stored, err := d.GetRunAgentSessions(run.ID)
 	if err != nil {
@@ -441,9 +441,9 @@ func TestRunSessions_ResetDropsStoredIdentity(t *testing.T) {
 // no-ops: the cold path must never panic on a rejected turn.
 func TestRunSessions_ResetIsSafeWhenNothingStored(t *testing.T) {
 	var nilManager *RunSessions
-	nilManager.Reset(SessionRoleReviewer)
+	nilManager.Forget(SessionRoleReviewer)
 
 	d, run := sessionTestDB(t)
 	rs := NewRunSessions(d, run.ID, newFakeSessionAgent(), true)
-	rs.Reset(SessionRoleReviewer)
+	rs.Forget(SessionRoleReviewer)
 }

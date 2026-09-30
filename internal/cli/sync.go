@@ -95,7 +95,7 @@ func newSyncCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "freshly verify and show the synchronization plan without changing HEAD")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply an eligible guarded synchronization without prompting")
-	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
+	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch), or rebind a terminal run's push binding to a verified rewritten remote head (recover_remote_rewritten)")
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
 	cmd.Flags().BoolVar(&adoptPublished, "adopt-published", false, "adopt a clean diverged local head into its stale gate lane only when the configured push target already has that exact head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
@@ -117,6 +117,8 @@ func newAxiSyncCmd() *cobra.Command {
 			"--check performs the same fresh read-only plan. Blocked states change nothing.\n" +
 			"--recover performs the guarded custody return offered by\n" +
 			"next_action.code: recover_custody; --keep-local keeps the current local head.\n" +
+			"It also performs next_action.code: recover_remote_rewritten, which anchors the\n" +
+			"superseded pipeline head and rebinds the push binding to the re-verified live head.\n" +
 			"--bind-archive-ref binds one exact existing refs/heads/archive/* commit to\n" +
 			"the selected terminal run; it never creates or moves a Git ref.\n" +
 			"--adopt-published performs the guarded gate-lane recovery offered by\n" +
@@ -138,7 +140,7 @@ func newAxiSyncCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "freshly verify and return the plan without changing HEAD")
-	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch)")
+	cmd.Flags().BoolVar(&recoverCustody, "recover", false, "return custody of a branch stranded by a terminal run with unpublished pipeline commits (a no-op when cancellation already released the branch), or rebind a terminal run's push binding to a verified rewritten remote head (recover_remote_rewritten)")
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
 	cmd.Flags().BoolVar(&adoptPublished, "adopt-published", false, "adopt a clean diverged local head into its stale gate lane only when the configured push target already has that exact head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
@@ -294,8 +296,8 @@ func runHumanRecover(cmd *cobra.Command, keepLocal, yes bool) error {
 			result = "refused"
 			return &exitError{code: 1}
 		}
-		w.Println("  Recovery returns custody of this branch from its terminal run. The only")
 		if keepLocal {
+			w.Println("  Recovery returns custody of this branch from its terminal run. The only")
 			if state.Recovery != nil && state.Recovery.KeepLocal {
 				w.Println("  possible Git change is moving the local gate branch to the exact required")
 				w.Println("  head; the worktree and verified divergent archive are never touched.")
@@ -305,11 +307,19 @@ func runHumanRecover(cmd *cobra.Command, keepLocal, yes bool) error {
 				w.Println("  the worktree is never touched.")
 			}
 		} else {
-			w.Println("  possible worktree change is a fast-forward of this clean behind branch, or")
+			w.Println("  Recovery may return custody from the terminal run. The possible worktree")
+			w.Println("  change is a fast-forward of this clean behind branch, or")
 			w.Println("  adoption of a diverged preserved head proven to carry every local change;")
-			w.Println("  unproven divergence refuses, and --keep-local keeps the current head.")
+			w.Println("  unproven divergence refuses. If the live remote was rewritten, recovery")
+			w.Println("  anchors the superseded pipeline head in a ref and rebinds the recorded")
+			w.Println("  push binding to the verified live head without moving the worktree.")
+			w.Println("  --keep-local keeps the current head for custody recovery.")
 		}
-		w.Print("  Return custody of this branch? [y/N] ")
+		if keepLocal {
+			w.Print("  Return custody of this branch? [y/N] ")
+		} else {
+			w.Print("  Proceed with this recovery? [y/N] ")
+		}
 		line, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 		if readErr != nil && strings.TrimSpace(line) == "" {
 			return readErr
@@ -328,6 +338,8 @@ func runHumanRecover(cmd *cobra.Command, keepLocal, yes bool) error {
 	if recovered.Recovered {
 		if recovered.State == branchsync.StateUserOwned {
 			w.Println("  Nothing to recover; cancellation already released this branch to you.")
+		} else if recovered.Recovery != nil && recovered.Recovery.Source == "remote_rewritten" {
+			w.Println("  Push binding rebound to the verified live remote head; the superseded pipeline head stays anchored.")
 		} else {
 			w.Println("  Custody returned; start a fresh run when ready.")
 		}
@@ -500,7 +512,11 @@ func runAxiSync(cmd *cobra.Command, check, recoverCustody, keepLocal, adoptPubli
 		state = service.Apply(cmd.Context())
 	}
 	fields := []toON.Field{branchSyncField(state)}
-	if state.Error != "" {
+	// A successful rewritten-remote rebind exits 0; any follow-up relation
+	// (for example divergence from the new binding) stays in branch_sync.note
+	// and next_action rather than a top-level error.
+	reboundRewritten := recoverCustody && state.Recovered && state.Recovery != nil && state.Recovery.Source == "remote_rewritten"
+	if state.Error != "" && !reboundRewritten {
 		fields = append(fields, toON.Field{Key: "error", Value: state.Error})
 	}
 	var help []string

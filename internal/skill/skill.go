@@ -409,7 +409,7 @@ not skip Test, which would publish that work. Ask the operator to choose:
 ` + "```sh" + `
 no-mistakes axi               # home view: current branch, active runs, next steps
 no-mistakes axi status        # full detail plus cached branch_sync when relevant
-no-mistakes axi logs --step <name> --full   # full log output of one step
+no-mistakes axi logs --step <name> --full   # one step's recorded findings, complete summary, and full log
 no-mistakes axi abort         # cancel the current-branch active run
 no-mistakes axi abort --run <id>   # cancel a specific run by id (works outside its worktree)
 ` + "```" + `
@@ -445,7 +445,7 @@ help[4]:
   Run ` + "`no-mistakes axi respond --action approve`" + ` to accept this step and continue
   Run ` + "`no-mistakes axi respond --action fix --findings <ids>`" + ` to have the pipeline fix the selected findings (do not edit files yourself)
   Run ` + "`no-mistakes axi respond --action skip`" + ` to skip this step
-  Run ` + "`no-mistakes axi logs --step review --full`" + ` to read the full step log
+  Run ` + "`no-mistakes axi logs --step review --full`" + ` to read the complete step summary and log
 ` + "```" + `
 
 ## Run-progress fields
@@ -477,6 +477,7 @@ Every ` + "`next_action`" + ` carries both a ` + "`code`" + ` and the exact ` + 
 - ` + "`continue_active_run`" + ` - the pipeline still owns the branch: keep driving the active run rather than making local follow-up commits.
 - ` + "`recover_custody`" + ` - a terminal run left unpublished pipeline commits preserved in the local gate. Recover custody first with ` + "`no-mistakes axi sync --recover`" + `: it returns custody and moves a clean worktree to the preserved pipeline head, by fast-forward or by adopting a diverged preserved head proven to carry every local change - the ordinary result of the pipeline rebasing your commits onto a newer base - after anchoring your pre-recovery head under ` + "`refs/no-mistakes/recover-local/<run>`" + `. That proof is deliberately narrow, so a rebase whose fix rounds also rewrote your own lines refuses instead of being adopted: when nothing can tell a deliberate pipeline fix from a dropped change, the decision is yours. Then validate that head with ` + "`no-mistakes axi run --intent \"...\"`" + `, which starts and drives the run in one command. ` + "`no-mistakes rerun`" + ` also re-runs the preserved pipeline head, but it returns immediately without driving, and a following ` + "`no-mistakes axi run`" + ` reattaches only while your local HEAD equals that preserved head - so use it only after the recovery moved your worktree there. A dirty worktree, or divergence that cannot be proven contained, makes the recovery refuse with explicit choices; ` + "`--keep-local`" + ` keeps your current head while the preserved commits stay anchored under ` + "`refs/no-mistakes/recover/<run>`" + `.
   Run the exact reported ` + "`next_action.command`" + ` rather than reconstructing one. It is ` + "`no-mistakes axi sync --recover --keep-local`" + ` in two cases: when an accessible gate confirms the verified preserved head is missing and you are explicitly discarding those unpublished commits, or when a bound archive proves divergent later work remains preserved while recovery keeps the branch at the exact reported required head and never selects, merges, or replays the archive. Do not substitute plain ` + "`--recover`" + ` or ` + "`rerun`" + ` for a reported keep-local action.
+- ` + "`recover_remote_rewritten`" + ` - the configured push target was force-rewritten outside the pipeline after a terminal run: run exact ` + "`no-mistakes axi sync --recover`" + `. It re-verifies the live target, anchors the superseded pipeline head under ` + "`refs/no-mistakes/recover-rewritten/<run>/<generation>`" + `, and rebinds only the recorded push binding to the verified live head; it never moves your branch, the gate, or the remote. It refuses ` + "`--keep-local`" + `, a live head or target that changes during recovery, a head it cannot anchor, and a merged or closed PR. Afterwards follow the ordinary ` + "`next_action`" + ` it reports.
 - ` + "`adopt_published`" + ` - a custody-returned branch was rebased after its gate lane stopped moving: run ` + "`no-mistakes axi sync --adopt-published`" + `. It verifies the configured push target already has the exact rebased local head, preserves the old lane head, and updates only that stale gate lane. If the target differs or changes during verification, it refuses without replacing the lane.
 - ` + "`inspect_worktree`" + ` and ` + "`inspect_and_reconcile_manually`" + ` - the operation refused and changed nothing. The reported command only shows you the situation; it does not resolve it.
 

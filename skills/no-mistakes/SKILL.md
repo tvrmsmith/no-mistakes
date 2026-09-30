@@ -364,7 +364,7 @@ not skip Test, which would publish that work. Ask the operator to choose:
 ```sh
 no-mistakes axi               # home view: current branch, active runs, next steps
 no-mistakes axi status        # full detail plus cached branch_sync when relevant
-no-mistakes axi logs --step <name> --full   # full log output of one step
+no-mistakes axi logs --step <name> --full   # one step's recorded findings, complete summary, and full log
 no-mistakes axi abort         # cancel the current-branch active run
 no-mistakes axi abort --run <id>   # cancel a specific run by id (works outside its worktree)
 ```

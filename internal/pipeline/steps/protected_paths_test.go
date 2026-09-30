@@ -131,7 +131,6 @@ func TestCIStep_ProtectedPathRetryUsesPersistedRepair(t *testing.T) {
 				if strings.HasPrefix(opts.Purpose, "review") {
 					reviews++
 					findings.ReviewedPaths = fullReviewCoverage(t, f.dir, f.sctx.Run.BaseSHA)
-					findings.DecisionReviews = satisfiedDecisionReviews(t, opts.Prompt)
 				}
 				// The Test step's evidence turn is unconditional and reads a
 				// different contract than review's findings.

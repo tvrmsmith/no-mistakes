@@ -404,7 +404,7 @@ func runShellCommandWithProcessEnv(ctx context.Context, dir string, env []string
 	out, err := shellenv.CombinedOutputShellCommand(newShellCommand(ctx, dir, env, cmdStr))
 	code, execErr := shellCommandExitCode(cmdStr, err)
 	if execErr != nil {
-		return "", -1, execErr
+		return string(out), -1, execErr
 	}
 	return string(out), code, nil
 }
@@ -415,7 +415,7 @@ func runSplitShellCommandWithProcessEnv(ctx context.Context, dir string, env []s
 	outBytes, errBytes, runErr := shellenv.SplitOutputShellCommand(newShellCommand(ctx, dir, env, cmdStr))
 	code, execErr := shellCommandExitCode(cmdStr, runErr)
 	if execErr != nil {
-		return "", "", -1, execErr
+		return string(outBytes), string(errBytes), -1, execErr
 	}
 	return string(outBytes), string(errBytes), code, nil
 }
@@ -438,7 +438,7 @@ func newShellCommand(ctx context.Context, dir string, env []string, cmdStr strin
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "cmd.exe", "/c", cmdStr)
 	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", cmdStr)
+		cmd = exec.CommandContext(ctx, "sh", "-c", shellenv.OwnOOMScoreScript(cmdStr))
 	}
 	shellenv.ConfigureCooperativeShellCommand(cmd)
 	cmd.Dir = dir

@@ -35,7 +35,9 @@ func TestAgentCommitRestartsValidationEndToEnd(t *testing.T) {
 	var turns []string
 	documentTurns := 0
 	ag := &mockAgent{name: "evidence", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if strings.Contains(strings.ToLower(opts.Prompt), "documentation") {
+		// The review prompt mentions documentation too, so route on its own
+		// opening line first.
+		if !strings.Contains(opts.Prompt, "Review the code changes") && strings.Contains(strings.ToLower(opts.Prompt), "documentation") {
 			documentTurns++
 			turns = append(turns, fmt.Sprintf("document agent turn %d", documentTurns))
 			if documentTurns == 1 {

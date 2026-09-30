@@ -8,12 +8,12 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` and `gates[].command` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor` and `devin`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.path_instructions`, `gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), the whole `metrics` block (`metrics.threshold`, `metrics.exempt_paths`), `rebase.strategy`, `restart.exempt_paths`, `test.instructions`, `test.allow_approve_over_failure`, `test.evidence.branch`, `pr.template`, `pr.publish_intent`, and `auto_fix.min_severity` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.conversation`, `review.path_instructions`, `gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `skip_steps`, the whole `ci` block (`ci.rerun_transient`, `ci.revalidate_repairs`), the whole `metrics` block (`metrics.threshold`, `metrics.exempt_paths`), `rebase.strategy`, `restart.exempt_paths`, `test.prepare`, `test.instructions`, `test.allow_approve_over_failure`, `test.evidence.branch`, `pr.template`, `pr.publish_intent`, `pr.appendix`, and `auto_fix.min_severity` only from that trusted copy.
 `pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
-Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`, `pr.title_format`, and `providers`) are still read from the pushed branch, with four exceptions: `test.evidence.branch`, which names a git ref the daemon pushes to, `test.instructions`, which steers the gate that validates the pushed branch, `test.allow_approve_over_failure`, which waives a required check, and `auto_fix.min_severity`. The retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise. `restart` is its own trusted-only block for the same reason: `restart.exempt_paths` is a gate strength, and widening it to `**` would let a pushed branch exempt every commit it makes from revalidation. `metrics` is trusted-only on the same grounds: `metrics.threshold` is the strength of the metrics gate and `metrics.exempt_paths` waives it for a path, so a contributor must not be able to raise the ceiling that judges their own breach.
+Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`, `pr.title_format`, and `providers`) are still read from the pushed branch, with five exceptions: `test.prepare`, which opts Test into running setup the maintainer pays for, `test.evidence.branch`, which names a git ref the daemon pushes to, `test.instructions`, which steers the gate that validates the pushed branch, `test.allow_approve_over_failure`, which waives a required check, and `auto_fix.min_severity`. The retry counts only bound how hard the pipeline tries, while the severity floor is a gate strength a pushed branch must not raise. `restart` is its own trusted-only block for the same reason: `restart.exempt_paths` is a gate strength, and widening it to `**` would let a pushed branch exempt every commit it makes from revalidation. `metrics` is trusted-only on the same grounds: `metrics.threshold` is the strength of the metrics gate and `metrics.exempt_paths` waives it for a path, so a contributor must not be able to raise the ceiling that judges their own breach.
 `ignore_patterns` is read from both copies for different jobs: the pushed value filters review and documentation, and the trusted default-branch value is the only one that exempts a changed file from the Test step's coverage guard, so a pushed `ignore_patterns: ["**"]` cannot turn that guard off for its own change (see [`ignore_patterns`](#ignore_patterns)).
 
 If you genuinely want per-branch `commands` and `agent` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](#allow_repo_commands) in this same file on your default branch. This re-enables the previous behavior with eyes open. The switch is read only from the trusted default-branch copy, so a contributor cannot self-enable it from a pushed branch.
@@ -52,9 +52,11 @@ document:
   instructions: |
     docs/ owns detailed product guidance; README.md owns the introduction.
 
-# Optional extra review guidance, scoped to the paths a change touches.
-# Read only from the trusted default branch.
+# Optional review settings, read only from the trusted default branch:
+# whether the reviewer may ask you questions while it works (off by default),
+# and extra guidance scoped to the paths a change touches.
 review:
+  conversation: true
   path_instructions:
     - path: "internal/scm/**"
       instructions: |
@@ -73,9 +75,14 @@ disable_project_settings: true
 
 # Optional PR settings.
 # base_branch is read from the trusted default branch.
+# template, publish_intent, and appendix are trusted publication policy.
+# appendix defaults to full. collapsed and minimal shorten the generated tail.
 # title_format is a repository convention and is read from this branch.
 pr:
   base_branch: develop
+  # template: .github/pull_request_template.md
+  # publish_intent: false
+  # appendix: collapsed # full | collapsed | minimal
   # title_format: "{{.Branch}}: {{.Title}}"
 
 # Optional restart-exemption globs, read only from the trusted default branch.
@@ -170,7 +177,7 @@ Opt in to honoring the code-executing selection fields (`commands.{prepare,test,
 | Type | `bool` |
 | Default | `false` |
 
-This field is itself read **only from the trusted default-branch copy** of `.no-mistakes.yaml`, never from the pushed SHA, so a contributor cannot self-enable it by setting it on a feature branch. By default the daemon reads `commands` and `agent` from your default branch (e.g. `origin/main`) so a pushed SHA cannot inject shell or pick the launched agent on the daemon host. The PR-target exception is documented under [`pr.base_branch`](#prbase_branch); `pr.template`, `pr.publish_intent`, and the other trusted-only fields listed above do not follow this opt-in. Leave this `false` for any repo that accepts contributions. Set it to `true` only for a single-developer environment where you trust every branch you push (for example, a personal repo gated by your own daemon).
+This field is itself read **only from the trusted default-branch copy** of `.no-mistakes.yaml`, never from the pushed SHA, so a contributor cannot self-enable it by setting it on a feature branch. By default the daemon reads `commands` and `agent` from your default branch (e.g. `origin/main`) so a pushed SHA cannot inject shell or pick the launched agent on the daemon host. The PR-target exception is documented under [`pr.base_branch`](#prbase_branch); `pr.template`, `pr.publish_intent`, `pr.appendix`, and the other trusted-only fields listed above do not follow this opt-in. Leave this `false` for any repo that accepts contributions. Set it to `true` only for a single-developer environment where you trust every branch you push (for example, a personal repo gated by your own daemon).
 
 ### disable_project_settings
 
@@ -295,6 +302,7 @@ Use a repository Markdown template for the public narrative, followed by no-mist
 pr:
   template: .github/pull_request_template.md
   publish_intent: false # Optional; otherwise original Intent is still published.
+  appendix: collapsed # Optional; full (the default), collapsed, or minimal.
 ```
 
 For example, commit this template and the configuration to the default branch:
@@ -311,7 +319,7 @@ For example, commit this template and the configuration to the default branch:
 - [ ] Maintainer approves rollout
 ```
 
-On a new or empty PR, the agent makes a best effort to follow template instructions and fill applicable sections from the final branch delta. Only top-level ATX `#` headings outside fenced examples are structurally required, with their trimmed text and order retained. Lower-level headings (`##`–`######`) and task lines are editable: the model may remove inapplicable sections/options, select supported choices, and fill checkbox rationale placeholders. It is instructed not to invent behavior/tests or falsely claim human signoff; human approval boxes must not be marked complete. Subordinate completion and factual correctness are best effort, not mechanically guaranteed. No fixed `What Changed` heading is imposed. This is ordinary Markdown, not a variable/loop/plugin language, and there is no implicit template discovery. Template headings such as `Testing` remain author narrative; recorded Risk, Testing and Pipeline content is still appended by code in its existing order. Extra evidence headings are intentional: this does **not** satisfy a policy requiring only the template's headings or bytes.
+On a new or empty PR, the agent makes a best effort to follow template instructions and fill applicable sections from the final branch delta. Only top-level ATX `#` headings outside fenced examples are structurally required, with their trimmed text and order retained. Lower-level headings (`##`–`######`) and task lines are editable: the model may remove inapplicable sections/options, select supported choices, and fill checkbox rationale placeholders. It is instructed not to invent behavior/tests or falsely claim human signoff; human approval boxes must not be marked complete. Subordinate completion and factual correctness are best effort, not mechanically guaranteed. No fixed `What Changed` heading is imposed. This is ordinary Markdown, not a variable/loop/plugin language, and there is no implicit template discovery. Template headings such as `Testing` remain author narrative; the generated appendix follows that narrative. [`pr.appendix`](#prappendix) chooses whether its recorded evidence is expanded, folded, or reduced to a risk line and the attestation. Extra evidence headings are intentional in the default `full` mode: this does **not** satisfy a policy requiring only the template's headings or bytes. `collapsed` and `minimal` keep the template as the visible body.
 
 The path is read as a literal Git tree entry, never through the pushed worktree filesystem. Absolute/Windows paths, traversal, ref expressions, symlinks, submodules, missing/unreadable files, empty/non-UTF-8/NUL-containing content, and files over 16 KiB fail rather than silently replacing the template with a generic summary. Raw no-mistakes ownership/attestation markers are reserved. Invalid agent output, missing/changed/reordered required H1 headings, and agent failure also fail template drafting rather than using the ordinary fallback. Templates without H1 headings have no structural heading requirements; they are not malformed for that reason. Matching retains the existing ordered-subsequence contract: extra headings are allowed. The structural guard is not a full Markdown parser, a visibility/uniqueness proof, or a template policy engine; it does not enforce subordinate sections, checkbox states, or placeholder completion.
 
@@ -323,7 +331,7 @@ Ownership is never inferred from a heading's name. An existing author-only body 
 
 Updates read the live raw body before deciding which publication path applies. Missing/null/malformed content is not treated as an empty description. Without `pr.title_format`, body-only updates omit title and draft flags rather than reading and resending a possibly stale author title. Template updates re-read immediately before writing and verify the body afterward; observed pre-write edits are retried from the latest body up to three times. Write/readback errors and body divergence fail visibly, without replaying a possibly applied write. This is **not atomic compare-and-swap**: an edit in the provider's final read/write gap can still be lost. New template creations are read back too; a created PR identity may be recorded even if verification then fails, so it remains discoverable for recovery.
 
-If the complete author text, closing references and rendered evidence cannot fit the publication budget, the step fails instead of truncating them. Evidence rendering retains its existing artifact presentation limits; this adds no body-level eviction to make a template fit. Pre-push and CI-repair restamping update the appendix's integrity guard together with its head-bound attestation, without changing author text.
+If the complete author text, closing references, and evidence selected by [`pr.appendix`](#prappendix) cannot fit the publication budget, the step fails instead of truncating them. Evidence rendering retains its existing artifact presentation limits; this adds no body-level eviction to make a template fit. Pre-push and CI-repair restamping update the appendix's integrity guard together with its head-bound attestation, without changing author text.
 
 Unconfigured, unowned descriptions retain ordinary narrative/fallback/size behavior; existing owned bodies retain author-safe updates even after the setting is removed. Providers without a raw content contract reject configured templates.
 
@@ -346,6 +354,30 @@ Control publication of the **generated `Intent` section**, independently of inte
 A contributor can keep the section off for their own runs without touching this repository policy: `axi run --no-publish-intent` records a tighten-only omission on the run, and an operator can set the global `intent.publish_intent: false` default. Both compose with this field and can only reduce publication: the trusted repository policy is the ceiling, and a caller can never publish intent on a repository whose trusted config disabled it. Neither signal changes what review, test, document, lint, or CI auto-fix prompts receive. The caller-side omission goes one step further than this repository policy: the PR-drafting turns (ordinary narrative, title-only fallback, and repository-template narrative) receive no intent text at all and draft from the diff and commit messages only, so no paraphrase of the withheld intent can reach the public PR. The intent is withheld, never scanned for: there is no output filter.
 
 This is not a privacy filter: generated narrative and other evidence can still contain sensitive information, and LLM drafting is not a confidentiality guarantee. No caller-written public-body override is introduced by this setting.
+
+### pr.appendix
+
+Choose how much of the generated Risk, Testing, and Pipeline tail is visible after the narrative. Intent publication stays under [`pr.publish_intent`](#prpublish_intent).
+
+| | |
+| --- | --- |
+| Type | `string` |
+| Values | `full`, `collapsed`, `minimal` |
+| Default | `full` (missing or empty also preserves the default) |
+| Trust | Trusted default branch only, regardless of `allow_repo_commands` |
+
+`full` is today's body: `## Risk Assessment`, `## Testing`, and `## Pipeline` follow the narrative, in that order.
+
+`collapsed` folds those three sections into one closed `Validation` details block. The narrative, and the Intent section when it is published, stay outside the block. Within the body limit, opening the block shows the same recorded evidence `full` would have published. If an ordinary body exceeds the limit, Testing is dropped before pipeline history is shortened; the attestation is retained. Bitbucket Cloud escapes raw HTML, so `collapsed` stays on the `full` appendix there instead of printing the details tags as text.
+
+`minimal` keeps a single risk line (the recorded level and rationale, on one line) and the pipeline attestation. Testing logs, pipeline round history, and the Risk and Pipeline headings are omitted. The attestation marker stays in its host-specific form: an HTML comment on GitHub, GitLab, Gitea, Forgejo, and Azure, and a visible text fence on an owned Bitbucket description. Ordinary unowned Bitbucket descriptions still omit the comment.
+
+An unrecognized value fails config parsing closed. Body size limits and truncation still apply in every mode. A templated body that cannot fit still fails instead of dropping author text. The marker remains the one `require-no-mistakes` binds to the PR head.
+
+```yaml
+pr:
+  appendix: minimal
+```
 
 ### pr.title_format
 
@@ -381,7 +413,7 @@ Optional dependency-preparation command for isolated run worktrees. Run via the 
 | Type | `string` |
 | Default | Empty (no preparation command) |
 
-When set, no-mistakes runs this command before the first configured `commands.test`, `commands.lint`, or `commands.format` command that the pipeline reaches. It is a lazy command hook, not an additional pipeline step: `commands.prepare` alone does nothing when no configured command needs it. A successful result is shared by all later configured commands in that isolated worktree, including after daemon recovery. The dependent step log records the preparation command, output, and elapsed preparation time. A non-zero exit or launch failure fails that step before its command runs.
+When set, no-mistakes runs this command before the first configured `commands.test`, `commands.lint`, or `commands.format` command that the pipeline reaches. By default, it is a lazy command hook rather than an additional pipeline step: when no configured command needs it and [`test.prepare`](#testprepare) is false, `commands.prepare` alone does nothing. Trusted `test.prepare: true` instead triggers it eagerly before agent-only Test while leaving `commands.test` unset. A successful result is shared by all later configured commands in that isolated worktree, including after daemon recovery. The dependent step log records the preparation command, output, and elapsed preparation time. A non-zero exit or launch failure fails that step before its command runs.
 
 Use this for deterministic dependency materialization such as `npm ci --prefer-offline`. The run worktree starts with tracked files only, so ignored dependency directories such as `node_modules` are otherwise absent. no-mistakes keeps ignored files produced by preparation, while removing its tracked, ordinary untracked, and nested-repository mutations before continuing. Earlier pending tracked and ordinary untracked pipeline changes are restored exactly, so preparation can run before a later configured command without admitting setup artifacts into a fix commit.
 
@@ -517,11 +549,34 @@ Repository-specific documentation ownership policy for the document step.
 | Type | `string` (multiline) |
 | Default | Empty (built-in placement policy only) |
 
-The document step always applies a built-in placement policy: every fact has exactly one authoritative owner document, stale duplicates are removed or reduced to pointers instead of synchronized, no new documentation surfaces are created merely to close perceived gaps, and incident lessons live as invariants near their owner (with a pointer to the regression test), never as AGENTS.md postmortems.
+The document step always applies a built-in placement policy: every fact has exactly one authoritative owner document, stale duplicates are removed or reduced to pointers instead of synchronized, no new documentation surfaces are created merely to close perceived gaps, and incident lessons live as invariants near their owner (with a pointer to the regression test), never as AGENTS.md postmortems. Its agent prompt treats `AGENTS.md` and `CLAUDE.md` as memory files: it may correct or remove factually wrong content, but must not add content because something is missing, create absent files, or restructure or expand them. This is prompt guidance, not a file guard.
 `document.instructions` states this repository's ownership map or extra placement rules (for example, which file owns which class of facts).
-It augments or clarifies the built-in policy; it cannot disable documentation integrity.
+It augments or clarifies the built-in policy; it cannot disable documentation integrity, and it cannot turn the memory files into an automated documentation surface - instructions that encourage additions to `AGENTS.md` or `CLAUDE.md` do not take effect over the built-in correction-only rule.
 
 Like `commands.*` and `agent`, this field steers gate behavior, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`: a contributor's pushed branch cannot weaken the documentation rules that gate its own review.
+
+### review.conversation
+
+Whether the reviewer may ask you questions while it reviews, instead of turning every undecidable point into a finding you answer with a verdict. The [Review conversation](/no-mistakes/concepts/review-conversation/) concept page owns the protocol, the state machine, and what is persisted.
+
+| | |
+|---|---|
+| Type | `boolean` |
+| Default | `false` |
+| Trust | Read only from the trusted default branch |
+
+```yaml
+review:
+  conversation: true
+```
+
+**Opting in.** Commit that block to your **default branch** (the same copy the daemon reads `commands` and `agent` from). It takes effect on the next run of every branch in the repository; a branch cannot opt itself in or out, in either direction. A contributor must not be able to make their own review park for a human answer, and once you have asked for the conversation a pushed branch must not be able to decline it.
+
+**On**, the review step gains a question channel. The reviewer emits each larger question the moment it has one, keeps reviewing while it is open, and re-reads answers at its own checkpoints. A pass that ends with an unanswered question parks with one `ask-user` warning per question; you answer each with [`no-mistakes axi answer`](/no-mistakes/reference/cli/#no-mistakes-axi-answer), and once none are open the reviewer finishes its pass with your answers - resuming that same session when [`session_reuse`](/no-mistakes/reference/global-config/#session_reuse) is on, cold otherwise. Answers are recorded per branch, reach every later cold reviewer as settled, and are published in the PR body.
+
+**Off (the default)**, the review step is the monologue it has always been: the reviewer is told nothing about a channel, no conversation files are written, no question findings are produced, and the PR body grows no conversation group. A repository that never opted in cannot have a conversation on disk, so for it every review turn also runs session-free and `no-mistakes axi answer` refuses and names this setting. A question asked while the setting was on stays answerable if you turn it off mid-run - see [Turning the setting off does not strand a question already asked](/no-mistakes/concepts/review-conversation/). Upgrading no-mistakes never starts a conversation under a repository that did not ask for one.
+
+The trade-off is latency against precision. A question costs the run a park - tens of minutes to hours of wall clock, waiting on you - and buys a review that decided the point instead of handing you a finding to rule on. Repositories whose changes rarely turn on product intent will not get much for that wait; repositories where the reviewer regularly cannot tell deliberate from accidental will.
 
 ### review.path_instructions
 
@@ -940,6 +995,24 @@ The command receives [`NO_MISTAKES_BASE_SHA`](/no-mistakes/reference/environment
 `command` runs on the daemon host with the maintainer's credentials, exactly like `commands.test`, so the whole `test.units` list is honored only from the trusted default-branch copy of this file unless the repository opts in via `allow_repo_commands: true` - see [`allow_repo_commands`](#allow_repo_commands). A contributor's pushed branch cannot inject shell by naming a new unit or repointing an existing one's command.
 
 When `test.units` is empty, `commands.test` (or, failing that, an agent inference pass) decides what runs; see [`commands.test`](#commandstest).
+
+### test.prepare
+
+**Type:** boolean. **Default:** `false`. Repository-only, trusted-default-branch-only, even with `allow_repo_commands: true`.
+
+```yaml
+commands:
+  prepare: "npm ci --prefer-offline"
+test:
+  prepare: true
+# commands.test remains unset: Test is agent-driven.
+```
+
+Opts agent-only Test into running `commands.prepare` before its first agent turn (including a repair turn). Uses the same successful-worktree receipt, cleanup/restoration, failure reporting, and recovery behavior as configured Test/Lint/Format; later configured commands do not install again. A new worktree prepares separately. Existing dependencies or an agent's claim that installation succeeded do not count as managed preparation. An empty `commands.prepare` remains a no-op, and configured `commands.test` retains its existing preparation behavior.
+
+This is **eager**, not on-demand: opted-in repositories pay setup cost even when the evidence agent subsequently reports `no-surface`. Leave it off to retain lazy command-only preparation. Preparation does not replace fresh Test evidence or change verdict/approval policy. Failures stop Test before the agent launches and never record successful preparation.
+
+The trigger always comes from the trusted default branch; pushed-branch text cannot enable it. The executable `commands.prepare` value separately follows the existing `allow_repo_commands` policy.
 
 ### test.instructions
 

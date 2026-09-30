@@ -54,7 +54,9 @@ func resolveBaseSHA(ctx context.Context, workDir, baseSHA, baseBranch string) st
 // stale-base bug. Callers return the error, which fails the step instead of
 // validating or drafting content against unverified base state.
 func resolveBranchBaseSHA(ctx context.Context, sctx *pipeline.StepContext, fallbackBaseSHA, baseBranch string) (string, error) {
-	if strings.TrimSpace(baseBranch) != "" {
+	// Eval replay has no upstream to fetch: it pins origin/<base> to the
+	// captured commit in its isolated worktree, which is the base to use.
+	if strings.TrimSpace(baseBranch) != "" && !sctx.EvalReplay {
 		if err := fetchRunUpstreamBranch(ctx, sctx, baseBranch); err != nil {
 			return "", fmt.Errorf("fetch base branch %q to resolve branch base: %w", baseBranch, err)
 		}

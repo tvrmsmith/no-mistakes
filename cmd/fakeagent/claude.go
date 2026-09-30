@@ -21,6 +21,14 @@ func runClaude(args []string, promptReader io.Reader, scenario *Scenario) int {
 	if err := applyAction(action); err != nil {
 		return 1
 	}
+	if err := askQuestions(prompt, action.AskQuestions); err != nil {
+		fmt.Fprintf(os.Stderr, "fakeagent: %v\n", err)
+		return 1
+	}
+	if err := writeEvidence(prompt, action.WriteEvidence); err != nil {
+		fmt.Fprintf(os.Stderr, "fakeagent: %v\n", err)
+		return 1
+	}
 
 	// A prompt that mandates a skill is answered by an agent that actually
 	// invokes it: no-mistakes fails a review turn whose stream reports no
