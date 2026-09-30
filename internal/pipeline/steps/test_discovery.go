@@ -130,39 +130,81 @@ func selectUnitsForPaths(units []config.TestUnit, changed []string) []string {
 	return unitNamesInDeclarationOrder(units, owners)
 }
 
-// underSelectedUnits returns the units a changed file belongs to that the
-// selection left out. Under-selection is a scope fault, not a coverage
-// finding: discovery claimed a scope the changed files contradict.
+// underSelection is what a selection left out: each changed file no selected
+// unit owns, with the units the layout assigns it to, and those units in
+// declaration order.
+type underSelection struct {
+	paths []underSelectedPath
+	units []config.TestUnit
+}
+
+// underSelectedPath is one changed file no selected unit owns, and the names
+// of its most specific owners in the layout.
+type underSelectedPath struct {
+	path   string
+	owners []string
+}
+
+// underSelected returns what the selection left out. Under-selection is a
+// scope fault, not a coverage finding: discovery claimed a scope the changed
+// files contradict.
 //
 // A path an already-selected unit owns raises nothing, whatever its most
 // specific owner is, so a selection of the narrow unit alone stands and a
 // broader unit is added only for the paths nothing selected covers. The
 // predicate is the one selectUnitsForPaths derives from, so the config and
 // command sources still cannot disagree with themselves.
-func underSelectedUnits(units []config.TestUnit, changed, selected []string) []config.TestUnit {
+func underSelected(units []config.TestUnit, changed, selected []string) underSelection {
 	selectedSet := map[string]bool{}
 	for _, name := range selected {
 		selectedSet[name] = true
 	}
+	var gap underSelection
 	missingSet := map[string]bool{}
 	for _, path := range changed {
 		if anySelectedUnitOwns(units, selectedSet, path) {
 			continue
 		}
-		for _, owner := range mostSpecificOwners(units, path) {
-			missingSet[owner.Name] = true
+		owners := mostSpecificOwners(units, path)
+		if len(owners) == 0 {
+			continue
 		}
+		entry := underSelectedPath{path: path}
+		for _, owner := range owners {
+			missingSet[owner.Name] = true
+			entry.owners = append(entry.owners, owner.Name)
+		}
+		gap.paths = append(gap.paths, entry)
 	}
-	var missing []config.TestUnit
 	seen := map[string]bool{}
 	for _, unit := range units {
 		if seen[unit.Name] || !missingSet[unit.Name] {
 			continue
 		}
-		missing = append(missing, unit)
+		gap.units = append(gap.units, unit)
 		seen[unit.Name] = true
 	}
-	return missing
+	return gap
+}
+
+// rediscoverySection tells a rediscovery that the dead unit ran only because
+// the agent's own layout assigned it changed files the selection left out.
+// Without it the agent sees a dead command, answers with the same selection,
+// and the unchanged layout raises the run's second scope fault.
+func (gap underSelection) rediscoverySection(deadUnit string) string {
+	if len(gap.paths) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `
+
+Unit %q ran only because the selection you reported left out changed files. A changed file belongs to the unit with the longest path containing it, and in your layout these belong to no unit you selected:
+`, deadUnit)
+	for _, p := range gap.paths {
+		fmt.Fprintf(&b, "- %s belongs to %s\n", p.path, strings.Join(p.owners, ", "))
+	}
+	b.WriteString("Select a unit with a runnable command for each of these files, or narrow the layout so each one belongs to a unit you select. The same selection under the same layout stops the run for a maintainer.")
+	return b.String()
 }
 
 // anySelectedUnitOwns reports whether a unit already in the selection covers
@@ -319,7 +361,11 @@ func discoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []str
 // The agent may report a replacement or keep the same command when the output
 // shows the runner is sound. It does not cache the answer: the caller adopts a
 // replacement only once it knows the answer selects something to run.
-func rediscoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []string, dead deadTestRunner) (pipeline.TestDiscovery, error) {
+//
+// When the dead unit ran because the pass expanded an under-selection, gap
+// names the files that caused it, so the agent can correct the layout rather
+// than repeat the selection.
+func rediscoverTestUnits(sctx *pipeline.StepContext, baseSHA string, changed []string, dead deadTestRunner, gap underSelection) (pipeline.TestDiscovery, error) {
 	sctx.Log(fmt.Sprintf("test unit %q could not run any test, rediscovering test units...", dead.unit.Name))
 	failure := fmt.Sprintf(`
 
@@ -330,7 +376,7 @@ Output:
 %s
 
 Report a command that can actually run this repository's tests on this machine. If the output shows the command itself is sound and the failure is in the code under test (for example a compile error in a changed file), report that same command unchanged.`,
-		dead.unit.Name, dead.exitCode, dead.reason, dead.unit.Command, dead.output)
+		dead.unit.Name, dead.exitCode, dead.reason, dead.unit.Command, dead.output) + gap.rediscoverySection(dead.unit.Name)
 	return discoverValidatedViaAgent(sctx, baseSHA, changed, failure)
 }
 

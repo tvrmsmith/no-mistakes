@@ -165,6 +165,9 @@ func TestTestStep_DeadInferredCommandIsRediscoveredWithItsFailure(t *testing.T) 
 			t.Errorf("rediscovery prompt missing %q", want)
 		}
 	}
+	if strings.Contains(calls[1].Prompt, "left out changed files") {
+		t.Error("rediscovery prompt names an under-selection, but the dead unit was selected")
+	}
 	if cached, ok := sctx.Shared.TestDiscovery(changedFilesFingerprint([]string{"services/api/main.go"})); !ok || cached.Units[0].Command != replacement {
 		t.Fatalf("cached discovery = %+v, want the replacement so later attempts reuse it", cached)
 	}
