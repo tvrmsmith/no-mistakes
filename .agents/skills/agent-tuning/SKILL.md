@@ -1,6 +1,6 @@
 ---
 name: agent-tuning
-description: Use when changing agent model or effort configuration, per-run Pi profile pins, adapter mappings, or eval candidate profiles.
+description: Use when changing agent model or effort configuration, per-run Pi profile pins, adapter mappings, eval candidate profiles, or Claude Code workspace trust.
 user-invocable: false
 metadata:
   internal: true
@@ -19,3 +19,10 @@ metadata:
 **Per-Run Pi Profile Pin**
 
 - A per-run Pi pin (`axi run` / `rerun` `--model`/`--effort`) is immutable once the run exists (`runs.pi_profile`, plus an immutability trigger) and must be fully validated **before** it supersedes an active validation: `startRunWithIntentSourceLocked` resolves it against global `agent`/`review_agents`/`agent_args_override.pi` and re-checks the merged trusted default-branch `agent` selection (`ResolvePiProfile`, `validatePiProfileAgentsBeforeCancel`), while the post-merge `ValidatePiProfileAgents`/`ApplyPiProfile` pass at worktree setup and `ApplyPiProfile` in `loadRecoveredConfig` remain the enforcement after cancellation. User semantics are owned by `docs/src/content/docs/reference/global-config.md` (Per-run Pi profiles). Regressions: `internal/config/pi_profile_test.go`, `internal/daemon/pi_profile_test.go` (`TestPiProfileInvalidLaunchDoesNotSupersedeActiveRun`, `TestPiProfileTrustedRepoAgentOverrideDoesNotSupersedeActiveRun`, `TestPiProfileRecoveryUsesPersistedPinAndLegacyUsesLiveConfig`), `internal/db/pi_profile_test.go`, `internal/cli/pi_profile_test.go`, e2e `TestPiRunProfileSurvivesGlobalChangesAcrossEveryDuty`.
+
+**Claude Code workspace trust (`internal/claudetrust`)**
+
+- Claude Code drops a repo's project permission entries unless `~/.claude.json` trusts the workspace. The key is the bare gate repo `paths.RepoDir(<repoID>)`, not the run worktree, stored realpath'd and NFC-normalized, so compare through `claudetrust.CanonicalWorkspace`.
+- Under `--dangerously-skip-permissions` only a dropped `permissions.additionalDirectories` costs the run; `Warning.BitesUnderBypass` owns that split and answers false for an unnamed category.
+- The stderr detector is best effort. `doctorClaudeWorkspaceTrust` (`internal/cli/doctor.go`) is the standing check and only warns.
+- The package is read-only: it never writes a trust decision into `~/.claude.json`.

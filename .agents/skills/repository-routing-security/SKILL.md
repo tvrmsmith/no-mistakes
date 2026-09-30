@@ -50,3 +50,10 @@ metadata:
 - The daemon decides a run's gate list once, stores it in `runs.gates_json`, and reads the pin during recovery. An absent pin means the core pipeline. An unparseable pin fails recovery closed.
 - `validReadableStep` accepts gate names for read-only logs. `validStep` still controls run mutations, so `--skip` and `no-mistakes.skip=` refuse gate names.
 - Regressions: `internal/config/gates_test.go`, `internal/types/gates_test.go`, `internal/pipeline/steps/customgate_test.go`, `internal/daemon/gate_pin_test.go`, `TestGetStepsByRun_PlacesAGateAfterItsAnchor`, `TestBuildPipelineAttestation_ListsAGateAfterItsAnchor`, `TestAxiLogsRefusesAGateStepNameThatWouldEscapeTheLogDirectory`, `TestSkipPushOptionRefusesARepositoryGateStepName`.
+
+**Personal-build trust additions**
+
+- Also trusted-only regardless of `allow_repo_commands`: `skip_steps` (an unknown step name fails the config), `restart.exempt_paths`, the whole `metrics` block, and `auto_fix.min_severity` (a severity floor is gate strength, while the retry counts beside it stay pushed-branch). Copy the `metrics` and `restart` blocks the way `Restart` is copied and clone `ExemptPaths`, because a bare struct copy aliases the trusted slice.
+- `test.units` and `commands.{prepare,metrics}` join the `commands.*` group, so they honor `allow_repo_commands: true` exactly as `commands.test` does.
+- Under the global `trust_working_path_config` opt-in, `applyWorkingPathTrustedConfig` (`internal/daemon/manager.go`) promotes the `.no-mistakes.yaml` in `repos.working_path` (the daemon-host checkout, never the gate worktree), and `config.ResolveWorkingPathTrusted` replaces the pinned copy rather than layering over it. `allow_repo_commands` stays default-branch-only and `disable_project_settings` is true-wins. A parse failure keeps the pinned copy; a git-tracked file warns and still applies.
+- Regressions: `internal/config/config_metrics_test.go`, `internal/config/config_skipsteps_test.go`, `internal/config/config_repo_test.go`, `internal/config/config_workingpath_trust_test.go`, `internal/daemon/manager_workingpath_trust_test.go`.
