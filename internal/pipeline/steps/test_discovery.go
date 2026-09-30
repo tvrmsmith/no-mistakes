@@ -354,12 +354,17 @@ func discoverValidatedViaAgent(sctx *pipeline.StepContext, baseSHA string, chang
 // instead of improvising one each run. The prompt's own rules stay binding:
 // a runbook written for live validation must not widen a unit command past
 // the changed files or drop the coverage artifacts the vacuous-green guard reads.
+//
+// A runbook often writes a command as a template (`dotnet test <dir>/<name>.csproj`),
+// and an agent told only to follow it has copied the placeholders into a unit
+// command verbatim, so the section says to fill them from the tree.
 func discoveryRunbookSection(sctx *pipeline.StepContext) string {
 	runbook := trustedTestRunbook(sctx)
 	if runbook == "" {
 		return ""
 	}
-	return "\nRepository test runbook (trusted, from the default branch). Follow it for how this repository runs its tests; where it conflicts with them, the rules below still bind:\n" + runbook + "\n"
+	return "\nRepository test runbook (trusted, from the default branch). Follow it for how this repository runs its tests; where it conflicts with them, the rules below still bind:\n" + runbook + "\n" +
+		"Where the runbook writes a command as a template with placeholders such as <dir>, <name>, or <path>, fill every placeholder with the concrete path or name from this repository before reporting the command. Never copy a placeholder token into a unit command; a unit command must run as written.\n"
 }
 
 // discoveryAgentUnit and discoveryAgentOutput mirror the discovery agent's
