@@ -209,7 +209,13 @@ func TestCheckInferredCommand_TimedOutRunIsNotARejection(t *testing.T) {
 	fakeShOnPath(t, "sleep 30")
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
+	start := time.Now()
 	err := checkInferredCommand(ctx, config.TestUnit{Name: "api", Path: "services/api", Command: "go test ./services/api/..."})
+	// The forked sleep holds the output pipe, so only a process-group kill
+	// returns before it finishes.
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("checkInferredCommand returned after %s: cancellation must kill the whole process group, not just sh", elapsed)
+	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("checkInferredCommand = %v, want the deadline", err)
 	}
