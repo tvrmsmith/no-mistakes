@@ -206,7 +206,7 @@ func TestCheckInferredCommand_TimedOutRunIsNotARejection(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cmd.exe runs unit commands on Windows, so there is no sh -n parse")
 	}
-	fakeShOnPath(t, "exec sleep 30")
+	fakeShOnPath(t, "sleep 30")
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	err := checkInferredCommand(ctx, config.TestUnit{Name: "api", Path: "services/api", Command: "go test ./services/api/..."})
@@ -235,5 +235,34 @@ func TestCheckInferredCommand_SignalledShIsNotARejection(t *testing.T) {
 	var rejection discoveryResultError
 	if errors.As(err, &rejection) {
 		t.Fatalf("a signalled check was reported as a rejected answer: %v", err)
+	}
+}
+
+// TestTestStep_SignalledShFailsTheRunWithoutReasking drives an sh invocation
+// failure through discovery: it is not a verdict on the agent's answer, so the
+// run fails on the first answer instead of spending a re-ask.
+func TestTestStep_SignalledShFailsTheRunWithoutReasking(t *testing.T) {
+	skipUnlessPOSIXShell(t)
+	dir, baseSHA := newUnitRepo(t)
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+	layout := encodeOneUnitLayout("api", "services/api", coverageFor("true", "services/api/main.go"), "api")
+	ag := sequencedDiscoveryAgent(layout, layout)
+	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
+	lines := capturingLog(sctx)
+	fakeShOnPath(t, "kill -KILL $$")
+
+	outcome, err := (&TestStep{}).Execute(sctx)
+	if err == nil {
+		t.Fatalf("Execute returned no error, outcome = %+v", outcome)
+	}
+	var rejection discoveryResultError
+	if errors.As(err, &rejection) {
+		t.Fatalf("a signalled sh was reported as a rejected answer: %v", err)
+	}
+	if n := len(discoveryCalls(ag)); n != 1 {
+		t.Fatalf("discovery calls = %d, want 1: an sh failure is not re-asked", n)
+	}
+	if log := joinedLog(*lines); strings.Contains(log, "asking again") {
+		t.Errorf("an sh failure was re-asked:\n%s", log)
 	}
 }
