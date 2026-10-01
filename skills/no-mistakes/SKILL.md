@@ -210,6 +210,8 @@ Run the pipeline and decide on its findings as they come up:
 
     Each `respond` blocks until the next `gate:`, `checks-passed` decision point, or final outcome, subject to the same default `--wait 8m` hold.
 
+    A review gate whose findings are `question-<id>` rows is waiting on answers to its reviewer's questions, not on a verdict: answer each with `no-mistakes axi answer --question <id> --answer "<one of its options>"` instead of approving or fixing. The answer that closes the last open question blocks exactly like `respond` and returns the next `gate:` or outcome; any other answer returns at once.
+
     Extra flags on `respond`:
     - `--wait` bounds the hold (default 8m).
     - `--reason "the operator's explanation"` records an explicitly authorized Test exception with `--step test --action approve`.

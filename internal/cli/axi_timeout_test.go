@@ -32,8 +32,12 @@ func TestAxiWaitFlagDefaultIsEightMinutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runWait != 8*time.Minute || respondWait != 8*time.Minute {
-		t.Fatalf("run=%s respond=%s, want 8m on both", runWait, respondWait)
+	answerWait, err := newAxiAnswerCmd().Flags().GetDuration("wait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runWait != 8*time.Minute || respondWait != 8*time.Minute || answerWait != 8*time.Minute {
+		t.Fatalf("run=%s respond=%s answer=%s, want 8m on all", runWait, respondWait, answerWait)
 	}
 }
 
@@ -343,6 +347,8 @@ func TestNoMistakesBinary_WaitAndSlowDaemon(t *testing.T) {
 type axiTimeoutOpts struct {
 	responded *atomic.Bool
 	subscribe ipc.StreamHandlerFunc
+	// answer, when set, serves the daemon's answer-review-question call.
+	answer func() *ipc.AnswerReviewQuestionResult
 }
 
 type axiTimeoutFixture struct {
@@ -472,6 +478,11 @@ func newAxiTimeoutFixture(t *testing.T, opts axiTimeoutOpts) *axiTimeoutFixture 
 		srv.Handle(ipc.MethodRespond, func(context.Context, json.RawMessage) (interface{}, error) {
 			opts.responded.Store(true)
 			return &ipc.RespondResult{OK: true}, nil
+		})
+	}
+	if opts.answer != nil {
+		srv.Handle(ipc.MethodAnswerReview, func(context.Context, json.RawMessage) (interface{}, error) {
+			return opts.answer(), nil
 		})
 	}
 	var getRunCalls atomic.Int32
