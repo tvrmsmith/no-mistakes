@@ -15,14 +15,18 @@ import (
 
 // These journeys replay issue #63 through the real CLI, daemon, and gate. The
 // trusted runbook writes its command as a template, and the canned discovery
-// agent copies it into an unselected unit that owns a changed root file, the
-// way the observed run did. Scope fault 1 expands into that unit, it cannot
-// run, rediscovery returns the same layout, and scope fault 2 parks.
+// agent reports an unselected unit that owns a changed root file and whose
+// command cannot run. The observed run copied the template's placeholders
+// verbatim, which discovery now rejects before anything runs (issue #59), so
+// the canned command is a filled-in one that still fails. Scope fault 1
+// expands into that unit, it cannot run, rediscovery returns the same layout,
+// and scope fault 2 parks.
 
 const (
 	scopeGapRunbook = "For each changed .NET service run: dotnet test <dir>/<name>.csproj --settings <path>/coverlet.runsettings"
-	// scopeGapPlaceholderCommand is the unit command from the observed run.
-	scopeGapPlaceholderCommand = "nm verify (per changed .NET service from <manifest>): dotnet test <svc>/<name>.csproj --settings <nearest coverlet.runsettings>"
+	// scopeGapDeadCommand passes discovery's command check and then fails,
+	// the way a filled-in runbook command fails when its runner cannot build.
+	scopeGapDeadCommand = "printf 'svc runner did not build'; exit 2"
 	// scopeGapReviewToken appears only in prompts that carry the review
 	// finding back, so the re-review after the fix restart answers clean.
 	scopeGapReviewToken   = "SCOPEGAP-REVIEW-TOKEN"
@@ -43,7 +47,7 @@ func scopeGapScenario(t *testing.T) string {
           command: "` + InferredUnitCommand + `"
         - name: svc
           path: "."
-          command: '` + scopeGapPlaceholderCommand + `'
+          command: "` + scopeGapDeadCommand + `"
       selected: ["web"]
 `
 	}
