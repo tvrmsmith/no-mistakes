@@ -469,6 +469,9 @@ Previous test findings to address:
 		covered, ran = nil, map[string]bool{}
 		baselineFindings, baselineSummary, baselineExitCode, dead = nil, "", 0, nil
 		acceptedScopeGap = nil
+		// expandedGap is this pass's under-selection expansion, which a
+		// rediscovery for a dead expanded unit must name.
+		var expandedGap underSelection
 		multiUnit = len(discovery.Units) > 1
 
 		// Resolve every selected name against the layout before running
@@ -503,7 +506,8 @@ Previous test findings to address:
 			}
 		}
 
-		missing := underSelectedUnits(discovery.Units, changed, discovery.Selected)
+		gap := underSelected(discovery.Units, changed, discovery.Selected)
+		missing := gap.units
 		// An operator who approved this exact gap at an earlier park already
 		// decided these units need not run for this changed-file set, so a
 		// re-test neither parks on it again nor runs them.
@@ -513,6 +517,7 @@ Previous test findings to address:
 			missing = nil
 		}
 		if len(missing) > 0 && baselineExitCode == 0 {
+			expandedGap = gap
 			missingNames := make([]string, len(missing))
 			for i, u := range missing {
 				missingNames[i] = u.Name
@@ -585,7 +590,7 @@ Previous test findings to address:
 			return parkDeadRunner(dead, description+"; test unit discovery already replaced a dead inferred command once in this run")
 		}
 		replaced, replacedDescription = dead, description
-		replacement, rediscoverErr := rediscoverTestUnits(sctx, baseSHA, changed, *dead)
+		replacement, rediscoverErr := rediscoverTestUnits(sctx, baseSHA, changed, *dead, expandedGap)
 		if rediscoverErr != nil {
 			var resultErr discoveryResultError
 			if !errors.As(rediscoverErr, &resultErr) {

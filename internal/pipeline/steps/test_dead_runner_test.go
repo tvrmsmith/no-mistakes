@@ -165,6 +165,9 @@ func TestTestStep_DeadInferredCommandIsRediscoveredWithItsFailure(t *testing.T) 
 			t.Errorf("rediscovery prompt missing %q", want)
 		}
 	}
+	if strings.Contains(calls[1].Prompt, "left out changed files") {
+		t.Error("rediscovery prompt names an under-selection, but the dead unit was selected")
+	}
 	if cached, ok := sctx.Shared.TestDiscovery(changedFilesFingerprint([]string{"services/api/main.go"})); !ok || cached.Units[0].Command != replacement {
 		t.Fatalf("cached discovery = %+v, want the replacement so later attempts reuse it", cached)
 	}
@@ -341,6 +344,74 @@ func TestTestStep_RediscoveryInvalidLayoutParks(t *testing.T) {
 	}
 	if reason == "" {
 		t.Fatal("override reason is empty, want approving over the dead command recorded as an override")
+	}
+}
+
+func TestTestStep_RediscoveryPlaceholderIsReaskedWithTheDeadRunner(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the dead runner command is POSIX shell")
+	}
+	dir, baseSHA := newUnitRepo(t)
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+	marker := filepath.Join(t.TempDir(), "corrected.ran")
+	ag := sequencedDiscoveryAgent(
+		encodeOneUnitLayout("api", "services/api", deadRunnerCommand, "api"),
+		encodeOneUnitLayout("api", "services/api", "go test ./<svc>/...", "api"),
+		encodeOneUnitLayout("api", "services/api", coverageFor(markerCommand(marker), "services/api/main.go"), "api"),
+	)
+	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
+
+	outcome, err := (&TestStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.NeedsApproval {
+		t.Fatalf("expected the corrected command to pass, got: %s", outcome.Findings)
+	}
+	calls := discoveryCalls(ag)
+	if len(calls) != 3 {
+		t.Fatalf("discovery calls = %d, want 3: the dead runner's rediscovery and its one re-ask", len(calls))
+	}
+	for _, want := range []string{deadRunnerCommand, "runner did not build", "previous answer was rejected", "template placeholder <svc>"} {
+		if !strings.Contains(calls[2].Prompt, want) {
+			t.Errorf("re-ask prompt missing %q", want)
+		}
+	}
+	if !fileExists(marker) {
+		t.Error("the corrected command did not run")
+	}
+}
+
+func TestTestStep_RepeatedlyRejectedRediscoveryParksForTheMaintainer(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the dead runner command is POSIX shell")
+	}
+	dir, baseSHA := newUnitRepo(t)
+	headSHA := changeUnitFile(t, dir, "services/api/main.go")
+	ag := sequencedDiscoveryAgent(
+		encodeOneUnitLayout("api", "services/api", deadRunnerCommand, "api"),
+		encodeOneUnitLayout("api", "services/api", "go test ./<svc>/...", "api"),
+		encodeOneUnitLayout("api", "services/api", "go test ./<project>/...", "api"),
+	)
+	sctx := unitTestContext(t, ag, dir, baseSHA, headSHA, nil)
+
+	outcome, err := (&TestStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NeedsApproval || outcome.AutoFixable || outcome.ExitCode != 2 {
+		t.Fatalf("outcome = %+v, want a maintainer park carrying the dead command's exit code", outcome)
+	}
+	finding := onlyFinding(t, outcome.Findings)
+	for _, want := range []string{"test unit discovery failed", "template placeholder <project>"} {
+		if !strings.Contains(finding.Description, want) {
+			t.Errorf("description %q missing %q", finding.Description, want)
+		}
+	}
+	if n := len(discoveryCalls(ag)); n != 3 {
+		t.Fatalf("discovery calls = %d, want 3", n)
 	}
 }
 
