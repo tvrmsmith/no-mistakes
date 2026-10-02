@@ -1,17 +1,23 @@
 package steps
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
 
 // testDiscoverySchema is the JSON schema for the discovery agent pass,
@@ -338,15 +344,144 @@ func discoverAndCacheViaAgent(sctx *pipeline.StepContext, baseSHA string, change
 	return d, nil
 }
 
+// maxDiscoveryAnswers bounds how many layouts one discovery asks the agent for:
+// its answer, and one re-ask naming the command that answer was rejected for.
+const maxDiscoveryAnswers = 2
+
+// discoverValidatedViaAgent asks the agent for a layout. A layout whose
+// command check fails is re-asked once, naming the rejected command, before it
+// parks: nothing has run by then, so the re-ask costs one agent turn and no
+// side effects. Every other rejection parks on the first answer.
 func discoverValidatedViaAgent(sctx *pipeline.StepContext, baseSHA string, changed []string, failureSection string) (pipeline.TestDiscovery, error) {
-	d, err := discoverTestUnitsViaAgent(sctx, baseSHA, changed, failureSection)
-	if err != nil {
-		return pipeline.TestDiscovery{}, err
+	section := failureSection
+	for answer := 1; ; answer++ {
+		d, err := discoverTestUnitsViaAgent(sctx, baseSHA, changed, section)
+		if err != nil {
+			return pipeline.TestDiscovery{}, err
+		}
+		if err := validateDiscovery(&d); err != nil {
+			return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
+		}
+		err = checkInferredCommands(sctx.Ctx, d.Units)
+		if err == nil {
+			return d, nil
+		}
+		var rejection discoveryResultError
+		if !errors.As(err, &rejection) || answer == maxDiscoveryAnswers {
+			return pipeline.TestDiscovery{}, err
+		}
+		sctx.Log(fmt.Sprintf("test unit discovery answer rejected, asking again: %v", err))
+		section = failureSection + fmt.Sprintf(`
+
+Your previous answer was rejected before anything ran: %v
+Report the complete layout and selection again with that corrected.`, err)
 	}
-	if err := validateDiscovery(&d); err != nil {
-		return pipeline.TestDiscovery{}, parkOnDiscoveryResult(err)
+}
+
+// checkInferredCommands checks every unit's command, selected or not, because
+// under-selection can run an unselected unit's command with no agent turn in
+// between. Only an agent-written layout gets the check: a configured command
+// that does not parse already parks as a dead runner with sh's own error, and
+// the placeholder pattern could misread a legitimate redirect in trusted
+// configuration.
+func checkInferredCommands(ctx context.Context, units []config.TestUnit) error {
+	for _, unit := range units {
+		if err := checkInferredCommand(ctx, unit); err != nil {
+			return err
+		}
 	}
-	return d, nil
+	return nil
+}
+
+// templatePlaceholder matches a <...> placeholder that is not glued to a
+// preceding identifier or to a heredoc's <<, so <svc>/<name>.csproj,
+// <path/to/project.csproj> and <crate::module> match and a generic type in a
+// test filter such as Cache<Key> does not. A space may separate words but never
+// precedes the closing >, and a later word needs a non-digit, so an input
+// redirect followed by an output redirect (<in.txt >out.txt, <in.txt 2>err.txt)
+// is not a placeholder. sh -n alone misses a placeholder like <svc>, which
+// parses as a redirect. Callers go through templatePlaceholderIn, which also
+// skips quoted text and unspaced redirect pairs.
+var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_<])(<[A-Za-z][A-Za-z0-9._/:-]*(?: [A-Za-z0-9._/:-]*[A-Za-z._/:-][A-Za-z0-9._/:-]*)*>)`)
+
+// templatePlaceholderIn returns the first template placeholder in command.
+// Quoted text is literal data (grep -q "<testsuite>", pytest -k 'not <lambda>'),
+// so a placeholder inside quotes is left to the dead-runner path, as every
+// placeholder was before this check. sh tokenizes <in.txt>out.txt and
+// <Service>Tests.csproj identically, as two redirects, so only the inner token
+// tells them apart: a dotted file name glued to the following word is a
+// redirect pair, and a bare name such as <svc> stays a placeholder.
+func templatePlaceholderIn(command string) (string, bool) {
+	unquoted := blankQuotedSpans(command)
+	for _, m := range templatePlaceholder.FindAllStringSubmatchIndex(unquoted, -1) {
+		token, end := unquoted[m[2]:m[3]], m[3]
+		gluedToNextWord := end < len(unquoted) && !unicode.IsSpace(rune(unquoted[end]))
+		if gluedToNextWord && !strings.Contains(token, " ") && strings.Contains(token, ".") {
+			continue
+		}
+		return token, true
+	}
+	return "", false
+}
+
+// blankQuotedSpans replaces the text inside single and double quotes with
+// spaces, keeping every byte offset. A backslash escapes the next byte outside
+// single quotes, as in sh. An unterminated quote blanks to the end; sh -n
+// rejects that command anyway.
+func blankQuotedSpans(command string) string {
+	out := []byte(command)
+	var quote byte
+	for i := 0; i < len(out); i++ {
+		c := out[i]
+		switch {
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote = c
+		case quote == 0 && c == '\\':
+			i++
+		case c == quote:
+			quote = 0
+		case quote == '"' && c == '\\':
+			out[i] = ' '
+			if i+1 < len(out) {
+				i++
+				out[i] = ' '
+			}
+		case quote != 0:
+			out[i] = ' '
+		}
+	}
+	return string(out)
+}
+
+// checkInferredCommand rejects an agent-written command that describes a
+// command instead of being one. It proves only that the command parses;
+// whether it can run a test stays with the dead-runner path. A failure to run
+// the parse check at all, including sh killed by a signal, is returned as a
+// plain error rather than a discovery result, so it fails the run instead of
+// being re-asked or parked.
+func checkInferredCommand(ctx context.Context, unit config.TestUnit) error {
+	if placeholder, found := templatePlaceholderIn(unit.Command); found {
+		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command %q still carries the template placeholder %s; report the literal command to run", unit.Name, unit.Command, placeholder))
+	}
+	// Unit commands run through cmd.exe on Windows, which has no parse-only mode.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-n", "-c", unit.Command)
+	shellenv.ConfigureShellCommand(cmd)
+	out, runErr := shellenv.CombinedOutputShellCommand(cmd)
+	// A cancelled run kills sh, which is not a verdict on the command.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("check discovered unit %q command: %w", unit.Name, ctxErr)
+	}
+	if runErr == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) || exitErr.ExitCode() < 0 {
+		return fmt.Errorf("check discovered unit %q command: %w", unit.Name, runErr)
+	}
+	return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command %q is not a valid shell command (sh -n: %s)", unit.Name, unit.Command, strings.TrimSpace(string(out))))
 }
 
 // discoveryRunbookSection tells the discovery agent how this repository runs
@@ -410,6 +545,7 @@ Task:
 - Do not run any test now. Only report the layout and the selection.
 
 Rules for the command you report:
+- Report a runnable command for every unit, including the units you do not select: when a changed file turns out to belong to an unselected unit, its command runs through the shell as written. Each command is the literal shell text to run, with every path and name filled in.
 - Each command must scope itself to the changed files under its unit. Local Test is targeted validation of this change; remote CI owns broad regression.
 - A command must NOT be the complete repository test suite, even when the unit is the repository itself. Name the specific test targets, directories, packages, or selectors the changed files reach.
 - The command runs with NO_MISTAKES_BASE_SHA set to the base commit and NO_MISTAKES_CHANGED_FILES set to the newline-separated changed paths, with NO_MISTAKES_CHANGED_FILE_COUNT carrying the true total. Read those variables in the command when that is how a unit's runner takes a target list.
