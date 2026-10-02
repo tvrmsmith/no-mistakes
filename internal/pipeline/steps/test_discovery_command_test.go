@@ -43,6 +43,13 @@ func TestCheckInferredCommand(t *testing.T) {
 		{name: "input redirect before stderr joins stdout", command: "./run <cases.json 2>&1 | tee out"},
 		{name: "path placeholder", command: "dotnet test <path/to/project.csproj> --no-build", rejectedWith: "template placeholder <path/to/project.csproj>"},
 		{name: "module path placeholder", command: "cargo test <crate::module>", rejectedWith: "template placeholder <crate::module>"},
+		{name: "angle brackets in a double-quoted literal", command: `grep -q "<testsuite>" report.xml`},
+		{name: "angle brackets in a single-quoted literal", command: "sed 's/<b>//' out.log && pytest -k 'not <lambda>'"},
+		{name: "unspaced input and output redirects", command: "sort <in.txt>out.txt"},
+		{name: "unspaced redirects around a runner", command: "./t <cases.json>report.json"},
+		{name: "placeholder beside a quoted literal", command: `grep -q "<testsuite>" <dir>/report.xml`, rejectedWith: "template placeholder <dir>"},
+		{name: "placeholder after an escaped quote", command: `echo \"<svc>/<name>.csproj\"`, rejectedWith: "template placeholder <svc>"},
+		{name: "placeholder glued to a name", command: "dotnet test <Service>Tests/<Service>Tests.csproj", rejectedWith: "template placeholder <Service>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
