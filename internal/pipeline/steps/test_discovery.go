@@ -9,10 +9,8 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
@@ -401,27 +399,22 @@ func checkInferredCommands(ctx context.Context, units []config.TestUnit) error {
 // redirect followed by an output redirect (<in.txt >out.txt, <in.txt 2>err.txt)
 // is not a placeholder. sh -n alone misses a placeholder like <svc>, which
 // parses as a redirect. Callers go through templatePlaceholderIn, which also
-// skips quoted text and unspaced redirect pairs.
+// skips quoted text.
 var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_<])(<[A-Za-z][A-Za-z0-9._/:-]*(?: [A-Za-z0-9._/:-]*[A-Za-z._/:-][A-Za-z0-9._/:-]*)*>)`)
 
 // templatePlaceholderIn returns the first template placeholder in command.
 // Quoted text is literal data (grep -q "<testsuite>", pytest -k 'not <lambda>'),
 // so a placeholder inside quotes is left to the dead-runner path, as every
 // placeholder was before this check. sh tokenizes <in.txt>out.txt and
-// <Service>Tests.csproj identically, as two redirects, so only the inner token
-// tells them apart: a dotted file name glued to the following word is a
-// redirect pair, and a bare name such as <svc> stays a placeholder.
+// <Service>Tests.csproj identically, as two redirects, so an unspaced input
+// and output redirect pair is indistinguishable from a glued placeholder and is
+// rejected on purpose; the agent can write <in.txt >out.txt instead.
 func templatePlaceholderIn(command string) (string, bool) {
-	unquoted := blankQuotedSpans(command)
-	for _, m := range templatePlaceholder.FindAllStringSubmatchIndex(unquoted, -1) {
-		token, end := unquoted[m[2]:m[3]], m[3]
-		gluedToNextWord := end < len(unquoted) && !unicode.IsSpace(rune(unquoted[end]))
-		if gluedToNextWord && !strings.Contains(token, " ") && strings.Contains(token, ".") {
-			continue
-		}
-		return token, true
+	m := templatePlaceholder.FindStringSubmatch(blankQuotedSpans(command))
+	if m == nil {
+		return "", false
 	}
-	return "", false
+	return m[1], true
 }
 
 // blankQuotedSpans replaces the text inside single and double quotes with
@@ -463,12 +456,10 @@ func checkInferredCommand(ctx context.Context, unit config.TestUnit) error {
 	if placeholder, found := templatePlaceholderIn(unit.Command); found {
 		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command %q still carries the template placeholder %s; report the literal command to run", unit.Name, unit.Command, placeholder))
 	}
-	// Unit commands run through cmd.exe on Windows, which has no parse-only mode.
-	if runtime.GOOS == "windows" {
+	cmd, ok := newShellParseCommand(ctx, unit.Command)
+	if !ok {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, "sh", "-n", "-c", unit.Command)
-	shellenv.ConfigureShellCommand(cmd)
 	out, runErr := shellenv.CombinedOutputShellCommand(cmd)
 	// A cancelled run kills sh, which is not a verdict on the command.
 	if ctxErr := ctx.Err(); ctxErr != nil {

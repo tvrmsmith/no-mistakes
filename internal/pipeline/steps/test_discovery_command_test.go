@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,8 +44,12 @@ func TestCheckInferredCommand(t *testing.T) {
 		{name: "module path placeholder", command: "cargo test <crate::module>", rejectedWith: "template placeholder <crate::module>"},
 		{name: "angle brackets in a double-quoted literal", command: `grep -q "<testsuite>" report.xml`},
 		{name: "angle brackets in a single-quoted literal", command: "sed 's/<b>//' out.log && pytest -k 'not <lambda>'"},
-		{name: "unspaced input and output redirects", command: "sort <in.txt>out.txt"},
-		{name: "unspaced redirects around a runner", command: "./t <cases.json>report.json"},
+		{name: "unspaced input and output redirects", command: "sort <in.txt>out.txt", rejectedWith: "template placeholder <in.txt>"},
+		{name: "unspaced redirects around a runner", command: "./t <cases.json>report.json", rejectedWith: "template placeholder <cases.json>"},
+		{name: "dotted placeholders glued to a path", command: "dotnet test <Company.Svc>/<Company.Svc>.Tests.csproj", rejectedWith: "template placeholder <Company.Svc>"},
+		{name: "dotted placeholder before a test id", command: "pytest tests/<test_module.py>::test_x", rejectedWith: "template placeholder <test_module.py>"},
+		{name: "placeholder after an escaped quote in double quotes", command: `echo "a\"" <svc>/f`, rejectedWith: "template placeholder <svc>"},
+		{name: "angle brackets after an escaped quote in double quotes", command: `grep -q "x\"<y>" f`},
 		{name: "placeholder beside a quoted literal", command: `grep -q "<testsuite>" <dir>/report.xml`, rejectedWith: "template placeholder <dir>"},
 		{name: "placeholder after an escaped quote", command: `echo \"<svc>/<name>.csproj\"`, rejectedWith: "template placeholder <svc>"},
 		{name: "placeholder glued to a name", command: "dotnet test <Service>Tests/<Service>Tests.csproj", rejectedWith: "template placeholder <Service>"},
@@ -54,8 +57,8 @@ func TestCheckInferredCommand(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if tc.needsSh && runtime.GOOS == "windows" {
-				t.Skip("cmd.exe runs unit commands on Windows, so there is no sh -n parse")
+			if tc.needsSh {
+				skipWithoutShellParse(t)
 			}
 			err := checkInferredCommand(t.Context(), config.TestUnit{Name: "api", Path: "services/api", Command: tc.command})
 			if tc.rejectedWith == "" {
@@ -174,13 +177,20 @@ func TestTestStep_RepeatedlyRejectedDiscoveryAnswerParks(t *testing.T) {
 	}
 }
 
+// skipWithoutShellParse skips a test that needs the unit shell's parse-only
+// mode where that shell has none.
+func skipWithoutShellParse(t *testing.T) {
+	t.Helper()
+	if _, ok := newShellParseCommand(t.Context(), ""); !ok {
+		t.Skip("the shell that runs unit commands has no parse-only mode here")
+	}
+}
+
 // TestCheckInferredCommand_MissingShIsNotARejection keeps a parse check that
 // could not run an invocation failure, which fails the run, rather than a
 // verdict on the agent's answer.
 func TestCheckInferredCommand_MissingShIsNotARejection(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("cmd.exe runs unit commands on Windows, so there is no sh -n parse")
-	}
+	skipWithoutShellParse(t)
 	t.Setenv("PATH", t.TempDir())
 	err := checkInferredCommand(t.Context(), config.TestUnit{Name: "api", Path: "services/api", Command: "go test ./services/api/..."})
 	if err == nil {
@@ -210,9 +220,7 @@ func fakeShOnPath(t *testing.T, body string) {
 // run's deadline killed mid-run from reading as a verdict on the agent's
 // answer.
 func TestCheckInferredCommand_TimedOutRunIsNotARejection(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("cmd.exe runs unit commands on Windows, so there is no sh -n parse")
-	}
+	skipWithoutShellParse(t)
 	fakeShOnPath(t, "sleep 30")
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
@@ -236,9 +244,7 @@ func TestCheckInferredCommand_TimedOutRunIsNotARejection(t *testing.T) {
 // something outside the run killed from reading as a verdict on the agent's
 // answer.
 func TestCheckInferredCommand_SignalledShIsNotARejection(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("cmd.exe runs unit commands on Windows, so there is no sh -n parse")
-	}
+	skipWithoutShellParse(t)
 	fakeShOnPath(t, "kill -KILL $$")
 	err := checkInferredCommand(t.Context(), config.TestUnit{Name: "api", Path: "services/api", Command: "go test ./services/api/..."})
 	var exitErr *exec.ExitError
