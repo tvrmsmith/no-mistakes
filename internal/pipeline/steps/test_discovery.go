@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
@@ -399,8 +400,58 @@ func checkInferredCommands(ctx context.Context, units []config.TestUnit) error {
 // precedes the closing >, and a later word needs a non-digit, so an input
 // redirect followed by an output redirect (<in.txt >out.txt, <in.txt 2>err.txt)
 // is not a placeholder. sh -n alone misses a placeholder like <svc>, which
-// parses as a redirect.
+// parses as a redirect. Callers go through templatePlaceholderIn, which also
+// skips quoted text and unspaced redirect pairs.
 var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_<])(<[A-Za-z][A-Za-z0-9._/:-]*(?: [A-Za-z0-9._/:-]*[A-Za-z._/:-][A-Za-z0-9._/:-]*)*>)`)
+
+// templatePlaceholderIn returns the first template placeholder in command.
+// Quoted text is literal data (grep -q "<testsuite>", pytest -k 'not <lambda>'),
+// so a placeholder inside quotes is left to the dead-runner path, as every
+// placeholder was before this check. sh tokenizes <in.txt>out.txt and
+// <Service>Tests.csproj identically, as two redirects, so only the inner token
+// tells them apart: a dotted file name glued to the following word is a
+// redirect pair, and a bare name such as <svc> stays a placeholder.
+func templatePlaceholderIn(command string) (string, bool) {
+	unquoted := blankQuotedSpans(command)
+	for _, m := range templatePlaceholder.FindAllStringSubmatchIndex(unquoted, -1) {
+		token, end := unquoted[m[2]:m[3]], m[3]
+		gluedToNextWord := end < len(unquoted) && !unicode.IsSpace(rune(unquoted[end]))
+		if gluedToNextWord && !strings.Contains(token, " ") && strings.Contains(token, ".") {
+			continue
+		}
+		return token, true
+	}
+	return "", false
+}
+
+// blankQuotedSpans replaces the text inside single and double quotes with
+// spaces, keeping every byte offset. A backslash escapes the next byte outside
+// single quotes, as in sh. An unterminated quote blanks to the end; sh -n
+// rejects that command anyway.
+func blankQuotedSpans(command string) string {
+	out := []byte(command)
+	var quote byte
+	for i := 0; i < len(out); i++ {
+		c := out[i]
+		switch {
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote = c
+		case quote == 0 && c == '\\':
+			i++
+		case c == quote:
+			quote = 0
+		case quote == '"' && c == '\\':
+			out[i] = ' '
+			if i+1 < len(out) {
+				i++
+				out[i] = ' '
+			}
+		case quote != 0:
+			out[i] = ' '
+		}
+	}
+	return string(out)
+}
 
 // checkInferredCommand rejects an agent-written command that describes a
 // command instead of being one. It proves only that the command parses;
@@ -409,8 +460,8 @@ var templatePlaceholder = regexp.MustCompile(`(?:^|[^A-Za-z0-9_<])(<[A-Za-z][A-Z
 // plain error rather than a discovery result, so it fails the run instead of
 // being re-asked or parked.
 func checkInferredCommand(ctx context.Context, unit config.TestUnit) error {
-	if m := templatePlaceholder.FindStringSubmatch(unit.Command); m != nil {
-		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command %q still carries the template placeholder %s; report the literal command to run", unit.Name, unit.Command, m[1]))
+	if placeholder, found := templatePlaceholderIn(unit.Command); found {
+		return parkOnDiscoveryResult(fmt.Errorf("discovered unit %q command %q still carries the template placeholder %s; report the literal command to run", unit.Name, unit.Command, placeholder))
 	}
 	// Unit commands run through cmd.exe on Windows, which has no parse-only mode.
 	if runtime.GOOS == "windows" {
