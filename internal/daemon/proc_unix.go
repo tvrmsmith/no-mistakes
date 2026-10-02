@@ -50,11 +50,20 @@ func splitUnixProcessLine(line string) (int, string, bool) {
 	return pid, strings.TrimLeft(trimmed[sep:], " \t"), true
 }
 
+// readProcessState is processState behind a seam for tests.
+var readProcessState = processState
+
 func processRunning(pid int) (bool, error) {
 	err := syscall.Kill(pid, 0)
 	if err == nil {
-		state, err := processState(pid)
+		state, err := readProcessState(pid)
 		if err != nil {
+			// The process can exit between the probe and the ps read, and ps
+			// then fails for the missing pid. A second probe tells that apart
+			// from a ps that genuinely could not run.
+			if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+				return false, nil
+			}
 			return false, err
 		}
 		if strings.HasPrefix(state, "Z") {

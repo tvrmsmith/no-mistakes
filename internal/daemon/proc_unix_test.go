@@ -121,3 +121,33 @@ func countEnvEntries(env []string, key string) int {
 	}
 	return count
 }
+
+// A process can exit between processRunning's signal-0 probe and its ps
+// state read. ps then exits 1 for the missing pid, and reporting that as an
+// error made `daemon stop` fail right after it had killed the daemon.
+func TestProcessRunningReportsAProcessThatExitsBeforeTheStateReadAsGone(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	pid := cmd.Process.Pid
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	original := readProcessState
+	t.Cleanup(func() { readProcessState = original })
+	readProcessState = func(pid int) (string, error) {
+		if err := cmd.Process.Kill(); err != nil {
+			t.Fatalf("kill sleep: %v", err)
+		}
+		_ = cmd.Wait()
+		return original(pid)
+	}
+
+	running, err := processRunning(pid)
+	if err != nil {
+		t.Fatalf("processRunning(%d) = error %v, want not running", pid, err)
+	}
+	if running {
+		t.Fatalf("processRunning(%d) = running, want not running", pid)
+	}
+}
