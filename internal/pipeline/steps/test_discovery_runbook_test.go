@@ -80,7 +80,7 @@ func TestRediscoverTestUnits_PromptCarriesTheTrustedRunbookBeforeTheFailure(t *t
 		reason:   "wrote no test report",
 	}
 
-	if _, err := rediscoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"internal/x/x.go"}, dead); err != nil {
+	if _, err := rediscoverTestUnits(sctx, sctx.Run.BaseSHA, []string{"internal/x/x.go"}, dead, underSelection{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(ag.calls) != 1 {

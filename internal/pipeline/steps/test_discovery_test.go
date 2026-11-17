@@ -63,7 +63,7 @@ func TestSelectUnitsForPaths_IsDeterministicAndDeduplicated(t *testing.T) {
 	}
 }
 
-func TestUnderSelectedUnits_FindsTheOmittedUnit(t *testing.T) {
+func TestUnderSelected_FindsTheOmittedUnit(t *testing.T) {
 	units := []config.TestUnit{
 		{Name: "api", Path: "services/api"},
 		{Name: "web", Path: "services/web"},
@@ -71,13 +71,13 @@ func TestUnderSelectedUnits_FindsTheOmittedUnit(t *testing.T) {
 	changed := []string{"services/api/main.go", "services/web/index.tsx"}
 	selected := []string{"api"}
 
-	got := underSelectedUnits(units, changed, selected)
+	got := underSelected(units, changed, selected).units
 	if len(got) != 1 || got[0].Name != "web" {
 		t.Fatalf("under-selected = %+v, want [web]", got)
 	}
 }
 
-func TestUnderSelectedUnits_EmptyWhenSelectionCoversEveryChangedFile(t *testing.T) {
+func TestUnderSelected_EmptyWhenSelectionCoversEveryChangedFile(t *testing.T) {
 	units := []config.TestUnit{
 		{Name: "api", Path: "services/api"},
 		{Name: "web", Path: "services/web"},
@@ -85,7 +85,7 @@ func TestUnderSelectedUnits_EmptyWhenSelectionCoversEveryChangedFile(t *testing.
 	changed := []string{"services/api/main.go", "services/web/index.tsx"}
 	selected := []string{"api", "web"}
 
-	got := underSelectedUnits(units, changed, selected)
+	got := underSelected(units, changed, selected).units
 	if len(got) != 0 {
 		t.Fatalf("under-selected = %+v, want none", got)
 	}
@@ -113,18 +113,18 @@ func TestSelectUnitsForPaths_NestedLayoutSelectsTheMostSpecificOwner(t *testing.
 	}
 }
 
-func TestUnderSelectedUnits_NestedLayoutRaisesNoFaultForASelectedNarrowUnit(t *testing.T) {
+func TestUnderSelected_NestedLayoutRaisesNoFaultForASelectedNarrowUnit(t *testing.T) {
 	units := []config.TestUnit{
 		{Name: "root", Path: "."},
 		{Name: "api", Path: "api"},
 	}
 
-	got := underSelectedUnits(units, []string{"api/main.go"}, []string{"api"})
+	got := underSelected(units, []string{"api/main.go"}, []string{"api"}).units
 	if len(got) != 0 {
 		t.Fatalf("under-selected = %+v, want none", got)
 	}
 
-	got = underSelectedUnits(units, []string{"api/main.go", "go.mod"}, []string{"api"})
+	got = underSelected(units, []string{"api/main.go", "go.mod"}, []string{"api"}).units
 	if len(got) != 1 || got[0].Name != "root" {
 		t.Fatalf("under-selected = %+v, want [root]", got)
 	}
@@ -380,7 +380,7 @@ func TestDiscoverTestUnits_UncleanUnitPathStillSelectsItsChangedFiles(t *testing
 	if d.Units[0].Path != "services/api" {
 		t.Fatalf("Path = %q, want the cleaned path", d.Units[0].Path)
 	}
-	missing := underSelectedUnits(d.Units, []string{"services/api/main.go"}, d.Selected)
+	missing := underSelected(d.Units, []string{"services/api/main.go"}, d.Selected).units
 	if len(missing) != 1 || missing[0].Name != "api" {
 		t.Fatalf("under-selected = %+v, want [api]: an uncleaned path owns nothing and goes untested", missing)
 	}

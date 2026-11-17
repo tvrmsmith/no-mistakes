@@ -448,6 +448,18 @@ func newShellCommand(ctx context.Context, dir string, env []string, cmdStr strin
 	return cmd
 }
 
+// newShellParseCommand returns a command that parses cmdStr, without running
+// it, under the shell newShellCommand runs it with. It reports false where that
+// shell has no parse-only mode: cmd.exe on Windows.
+func newShellParseCommand(ctx context.Context, cmdStr string) (*exec.Cmd, bool) {
+	if runtime.GOOS == "windows" {
+		return nil, false
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-n", "-c", cmdStr)
+	shellenv.ConfigureShellCommand(cmd)
+	return cmd, true
+}
+
 // shellCommandExitCode separates a command that ran and failed, which is a
 // verdict the caller reads, from an exec failure, which is an error.
 func shellCommandExitCode(cmdStr string, err error) (int, error) {
